@@ -14,6 +14,16 @@
 
 ## Quick start
 
+### Install binary (GitHub Release)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/botirk38/sift/v0.1.2/scripts/install.sh | sh
+```
+
+Default release repo is **`botirk38/sift`**. Override: `SIFT_REPO=owner/repo`. Override version: `SIFT_VERSION=0.1.2`. Install path: `PREFIX=$HOME/.local` (binary goes to `$PREFIX/bin`).
+
+### From source
+
 ```bash
 cargo build --release -p sift-cli
 ./target/release/sift --sift-dir .sift build /path/to/corpus

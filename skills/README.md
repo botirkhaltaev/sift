@@ -15,7 +15,7 @@ npx skills add ./skills/sift-cli -a cursor -a claude-code -y
 After this repo is on GitHub, others can install from a path (branch name may be `main` or `master`):
 
 ```bash
-npx skills add https://github.com/sift-rs/sift/tree/master/skills/sift-cli
+npx skills add https://github.com/botirk38/sift/tree/master/skills/sift-cli
 ```
 
 Use your fork’s `org/repo` if it differs from the workspace `repository` URL in the root `Cargo.toml`.
