@@ -121,7 +121,8 @@ pub fn build_index_tables(root: &Path) -> crate::Result<(CorpusKind, IndexTables
         ids.dedup();
     }
 
-    let mut posting_bytes: Vec<u8> = Vec::new();
+    let total_u32s: usize = map.values().map(Vec::len).sum();
+    let mut posting_bytes: Vec<u8> = Vec::with_capacity(total_u32s.saturating_mul(4));
     let mut lex_entries: Vec<LexiconEntry> = Vec::with_capacity(map.len());
     for (tri, ids) in map {
         let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
