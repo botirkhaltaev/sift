@@ -33,7 +33,9 @@ cargo test --workspace --all-features
 
 ## Phased work (roadmap slices)
 
-After **each** roadmap phase (see `plan.md`): do a **full pass review** of the code touched in that phase—not only the happy path. Check structure and naming, duplication vs. small focused helpers, error handling (`Result` / `anyhow` without losing context), tests and integration coverage for new behavior, and that `cargo fmt`, `cargo clippy-check`, and `cargo test --workspace --all-features` are clean. Prefer best-practice Rust over preserving obsolete CLI semantics when they conflict with the target behavior.
+**Branching:** Before **starting** work on a new phase (see `plan.md`), create and checkout a dedicated branch from the latest default branch (e.g. `git fetch origin && git checkout master && git pull && git checkout -b phase-N-short-name`). Implement the phase on that branch only. Open a PR for review; after you merge it, start the **next** phase from an updated `master` on a **new** branch. Do not stack unrelated phase work on one long-lived branch unless intentional.
+
+After **each** roadmap phase (implementation complete, before merge): do a **full pass review** of the code touched in that phase—not only the happy path. Check structure and naming, duplication vs. small focused helpers, error handling (`Result` / `anyhow` without losing context), tests and integration coverage for new behavior, and that `cargo fmt`, `cargo clippy-check`, and `cargo test --workspace --all-features` are clean. Prefer best-practice Rust over preserving obsolete CLI semantics when they conflict with the target behavior.
 
 ## Embedding / API
 
