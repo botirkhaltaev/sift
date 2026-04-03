@@ -31,6 +31,10 @@ fn stats_reports_matches_and_files_searched() {
         "expected files searched in stderr, got: {stderr:?}"
     );
     assert!(
+        stderr.contains("bytes searched"),
+        "expected bytes searched line in stderr, got: {stderr:?}"
+    );
+    assert!(
         stderr.contains("s elapsed"),
         "expected elapsed line in stderr, got: {stderr:?}"
     );

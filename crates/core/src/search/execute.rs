@@ -43,6 +43,12 @@ fn write_line_terminator(out: &mut Vec<u8>, null_data: bool) {
     }
 }
 
+fn sum_candidate_file_bytes(candidates: &[CandidateInfo]) -> u64 {
+    candidates.iter().fold(0u64, |acc, c| {
+        acc + std::fs::metadata(&c.abs_path).map(|m| m.len()).unwrap_or(0)
+    })
+}
+
 impl CompiledSearch {
     /// Returns raw candidate file IDs from index (trigram or full scan).
     /// Does NOT apply `SearchFilter` - filtering happens in `prepare_candidates`.
@@ -162,6 +168,7 @@ impl CompiledSearch {
                 | SearchMode::FilesWithoutMatch => summary_counter.load(Ordering::Relaxed),
             };
             s.elapsed = search_start.elapsed();
+            s.bytes_searched = sum_candidate_file_bytes(&candidates);
         }
 
         Ok(ok)
@@ -261,6 +268,7 @@ impl CompiledSearch {
                 | SearchMode::FilesWithoutMatch => summary_counter.load(Ordering::Relaxed),
             };
             s.elapsed = search_start.elapsed();
+            s.bytes_searched = sum_candidate_file_bytes(&candidates);
         }
 
         Ok(ok)
