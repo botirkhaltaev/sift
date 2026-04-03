@@ -12,6 +12,8 @@
 
 **Agent skills** ([skills.sh](https://skills.sh) / `npx skills`): [`skills/README.md`](skills/README.md).
 
+**Manual `rg` vs `sift` timing demo** (kernel tree, no scripts — you run both and compare): [`demo/kernel-video/README.md`](demo/kernel-video/README.md).
+
 ## Quick start
 
 ### Install binary (GitHub Release)
@@ -20,7 +22,18 @@
 curl -fsSL https://raw.githubusercontent.com/botirk38/sift/v0.1.2/scripts/install.sh | sh
 ```
 
-Default release repo is **`botirk38/sift`**. Override: `SIFT_REPO=owner/repo`. Override version: `SIFT_VERSION=0.1.2`. Install path: `PREFIX=$HOME/.local` (binary goes to `$PREFIX/bin`).
+Installs to **`$HOME/.local/bin/sift`** by default (override with `PREFIX`).
+
+Environment variables:
+
+| Variable | Meaning |
+|----------|---------|
+| `SIFT_REPO` | `owner/repo` on GitHub (default: **`botirk38/sift`**) |
+| `SIFT_VERSION` | Release without `v`, e.g. `0.1.2` (skips GitHub API if set) |
+| `SIFT_DEFAULT_VERSION` | Fallback if the API is rate-limited (default baked into the script) |
+| `PREFIX` | Install prefix; binary at `$PREFIX/bin` |
+
+If **`curl https://api.github.com/.../releases/latest` hits a rate limit**, either export `SIFT_VERSION=0.1.2` before running the script or rely on the script’s built-in default version.
 
 ### From source
 

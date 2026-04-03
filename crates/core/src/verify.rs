@@ -89,15 +89,18 @@ mod tests {
         )
         .unwrap();
         let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"foo"))
-            .is_some());
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"bar"))
-            .is_some());
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"baz"))
-            .is_none());
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"foo"))
+                .is_some()
+        );
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"bar"))
+                .is_some()
+        );
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"baz"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -108,12 +111,14 @@ mod tests {
         )
         .unwrap();
         let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"a.c"))
-            .is_some());
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"abc"))
-            .is_none());
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"a.c"))
+                .is_some()
+        );
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"abc"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -124,12 +129,14 @@ mod tests {
         )
         .unwrap();
         let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"hello"))
-            .is_some());
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"HELLO"))
-            .is_some());
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"hello"))
+                .is_some()
+        );
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"HELLO"))
+                .is_some()
+        );
     }
 
     #[test]
@@ -140,12 +147,14 @@ mod tests {
         )
         .unwrap();
         let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"a cat here"))
-            .is_some());
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"concat"))
-            .is_none());
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"a cat here"))
+                .is_some()
+        );
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"concat"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -156,20 +165,24 @@ mod tests {
         )
         .unwrap();
         let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"yes"))
-            .is_some());
-        assert!(re
-            .search_with(&mut cache, &regex_automata::Input::new(b"oh yes sir"))
-            .is_none());
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"yes"))
+                .is_some()
+        );
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"oh yes sir"))
+                .is_none()
+        );
     }
 
     #[test]
     fn invalid_regex_returns_err() {
-        assert!(compile_search_pattern(
-            &["(".to_string()],
-            &opts(SearchMatchFlags::default(), CaseMode::Sensitive)
-        )
-        .is_err());
+        assert!(
+            compile_search_pattern(
+                &["(".to_string()],
+                &opts(SearchMatchFlags::default(), CaseMode::Sensitive)
+            )
+            .is_err()
+        );
     }
 }

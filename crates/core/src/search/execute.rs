@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grep_matcher::Matcher;
@@ -8,8 +9,8 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
-use crate::planner::TrigramPlan;
 use crate::Index;
+use crate::planner::TrigramPlan;
 
 use super::{
     CandidateInfo, CompiledSearch, FilenameMode, OutputEmission, SearchFilter, SearchMode,
@@ -24,16 +25,24 @@ impl CompiledSearch {
     /// Does NOT apply `SearchFilter` - filtering happens in `prepare_candidates`.
     #[must_use]
     pub fn candidate_file_ids(&self, index: &Index, exhaustive: bool) -> Vec<usize> {
+        let n = index.file_count();
         if exhaustive {
-            return (0..index.file_count()).collect();
+            let mut v = Vec::with_capacity(n);
+            v.extend(0..n);
+            return v;
         }
         match &self.plan {
-            TrigramPlan::FullScan => (0..index.file_count()).collect(),
-            TrigramPlan::Narrow { arms } => index
-                .candidate_file_ids(arms.as_slice())
-                .into_iter()
-                .map(|id| id as usize)
-                .collect(),
+            TrigramPlan::FullScan => {
+                let mut v = Vec::with_capacity(n);
+                v.extend(0..n);
+                v
+            }
+            TrigramPlan::Narrow { arms } => {
+                let raw = index.candidate_file_ids(arms.as_slice());
+                let mut v = Vec::with_capacity(raw.len());
+                v.extend(raw.into_iter().map(|id| id as usize));
+                v
+            }
         }
     }
 
@@ -59,25 +68,25 @@ impl CompiledSearch {
         }
 
         // Stage 2+3: Parallel filter + prepare CandidateInfo (single filter pass)
-        let threshold = parallel_candidate_min_files();
+        let threshold = parallel_candidate_threshold();
         let candidates = Self::prepare_candidates(index, &raw_ids, filter, threshold);
         if candidates.is_empty() {
             return Ok(false);
         }
 
-        // Stage 4: Build matcher and search
-        let matcher = self.build_matcher()?;
+        // Stage 4: Build matcher (once per `CompiledSearch`) and search
+        let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
         match output.mode {
             SearchMode::Standard | SearchMode::OnlyMatching => {
-                self.run_standard_with_info(&candidates, &matcher, output, parallel)
+                self.run_standard_with_info(&candidates, matcher, output, parallel)
             }
             SearchMode::Count
             | SearchMode::CountMatches
             | SearchMode::FilesWithMatches
             | SearchMode::FilesWithoutMatch => {
-                self.run_summary_with_info(&candidates, &matcher, output, parallel)
+                self.run_summary_with_info(&candidates, matcher, output, parallel)
             }
         }
     }
@@ -90,11 +99,17 @@ impl CompiledSearch {
         filter: &SearchFilter,
         threshold: usize,
     ) -> Vec<CandidateInfo> {
+        let need_rel = filter.needs_rel_str_for_matching();
+        let cap = ids.len();
         if ids.len() >= threshold {
             ids.par_iter()
                 .filter_map(|&id| {
                     let rel_path = index.file_path(id)?.to_path_buf();
-                    let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+                    let rel_str = if need_rel {
+                        rel_path.to_string_lossy().replace('\\', "/")
+                    } else {
+                        String::new()
+                    };
                     let abs_path = index.root.join(&rel_path);
                     let info = CandidateInfo {
                         id,
@@ -106,20 +121,24 @@ impl CompiledSearch {
                 })
                 .collect()
         } else {
-            ids.iter()
-                .filter_map(|&id| {
-                    let rel_path = index.file_path(id)?.to_path_buf();
-                    let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-                    let abs_path = index.root.join(&rel_path);
-                    let info = CandidateInfo {
-                        id,
-                        rel_path,
-                        rel_str,
-                        abs_path,
-                    };
-                    filter.is_candidate_info(&info).then_some(info)
-                })
-                .collect()
+            let mut out = Vec::with_capacity(cap);
+            out.extend(ids.iter().filter_map(|&id| {
+                let rel_path = index.file_path(id)?.to_path_buf();
+                let rel_str = if need_rel {
+                    rel_path.to_string_lossy().replace('\\', "/")
+                } else {
+                    String::new()
+                };
+                let abs_path = index.root.join(&rel_path);
+                let info = CandidateInfo {
+                    id,
+                    rel_path,
+                    rel_str,
+                    abs_path,
+                };
+                filter.is_candidate_info(&info).then_some(info)
+            }));
+            out
         }
     }
 
@@ -132,17 +151,19 @@ impl CompiledSearch {
     ) -> crate::Result<bool> {
         if parallel {
             let stop = AtomicBool::new(false);
-            let mut files = candidates
+            let n = candidates.len();
+            let mut files = Vec::with_capacity(n);
+            candidates
                 .par_iter()
                 .enumerate()
                 .map_init(
                     || StandardWorker::new(self, matcher.clone(), output),
-                    |worker: &mut StandardWorker<'_>,
+                    |worker: &mut StandardWorker,
                      (result_index, candidate): (usize, &CandidateInfo)| {
                         worker.search_candidate(candidate, result_index, &stop)
                     },
                 )
-                .collect::<Vec<_>>();
+                .collect_into_vec(&mut files);
             files.sort_by_key(|file| file.index);
             return flush_chunk_output(files.into_iter().map(|file| file.output));
         }
@@ -159,7 +180,9 @@ impl CompiledSearch {
     ) -> crate::Result<bool> {
         if parallel {
             let stop = AtomicBool::new(false);
-            let mut files = candidates
+            let n = candidates.len();
+            let mut files = Vec::with_capacity(n);
+            candidates
                 .par_iter()
                 .enumerate()
                 .map_init(
@@ -176,7 +199,7 @@ impl CompiledSearch {
                         worker.search_candidate(&candidate.abs_path, result_index, output, &stop)
                     },
                 )
-                .collect::<Vec<_>>();
+                .collect_into_vec(&mut files);
             files.sort_by_key(|file| file.index);
             return flush_chunk_output(files.into_iter().map(|file| file.output));
         }
@@ -190,22 +213,23 @@ impl CompiledSearch {
         matcher: &RegexMatcher,
         output: SearchOutput,
     ) -> crate::Result<bool> {
-        let mut any_match = false;
-        let mut out = Vec::new();
-        let mut searcher = self.build_searcher(output.line_number, self.opts.max_results);
-        for candidate in candidates {
-            let mut sink = StandardSink::new(matcher, output, &candidate.abs_path, &mut out);
-            let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
-            any_match |= sink.matched;
-            if output.emission == OutputEmission::Quiet && any_match {
-                break;
+        self.with_cached_searcher(output.line_number, self.opts.max_results, |searcher| {
+            let mut any_match = false;
+            let mut out = Vec::new();
+            for candidate in candidates {
+                let mut sink = StandardSink::new(matcher, output, &candidate.abs_path, &mut out);
+                let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
+                any_match |= sink.matched;
+                if output.emission == OutputEmission::Quiet && any_match {
+                    break;
+                }
             }
-        }
 
-        flush_chunk_output(std::iter::once(ChunkOutput {
-            bytes: out,
-            matched: any_match,
-        }))
+            flush_chunk_output(std::iter::once(ChunkOutput {
+                bytes: out,
+                matched: any_match,
+            }))
+        })
     }
 
     fn run_summary_capped_with_info(
@@ -214,23 +238,25 @@ impl CompiledSearch {
         matcher: &RegexMatcher,
         output: SearchOutput,
     ) -> crate::Result<bool> {
-        let mut any_match = false;
-        let mut out = Vec::new();
-        let mut worker =
-            SummaryWorker::new(self, matcher.clone(), self.opts.max_results, output.mode);
-        for candidate in candidates {
-            let result = worker.search_file(&candidate.abs_path);
-            any_match |= mode_is_success(output.mode, result);
-            write_summary_record(&mut out, output, &candidate.abs_path, result)?;
-            if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result) {
-                break;
+        self.with_cached_searcher(false, self.opts.max_results, |searcher| {
+            let mut any_match = false;
+            let mut out = Vec::new();
+            for candidate in candidates {
+                let result =
+                    summary_search_file(searcher, matcher, output.mode, &candidate.abs_path);
+                any_match |= mode_is_success(output.mode, result);
+                write_summary_record(&mut out, output, &candidate.abs_path, result)?;
+                if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result)
+                {
+                    break;
+                }
             }
-        }
 
-        flush_chunk_output(std::iter::once(ChunkOutput {
-            bytes: out,
-            matched: any_match,
-        }))
+            flush_chunk_output(std::iter::once(ChunkOutput {
+                bytes: out,
+                matched: any_match,
+            }))
+        })
     }
 
     // Legacy methods kept for backward compat in tests
@@ -284,56 +310,58 @@ impl CompiledSearch {
         filter: &SearchFilter,
         candidate_ids: &[usize],
     ) -> crate::Result<Vec<Match>> {
-        let matcher = self.build_matcher()?;
-        let mut searcher = self.build_searcher(true, None);
+        let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
-        for &id in candidate_ids {
-            let Some(candidate) = index.file_path(id) else {
-                continue;
-            };
-            if !filter.is_candidate(candidate) {
-                continue;
+        self.with_cached_searcher(true, None, |searcher| {
+            for &id in candidate_ids {
+                let Some(candidate) = index.file_path(id) else {
+                    continue;
+                };
+                if !filter.is_candidate(candidate) {
+                    continue;
+                }
+                let mut sink = CollectSink::new(
+                    index.root.join(candidate),
+                    self.opts.only_matching(),
+                    matcher.clone(),
+                );
+                let _ = searcher.search_path(matcher, index.root.join(candidate), &mut sink);
+                out.extend(sink.into_matches());
             }
-            let mut sink = CollectSink::new(
-                index.root.join(candidate),
-                self.opts.only_matching(),
-                matcher.clone(),
-            );
-            let _ = searcher.search_path(&matcher, index.root.join(candidate), &mut sink);
-            out.extend(sink.into_matches());
-        }
+        });
         Ok(out)
     }
 
     #[cfg(test)]
     fn collect_walk_candidates(&self, candidates: &[PathBuf]) -> crate::Result<Vec<Match>> {
-        let matcher = self.build_matcher()?;
-        let mut searcher = self.build_searcher(true, None);
+        let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
-        for candidate in candidates {
-            let mut sink = CollectSink::new(
-                candidate.clone(),
-                self.opts.only_matching(),
-                matcher.clone(),
-            );
-            let _ = searcher.search_path(&matcher, candidate, &mut sink);
-            out.extend(sink.into_matches());
-        }
+        self.with_cached_searcher(true, None, |searcher| {
+            for candidate in candidates {
+                let mut sink = CollectSink::new(
+                    candidate.clone(),
+                    self.opts.only_matching(),
+                    matcher.clone(),
+                );
+                let _ = searcher.search_path(matcher, candidate, &mut sink);
+                out.extend(sink.into_matches());
+            }
+        });
         Ok(out)
     }
 }
 
-struct StandardWorker<'a> {
-    search: &'a CompiledSearch,
+struct StandardWorker {
     matcher: RegexMatcher,
+    searcher: Searcher,
     output: SearchOutput,
     bytes: Vec<u8>,
 }
 
-impl<'a> StandardWorker<'a> {
-    const fn new(search: &'a CompiledSearch, matcher: RegexMatcher, output: SearchOutput) -> Self {
+impl StandardWorker {
+    fn new(search: &CompiledSearch, matcher: RegexMatcher, output: SearchOutput) -> Self {
         Self {
-            search,
+            searcher: search.build_searcher(output.line_number, search.opts.max_results),
             matcher,
             output,
             bytes: Vec::new(),
@@ -355,16 +383,15 @@ impl<'a> StandardWorker<'a> {
         }
 
         let matched = {
-            let mut searcher = self
-                .search
-                .build_searcher(self.output.line_number, self.search.opts.max_results);
             let mut sink = StandardSink::new(
                 &self.matcher,
                 self.output,
                 &candidate.abs_path,
                 &mut self.bytes,
             );
-            let _ = searcher.search_path(&self.matcher, &candidate.abs_path, &mut sink);
+            let _ = self
+                .searcher
+                .search_path(&self.matcher, &candidate.abs_path, &mut sink);
             sink.matched
         };
 
@@ -442,6 +469,22 @@ impl Sink for StandardSink<'_> {
     }
 }
 
+fn summary_search_file(
+    searcher: &mut Searcher,
+    matcher: &RegexMatcher,
+    mode: SearchMode,
+    path: &Path,
+) -> FileSummary {
+    let sink_matcher = if mode == SearchMode::CountMatches {
+        Some(matcher.clone())
+    } else {
+        None
+    };
+    let mut sink = SummarySink::new(mode, sink_matcher);
+    let _ = searcher.search_path(matcher, path, &mut sink);
+    sink.finish()
+}
+
 struct SummaryWorker {
     matcher: RegexMatcher,
     searcher: Searcher,
@@ -463,14 +506,7 @@ impl SummaryWorker {
     }
 
     fn search_file(&mut self, path: &Path) -> FileSummary {
-        let sink_matcher = if self.mode == SearchMode::CountMatches {
-            Some(self.matcher.clone())
-        } else {
-            None
-        };
-        let mut sink = SummarySink::new(self.mode, sink_matcher);
-        let _ = self.searcher.search_path(&self.matcher, path, &mut sink);
-        sink.finish()
+        summary_search_file(&mut self.searcher, &self.matcher, self.mode, path)
     }
 
     fn search_candidate(
@@ -674,22 +710,36 @@ pub fn walk_file_paths(root: &Path) -> crate::Result<HashSet<PathBuf>> {
     Ok(set)
 }
 
-pub fn parallel_candidate_min_files() -> usize {
-    let cpus = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
-    let rayon_threads = std::env::var("RAYON_NUM_THREADS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok());
-    let effective = rayon_threads
-        .filter(|&n| n > 0)
-        .map_or(cpus, |rt| rt.min(cpus))
-        .max(1);
-    if effective <= 1 {
-        usize::MAX
-    } else {
-        effective.saturating_mul(8)
-    }
+static PARALLEL_CANDIDATE_THRESHOLD: OnceLock<usize> = OnceLock::new();
+
+/// Minimum candidate file count before `run_index` uses Rayon for filtering and search.
+///
+/// Value is `8 * effective_threads`, where `effective_threads` is
+/// `min(RAYON_NUM_THREADS, available_parallelism)` when `RAYON_NUM_THREADS` is set and valid,
+/// else `available_parallelism`. If there is only one effective thread, returns [`usize::MAX`]
+/// so the sequential path is always used.
+///
+/// The result is computed **once per process** on first call (including `RAYON_NUM_THREADS` read).
+/// Changing the env var after that has no effect until restart.
+#[must_use]
+pub fn parallel_candidate_threshold() -> usize {
+    *PARALLEL_CANDIDATE_THRESHOLD.get_or_init(|| {
+        let cpus = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        let rayon_threads = std::env::var("RAYON_NUM_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok());
+        let effective = rayon_threads
+            .filter(|&n| n > 0)
+            .map_or(cpus, |rt| rt.min(cpus))
+            .max(1);
+        if effective <= 1 {
+            usize::MAX
+        } else {
+            effective.saturating_mul(8)
+        }
+    })
 }
 
 #[cfg(test)]

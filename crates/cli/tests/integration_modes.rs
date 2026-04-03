@@ -993,9 +993,11 @@ fn files_with_matches_still_path_mode_under_no_filename() {
         .map(str::to_string)
         .collect();
     assert_eq!(lines.len(), 2);
-    assert!(lines
-        .iter()
-        .all(|l| l.contains("a.txt") || l.contains("b.txt")));
+    assert!(
+        lines
+            .iter()
+            .all(|l| l.contains("a.txt") || l.contains("b.txt"))
+    );
 }
 
 #[test]

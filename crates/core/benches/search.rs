@@ -35,7 +35,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use sift_core::{
@@ -257,6 +257,39 @@ fn bench_literal_narrow_large(c: &mut Criterion) {
             );
         });
     });
+    g.finish();
+}
+
+/// Monorepo-shaped corpus size sweep (`literal_narrow` on synthetic trees of different file counts).
+fn bench_literal_narrow_corpus_scale(c: &mut Criterion) {
+    let mut g = c.benchmark_group("search_literal_narrow_corpus_scale");
+    for files in [100usize, 1_000, 8_000] {
+        let (_tmp, index) = {
+            let tmp = tempfile::tempdir().unwrap();
+            let corpus = tmp.path().join("corpus");
+            materialize_large_corpus(&corpus, files, 100, 256);
+            let idx = tmp.path().join(".sift");
+            IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
+            let index = Index::open(&idx).unwrap();
+            (tmp, index)
+        };
+        let pat = vec!["beta".to_string()];
+        let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
+        let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+        g.bench_function(format!("beta_files_{files}"), |b| {
+            b.iter(|| {
+                black_box(
+                    query
+                        .run_index(
+                            black_box(&index),
+                            &filter,
+                            output_quiet(SearchMode::Standard),
+                        )
+                        .unwrap(),
+                );
+            });
+        });
+    }
     g.finish();
 }
 
@@ -968,6 +1001,7 @@ criterion_group! {
         bench_build_index,
         bench_literal_narrow,
         bench_literal_narrow_large,
+        bench_literal_narrow_corpus_scale,
         bench_word_literal,
         bench_line_literal,
         bench_fixed_string,

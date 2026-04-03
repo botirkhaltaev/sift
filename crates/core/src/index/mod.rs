@@ -229,25 +229,36 @@ impl Index {
 
     #[must_use]
     pub fn candidate_file_ids(&self, arms: &[crate::planner::Arm]) -> Vec<u32> {
+        if arms.is_empty() {
+            return Vec::new();
+        }
+        if arms.len() == 1 {
+            return self.posting_ids_for_arm(&arms[0]).unwrap_or_default();
+        }
         let mut id_lists: Vec<Vec<u32>> = Vec::with_capacity(arms.len());
         for arm in arms {
-            if arm.is_empty() {
-                continue;
-            }
-            let mut slices: Vec<&[u8]> = arm
-                .iter()
-                .map(|tri| self.posting_bytes_slice(*tri))
-                .collect();
-            if slices.iter().any(|s| s.is_empty()) {
-                continue;
-            }
-            slices.sort_unstable_by_key(|slice| slice.len());
-            let ids = intersect_sorted_posting_byte_slices(&slices);
-            if !ids.is_empty() {
+            if let Some(ids) = self.posting_ids_for_arm(arm) {
                 id_lists.push(ids);
             }
         }
         merge_sorted_runs(id_lists)
+    }
+
+    fn posting_ids_for_arm(&self, arm: &crate::planner::Arm) -> Option<Vec<u32>> {
+        if arm.is_empty() {
+            return None;
+        }
+        let mut slices: Vec<&[u8]> = Vec::with_capacity(arm.len());
+        for tri in arm {
+            let s = self.posting_bytes_slice(*tri);
+            if s.is_empty() {
+                return None;
+            }
+            slices.push(s);
+        }
+        slices.sort_unstable_by_key(|slice| slice.len());
+        let ids = intersect_sorted_posting_byte_slices(&slices);
+        if ids.is_empty() { None } else { Some(ids) }
     }
 
     #[must_use]

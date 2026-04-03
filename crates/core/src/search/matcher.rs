@@ -4,6 +4,8 @@ use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
 use super::{CaseMode, CompiledSearch};
 
+type SearcherCacheKey = (bool, Option<usize>);
+
 impl CompiledSearch {
     /// # Errors
     /// Returns an error if pattern compilation fails.
@@ -42,5 +44,32 @@ impl CompiledSearch {
             .line_number(line_number)
             .max_matches(max_matches.map(|n| n as u64));
         builder.build()
+    }
+
+    pub(crate) fn with_cached_searcher<R>(
+        &self,
+        line_number: bool,
+        max_matches: Option<usize>,
+        f: impl FnOnce(&mut Searcher) -> R,
+    ) -> R {
+        let key: SearcherCacheKey = (line_number, max_matches);
+        let mut inner = {
+            let mut guard = self
+                .searcher_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let need_new = guard.as_ref().is_none_or(|(k, _)| *k != key);
+            if need_new {
+                *guard = Some((key, self.build_searcher(line_number, max_matches)));
+            }
+            guard.take().expect("searcher_cache populated above")
+        };
+        let out = f(&mut inner.1);
+        let mut guard = self
+            .searcher_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(inner);
+        out
     }
 }

@@ -1,52 +1,38 @@
 #!/usr/bin/env bash
-# Profile sift-core via the `sift-profile` binary (release + line tables: workspace `profiling` profile).
+# Profile sift-core via the `sift-profile` binary (workspace `profiling` profile: optimized + line tables).
 #
-# Query-planning scenarios:
+# Subcommands (passed through to `sift-profile`):
 #   ./scripts/profile.sh list
-#   ./scripts/profile.sh literal_narrow
-#   ./scripts/profile.sh word_literal
-#   ./scripts/profile.sh line_literal
-#   ./scripts/profile.sh fixed_string
-#   ./scripts/profile.sh casei_literal
-#   ./scripts/profile.sh smart_case_lower
-#   ./scripts/profile.sh smart_case_upper
-#   ./scripts/profile.sh required_literal
-#   ./scripts/profile.sh no_literal
-#   ./scripts/profile.sh alternation
-#   ./scripts/profile.sh alternation_casei
-#   ./scripts/profile.sh unicode_class
-#
-# Filter + query scenarios:
-#   ./scripts/profile.sh glob_include
-#   ./scripts/profile.sh glob_exclude
-#   ./scripts/profile.sh glob_casei
-#   ./scripts/profile.sh hidden_default
-#   ./scripts/profile.sh hidden_include
-#   ./scripts/profile.sh ignore_default
-#   ./scripts/profile.sh ignore_custom
-#   ./scripts/profile.sh scoped_search
-#
-# Output-mode scenarios:
-#   ./scripts/profile.sh only_matching
-#   ./scripts/profile.sh count
-#   ./scripts/profile.sh count_matches
-#   ./scripts/profile.sh files_with_matches
-#   ./scripts/profile.sh files_without_match
-#   ./scripts/profile.sh max_count_1
-#
-# Build benchmark:
+#   ./scripts/profile.sh hints
 #   ./scripts/profile.sh build
+#   ./scripts/profile.sh run <scenario>
+#   ./scripts/profile.sh search-only <scenario>
+#
+# Query-planning scenarios (use: ./scripts/profile.sh run <name>):
+#   literal_narrow word_literal line_literal fixed_string casei_literal smart_case_lower
+#   smart_case_upper required_literal no_literal alternation alternation_casei unicode_class
+#
+# Filter + query: glob_include glob_exclude glob_casei hidden_default hidden_include
+#   ignore_default ignore_custom scoped_search
+#
+# Output-mode: only_matching count count_matches files_with_matches files_without_match max_count_1
+#
+# Shorthand: `./scripts/profile.sh literal_narrow` runs `sift-profile run literal_narrow`.
 #
 # Large corpus:
-#   SIFT_LARGE=1 ./scripts/profile.sh literal_narrow
-#   SIFT_CORPUS_FILES=20000 ./scripts/profile.sh no_literal
+#   SIFT_PROFILE_LARGE=1 ./scripts/profile.sh run literal_narrow
+#   SIFT_PROFILE_CORPUS_FILES=20000 ./scripts/profile.sh run no_literal
 #
-# Timing control:
-#   SIFT_LOOP_SECS=30 ./scripts/profile.sh required_literal
+# Timing:
+#   SIFT_PROFILE_LOOP_SECS=30 ./scripts/profile.sh run required_literal
 #
-# Flamegraph:
+# Flamegraph (wrapper around cargo flamegraph):
 #   ./scripts/profile.sh flamegraph literal_narrow
 #   ./scripts/profile.sh flamegraph build
+#
+# System profiling (CPU call stacks — prefer this to find hot functions):
+#   ./scripts/system-profile.sh literal_narrow
+#   ./scripts/system-profile.sh --perf no_literal   # Linux: perf report
 #
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -58,19 +44,23 @@ first="${1:-list}"
 second="${2:-}"
 
 case "$first" in
-list)
-    exec cargo run "${cargo_prof[@]}" -- list
+list|hints|build)
+    exec cargo run "${cargo_prof[@]}" -- "$first"
     ;;
 flamegraph)
     scenario="${second:-literal_narrow}"
     if [[ "$scenario" == build ]]; then
-        unset SIFT_LOOP_SECS || true
+        unset SIFT_PROFILE_LOOP_SECS || true
+        exec cargo flamegraph "${cargo_prof[@]}" -- build
     else
-        export SIFT_LOOP_SECS="${SIFT_LOOP_SECS:-30}"
+        export SIFT_PROFILE_LOOP_SECS="${SIFT_PROFILE_LOOP_SECS:-30}"
+        exec cargo flamegraph "${cargo_prof[@]}" -- run "$scenario"
     fi
-    exec cargo flamegraph "${cargo_prof[@]}" -- "$scenario"
+    ;;
+run|search-only)
+    exec cargo run "${cargo_prof[@]}" -- "$first" "$second"
     ;;
 *)
-    exec cargo run "${cargo_prof[@]}" -- "$first"
+    exec cargo run "${cargo_prof[@]}" -- run "$first"
     ;;
 esac

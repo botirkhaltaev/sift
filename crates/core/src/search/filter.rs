@@ -60,7 +60,7 @@ pub struct CandidateInfo {
     pub id: usize,
     /// Relative path as stored in the index.
     pub rel_path: PathBuf,
-    /// Normalized relative path string (forward slashes, for gitignore/glob).
+    /// Normalized relative path string (forward slashes, for gitignore/glob). Empty when neither applies.
     pub rel_str: String,
     /// Absolute path on disk (`index.root.join(&rel_path)`).
     pub abs_path: PathBuf,
@@ -76,6 +76,11 @@ pub struct SearchFilter {
 }
 
 impl SearchFilter {
+    #[must_use]
+    pub(crate) const fn needs_rel_str_for_matching(&self) -> bool {
+        self.gitignore.is_some() || self.glob.is_some()
+    }
+
     /// Build a search filter from configuration.
     ///
     /// # Errors
@@ -206,11 +211,12 @@ impl SearchFilter {
     fn matches_file(&self, rel_path: &Path) -> bool {
         // Fast hidden check - no allocation using as_encoded_bytes()
         if self.hidden == HiddenMode::Respect {
-            if let Some(name) = rel_path.file_name() {
+            let skip_hidden = rel_path.file_name().is_some_and(|name| {
                 let bytes = name.as_encoded_bytes();
-                if bytes.starts_with(b".") && bytes.len() > 1 {
-                    return false;
-                }
+                bytes.starts_with(b".") && bytes.len() > 1
+            });
+            if skip_hidden {
+                return false;
             }
         }
 
@@ -227,23 +233,28 @@ impl SearchFilter {
     fn matches_file_info(&self, info: &CandidateInfo) -> bool {
         // Fast hidden check - no allocation
         if self.hidden == HiddenMode::Respect {
-            if let Some(name) = info.rel_path.file_name() {
+            let skip_hidden = info.rel_path.file_name().is_some_and(|name| {
                 let bytes = name.as_encoded_bytes();
-                if bytes.starts_with(b".") && bytes.len() > 1 {
-                    return false;
-                }
+                bytes.starts_with(b".") && bytes.len() > 1
+            });
+            if skip_hidden {
+                return false;
             }
         }
 
-        // rel_str already computed
+        if !self.needs_rel_str_for_matching() {
+            return true;
+        }
         self.matches_file_str(Path::new(&info.rel_str))
     }
 
     fn matches_file_str(&self, rel_path: &Path) -> bool {
-        if let Some(ref matcher) = self.gitignore {
-            if matcher.matched(rel_path, false).is_ignore() {
-                return false;
-            }
+        if self
+            .gitignore
+            .as_ref()
+            .is_some_and(|m| m.matched(rel_path, false).is_ignore())
+        {
+            return false;
         }
 
         if let Some(ref glob) = self.glob {

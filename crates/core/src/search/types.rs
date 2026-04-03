@@ -1,6 +1,13 @@
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+use grep_regex::RegexMatcher;
+use grep_searcher::Searcher;
+use once_cell::sync::OnceCell;
 
 use crate::planner::TrigramPlan;
+
+type SearcherCacheEntry = ((bool, Option<usize>), Searcher);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaseMode {
@@ -124,11 +131,15 @@ impl Default for SearchOutput {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CompiledSearch {
     pub patterns: Vec<String>,
     pub opts: SearchOptions,
     pub plan: TrigramPlan,
+    /// Lazily filled by [`Self::run_index`] via [`Self::build_matcher`]; repeated searches reuse one matcher.
+    pub matcher: OnceCell<RegexMatcher>,
+    /// Last [`Searcher`](grep_searcher::Searcher) built for `(line_number, max_matches)`; reused across `run_index` calls when the key matches.
+    pub searcher_cache: Mutex<Option<SearcherCacheEntry>>,
 }
 
 impl CompiledSearch {
@@ -146,6 +157,8 @@ impl CompiledSearch {
             patterns: patterns.to_vec(),
             opts,
             plan,
+            matcher: OnceCell::new(),
+            searcher_cache: Mutex::new(None),
         })
     }
 

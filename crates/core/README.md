@@ -6,7 +6,7 @@ Indexed, grep-style search over a directory tree: build a **trigram index** on d
 
 - **`build_index(corpus_root, index_dir)`** — walk corpus (ignore rules via `ignore`), write `files.bin` / `lexicon.bin` / `postings.bin` + metadata.
 - **`Index::open(index_dir)`** — load tables; holds corpus root path and file list.
-- **`CompiledSearch::new(patterns, SearchOptions)`** — compile once; then **`search_index`** (indexed) or **`search_walk`** (walk + match, optional path subset).
+- **`CompiledSearch::new(patterns, SearchOptions)`** — compile once; then **`search_index`** (indexed) or **`search_walk`** (walk + match, optional path subset). Repeated **`search_index`** / **`run_index`** calls on the same **`CompiledSearch`** reuse the compiled regex matcher (`matcher`) and, for the same line-number / max-matches settings, the line **`Searcher`** (`searcher_cache`).
 
 ## Internals (high level)
 

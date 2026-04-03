@@ -6,7 +6,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use crate::storage::format::{write_magic, POSTINGS_MAGIC};
+use crate::storage::format::{POSTINGS_MAGIC, write_magic};
 use crate::storage::mmap::open_mmap;
 
 /// Write postings blob to `out_path`.

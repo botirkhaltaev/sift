@@ -6,7 +6,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use crate::storage::format::{write_magic, LEXICON_MAGIC};
+use crate::storage::format::{LEXICON_MAGIC, write_magic};
 use crate::storage::mmap::open_mmap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

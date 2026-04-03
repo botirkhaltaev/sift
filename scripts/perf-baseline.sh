@@ -11,12 +11,12 @@ BIN="${repo_root}/target/profiling/sift-profile"
 
 if ! command -v perf >/dev/null 2>&1; then
 	echo "perf(1) not found — printing sift-profile metrics (install linux-tools / perf on Linux for perf.data)."
-	echo "=== literal_narrow (parity, SIFT_ITERS=50000) ==="
-	SIFT_ITERS=50000 "${BIN}" literal_narrow
-	echo "=== no_literal (parity, SIFT_ITERS=50000) ==="
-	SIFT_ITERS=50000 "${BIN}" no_literal
-	echo "=== build (SIFT_LARGE=1, SIFT_ITERS=1) ==="
-	SIFT_LARGE=1 SIFT_ITERS=1 "${BIN}" build
+	echo "=== literal_narrow (parity, SIFT_PROFILE_ITERS=50000) ==="
+	SIFT_PROFILE_ITERS=50000 "${BIN}" run literal_narrow
+	echo "=== no_literal (parity, SIFT_PROFILE_ITERS=50000) ==="
+	SIFT_PROFILE_ITERS=50000 "${BIN}" run no_literal
+	echo "=== build (SIFT_PROFILE_LARGE=1, SIFT_PROFILE_ITERS=1) ==="
+	SIFT_PROFILE_LARGE=1 SIFT_PROFILE_ITERS=1 "${BIN}" build
 	exit 0
 fi
 
@@ -28,13 +28,13 @@ run_perf() {
 	perf report --stdio --no-children -i "${repo_root}/target/perf-${name}.data" | head -n 40
 }
 
-echo "=== perf: literal_narrow (SIFT_ITERS=200000) ==="
-SIFT_ITERS=200000 run_perf literal-narrow "${BIN}" literal_narrow
+echo "=== perf: literal_narrow (SIFT_PROFILE_ITERS=200000) ==="
+SIFT_PROFILE_ITERS=200000 run_perf literal-narrow "${BIN}" run literal_narrow
 
-echo "=== perf: no_literal (SIFT_ITERS=100000) ==="
-SIFT_ITERS=100000 run_perf no-literal "${BIN}" no_literal
+echo "=== perf: no_literal (SIFT_PROFILE_ITERS=100000) ==="
+SIFT_PROFILE_ITERS=100000 run_perf no-literal "${BIN}" run no_literal
 
-echo "=== perf: build (SIFT_LARGE=1, SIFT_ITERS=1) ==="
-SIFT_LARGE=1 SIFT_ITERS=1 run_perf build-large "${BIN}" build
+echo "=== perf: build (SIFT_PROFILE_LARGE=1, SIFT_PROFILE_ITERS=1) ==="
+SIFT_PROFILE_LARGE=1 SIFT_PROFILE_ITERS=1 run_perf build-large "${BIN}" build
 
 echo "Raw perf.data files under target/perf-*.data — run: perf report -i target/perf-literal-narrow.data"

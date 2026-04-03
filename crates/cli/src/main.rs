@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{value_parser, Arg, ArgAction, Args, Command, FromArgMatches, Parser, Subcommand};
+use clap::{Arg, ArgAction, Args, Command, FromArgMatches, Parser, Subcommand, value_parser};
 use sift_core::{
     CaseMode, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
     Index, IndexBuilder, OutputEmission, SearchFilter, SearchFilterConfig, SearchMatchFlags,
@@ -93,11 +93,11 @@ fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
             } else {
                 None
             };
-            if let Some((idx, val)) = flag {
-                if idx > last_idx {
-                    last_idx = idx;
-                    result = val;
-                }
+            if let Some((idx, val)) = flag
+                && idx > last_idx
+            {
+                last_idx = idx;
+                result = val;
             }
         }
     }
@@ -129,11 +129,11 @@ fn resolve_hidden_from_args(args: &[String]) -> bool {
         } else {
             None
         };
-        if let Some((idx, val)) = flag {
-            if idx > last_idx {
-                last_idx = idx;
-                result = val;
-            }
+        if let Some((idx, val)) = flag
+            && idx > last_idx
+        {
+            last_idx = idx;
+            result = val;
         }
     }
     result
@@ -331,18 +331,18 @@ fn resolve_output_mode(args: &[String], invert_match: bool) -> (SearchMode, bool
             None
         };
 
-        if let Some((idx, name)) = flag {
-            if idx > last_idx {
-                last_idx = idx;
-                match name {
-                    "count" => mode = SearchMode::Count,
-                    "count_matches" => mode = SearchMode::CountMatches,
-                    "files_with_matches" => mode = SearchMode::FilesWithMatches,
-                    "files_without_match" => mode = SearchMode::FilesWithoutMatch,
-                    "only_matching" => saw_only_matching = true,
-                    "quiet" => quiet = true,
-                    _ => {}
-                }
+        if let Some((idx, name)) = flag
+            && idx > last_idx
+        {
+            last_idx = idx;
+            match name {
+                "count" => mode = SearchMode::Count,
+                "count_matches" => mode = SearchMode::CountMatches,
+                "files_with_matches" => mode = SearchMode::FilesWithMatches,
+                "files_without_match" => mode = SearchMode::FilesWithoutMatch,
+                "only_matching" => saw_only_matching = true,
+                "quiet" => quiet = true,
+                _ => {}
             }
         }
     }
@@ -658,10 +658,10 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(e) => {
-            if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
-                if ioe.kind() == std::io::ErrorKind::BrokenPipe {
-                    return ExitCode::SUCCESS;
-                }
+            if let Some(ioe) = e.downcast_ref::<std::io::Error>()
+                && ioe.kind() == std::io::ErrorKind::BrokenPipe
+            {
+                return ExitCode::SUCCESS;
             }
             eprintln!("sift: {e}");
             ExitCode::from(2)

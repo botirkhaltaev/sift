@@ -13,11 +13,11 @@ Public API is re-exported from the `sift_core` lib root (`lib.rs`): `Index`, `In
 | `index/trigram.rs` | `extract_trigrams`, `extract_trigrams_utf8_lossy` |
 | `index/files.rs` | read/write `files.bin` |
 | `planner.rs` | `TrigramPlan::for_patterns` — literal/alternation → narrow arms or full scan |
-| `search.rs` | `CompiledSearch`, `search_files`, `scan_lines`, parallel candidate scans, `parallel_candidate_min_files()` |
+| `search.rs` | `CompiledSearch`, `search_files`, `scan_lines`, parallel candidate scans, `parallel_candidate_threshold()` |
 | `prefilter.rs` | Regex HIR → necessary substring checks (skipped for `-F`/`-i`/`-v`) |
 | `verify.rs` | `pattern_branch`, `compile_search_pattern` |
 | `storage/` | Lexicon/postings binary layout |
-| `bin/profile.rs` | `sift-profile` — feature `profile` only |
+| `bin/sift_profile/` | `sift-profile` — feature `profile` only |
 
 ## Invariants worth preserving
 

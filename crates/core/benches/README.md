@@ -1,7 +1,7 @@
 # Benchmarks
 
 `crates/core/benches/search.rs` contains the Criterion benchmark suite for sift-core.
-`crates/core/src/bin/profile.rs` contains the `sift-profile` binary for hot-loop profiling.
+`crates/core/src/bin/sift_profile/` holds the `sift-profile` binary (hot-loop profiling, `profile` feature).
 
 ## Scenario matrix
 
@@ -14,6 +14,7 @@ execution paths:
 |---|---|---|
 | `literal_narrow` | `beta` | default (narrowable) |
 | `literal_narrow_large` | `beta` | default, 8k files |
+| `search_literal_narrow_corpus_scale` | `beta` | 100 / 1k / 8k files (sweep) |
 | `word_literal` | `beta` | `WORD_REGEXP` |
 | `line_literal` | `beta` | `LINE_REGEXP` |
 | `fixed_string` | `beta.gamma` | `FIXED_STRINGS` |
@@ -56,7 +57,7 @@ execution paths:
 - **filter_corpus**: 12 files with mixed extensions, hidden files, scoped subdirs,
   `.gitignore`, and `.ignore` markers — exercises all filter branches
 - **large**: ~8k files × 100 lines across 256 crate dirs — for statistical significance
-  on warm caches; enable with `SIFT_LARGE=1`
+  on warm caches; enable with `SIFT_PROFILE_LARGE=1`
 
 ## Running
 
@@ -69,35 +70,49 @@ cargo bench -p sift-core --bench search
 ./scripts/bench.sh -- --save-baseline main
 ./scripts/bench.sh -- --baseline main
 
-# sift-profile (hot-loop, tab-separated metrics)
+# sift-profile (tab-separated `profile` lines; see `sift-profile hints`)
 cargo run -p sift-core --features profile --bin sift-profile -- list
+cargo run -p sift-core --features profile --bin sift-profile -- hints
 ./scripts/profile.sh list
 
+./scripts/profile.sh run literal_narrow
+# shorthand:
 ./scripts/profile.sh literal_narrow
-./scripts/profile.sh glob_include
-./scripts/profile.sh count
-./scripts/profile.sh files_with_matches
+
+./scripts/profile.sh run glob_include
+./scripts/profile.sh run count
+./scripts/profile.sh search-only no_literal
 
 # Use large corpus
-SIFT_LARGE=1 ./scripts/profile.sh literal_narrow
+SIFT_PROFILE_LARGE=1 ./scripts/profile.sh run literal_narrow
 
 # Flamegraph
 ./scripts/profile.sh flamegraph literal_narrow
 
 # Custom corpus
-SIFT_PROFILE_CORPUS=/path/to/repo ./scripts/profile.sh literal_narrow
+SIFT_PROFILE_CORPUS=/path/to/repo ./scripts/profile.sh run literal_narrow
 ```
 
-## Environment variables
+## System profiling (CPU / call stacks)
+
+`sift-profile` prints **timings** (`profile` lines). To see **which functions use CPU**, use stack sampling:
+
+- **Script (recommended):** `./scripts/system-profile.sh` — builds with frame pointers, runs a **steady-state** search (`SIFT_PROFILE_LOOP_SECS`, default 25s), then records a **flamegraph** (`cargo install flamegraph`) or on **Linux** `perf` with `./scripts/system-profile.sh --perf no_literal`.
+- **Interpretation:** Open the SVG (usually `flamegraph.svg` in the repo root) — wide boxes = hot stacks. Compare **`search-only`** vs full **`run`** to focus on `run_index` vs planning.
+- **macOS:** Flamegraph may use **dtrace** and need **sudo**; or use **Xcode Instruments → Time Profiler** on `sift-profile` while it runs a long `SIFT_PROFILE_LOOP_SECS` loop.
+
+## `sift-profile` environment (`SIFT_PROFILE_*`)
 
 | Variable | Effect |
 |---|---|
-| `SIFT_LARGE=1` | Use large corpus (8k files) |
-| `SIFT_CORPUS_FILES=N` | Custom file count |
-| `SIFT_CORPUS_LINES=N` | Lines per file (large corpus) |
-| `SIFT_CORPUS_DIRS=N` | Directory fan-out (large corpus) |
-| `SIFT_FILTER_CORPUS=1` | Force filter_corpus in profile (parity default) |
-| `SIFT_ITERS=N` | Fixed iteration count |
-| `SIFT_LOOP_SECS=N` | Run each scenario for N seconds |
-| `SIFT_PROFILE_CORPUS` | Use external corpus path |
+| `SIFT_PROFILE_LARGE=1` | Use large corpus (8k files) |
+| `SIFT_PROFILE_CORPUS_FILES` | Custom file count |
+| `SIFT_PROFILE_CORPUS_LINES` | Lines per file (large corpus) |
+| `SIFT_PROFILE_CORPUS_DIRS` | Directory fan-out (large corpus) |
+| `SIFT_PROFILE_FILTER_CORPUS` | Force filter_corpus (parity default) |
+| `SIFT_PROFILE_ITERS` | Fixed iteration count for `run` / `build` |
+| `SIFT_PROFILE_LOOP_SECS` | Timed `run` (seconds); overrides `SIFT_PROFILE_ITERS` |
+| `SIFT_PROFILE_WARMUP` | `run_index` iterations before recording per-iter samples |
+| `SIFT_PROFILE_RSS=1` | Print resident set size before/after (Linux/macOS) |
+| `SIFT_PROFILE_CORPUS` | External corpus path |
 | `SIFT_PROFILE_INDEX` | Index directory (default: `<corpus>.sift`) |

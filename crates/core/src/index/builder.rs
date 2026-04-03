@@ -7,8 +7,8 @@ use ignore::WalkBuilder;
 use memmap2::Mmap;
 use rayon::prelude::*;
 
-use crate::index::{trigram::extract_unique_trigrams_utf8_lossy, CorpusKind};
-use crate::search::parallel_candidate_min_files;
+use crate::index::{CorpusKind, trigram::extract_unique_trigrams_utf8_lossy};
+use crate::search::parallel_candidate_threshold;
 use crate::storage::lexicon::LexiconEntry;
 use crate::storage::mmap::open_mmap;
 
@@ -82,7 +82,7 @@ pub fn build_index_tables(root: &Path) -> crate::Result<(CorpusKind, IndexTables
     let (corpus_kind, mut paths) = collect_paths(root)?;
     paths.sort_unstable();
 
-    let min_parallel = parallel_candidate_min_files();
+    let min_parallel = parallel_candidate_threshold();
     let per_file: Vec<(PathBuf, Vec<[u8; 3]>)> = if paths.len() >= min_parallel {
         paths
             .par_iter()

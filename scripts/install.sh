@@ -15,20 +15,29 @@ SIFT_REPO="${SIFT_REPO:-botirk38/sift}"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-$PREFIX/bin}"
 
+# Bump when you cut a release (used if GitHub API is rate-limited or unreachable).
+SIFT_DEFAULT_VERSION="${SIFT_DEFAULT_VERSION:-0.1.2}"
+
 # Optional: pin a version, e.g. export SIFT_VERSION=0.1.2
 resolve_version() {
 	if [ -n "${SIFT_VERSION:-}" ]; then
 		printf '%s\n' "$SIFT_VERSION"
 		return
 	fi
-	# Latest release tag from GitHub API (strip leading v)
-	_json=$(curl -fsSL "https://api.github.com/repos/${SIFT_REPO}/releases/latest") || return 1
-	_ver=$(printf '%s' "$_json" | tr -d '\n' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/')
-	if [ -z "$_ver" ] || [ "$_ver" = "$_json" ]; then
-		echo "install: could not resolve latest version for ${SIFT_REPO}; set SIFT_VERSION" >&2
-		return 1
+	# GitHub REST API requires a User-Agent; unauthenticated calls are rate-limited (~60/hr/IP).
+	_json=$(
+		curl -fsSL \
+			-H "Accept: application/vnd.github+json" \
+			-H "User-Agent: sift-install-script" \
+			"https://api.github.com/repos/${SIFT_REPO}/releases/latest"
+	) || _json=""
+	_ver=$(printf '%s' "$_json" | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' | head -1)
+	if [ -n "$_ver" ]; then
+		printf '%s\n' "$_ver"
+		return
 	fi
-	printf '%s\n' "$_ver"
+	echo "install: could not query releases/latest (rate limit or network); using SIFT_DEFAULT_VERSION=${SIFT_DEFAULT_VERSION} (override with SIFT_VERSION=... )" >&2
+	printf '%s\n' "$SIFT_DEFAULT_VERSION"
 }
 
 detect_asset() {
@@ -57,7 +66,7 @@ fallback_cargo() {
 	exit 0
 }
 
-VERSION=$(resolve_version) || exit 1
+VERSION=$(resolve_version)
 ASSET=$(detect_asset)
 TAG="v${VERSION}"
 URL="https://github.com/${SIFT_REPO}/releases/download/${TAG}/${ASSET}"

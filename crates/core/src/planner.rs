@@ -143,11 +143,7 @@ fn pick_better_lits(
         (true, true) => {
             let a_total = total_bytes(lits_a);
             let b_total = total_bytes(lits_b);
-            if a_total >= b_total {
-                lits_a
-            } else {
-                lits_b
-            }
+            if a_total >= b_total { lits_a } else { lits_b }
         }
     };
 
@@ -180,11 +176,7 @@ fn plan_pattern(pattern: &str, opts: &SearchOptions) -> Option<Vec<Vec<u8>>> {
     let hir = build_configured_hir(pattern, opts)?;
     let shaped = shape_hir(hir, opts);
     let lits = extract_literals(&shaped);
-    if lits.is_empty() {
-        None
-    } else {
-        Some(lits)
-    }
+    if lits.is_empty() { None } else { Some(lits) }
 }
 
 #[cfg(test)]

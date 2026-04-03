@@ -5,7 +5,7 @@ mod filter;
 mod matcher;
 mod types;
 
-pub use execute::{parallel_candidate_min_files, walk_file_paths};
+pub use execute::{parallel_candidate_threshold, walk_file_paths};
 pub use filter::{
     CandidateInfo, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilter,
     SearchFilterConfig, VisibilityConfig,

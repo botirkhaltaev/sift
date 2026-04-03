@@ -4,6 +4,7 @@
 /fuzz/artifacts
 /flamegraph.svg
 /cargo-flamegraph.trace
+/flamegraphs_all/
 .cursor/
 .sift/
 benchsuite/linux/
@@ -12,3 +13,5 @@ ripgrep/
 *.data
 *.data.*
 __pycache__/
+# Local Linux kernel clone for demos (large).
+demo/linux-kernel/
