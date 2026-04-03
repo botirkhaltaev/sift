@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,12 +13,34 @@ use crate::Index;
 use crate::planner::TrigramPlan;
 
 use super::{
-    CandidateInfo, CompiledSearch, FilenameMode, OutputEmission, SearchFilter, SearchMode,
-    SearchOutput,
+    CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, OutputEmission, SearchFilter,
+    SearchMode, SearchOutput, SearchRecordStyle,
 };
 
 #[cfg(test)]
 use super::{GlobConfig, HiddenMode, IgnoreConfig, Match, SearchFilterConfig, VisibilityConfig};
+
+const ANSI_RESET: &[u8] = b"\x1b[0m";
+const ANSI_PATH: &[u8] = b"\x1b[35m\x1b[1m";
+const ANSI_LINE: &[u8] = b"\x1b[32m";
+
+#[inline]
+fn should_color(records: SearchRecordStyle) -> bool {
+    match records.color {
+        ColorChoice::Never => false,
+        ColorChoice::Always => true,
+        ColorChoice::Auto => std::io::stdout().is_terminal(),
+    }
+}
+
+#[inline]
+fn write_line_terminator(out: &mut Vec<u8>, null_data: bool) {
+    if null_data {
+        out.push(0);
+    } else {
+        out.push(b'\n');
+    }
+}
 
 impl CompiledSearch {
     /// Returns raw candidate file IDs from index (trigram or full scan).
@@ -253,44 +275,56 @@ impl CompiledSearch {
         output: SearchOutput,
     ) -> crate::Result<bool> {
         let show_line_numbers =
-            output.line_number || self.opts.before_context > 0 || self.opts.after_context > 0;
-        self.with_cached_searcher(output.line_number, self.opts.max_results, |searcher| {
-            let mut any_match = false;
-            let mut out = Vec::new();
-            for candidate in candidates {
-                let heading = output.heading && output.filename_mode != FilenameMode::Never;
-                let mut sink_output = output;
-                if heading {
-                    sink_output.filename_mode = FilenameMode::Never;
-                }
-                let mut bytes = Vec::new();
-                let mut sink = StandardSink::new(
-                    matcher,
-                    sink_output,
-                    show_line_numbers,
-                    &candidate.rel_path,
-                    &mut bytes,
-                );
-                let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
-                any_match |= sink.matched;
-                if sink.matched && heading {
-                    if !out.is_empty() {
-                        out.push(b'\n');
+            output.lines.line_number || self.opts.before_context > 0 || self.opts.after_context > 0;
+        self.with_cached_searcher(
+            output.lines.line_number,
+            self.opts.max_results,
+            |searcher| {
+                let mut any_match = false;
+                let mut out = Vec::new();
+                for candidate in candidates {
+                    let heading =
+                        output.lines.heading && output.lines.filename_mode != FilenameMode::Never;
+                    let mut sink_output = output;
+                    if heading {
+                        sink_output.lines.filename_mode = FilenameMode::Never;
                     }
-                    writeln!(out, "{}", candidate.rel_path.display())?;
+                    let mut bytes = Vec::new();
+                    let mut sink = StandardSink::new(
+                        matcher,
+                        sink_output,
+                        show_line_numbers,
+                        &candidate.rel_path,
+                        &mut bytes,
+                    );
+                    let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
+                    any_match |= sink.matched;
+                    if sink.matched && heading {
+                        if !out.is_empty() {
+                            out.push(b'\n');
+                        }
+                        if should_color(output.records) {
+                            out.extend_from_slice(ANSI_PATH);
+                        }
+                        write!(out, "{}", candidate.rel_path.display())?;
+                        if should_color(output.records) {
+                            out.extend_from_slice(ANSI_RESET);
+                        }
+                        write_line_terminator(&mut out, output.records.null_data);
+                    }
+                    out.extend(bytes);
+                    if output.emission == OutputEmission::Quiet && any_match {
+                        break;
+                    }
                 }
-                out.extend(bytes);
-                if output.emission == OutputEmission::Quiet && any_match {
-                    break;
-                }
-            }
 
-            flush_chunk_output(std::iter::once(ChunkOutput {
-                bytes: out,
-                matched: any_match,
-                heading: false,
-            }))
-        })
+                flush_chunk_output(std::iter::once(ChunkOutput {
+                    bytes: out,
+                    matched: any_match,
+                    heading: false,
+                }))
+            },
+        )
     }
 
     fn run_summary_capped_with_info(
@@ -427,10 +461,15 @@ struct StandardWorker<'a> {
 
 impl<'a> StandardWorker<'a> {
     fn new(search: &CompiledSearch, matcher: &'a RegexMatcher, output: SearchOutput) -> Self {
-        let show_line_numbers =
-            output.line_number || search.opts.before_context > 0 || search.opts.after_context > 0;
+        let show_line_numbers = output.lines.line_number
+            || search.opts.before_context > 0
+            || search.opts.after_context > 0;
         Self {
-            searcher: search.build_searcher(output.line_number, search.opts.max_results, true),
+            searcher: search.build_searcher(
+                output.lines.line_number,
+                search.opts.max_results,
+                true,
+            ),
             matcher,
             output,
             show_line_numbers,
@@ -453,10 +492,11 @@ impl<'a> StandardWorker<'a> {
         }
 
         let matched = {
-            let heading = self.output.heading && self.output.filename_mode != FilenameMode::Never;
+            let heading =
+                self.output.lines.heading && self.output.lines.filename_mode != FilenameMode::Never;
             let mut sink_output = self.output;
             if heading {
-                sink_output.filename_mode = FilenameMode::Never;
+                sink_output.lines.filename_mode = FilenameMode::Never;
             }
             let mut sink = StandardSink::new(
                 self.matcher,
@@ -480,12 +520,19 @@ impl<'a> StandardWorker<'a> {
             index: result_index,
             output: ChunkOutput {
                 bytes: if matched
-                    && self.output.heading
-                    && self.output.filename_mode != FilenameMode::Never
+                    && self.output.lines.heading
+                    && self.output.lines.filename_mode != FilenameMode::Never
                     && self.output.emission != OutputEmission::Quiet
                 {
                     let mut out = Vec::new();
-                    let _ = writeln!(out, "{}", candidate.rel_path.display());
+                    if should_color(self.output.records) {
+                        out.extend_from_slice(ANSI_PATH);
+                    }
+                    let _ = write!(out, "{}", candidate.rel_path.display());
+                    if should_color(self.output.records) {
+                        out.extend_from_slice(ANSI_RESET);
+                    }
+                    write_line_terminator(&mut out, self.output.records.null_data);
                     out.extend(std::mem::take(&mut self.bytes));
                     out
                 } else {
@@ -493,8 +540,8 @@ impl<'a> StandardWorker<'a> {
                 },
                 matched,
                 heading: matched
-                    && self.output.heading
-                    && self.output.filename_mode != FilenameMode::Never
+                    && self.output.lines.heading
+                    && self.output.lines.filename_mode != FilenameMode::Never
                     && self.output.emission != OutputEmission::Quiet,
             },
         }
@@ -793,26 +840,47 @@ fn write_summary_record(
             if result.count == 0 {
                 return Ok(());
             }
-            let print_filename = output.filename_mode != FilenameMode::Never;
+            let print_filename = output.lines.filename_mode != FilenameMode::Never;
             if print_filename {
-                writeln!(out, "{}:{}", path.display(), result.count)
+                if should_color(output.records) {
+                    out.extend_from_slice(ANSI_PATH);
+                }
+                write!(out, "{}", path.display())?;
+                if should_color(output.records) {
+                    out.extend_from_slice(ANSI_RESET);
+                }
+                writeln!(out, ":{}", result.count)?;
             } else {
-                writeln!(out, "{}", result.count)
+                writeln!(out, "{}", result.count)?;
             }
+            Ok(())
         }
         SearchMode::FilesWithMatches => {
             if result.matched {
-                writeln!(out, "{}", path.display())
-            } else {
-                Ok(())
+                if should_color(output.records) {
+                    out.extend_from_slice(ANSI_PATH);
+                }
+                write!(out, "{}", path.display())?;
+                if should_color(output.records) {
+                    out.extend_from_slice(ANSI_RESET);
+                }
+                write_line_terminator(out, output.records.null_data);
             }
+            Ok(())
         }
         SearchMode::FilesWithoutMatch => {
             if result.matched {
-                Ok(())
-            } else {
-                writeln!(out, "{}", path.display())
+                return Ok(());
             }
+            if should_color(output.records) {
+                out.extend_from_slice(ANSI_PATH);
+            }
+            write!(out, "{}", path.display())?;
+            if should_color(output.records) {
+                out.extend_from_slice(ANSI_RESET);
+            }
+            write_line_terminator(out, output.records.null_data);
+            Ok(())
         }
         SearchMode::Standard | SearchMode::OnlyMatching => unreachable!(),
     }
@@ -826,14 +894,28 @@ fn write_standard_prefix(
     show_line_numbers: bool,
     is_context_line: bool,
 ) -> io::Result<()> {
-    let print_filename = output.filename_mode != FilenameMode::Never;
+    let color = should_color(output.records);
+    let print_filename = output.lines.filename_mode != FilenameMode::Never;
     if print_filename {
+        if color {
+            out.extend_from_slice(ANSI_PATH);
+        }
+        write!(out, "{}", path.display())?;
+        if color {
+            out.extend_from_slice(ANSI_RESET);
+        }
         let sep = if is_context_line { '-' } else { ':' };
-        write!(out, "{}{}", path.display(), sep)?;
+        write!(out, "{sep}")?;
     }
     if show_line_numbers {
+        if color {
+            out.extend_from_slice(ANSI_LINE);
+        }
         let sep = if is_context_line { '-' } else { ':' };
         write!(out, "{}{}", line_number.unwrap_or(0), sep)?;
+        if color {
+            out.extend_from_slice(ANSI_RESET);
+        }
     }
     Ok(())
 }

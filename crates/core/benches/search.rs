@@ -39,9 +39,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use sift_core::{
-    CaseMode, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    Index, IndexBuilder, OutputEmission, SearchFilter, SearchFilterConfig, SearchMatchFlags,
-    SearchMode, SearchOptions, SearchOutput, VisibilityConfig,
+    CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
+    IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter, SearchFilterConfig,
+    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle,
+    VisibilityConfig,
 };
 
 fn make_parity_corpus(root: &Path) {
@@ -177,9 +178,15 @@ const fn output_std() -> SearchOutput {
     SearchOutput {
         mode: SearchMode::Standard,
         emission: OutputEmission::Normal,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        lines: SearchLineStyle {
+            filename_mode: FilenameMode::Auto,
+            heading: false,
+            line_number: false,
+        },
+        records: SearchRecordStyle {
+            null_data: false,
+            color: ColorChoice::Never,
+        },
     }
 }
 
@@ -187,9 +194,15 @@ const fn output_quiet(mode: SearchMode) -> SearchOutput {
     SearchOutput {
         mode,
         emission: OutputEmission::Quiet,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        lines: SearchLineStyle {
+            filename_mode: FilenameMode::Auto,
+            heading: false,
+            line_number: false,
+        },
+        records: SearchRecordStyle {
+            null_data: false,
+            color: ColorChoice::Never,
+        },
     }
 }
 
@@ -877,9 +890,7 @@ fn bench_scoped_search(c: &mut Criterion) {
     let output = SearchOutput {
         mode: SearchMode::FilesWithMatches,
         emission: OutputEmission::Normal,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        ..SearchOutput::default()
     };
     let mut g = c.benchmark_group("search_scoped");
     g.bench_function("beta_subdir_filter_corpus", |b| {
@@ -900,9 +911,7 @@ fn bench_only_matching(c: &mut Criterion) {
     let output = SearchOutput {
         mode: SearchMode::OnlyMatching,
         emission: OutputEmission::Normal,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        ..SearchOutput::default()
     };
     let mut g = c.benchmark_group("search_only_matching");
     g.bench_function("beta_parity", |b| {
@@ -921,9 +930,7 @@ fn bench_count(c: &mut Criterion) {
     let output = SearchOutput {
         mode: SearchMode::Count,
         emission: OutputEmission::Normal,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        ..SearchOutput::default()
     };
     let mut g = c.benchmark_group("search_count");
     g.bench_function("beta_parity", |b| {
@@ -942,9 +949,7 @@ fn bench_count_matches(c: &mut Criterion) {
     let output = SearchOutput {
         mode: SearchMode::CountMatches,
         emission: OutputEmission::Normal,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        ..SearchOutput::default()
     };
     let mut g = c.benchmark_group("search_count_matches");
     g.bench_function("beta_parity", |b| {
@@ -963,9 +968,7 @@ fn bench_files_with_matches(c: &mut Criterion) {
     let output = SearchOutput {
         mode: SearchMode::FilesWithMatches,
         emission: OutputEmission::Normal,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        ..SearchOutput::default()
     };
     let mut g = c.benchmark_group("search_files_with_matches");
     g.bench_function("beta_parity", |b| {
@@ -984,9 +987,7 @@ fn bench_files_without_match(c: &mut Criterion) {
     let output = SearchOutput {
         mode: SearchMode::FilesWithoutMatch,
         emission: OutputEmission::Normal,
-        filename_mode: FilenameMode::Auto,
-        heading: false,
-        line_number: false,
+        ..SearchOutput::default()
     };
     let mut g = c.benchmark_group("search_files_without_match");
     g.bench_function("beta_parity", |b| {

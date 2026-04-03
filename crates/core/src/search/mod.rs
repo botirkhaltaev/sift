@@ -11,6 +11,6 @@ pub use filter::{
     SearchFilterConfig, VisibilityConfig,
 };
 pub use types::{
-    CaseMode, CompiledSearch, FilenameMode, Match, OutputEmission, SearchMatchFlags, SearchMode,
-    SearchOptions, SearchOutput,
+    CaseMode, ColorChoice, CompiledSearch, FilenameMode, Match, OutputEmission, SearchLineStyle,
+    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle,
 };
