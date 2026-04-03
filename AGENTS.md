@@ -35,6 +35,22 @@ Bench / `sift-profile`: package + features in `crates/core/benches/README.md` an
 - Prefer fixing lints over `#[allow(clippy::…)]` unless there is a rare, documented reason.
 - Larger roadmap slices: **one branch per slice**, PR, merge, then start the next slice from an updated default branch — details in `plan.md` when present.
 
+### Branch names
+
+Use **short, descriptive kebab-case** names so history and open PRs stay readable. Prefer a **type prefix** when it fits:
+
+| Prefix | Use for |
+|--------|---------|
+| `feat/` | New behavior, flags, or API |
+| `fix/` | Bug fixes, regressions |
+| `docs/` | Documentation only |
+| `chore/` | Tooling, CI, refactors with no user-visible change |
+
+**Good:** `feat/stats-elapsed`, `fix/ignore-git-without-repo`, `docs/rg-compat-matrix`  
+**Avoid:** opaque labels like `phase-4` or `wip` with no topic — they force readers to open the PR to learn what changed.
+
+Rename a local branch before push: `git branch -m old-name new-name`, then `git push -u origin new-name` (and delete the old remote branch if it was already pushed).
+
 ## Core API (entry points)
 
 `IndexBuilder::build`, `Index::open`, `CompiledSearch::new`, then indexed `run_index` or walk-based search as in `crates/core/README.md`.

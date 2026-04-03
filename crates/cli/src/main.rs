@@ -1004,6 +1004,7 @@ fn build_search_filter_config(
 fn write_search_stats(stats: &SearchStats) {
     eprintln!("{} matches", stats.matches);
     eprintln!("{} files searched", stats.files_searched);
+    eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
 }
 
 fn run_search_with_index(
