@@ -3,6 +3,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Instant;
 
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
@@ -128,6 +129,7 @@ impl CompiledSearch {
         }
 
         // Stage 4: Build matcher (once per `CompiledSearch`) and search
+        let search_start = Instant::now();
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
@@ -159,6 +161,7 @@ impl CompiledSearch {
                 | SearchMode::FilesWithMatches
                 | SearchMode::FilesWithoutMatch => summary_counter.load(Ordering::Relaxed),
             };
+            s.elapsed = search_start.elapsed();
         }
 
         Ok(ok)
@@ -225,6 +228,7 @@ impl CompiledSearch {
             return Ok(false);
         }
 
+        let search_start = Instant::now();
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
@@ -256,6 +260,7 @@ impl CompiledSearch {
                 | SearchMode::FilesWithMatches
                 | SearchMode::FilesWithoutMatch => summary_counter.load(Ordering::Relaxed),
             };
+            s.elapsed = search_start.elapsed();
         }
 
         Ok(ok)

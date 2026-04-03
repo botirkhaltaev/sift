@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
@@ -185,12 +186,17 @@ impl Default for SearchOutput {
 ///
 /// `matches` is mode-dependent: line hits for standard / only-matching / count modes,
 /// one per matching file for `-l`, and one per listed file for `--files-without-match`.
+///
+/// `elapsed` covers wall time for the search stage (matcher build + scanning candidates), not
+/// index open or filter prep.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SearchStats {
     /// Files searched after filtering (same length as the candidate list).
     pub files_searched: usize,
     /// Mode-dependent match tally (see struct docs).
     pub matches: usize,
+    /// Wall-clock time spent in the search phase after candidates are ready.
+    pub elapsed: Duration,
 }
 
 #[derive(Debug)]
