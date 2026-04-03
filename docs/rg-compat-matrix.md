@@ -19,5 +19,6 @@ back each implemented row with Rust tests that run `rg` and `sift` side by side.
 | Color / separators / null | `ripgrep/crates/printer/src/standard.rs`, `ripgrep/crates/printer/src/summary.rs` | Implemented | `--color`, `-0` / `--null`; see `integration_null_color.rs`. |
 | `--stats` | `ripgrep/crates/printer/stats.rs` (approx.) | Partial | Match tally, files contained matches, files searched, bytes printed, bytes searched (metadata sum), elapsed on stderr; no “matched lines” / split timing like rg; parity vs rg totals not guaranteed. See `integration_stats.rs`. |
 | Encoding / multiline | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/json.rs`, `ripgrep/tests/multiline.rs` | Missing | In scope, but after basic output parity lands. |
-| `--json`, `--vimgrep`, `--debug` | `ripgrep/tests/json.rs`, `ripgrep/tests/misc.rs` (`vimgrep`) | Missing | In scope for non-engine parity. |
+| `--json` | `ripgrep/tests/json.rs`, `grep-printer` JSON | Implemented | JSON Lines (`begin` / `match` / `context` / `end` / `summary`); `--json` implies stderr stats like `rg`. See `integration_json.rs`. |
+| `--vimgrep`, `--debug` | `ripgrep/tests/misc.rs` (`vimgrep`) | Missing | In scope for non-engine parity. |
 | `-P` / PCRE2 | `ripgrep/crates/pcre2`, `ripgrep/crates/core/flags/defs.rs` | Deferred | Explicitly out of scope for the current parity phase. |

@@ -8,7 +8,7 @@ use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig,
     HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter,
     SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchRecordStyle, SearchStats, VisibilityConfig,
+    SearchOutputFormat, SearchRecordStyle, SearchStats, VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -52,6 +52,17 @@ struct Cli {
     paths: PathArgs,
     #[command(flatten)]
     stats_decl: StatsDecl,
+    #[command(flatten)]
+    json_decl: JsonDecl,
+}
+
+/// Declares `--json` / `--no-json` for clap; effective value uses [`resolve_json_from_args`].
+#[derive(Args)]
+struct JsonDecl {
+    #[arg(long = "json", action = ArgAction::SetTrue)]
+    _json: bool,
+    #[arg(long = "no-json", action = ArgAction::SetTrue)]
+    _no_json: bool,
 }
 
 /// Declares `--stats` for clap; effective value uses [`resolve_stats_from_args`].
@@ -358,6 +369,23 @@ fn resolve_stats_from_args(args: &[String]) -> bool {
         if arg == "--stats" && i >= last_idx {
             last_idx = i;
             result = true;
+        }
+    }
+    result
+}
+
+/// `--json` / `--no-json`; later flag wins (ripgrep-style).
+fn resolve_json_from_args(args: &[String]) -> bool {
+    let mut last_idx = 0usize;
+    let mut result = false;
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--json" && i >= last_idx {
+            last_idx = i;
+            result = true;
+        }
+        if arg == "--no-json" && i >= last_idx {
+            last_idx = i;
+            result = false;
         }
     }
     result
@@ -897,12 +925,14 @@ fn excluded_search_paths(search_root: &Path, sift_dir: &Path) -> Vec<PathBuf> {
 }
 
 const fn search_output(
+    format: SearchOutputFormat,
     effective_mode: SearchMode,
     quiet: bool,
     lines: SearchLineStyle,
     records: SearchRecordStyle,
 ) -> SearchOutput {
     SearchOutput {
+        format,
         mode: effective_mode,
         emission: if quiet {
             OutputEmission::Quiet
@@ -954,6 +984,7 @@ struct SearchOutputCtx {
     mode: SearchModeCtx,
     lines: SearchLineResolveCtx,
     format: SearchFormatCtx,
+    output_format: SearchOutputFormat,
 }
 
 /// Resolved visibility, ignore sources, and glob case (from argv order + clap) for [`SearchFilterConfig`].
@@ -1028,12 +1059,14 @@ fn run_search_with_index(
         corpus_is_single_file,
     );
     let output = search_output(
+        out.output_format,
         out.mode.effective_mode,
         out.mode.quiet,
         SearchLineStyle {
             filename_mode,
             heading: out.lines.heading,
-            line_number: cli.out1.line_number,
+            line_number: cli.out1.line_number
+                || matches!(out.output_format, SearchOutputFormat::Json),
         },
         SearchRecordStyle {
             null_data: out.format.null_data,
@@ -1066,12 +1099,14 @@ fn run_search_walk(
     let filename_mode =
         effective_filename_mode(out.lines.with_filename, out.lines.is_path_mode, false);
     let output = search_output(
+        out.output_format,
         out.mode.effective_mode,
         out.mode.quiet,
         SearchLineStyle {
             filename_mode,
             heading: out.lines.heading,
-            line_number: cli.out1.line_number,
+            line_number: cli.out1.line_number
+                || matches!(out.output_format, SearchOutputFormat::Json),
         },
         SearchRecordStyle {
             null_data: out.format.null_data,
@@ -1099,7 +1134,6 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     )?;
 
     let args: Vec<String> = std::env::args().collect();
-    let print_stats = resolve_stats_from_args(&args);
     let invert_match = resolve_invert_match_from_args(&args);
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
     let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
@@ -1138,6 +1172,22 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
         mode
     };
 
+    let use_json = resolve_json_from_args(&args);
+    if use_json {
+        match effective_mode {
+            SearchMode::Count
+            | SearchMode::CountMatches
+            | SearchMode::FilesWithMatches
+            | SearchMode::FilesWithoutMatch => {
+                anyhow::bail!(
+                    "sift: --json cannot be used with --count, --count-matches, --files-with-matches, or --files-without-match"
+                );
+            }
+            SearchMode::Standard | SearchMode::OnlyMatching => {}
+        }
+    }
+    let print_stats = resolve_stats_from_args(&args) || use_json;
+
     let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
     let cwd = std::env::current_dir()?;
 
@@ -1157,6 +1207,11 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
             is_path_mode,
         },
         format: SearchFormatCtx { null_data, color },
+        output_format: if use_json {
+            SearchOutputFormat::Json
+        } else {
+            SearchOutputFormat::Text
+        },
     };
     let filter = SearchFilterCtx {
         hidden,

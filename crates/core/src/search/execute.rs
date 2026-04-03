@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use grep_matcher::Matcher;
+use grep_printer::{JSON, Stats as JsonStats};
 use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
@@ -15,7 +16,7 @@ use crate::planner::TrigramPlan;
 
 use super::{
     CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, OutputEmission, SearchFilter,
-    SearchMode, SearchOutput, SearchRecordStyle, SearchStats,
+    SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchStats,
 };
 
 #[cfg(test)]
@@ -56,6 +57,53 @@ struct StatsCollection<'a> {
     primary: Option<&'a AtomicUsize>,
     files_with_matches: Option<&'a AtomicUsize>,
     bytes_printed: Option<&'a AtomicU64>,
+}
+
+/// Discards JSON bytes (for `--json` + quiet: ripgrep emits summary only).
+struct NullWriter;
+
+impl io::Write for NullWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[inline]
+fn fill_json_search_stats(
+    s: &mut SearchStats,
+    merged: &JsonStats,
+    candidates_len: usize,
+    bytes_searched_sum: u64,
+    elapsed: std::time::Duration,
+    summary_line_bytes: u64,
+) {
+    s.matches = usize::try_from(merged.matches()).unwrap_or(usize::MAX);
+    s.files_with_matches = usize::try_from(merged.searches_with_match()).unwrap_or(usize::MAX);
+    s.files_searched = candidates_len;
+    s.bytes_printed = merged.bytes_printed() + summary_line_bytes;
+    s.bytes_searched = bytes_searched_sum;
+    s.elapsed = elapsed;
+}
+
+fn format_json_summary_line(wall: std::time::Duration, agg: &JsonStats) -> crate::Result<String> {
+    let stats_val = serde_json::to_value(agg)?;
+    let wall_secs = f64::from(wall.subsec_nanos()).mul_add(1e-9, wall.as_secs_f64());
+    let v = serde_json::json!({
+        "type": "summary",
+        "data": {
+            "elapsed_total": {
+                "secs": wall.as_secs(),
+                "nanos": wall.subsec_nanos(),
+                "human": format!("{wall_secs:0.6}s"),
+            },
+            "stats": stats_val,
+        }
+    });
+    Ok(serde_json::to_string(&v)?)
 }
 
 impl CompiledSearch {
@@ -147,6 +195,21 @@ impl CompiledSearch {
         let search_start = Instant::now();
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
+
+        if matches!(output.format, SearchOutputFormat::Json) {
+            return match output.mode {
+                SearchMode::Standard | SearchMode::OnlyMatching => self
+                    .run_json_standard_with_info(
+                        &candidates,
+                        matcher,
+                        output,
+                        parallel,
+                        search_start,
+                        stats,
+                    ),
+                _ => Err(crate::Error::JsonOutputIncompatibleMode),
+            };
+        }
 
         let match_counter = AtomicUsize::new(0);
         let counter_ref = stats.is_some().then_some(&match_counter);
@@ -270,6 +333,21 @@ impl CompiledSearch {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
+        if matches!(output.format, SearchOutputFormat::Json) {
+            return match output.mode {
+                SearchMode::Standard | SearchMode::OnlyMatching => self
+                    .run_json_standard_with_info(
+                        &candidates,
+                        matcher,
+                        output,
+                        parallel,
+                        search_start,
+                        stats,
+                    ),
+                _ => Err(crate::Error::JsonOutputIncompatibleMode),
+            };
+        }
+
         let match_counter = AtomicUsize::new(0);
         let counter_ref = stats.is_some().then_some(&match_counter);
         let files_with_matches = AtomicUsize::new(0);
@@ -376,6 +454,71 @@ impl CompiledSearch {
             }));
             out
         }
+    }
+
+    fn run_json_standard_with_info(
+        &self,
+        candidates: &[CandidateInfo],
+        matcher: &RegexMatcher,
+        output: SearchOutput,
+        parallel: bool,
+        wall_start: Instant,
+        stats: Option<&mut SearchStats>,
+    ) -> crate::Result<bool> {
+        let bytes_searched_sum = sum_candidate_file_bytes(candidates);
+        if parallel {
+            let stop = AtomicBool::new(false);
+            let n = candidates.len();
+            let mut files = Vec::with_capacity(n);
+            candidates
+                .par_iter()
+                .enumerate()
+                .map_init(
+                    || JsonWorker::new(self, matcher, output),
+                    |worker: &mut JsonWorker<'_>,
+                     (result_index, candidate): (usize, &CandidateInfo)| {
+                        worker.search_candidate(candidate, result_index, &stop)
+                    },
+                )
+                .collect_into_vec(&mut files);
+            files.sort_by_key(|file| file.index);
+            return finish_json_run(
+                files,
+                wall_start,
+                stats,
+                candidates.len(),
+                bytes_searched_sum,
+            );
+        }
+
+        self.run_json_capped_with_info(candidates, matcher, output, wall_start, stats)
+    }
+
+    fn run_json_capped_with_info(
+        &self,
+        candidates: &[CandidateInfo],
+        matcher: &RegexMatcher,
+        output: SearchOutput,
+        wall_start: Instant,
+        stats: Option<&mut SearchStats>,
+    ) -> crate::Result<bool> {
+        let bytes_searched_sum = sum_candidate_file_bytes(candidates);
+        self.with_cached_searcher(true, self.opts.max_results, |searcher| {
+            let stop = AtomicBool::new(false);
+            let mut files = Vec::with_capacity(candidates.len());
+            for (i, candidate) in candidates.iter().enumerate() {
+                files.push(json_search_one(
+                    searcher, matcher, output, candidate, i, &stop,
+                ));
+            }
+            finish_json_run(
+                files,
+                wall_start,
+                stats,
+                candidates.len(),
+                bytes_searched_sum,
+            )
+        })
     }
 
     fn run_standard_with_info(
@@ -669,6 +812,38 @@ impl CompiledSearch {
     }
 }
 
+struct JsonWorker<'a> {
+    searcher: Searcher,
+    matcher: &'a RegexMatcher,
+    output: SearchOutput,
+}
+
+impl<'a> JsonWorker<'a> {
+    fn new(search: &'a CompiledSearch, matcher: &'a RegexMatcher, output: SearchOutput) -> Self {
+        Self {
+            searcher: search.build_searcher(true, search.opts.max_results, true),
+            matcher,
+            output,
+        }
+    }
+
+    fn search_candidate(
+        &mut self,
+        candidate: &CandidateInfo,
+        result_index: usize,
+        stop: &AtomicBool,
+    ) -> FileResult {
+        json_search_one(
+            &mut self.searcher,
+            self.matcher,
+            self.output,
+            candidate,
+            result_index,
+            stop,
+        )
+    }
+}
+
 struct StandardWorker<'a> {
     /// Shared across Rayon threads; [`Matcher`] is implemented for `&RegexMatcher`.
     matcher: &'a RegexMatcher,
@@ -718,6 +893,7 @@ impl<'a> StandardWorker<'a> {
             return FileResult {
                 index: result_index,
                 output: ChunkOutput::empty(),
+                json_stats: None,
             };
         }
 
@@ -783,6 +959,7 @@ impl<'a> StandardWorker<'a> {
                     && self.output.lines.filename_mode != FilenameMode::Never
                     && self.output.emission != OutputEmission::Quiet,
             },
+            json_stats: None,
         }
     }
 }
@@ -954,6 +1131,7 @@ impl<'a> SummaryWorker<'a> {
             return FileResult {
                 index: result_index,
                 output: ChunkOutput::empty(),
+                json_stats: None,
             };
         }
 
@@ -980,6 +1158,7 @@ impl<'a> SummaryWorker<'a> {
                 matched,
                 heading: false,
             },
+            json_stats: None,
         }
     }
 }
@@ -987,6 +1166,8 @@ impl<'a> SummaryWorker<'a> {
 struct FileResult {
     index: usize,
     output: ChunkOutput,
+    /// Per-file [`JsonStats`] when running JSON output mode; unused for text printers.
+    json_stats: Option<JsonStats>,
 }
 
 struct ChunkOutput {
@@ -1031,6 +1212,85 @@ fn flush_chunk_output(
         emitted = true;
     }
     Ok(any_match)
+}
+
+fn finish_json_run(
+    files: Vec<FileResult>,
+    wall_start: Instant,
+    stats: Option<&mut SearchStats>,
+    candidates_len: usize,
+    bytes_searched_sum: u64,
+) -> crate::Result<bool> {
+    let mut merged = JsonStats::new();
+    let mut outputs = Vec::with_capacity(files.len());
+    for f in files {
+        if let Some(st) = f.json_stats {
+            merged += &st;
+        }
+        outputs.push(f.output);
+    }
+    let any_match = flush_chunk_output(outputs, None)?;
+    let summary_line = format_json_summary_line(wall_start.elapsed(), &merged)?;
+    let summary_bytes = summary_line.len() as u64 + 1;
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(summary_line.as_bytes())?;
+    stdout.write_all(b"\n")?;
+    if let Some(s) = stats {
+        fill_json_search_stats(
+            s,
+            &merged,
+            candidates_len,
+            bytes_searched_sum,
+            wall_start.elapsed(),
+            summary_bytes,
+        );
+    }
+    Ok(any_match)
+}
+
+fn json_search_one(
+    searcher: &mut Searcher,
+    matcher: &RegexMatcher,
+    output: SearchOutput,
+    candidate: &CandidateInfo,
+    result_index: usize,
+    stop: &AtomicBool,
+) -> FileResult {
+    if stop.load(Ordering::SeqCst) {
+        return FileResult {
+            index: result_index,
+            output: ChunkOutput::empty(),
+            json_stats: None,
+        };
+    }
+    let quiet = output.emission == OutputEmission::Quiet;
+    let (bytes, file_stats) = if quiet {
+        let mut json = JSON::new(NullWriter);
+        let mut sink = json.sink_with_path(matcher, &candidate.abs_path);
+        let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
+        (Vec::new(), sink.stats().clone())
+    } else {
+        let mut json = JSON::new(Vec::new());
+        let file_stats = {
+            let mut sink = json.sink_with_path(matcher, &candidate.abs_path);
+            let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
+            sink.stats().clone()
+        };
+        (json.into_inner(), file_stats)
+    };
+    let had_match = file_stats.matches() > 0;
+    if output.emission == OutputEmission::Quiet && had_match {
+        stop.store(true, Ordering::SeqCst);
+    }
+    FileResult {
+        index: result_index,
+        output: ChunkOutput {
+            bytes,
+            matched: had_match,
+            heading: false,
+        },
+        json_stats: Some(file_stats),
+    }
 }
 
 #[derive(Clone, Copy)]

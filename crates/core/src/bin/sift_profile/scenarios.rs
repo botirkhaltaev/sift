@@ -54,6 +54,7 @@ impl Scenario {
 
 const fn make_output(mode: SearchMode, emission: sift_core::OutputEmission) -> SearchOutput {
     SearchOutput {
+        format: sift_core::SearchOutputFormat::Text,
         mode,
         emission,
         lines: SearchLineStyle {

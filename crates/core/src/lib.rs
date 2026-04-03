@@ -16,8 +16,8 @@ pub use planner::TrigramPlan;
 pub use search::{
     CandidateInfo, CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode,
     IgnoreConfig, IgnoreSources, Match, OutputEmission, SearchFilter, SearchFilterConfig,
-    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle,
-    SearchStats, VisibilityConfig, walk_file_paths,
+    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
+    SearchRecordStyle, SearchStats, VisibilityConfig, walk_file_paths,
 };
 
 pub use ignore::{Walk, WalkBuilder};
@@ -54,6 +54,12 @@ pub enum Error {
 
     #[error("invalid max-count: 0 matches requested")]
     InvalidMaxCount,
+
+    #[error("JSON output is only supported for standard search (not count or file-list modes)")]
+    JsonOutputIncompatibleMode,
+
+    #[error("JSON serialization error: {0}")]
+    JsonSerialize(#[from] serde_json::Error),
 
     #[error("invalid index metadata: {0}")]
     InvalidMeta(PathBuf),
