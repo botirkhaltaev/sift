@@ -15,13 +15,15 @@ Short orientation for tools and contributors. Product direction and phased roadm
 
 ## CI-equivalent checks
 
-Same as `.github/workflows/ci.yml` (Ubuntu, macOS, Windows; stable Rust):
+Same as `.github/workflows/ci.yml` (Ubuntu, macOS; stable Rust):
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
+
+**Mandatory precommit procedure**: Run all three CI-equivalent commands above **before pushing**. Fix any failures locally, then push.
 
 Bench / `sift-profile`: package + features in `crates/core/benches/README.md` and `crates/core/README.md`. Fuzz is manual: `./scripts/fuzz.sh`.
 

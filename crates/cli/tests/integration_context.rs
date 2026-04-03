@@ -4,9 +4,7 @@ mod common;
 
 use std::fs;
 
-use common::{
-    BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout,
-};
+use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout};
 
 #[test]
 fn context_c_shows_surrounding_lines() {
