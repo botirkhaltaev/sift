@@ -159,6 +159,7 @@ fn sift_criterion() -> Criterion {
 fn default_filter() -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![],
+        exclude_paths: vec![],
         glob: GlobConfig::default(),
         visibility: VisibilityConfig {
             hidden: HiddenMode::Respect,
@@ -168,6 +169,7 @@ fn default_filter() -> SearchFilterConfig {
                 require_git: true,
             },
         },
+        follow_links: false,
     }
 }
 
@@ -176,6 +178,7 @@ const fn output_std() -> SearchOutput {
         mode: SearchMode::Standard,
         emission: OutputEmission::Normal,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     }
 }
@@ -185,6 +188,7 @@ const fn output_quiet(mode: SearchMode) -> SearchOutput {
         mode,
         emission: OutputEmission::Quiet,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     }
 }
@@ -596,6 +600,7 @@ fn bench_alternation_casei(c: &mut Criterion) {
 fn glob_include_filter() -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![],
+        exclude_paths: vec![],
         glob: GlobConfig {
             patterns: vec!["**/*.txt".to_string()],
             case_insensitive: false,
@@ -608,12 +613,14 @@ fn glob_include_filter() -> SearchFilterConfig {
                 require_git: true,
             },
         },
+        follow_links: false,
     }
 }
 
 fn glob_exclude_filter() -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![],
+        exclude_paths: vec![],
         glob: GlobConfig {
             patterns: vec!["!**/*.txt".to_string()],
             case_insensitive: false,
@@ -626,12 +633,14 @@ fn glob_exclude_filter() -> SearchFilterConfig {
                 require_git: true,
             },
         },
+        follow_links: false,
     }
 }
 
 fn glob_casei_filter() -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![],
+        exclude_paths: vec![],
         glob: GlobConfig {
             patterns: vec!["**/*.TXT".to_string()],
             case_insensitive: true,
@@ -644,12 +653,14 @@ fn glob_casei_filter() -> SearchFilterConfig {
                 require_git: true,
             },
         },
+        follow_links: false,
     }
 }
 
 fn hidden_include_filter() -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![],
+        exclude_paths: vec![],
         glob: GlobConfig::default(),
         visibility: VisibilityConfig {
             hidden: HiddenMode::Include,
@@ -659,12 +670,14 @@ fn hidden_include_filter() -> SearchFilterConfig {
                 require_git: true,
             },
         },
+        follow_links: false,
     }
 }
 
 fn ignore_custom_filter() -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![],
+        exclude_paths: vec![],
         glob: GlobConfig::default(),
         visibility: VisibilityConfig {
             hidden: HiddenMode::Respect,
@@ -674,12 +687,14 @@ fn ignore_custom_filter() -> SearchFilterConfig {
                 require_git: false,
             },
         },
+        follow_links: false,
     }
 }
 
 fn scoped_filter(subdir: &str) -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![PathBuf::from(subdir)],
+        exclude_paths: vec![],
         glob: GlobConfig::default(),
         visibility: VisibilityConfig {
             hidden: HiddenMode::Respect,
@@ -689,6 +704,7 @@ fn scoped_filter(subdir: &str) -> SearchFilterConfig {
                 require_git: true,
             },
         },
+        follow_links: false,
     }
 }
 
@@ -855,6 +871,7 @@ fn bench_scoped_search(c: &mut Criterion) {
         mode: SearchMode::FilesWithMatches,
         emission: OutputEmission::Normal,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     };
     let mut g = c.benchmark_group("search_scoped");
@@ -877,6 +894,7 @@ fn bench_only_matching(c: &mut Criterion) {
         mode: SearchMode::OnlyMatching,
         emission: OutputEmission::Normal,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     };
     let mut g = c.benchmark_group("search_only_matching");
@@ -897,6 +915,7 @@ fn bench_count(c: &mut Criterion) {
         mode: SearchMode::Count,
         emission: OutputEmission::Normal,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     };
     let mut g = c.benchmark_group("search_count");
@@ -917,6 +936,7 @@ fn bench_count_matches(c: &mut Criterion) {
         mode: SearchMode::CountMatches,
         emission: OutputEmission::Normal,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     };
     let mut g = c.benchmark_group("search_count_matches");
@@ -937,6 +957,7 @@ fn bench_files_with_matches(c: &mut Criterion) {
         mode: SearchMode::FilesWithMatches,
         emission: OutputEmission::Normal,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     };
     let mut g = c.benchmark_group("search_files_with_matches");
@@ -957,6 +978,7 @@ fn bench_files_without_match(c: &mut Criterion) {
         mode: SearchMode::FilesWithoutMatch,
         emission: OutputEmission::Normal,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     };
     let mut g = c.benchmark_group("search_files_without_match");

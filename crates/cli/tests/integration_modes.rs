@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 
 use common::{
-    abs, abs_match, assert_success, build_index, command, fresh_dir, line_path, normalized_stdout,
+    BuildIndexOptions, assert_success, command, fresh_dir, line_path, normalized_stdout, rel_match,
 };
 
 #[test]
@@ -14,7 +14,7 @@ fn files_without_match_only_non_matching_paths() {
     fs::write(root.join("c.txt"), "hello again\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -29,7 +29,7 @@ fn files_without_match_only_non_matching_paths() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(lines, [abs(&root, "b.txt")]);
+    assert_eq!(lines, ["b.txt".to_string()]);
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn files_without_match_when_no_file_matches_prints_all_files() {
     fs::write(root.join("b.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -54,7 +54,7 @@ fn files_without_match_when_no_file_matches_prints_all_files() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(lines, [abs(&root, "a.txt"), abs(&root, "b.txt")]);
+    assert_eq!(lines, ["a.txt".to_string(), "b.txt".to_string()]);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn files_without_match_all_match_prints_nothing_and_exits_1() {
     fs::write(root.join("b.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -86,7 +86,7 @@ fn files_with_matches_wins_over_files_without_match() {
     fs::write(root.join("b.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -102,7 +102,7 @@ fn files_with_matches_wins_over_files_without_match() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(lines, [abs(&root, "a.txt"), abs(&root, "b.txt")]);
+    assert_eq!(lines, ["a.txt".to_string(), "b.txt".to_string()]);
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn count_shows_zero_for_non_matching_files() {
     fs::write(root.join("b.txt"), "miss\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -124,7 +124,7 @@ fn count_shows_zero_for_non_matching_files() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&abs_match(&root, "a.txt", "2")));
+    assert!(stdout.contains(&rel_match("a.txt", "2")));
     assert!(
         !stdout.contains("b.txt"),
         "zero-count files should be omitted"
@@ -138,7 +138,7 @@ fn count_takes_precedence_when_last() {
     fs::write(root.join("b.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -154,13 +154,7 @@ fn count_takes_precedence_when_last() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(
-        lines,
-        [
-            abs_match(&root, "a.txt", "1"),
-            abs_match(&root, "b.txt", "1")
-        ]
-    );
+    assert_eq!(lines, [rel_match("a.txt", "1"), rel_match("b.txt", "1")]);
 }
 
 #[test]
@@ -169,7 +163,7 @@ fn quiet_exit_code_0_on_match() {
     fs::write(root.join("a.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let status = command(None)
         .arg("--sift-dir")
@@ -187,7 +181,7 @@ fn quiet_exit_code_1_on_no_match() {
     fs::write(root.join("a.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let status = command(None)
         .arg("--sift-dir")
@@ -205,7 +199,7 @@ fn quiet_no_output_on_match() {
     fs::write(root.join("a.txt"), "hello world\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -229,7 +223,7 @@ fn no_match_exit_code_1() {
     fs::write(root.join("a.txt"), "something\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let status = command(None)
         .arg("--sift-dir")
@@ -246,7 +240,7 @@ fn match_exit_code_0() {
     fs::write(root.join("a.txt"), "something\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let status = command(None)
         .arg("--sift-dir")
@@ -263,7 +257,7 @@ fn standard_output_with_line_numbers() {
     fs::write(root.join("t.txt"), "line one\nline two\nline three\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -285,7 +279,7 @@ fn standard_output_no_filename() {
     fs::write(root.join("t.txt"), "alpha\nbeta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -309,7 +303,7 @@ fn multiple_patterns_combined_with_or() {
     fs::write(root.join("c.txt"), "gamma\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -323,8 +317,8 @@ fn multiple_patterns_combined_with_or() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&abs_match(&root, "a.txt", "alpha")));
-    assert!(stdout.contains(&abs_match(&root, "b.txt", "beta")));
+    assert!(stdout.contains(&rel_match("a.txt", "alpha")));
+    assert!(stdout.contains(&rel_match("b.txt", "beta")));
     assert!(!stdout.contains("c.txt"));
 }
 
@@ -334,7 +328,7 @@ fn empty_corpus_exits_gracefully() {
     fs::create_dir_all(root.join("empty")).unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -354,7 +348,7 @@ fn single_file_match() {
     fs::write(root.join("only.txt"), "unique content\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -365,7 +359,7 @@ fn single_file_match() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&abs_match(&root, "only.txt", "unique content")));
+    assert!(stdout.contains(&rel_match("only.txt", "unique content")));
 }
 
 #[test]
@@ -374,7 +368,7 @@ fn invert_match_excludes_matching_lines() {
     fs::write(root.join("t.txt"), "keep\ndrop\nkeep\ndrop\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -400,7 +394,7 @@ fn word_regexp_respects_word_boundaries() {
     .unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -433,7 +427,7 @@ fn word_regexp_with_unicode() {
     fs::write(root.join("t.txt"), "αβγ\nαβ\nβγδ\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -456,7 +450,7 @@ fn line_regexp_exact_line_match() {
     fs::write(root.join("t.txt"), "exact\nnot exact\nnot exact either\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -468,7 +462,7 @@ fn line_regexp_exact_line_match() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&abs_match(&root, "t.txt", "exact")));
+    assert!(stdout.contains(&rel_match("t.txt", "exact")));
     assert!(
         stdout.lines().count() == 1,
         "only exact line should match: {stdout}"
@@ -481,7 +475,7 @@ fn case_insensitive_unicode() {
     fs::write(root.join("t.txt"), "ΑΛΦΑ\nαλφα\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -503,7 +497,7 @@ fn fixed_strings_literal_match() {
     fs::write(root.join("t.txt"), "hello.world\nhelloworld\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -528,7 +522,7 @@ fn fixed_strings_with_case_insensitive() {
     fs::write(root.join("t.txt"), "HELLO world\nhello WORLD\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -551,7 +545,7 @@ fn ascii_mode_restricts_unicode() {
     fs::write(root.join("t.txt"), "café\ncafe\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -575,7 +569,7 @@ fn regex_metacharacters_work_as_regex() {
     fs::write(root.join("t.txt"), "file1.txt\nfile2.txt\nfile[1].txt\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -600,7 +594,7 @@ fn max_count_stops_after_n_matches() {
     fs::write(root.join("t.txt"), "match\nmatch\nmatch\nmatch\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -630,7 +624,7 @@ fn output_order_deterministic() {
     fs::write(root.join("c/a.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -645,11 +639,7 @@ fn output_order_deterministic() {
         .map(str::to_string)
         .collect();
     assert_eq!(lines.len(), 3);
-    let expected = [
-        abs(&root, "a/z.txt"),
-        abs(&root, "b/m.txt"),
-        abs(&root, "c/a.txt"),
-    ];
+    let expected = ["a/z.txt", "b/m.txt", "c/a.txt"].map(String::from).to_vec();
     let paths: Vec<_> = lines
         .iter()
         .map(|l| line_path(l, &expected).to_string())
@@ -679,7 +669,7 @@ fn quiet_with_files_with_matches_match() {
     fs::write(root.join("a.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -699,7 +689,7 @@ fn quiet_with_files_with_matches_no_match() {
     fs::write(root.join("a.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -720,12 +710,12 @@ fn quiet_with_files_without_match_match() {
     fs::write(root.join("b.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
         .arg(&idx)
-        .arg("-L")
+        .arg("--files-without-match")
         .arg("-q")
         .arg("found")
         .output()
@@ -741,12 +731,12 @@ fn quiet_with_files_without_match_no_match() {
     fs::write(root.join("b.txt"), "miss\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
         .arg(&idx)
-        .arg("-L")
+        .arg("--files-without-match")
         .arg("-q")
         .arg("found")
         .output()
@@ -762,9 +752,12 @@ fn quiet_flag_order_independent() {
     fs::write(root.join("b.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
-    for args in &[&["-q", "-L"][..], &["-L", "-q"][..]] {
+    for args in &[
+        &["-q", "--files-without-match"][..],
+        &["--files-without-match", "-q"][..],
+    ] {
         let out = command(None)
             .arg("--sift-dir")
             .arg(&idx)
@@ -775,7 +768,7 @@ fn quiet_flag_order_independent() {
         assert_eq!(
             out.status.code(),
             Some(1),
-            "-L -q should exit 1 when all files match"
+            "--files-without-match -q should exit 1 when all files match"
         );
         assert!(normalized_stdout(&out).is_empty());
     }
@@ -787,7 +780,7 @@ fn quiet_count_no_output() {
     fs::write(root.join("a.txt"), "found\nfound\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -807,7 +800,7 @@ fn quiet_only_matching_match() {
     fs::write(root.join("a.txt"), "hello world\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -827,7 +820,7 @@ fn quiet_only_matching_no_match() {
     fs::write(root.join("a.txt"), "hello world\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -848,7 +841,7 @@ fn single_file_search_defaults_to_no_filename() {
     fs::write(&file, "hello world\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &file);
+    BuildIndexOptions::default().run(None, &idx, &file);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -873,7 +866,7 @@ fn single_file_o_defaults_to_no_filename() {
     fs::write(&file, "alpha beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &file);
+    BuildIndexOptions::default().run(None, &idx, &file);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -899,7 +892,7 @@ fn single_file_count_bare() {
     fs::write(&file, "hello\nhello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &file);
+    BuildIndexOptions::default().run(None, &idx, &file);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -925,7 +918,7 @@ fn single_file_count_matches_bare() {
     fs::write(&file, "hello hello hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &file);
+    BuildIndexOptions::default().run(None, &idx, &file);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -951,7 +944,7 @@ fn no_filename_flag_still_works_for_line_prefix() {
     fs::write(root.join("b.txt"), "also found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -976,7 +969,7 @@ fn files_with_matches_still_path_mode_under_no_filename() {
     fs::write(root.join("c.txt"), "miss\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -1008,13 +1001,13 @@ fn files_without_match_still_path_mode_under_no_filename() {
     fs::write(root.join("c.txt"), "miss\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
         .arg(&idx)
         .arg("--no-filename")
-        .arg("-L")
+        .arg("--files-without-match")
         .arg("hit")
         .output()
         .unwrap();
@@ -1034,7 +1027,7 @@ fn word_regexp_with_alternation() {
     fs::write(root.join("t.txt"), "cat\ndog\ncatdog\ncategory\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -1064,7 +1057,7 @@ fn line_regexp_with_alternation() {
     fs::write(root.join("t.txt"), "cat\ndog\ncatdog\ncat\r\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -1096,7 +1089,7 @@ fn word_and_line_regexp_line_takes_precedence() {
     fs::write(root.join("t.txt"), "cat\ncat dog\ndog cat\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -1135,7 +1128,7 @@ fn line_regexp_only_matching() {
     fs::write(root.join("t.txt"), "cat\ncat dog\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -1163,7 +1156,7 @@ fn word_regexp_only_matching() {
     fs::write(root.join("t.txt"), "cat\ncat dog\nconcatenate\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -1194,7 +1187,7 @@ fn word_line_regexp_only_matching() {
     fs::write(root.join("t.txt"), "cat\ncat dog\ndog cat\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")

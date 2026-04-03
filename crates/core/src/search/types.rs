@@ -117,6 +117,7 @@ pub struct SearchOutput {
     pub mode: SearchMode,
     pub emission: OutputEmission,
     pub filename_mode: FilenameMode,
+    pub heading: bool,
     pub line_number: bool,
 }
 
@@ -126,6 +127,7 @@ impl Default for SearchOutput {
             mode: SearchMode::Standard,
             emission: OutputEmission::Normal,
             filename_mode: FilenameMode::Auto,
+            heading: false,
             line_number: false,
         }
     }

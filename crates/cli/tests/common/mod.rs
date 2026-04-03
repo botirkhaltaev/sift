@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -28,15 +29,23 @@ pub fn command(cwd: Option<&Path>) -> Command {
     cmd
 }
 
-pub fn build_index(cwd: Option<&Path>, sift_dir: &Path, corpus: &Path) {
-    let status = command(cwd)
-        .arg("--sift-dir")
-        .arg(sift_dir)
-        .arg("build")
-        .arg(corpus)
-        .status()
-        .unwrap();
-    assert!(status.success(), "build index failed with status {status}");
+/// Build-time flags for `sift build` in integration tests. Add fields as the CLI grows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BuildIndexOptions {
+    /// Pass `--follow` / `-L` to `sift build`.
+    pub follow_symlinks: bool,
+}
+
+impl BuildIndexOptions {
+    pub fn run(self, cwd: Option<&Path>, sift_dir: &Path, corpus: &Path) {
+        let mut cmd = command(cwd);
+        cmd.arg("--sift-dir").arg(sift_dir);
+        if self.follow_symlinks {
+            cmd.arg("--follow");
+        }
+        let status = cmd.arg("build").arg(corpus).status().unwrap();
+        assert!(status.success(), "build index failed with status {status}");
+    }
 }
 
 pub fn assert_success(output: &Output) {
@@ -47,8 +56,36 @@ pub fn assert_success(output: &Output) {
     );
 }
 
-pub fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
+#[allow(dead_code)]
+pub fn assert_index_and_walk_output(cwd: &Path, args: &[OsString], expected_stdout: &str) {
+    let idx = cwd.join(".sift");
+    let missing_idx = fresh_dir("missing-index").join(".sift");
+    BuildIndexOptions::default().run(Some(cwd), &idx, Path::new("."));
+
+    let index = run_search(Some(cwd), &idx, args);
+    let walk = run_search(Some(cwd), &missing_idx, args);
+
+    for (name, output) in [("index", &index), ("walk", &walk)] {
+        assert_success(output);
+        assert_eq!(
+            normalized_stdout(output),
+            expected_stdout,
+            "{name}: stdout mismatch"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "",
+            "{name}: stderr mismatch"
+        );
+    }
+}
+
+#[allow(dead_code)]
+fn run_search(cwd: Option<&Path>, sift_dir: &Path, args: &[OsString]) -> Output {
+    let mut cmd = command(cwd);
+    cmd.arg("--sift-dir").arg(sift_dir);
+    cmd.args(args);
+    cmd.output().unwrap()
 }
 
 fn normalize_path_str(path: &str) -> String {
@@ -58,7 +95,8 @@ fn normalize_path_str(path: &str) -> String {
 }
 
 pub fn normalized_stdout(output: &Output) -> String {
-    normalize_path_str(&stdout(output))
+    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    normalize_path_str(&raw)
 }
 
 #[allow(dead_code)]
@@ -71,6 +109,12 @@ pub fn abs(root: &Path, rel: &str) -> String {
 #[allow(dead_code)]
 pub fn abs_match(root: &Path, rel: &str, text: &str) -> String {
     format!("{}:{text}", abs(root, rel))
+}
+
+/// `path:rest` where `path` is printed relative to the corpus root (like `grep`).
+#[allow(dead_code)]
+pub fn rel_match(rel: &str, rest: &str) -> String {
+    format!("{}:{rest}", normalize_path_str(rel))
 }
 
 #[allow(dead_code)]

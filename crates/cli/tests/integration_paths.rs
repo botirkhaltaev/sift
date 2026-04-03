@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::{assert_success, build_index, command, fresh_dir, normalized_stdout};
+use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout};
 
 #[test]
 fn relative_path_scope_limits_matches() {
@@ -14,7 +14,7 @@ fn relative_path_scope_limits_matches() {
     fs::write(root.join("b/y.txt"), "ONLY_IN_B\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(Some(&root), &idx, Path::new("."));
+    BuildIndexOptions::default().run(Some(&root), &idx, Path::new("."));
 
     let out = command(Some(&root))
         .arg("--sift-dir")
@@ -52,7 +52,7 @@ fn absolute_path_scope_within_corpus_works() {
     fs::write(root.join("b/y.txt"), "alpha\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -76,7 +76,7 @@ fn search_path_outside_corpus_exits_2() {
     fs::write(outside.join("b.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")

@@ -37,6 +37,7 @@ impl Scenario {
     pub fn default_filter() -> SearchFilterConfig {
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Respect,
@@ -46,6 +47,7 @@ impl Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         }
     }
 }
@@ -55,6 +57,7 @@ const fn make_output(mode: SearchMode, emission: sift_core::OutputEmission) -> S
         mode,
         emission,
         filename_mode: FilenameMode::Auto,
+        heading: false,
         line_number: false,
     }
 }
@@ -218,6 +221,7 @@ fn glob_include() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig {
                 patterns: vec!["**/*.txt".to_string()],
                 case_insensitive: false,
@@ -230,6 +234,7 @@ fn glob_include() -> Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         },
         default_output(),
     )
@@ -242,6 +247,7 @@ fn glob_exclude() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig {
                 patterns: vec!["!**/*.txt".to_string()],
                 case_insensitive: false,
@@ -254,6 +260,7 @@ fn glob_exclude() -> Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         },
         default_output(),
     )
@@ -266,6 +273,7 @@ fn glob_casei() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig {
                 patterns: vec!["**/*.TXT".to_string()],
                 case_insensitive: true,
@@ -278,6 +286,7 @@ fn glob_casei() -> Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         },
         default_output(),
     )
@@ -290,6 +299,7 @@ fn hidden_default() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Respect,
@@ -299,6 +309,7 @@ fn hidden_default() -> Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         },
         default_output(),
     )
@@ -311,6 +322,7 @@ fn hidden_include() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
@@ -320,6 +332,7 @@ fn hidden_include() -> Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         },
         default_output(),
     )
@@ -332,6 +345,7 @@ fn ignore_default() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Respect,
@@ -341,6 +355,7 @@ fn ignore_default() -> Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         },
         default_output(),
     )
@@ -353,6 +368,7 @@ fn ignore_custom() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Respect,
@@ -362,6 +378,7 @@ fn ignore_custom() -> Scenario {
                     require_git: false,
                 },
             },
+            follow_links: false,
         },
         default_output(),
     )
@@ -374,6 +391,7 @@ fn scoped_search() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![PathBuf::from("subdir")],
+            exclude_paths: vec![],
             glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Respect,
@@ -383,6 +401,7 @@ fn scoped_search() -> Scenario {
                     require_git: true,
                 },
             },
+            follow_links: false,
         },
         make_output(
             SearchMode::FilesWithMatches,

@@ -5,9 +5,10 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Args, Command, FromArgMatches, Parser, Subcommand, value_parser};
 use sift_core::{
-    CaseMode, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    Index, IndexBuilder, OutputEmission, SearchFilter, SearchFilterConfig, SearchMatchFlags,
-    SearchMode, SearchOptions, SearchOutput, VisibilityConfig,
+    CaseMode, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig, HiddenMode,
+    IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter,
+    SearchFilterConfig, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
+    VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -30,9 +31,60 @@ struct Cli {
     #[command(flatten)]
     out3: OutputFlagsC,
     #[command(flatten)]
+    out4: OutputFlagsD,
+    #[command(flatten)]
     glob_flags: GlobFlags,
     #[command(flatten)]
+    ignore_no: IgnoreNoDecl,
+    #[command(flatten)]
+    ignore_vcs: IgnoreVcsDecl,
+    #[command(flatten)]
+    ignore_dot: IgnoreDotDecl,
+    #[command(flatten)]
+    ignore_git: IgnoreGitDecl,
+    #[command(flatten)]
+    unrestricted: UnrestrictedDecl,
+    #[command(flatten)]
     paths: PathArgs,
+}
+
+/// Clap declarations only; effective values come from [`resolve_visibility_and_ignore`].
+#[derive(Args)]
+struct IgnoreNoDecl {
+    #[arg(long = "no-ignore", action = ArgAction::SetTrue)]
+    _no_ignore: bool,
+    #[arg(long = "ignore", action = ArgAction::SetTrue)]
+    _ignore: bool,
+}
+
+#[derive(Args)]
+struct IgnoreVcsDecl {
+    #[arg(long = "no-ignore-vcs", action = ArgAction::SetTrue)]
+    _no_ignore_vcs: bool,
+    #[arg(long = "ignore-vcs", action = ArgAction::SetTrue)]
+    _ignore_vcs: bool,
+}
+
+#[derive(Args)]
+struct IgnoreDotDecl {
+    #[arg(long = "no-ignore-dot", action = ArgAction::SetTrue)]
+    _no_ignore_dot: bool,
+    #[arg(long = "ignore-dot", action = ArgAction::SetTrue)]
+    _ignore_dot: bool,
+}
+
+#[derive(Args)]
+struct IgnoreGitDecl {
+    #[arg(long = "no-require-git", action = ArgAction::SetTrue)]
+    _no_require_git: bool,
+    #[arg(long = "require-git", action = ArgAction::SetTrue)]
+    _require_git: bool,
+}
+
+#[derive(Args)]
+struct UnrestrictedDecl {
+    #[arg(short = 'u', long = "unrestricted", action = ArgAction::Count)]
+    _unrestricted: u8,
 }
 
 #[derive(Args)]
@@ -74,8 +126,18 @@ struct OutputFlagsA {
 
 #[derive(Args)]
 struct OutputFlagsC {
-    #[arg(long = "no-filename")]
+    #[arg(short = 'I', long = "no-filename")]
     no_filename: bool,
+    #[arg(short = 'H', long = "with-filename")]
+    with_filename: bool,
+}
+
+#[derive(Args)]
+struct OutputFlagsD {
+    #[arg(long = "heading")]
+    heading: bool,
+    #[arg(long = "no-heading")]
+    no_heading: bool,
 }
 
 fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
@@ -104,36 +166,108 @@ fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
     result
 }
 
-fn resolve_hidden_from_args(args: &[String]) -> bool {
+/// Hidden files, ignore rules, and `require_git` — processed in argv order (ripgrep-style).
+fn resolve_visibility_and_ignore(args: &[String]) -> (bool, IgnoreSources, bool) {
+    const DEFAULT_SOURCES: IgnoreSources = IgnoreSources::DOT
+        .union(IgnoreSources::VCS)
+        .union(IgnoreSources::EXCLUDE);
+
+    let mut sources = DEFAULT_SOURCES;
+    let mut require_git = true;
+    let mut hidden = false;
+    let mut u_count: u8 = 0;
+
+    for arg in args {
+        if arg == "--unrestricted" {
+            u_count = u_count.saturating_add(1).min(3);
+            if u_count == 1 {
+                sources = IgnoreSources::empty();
+            } else if u_count == 2 {
+                hidden = true;
+            }
+            continue;
+        }
+        if arg.len() >= 2 {
+            let bytes = arg.as_bytes();
+            if bytes[0] == b'-' && bytes.get(1) != Some(&b'-') && arg[1..].chars().all(|c| c == 'u')
+            {
+                for _ in 0..arg.len().saturating_sub(1) {
+                    u_count = u_count.saturating_add(1).min(3);
+                    if u_count == 1 {
+                        sources = IgnoreSources::empty();
+                    } else if u_count == 2 {
+                        hidden = true;
+                    }
+                }
+                continue;
+            }
+        }
+
+        match arg.as_str() {
+            "--no-ignore" => sources = IgnoreSources::empty(),
+            "--ignore" => sources = DEFAULT_SOURCES,
+            "--no-ignore-vcs" => sources.remove(IgnoreSources::VCS),
+            "--ignore-vcs" => sources.insert(IgnoreSources::VCS),
+            "--no-ignore-dot" => sources.remove(IgnoreSources::DOT),
+            "--ignore-dot" => sources.insert(IgnoreSources::DOT),
+            "--no-require-git" => require_git = false,
+            "--require-git" => require_git = true,
+            "--hidden" | "-." => hidden = true,
+            "--no-hidden" => hidden = false,
+            _ => {}
+        }
+    }
+
+    (hidden, sources, require_git)
+}
+
+fn resolve_heading_from_args(args: &[String]) -> bool {
     let mut last_idx = 0usize;
     let mut result = false;
     for (i, arg) in args.iter().enumerate() {
         let bytes = arg.as_bytes();
-        let is_short = bytes.len() == 2 && bytes[0] == b'-';
-        let is_long = bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-';
-        let flag = if is_short {
-            if bytes[1] == b'.' {
-                Some((i, true))
-            } else {
-                None
+        if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
+            let value = match &bytes[2..] {
+                b"heading" => Some(true),
+                b"no-heading" => Some(false),
+                _ => None,
+            };
+            if let Some(value) = value
+                && i > last_idx
+            {
+                last_idx = i;
+                result = value;
             }
-        } else if is_long {
-            let suffix = &bytes[2..];
-            if suffix == b"hidden" {
-                Some((i, true))
-            } else if suffix == b"no-hidden" {
-                Some((i, false))
-            } else {
-                None
+        }
+    }
+    result
+}
+
+fn resolve_with_filename_from_args(args: &[String]) -> Option<bool> {
+    let mut last_idx = 0usize;
+    let mut result = None;
+    for (i, arg) in args.iter().enumerate() {
+        let bytes = arg.as_bytes();
+        let value = if bytes.len() == 2 && bytes[0] == b'-' {
+            match bytes[1] {
+                b'H' => Some(true),
+                b'I' => Some(false),
+                _ => None,
+            }
+        } else if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
+            match &bytes[2..] {
+                b"with-filename" => Some(true),
+                b"no-filename" => Some(false),
+                _ => None,
             }
         } else {
             None
         };
-        if let Some((idx, val)) = flag
-            && idx > last_idx
+        if let Some(value) = value
+            && i > last_idx
         {
-            last_idx = idx;
-            result = val;
+            last_idx = i;
+            result = Some(value);
         }
     }
     result
@@ -214,6 +348,9 @@ struct PathArgs {
     max_count: Option<usize>,
     #[arg(long, default_value = ".sift")]
     sift_dir: PathBuf,
+    /// Follow symbolic links.
+    #[arg(short = 'L', long = "follow")]
+    follow: bool,
 }
 
 #[derive(Subcommand)]
@@ -311,7 +448,6 @@ fn resolve_output_mode(args: &[String], invert_match: bool) -> (SearchMode, bool
             match bytes.get(1) {
                 Some(&b'c') => Some((i, "count")),
                 Some(&b'l') => Some((i, "files_with_matches")),
-                Some(&b'L') => Some((i, "files_without_match")),
                 Some(&b'o') => Some((i, "only_matching")),
                 Some(&b'q') => Some((i, "quiet")),
                 _ => None,
@@ -421,7 +557,6 @@ impl Args for SearchFlags {
         )
         .arg(
             Arg::new("files_without_match")
-                .short('L')
                 .long("files-without-match")
                 .action(ArgAction::SetTrue),
         )
@@ -538,6 +673,193 @@ fn corpus_path_prefixes(
     Ok(out)
 }
 
+/// Path scopes relative to `cwd` when searching without an on-disk index (walk mode).
+fn walk_path_prefixes(cwd: &Path, requested: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    if requested.is_empty() {
+        return Ok(vec![PathBuf::from("")]);
+    }
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut out = Vec::new();
+    for rel in requested {
+        let abs = if rel.is_absolute() {
+            rel.clone()
+        } else {
+            cwd.join(rel)
+        };
+        let abs = abs.canonicalize().unwrap_or(abs);
+        if !abs.starts_with(&cwd) {
+            anyhow::bail!("path {} is not under {}", abs.display(), cwd.display());
+        }
+        out.push(
+            abs.strip_prefix(&cwd)
+                .expect("prefix checked")
+                .to_path_buf(),
+        );
+    }
+    Ok(out)
+}
+
+fn excluded_search_paths(search_root: &Path, sift_dir: &Path) -> Vec<PathBuf> {
+    let abs = if sift_dir.is_absolute() {
+        sift_dir.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| sift_dir.to_path_buf(), |cwd| cwd.join(sift_dir))
+    };
+    let abs = abs.canonicalize().unwrap_or(abs);
+    let root = search_root
+        .canonicalize()
+        .unwrap_or_else(|_| search_root.to_path_buf());
+    if abs.starts_with(&root) {
+        vec![
+            abs.strip_prefix(&root)
+                .expect("prefix checked")
+                .to_path_buf(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+const fn search_output(
+    effective_mode: SearchMode,
+    quiet: bool,
+    filename_mode: FilenameMode,
+    heading: bool,
+    line_number: bool,
+) -> SearchOutput {
+    SearchOutput {
+        mode: effective_mode,
+        emission: if quiet {
+            OutputEmission::Quiet
+        } else {
+            OutputEmission::Normal
+        },
+        filename_mode,
+        heading,
+        line_number,
+    }
+}
+
+const fn effective_filename_mode(
+    with_filename: Option<bool>,
+    is_path_mode: bool,
+    corpus_is_single_file: bool,
+) -> FilenameMode {
+    if is_path_mode || matches!(with_filename, Some(true)) {
+        FilenameMode::Always
+    } else if matches!(with_filename, Some(false)) || corpus_is_single_file {
+        FilenameMode::Never
+    } else {
+        FilenameMode::Always
+    }
+}
+
+/// Resolved output mode and filename/heading flags (from argv + clap) shared by index and walk search.
+#[derive(Clone, Copy)]
+struct SearchOutputCtx {
+    effective_mode: SearchMode,
+    quiet: bool,
+    heading: bool,
+    with_filename: Option<bool>,
+    is_path_mode: bool,
+}
+
+/// Resolved visibility, ignore sources, and glob case (from argv order + clap) for [`SearchFilterConfig`].
+#[derive(Clone, Copy)]
+struct SearchFilterCtx {
+    hidden: bool,
+    ignore_sources: IgnoreSources,
+    require_git: bool,
+    glob_case_insensitive: bool,
+}
+
+impl SearchFilterCtx {
+    #[inline]
+    const fn hidden_mode(self) -> HiddenMode {
+        if self.hidden {
+            HiddenMode::Include
+        } else {
+            HiddenMode::Respect
+        }
+    }
+}
+
+fn build_search_filter_config(
+    cli: &Cli,
+    filter: SearchFilterCtx,
+    scopes: Vec<PathBuf>,
+    exclude_paths: Vec<PathBuf>,
+) -> SearchFilterConfig {
+    SearchFilterConfig {
+        scopes,
+        exclude_paths,
+        glob: GlobConfig {
+            patterns: cli.glob_flags.glob.clone(),
+            case_insensitive: filter.glob_case_insensitive,
+        },
+        visibility: VisibilityConfig {
+            hidden: filter.hidden_mode(),
+            ignore: IgnoreConfig {
+                sources: filter.ignore_sources,
+                custom_files: Vec::new(),
+                require_git: filter.require_git,
+            },
+        },
+        follow_links: cli.paths.follow,
+    }
+}
+
+fn run_search_with_index(
+    cli: &Cli,
+    query: &CompiledSearch,
+    index: &Index,
+    cwd: &Path,
+    out: SearchOutputCtx,
+    filter: SearchFilterCtx,
+) -> anyhow::Result<bool> {
+    let prefixes = corpus_path_prefixes(&index.root, cwd, &cli.search_scope.paths)?;
+    let exclude_paths = excluded_search_paths(&index.root, &cli.paths.sift_dir);
+    let corpus_is_single_file = matches!(index.corpus_kind, sift_core::CorpusKind::File { .. });
+    let filename_mode =
+        effective_filename_mode(out.with_filename, out.is_path_mode, corpus_is_single_file);
+    let output = search_output(
+        out.effective_mode,
+        out.quiet,
+        filename_mode,
+        out.heading,
+        cli.out1.line_number,
+    );
+    let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
+    let search_filter = SearchFilter::new(&filter_config, &index.root)?;
+    query
+        .run_index(index, &search_filter, output)
+        .map_err(Into::into)
+}
+
+fn run_search_walk(
+    cli: &Cli,
+    query: &CompiledSearch,
+    filter_root: &Path,
+    out: SearchOutputCtx,
+    filter: SearchFilterCtx,
+) -> anyhow::Result<bool> {
+    let prefixes = walk_path_prefixes(filter_root, &cli.search_scope.paths)?;
+    let exclude_paths = excluded_search_paths(filter_root, &cli.paths.sift_dir);
+    let filename_mode = effective_filename_mode(out.with_filename, out.is_path_mode, false);
+    let output = search_output(
+        out.effective_mode,
+        out.quiet,
+        filename_mode,
+        out.heading,
+        cli.out1.line_number,
+    );
+    let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
+    let search_filter = SearchFilter::new(&filter_config, filter_root)?;
+    query
+        .run_walk(filter_root, &search_filter, output)
+        .map_err(Into::into)
+}
+
 fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     let patterns = resolve_patterns(
         &cli.patterns.regexp,
@@ -548,7 +870,9 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     let args: Vec<String> = std::env::args().collect();
     let invert_match = resolve_invert_match_from_args(&args);
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
-    let hidden = resolve_hidden_from_args(&args);
+    let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
+    let heading = resolve_heading_from_args(&args);
+    let with_filename = resolve_with_filename_from_args(&args);
 
     let (mode, only_matching, quiet) = resolve_output_mode(&args, invert_match);
 
@@ -574,61 +898,37 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     };
 
     let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let index = Index::open(&cli.paths.sift_dir)?;
     let cwd = std::env::current_dir()?;
-    let prefixes = corpus_path_prefixes(&index.root, &cwd, &cli.search_scope.paths)?;
 
     let is_path_mode = matches!(
         effective_mode,
         SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
     );
-    let corpus_is_single_file = matches!(index.corpus_kind, sift_core::CorpusKind::File { .. });
-    let effective_filename_mode = if cli.out3.no_filename && !is_path_mode {
-        FilenameMode::Never
-    } else if cli.out3.no_filename && is_path_mode {
-        FilenameMode::Always
-    } else if corpus_is_single_file && !is_path_mode {
-        FilenameMode::Never
-    } else {
-        FilenameMode::Always
+
+    let out = SearchOutputCtx {
+        effective_mode,
+        quiet,
+        heading,
+        with_filename,
+        is_path_mode,
+    };
+    let filter = SearchFilterCtx {
+        hidden,
+        ignore_sources,
+        require_git,
+        glob_case_insensitive,
     };
 
-    let output = SearchOutput {
-        mode: effective_mode,
-        emission: if quiet {
-            OutputEmission::Quiet
-        } else {
-            OutputEmission::Normal
-        },
-        filename_mode: effective_filename_mode,
-        line_number: cli.out1.line_number,
-    };
-
-    let filter_config = SearchFilterConfig {
-        scopes: prefixes,
-        glob: GlobConfig {
-            patterns: cli.glob_flags.glob.clone(),
-            case_insensitive: glob_case_insensitive,
-        },
-        visibility: VisibilityConfig {
-            hidden: if hidden {
-                HiddenMode::Include
-            } else {
-                HiddenMode::Respect
-            },
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                custom_files: Vec::new(),
-                require_git: true,
-            },
-        },
-    };
-
-    let search_filter = SearchFilter::new(&filter_config, &index.root)?;
-
-    query
-        .run_index(&index, &search_filter, output)
-        .map_err(|e| anyhow::anyhow!("{e}"))
+    match Index::open(&cli.paths.sift_dir) {
+        Ok(index) => run_search_with_index(cli, &query, &index, &cwd, out, filter),
+        Err(
+            SiftError::MissingMeta(_) | SiftError::MissingComponent(_) | SiftError::InvalidMeta(_),
+        ) => {
+            let filter_root = cwd.canonicalize().map_err(|e| anyhow::anyhow!("{e}"))?;
+            run_search_walk(cli, &query, &filter_root, out, filter)
+        }
+        Err(e) => Err(anyhow::anyhow!("{e}")),
+    }
 }
 
 fn main() -> ExitCode {
@@ -637,6 +937,7 @@ fn main() -> ExitCode {
     if let Some(Commands::Build { path }) = cli.command {
         return match IndexBuilder::new(&path)
             .with_dir(&cli.paths.sift_dir)
+            .with_follow_links(cli.paths.follow)
             .build()
         {
             Ok(_) => {

@@ -91,6 +91,52 @@ impl CompiledSearch {
         }
     }
 
+    /// Search by walking the filesystem under `filter_root` (no trigram index).
+    ///
+    /// Candidate paths are discovered the same way as index build: all files under scoped paths,
+    /// then [`SearchFilter`] is applied. Ignores [`TrigramPlan`] narrowing (full file list).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the matcher cannot be built or stdout cannot be written.
+    pub fn run_walk(
+        &self,
+        filter_root: &Path,
+        filter: &SearchFilter,
+        output: SearchOutput,
+    ) -> crate::Result<bool> {
+        if self.opts.max_results == Some(0) {
+            return Err(crate::Error::InvalidMaxCount);
+        }
+
+        let abs_paths =
+            collect_abs_paths_for_scopes(filter_root, filter.scopes(), filter.follow_links())?;
+        if abs_paths.is_empty() {
+            return Ok(false);
+        }
+
+        let threshold = parallel_candidate_threshold();
+        let candidates = prepare_walk_candidates(filter_root, &abs_paths, filter, threshold);
+        if candidates.is_empty() {
+            return Ok(false);
+        }
+
+        let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
+        let parallel = candidates.len() >= threshold;
+
+        match output.mode {
+            SearchMode::Standard | SearchMode::OnlyMatching => {
+                self.run_standard_with_info(&candidates, matcher, output, parallel)
+            }
+            SearchMode::Count
+            | SearchMode::CountMatches
+            | SearchMode::FilesWithMatches
+            | SearchMode::FilesWithoutMatch => {
+                self.run_summary_with_info(&candidates, matcher, output, parallel)
+            }
+        }
+    }
+
     /// Prepare `CandidateInfo` with parallel filter + path prep.
     #[must_use]
     pub fn prepare_candidates(
@@ -110,7 +156,7 @@ impl CompiledSearch {
                     } else {
                         String::new()
                     };
-                    let abs_path = index.root.join(&rel_path);
+                    let abs_path = index.file_abs_path(id)?;
                     let info = CandidateInfo {
                         id,
                         rel_path,
@@ -129,7 +175,7 @@ impl CompiledSearch {
                 } else {
                     String::new()
                 };
-                let abs_path = index.root.join(&rel_path);
+                let abs_path = index.file_abs_path(id)?;
                 let info = CandidateInfo {
                     id,
                     rel_path,
@@ -157,8 +203,8 @@ impl CompiledSearch {
                 .par_iter()
                 .enumerate()
                 .map_init(
-                    || StandardWorker::new(self, matcher.clone(), output),
-                    |worker: &mut StandardWorker,
+                    || StandardWorker::new(self, matcher, output),
+                    |worker: &mut StandardWorker<'_>,
                      (result_index, candidate): (usize, &CandidateInfo)| {
                         worker.search_candidate(candidate, result_index, &stop)
                     },
@@ -186,17 +232,10 @@ impl CompiledSearch {
                 .par_iter()
                 .enumerate()
                 .map_init(
-                    || {
-                        SummaryWorker::new(
-                            self,
-                            matcher.clone(),
-                            self.opts.max_results,
-                            output.mode,
-                        )
-                    },
-                    |worker: &mut SummaryWorker,
+                    || SummaryWorker::new(self, matcher, self.opts.max_results, output.mode),
+                    |worker: &mut SummaryWorker<'_>,
                      (result_index, candidate): (usize, &CandidateInfo)| {
-                        worker.search_candidate(&candidate.abs_path, result_index, output, &stop)
+                        worker.search_candidate(candidate, result_index, output, &stop)
                     },
                 )
                 .collect_into_vec(&mut files);
@@ -217,9 +256,23 @@ impl CompiledSearch {
             let mut any_match = false;
             let mut out = Vec::new();
             for candidate in candidates {
-                let mut sink = StandardSink::new(matcher, output, &candidate.abs_path, &mut out);
+                let heading = output.heading && output.filename_mode != FilenameMode::Never;
+                let mut sink_output = output;
+                if heading {
+                    sink_output.filename_mode = FilenameMode::Never;
+                }
+                let mut bytes = Vec::new();
+                let mut sink =
+                    StandardSink::new(matcher, sink_output, &candidate.rel_path, &mut bytes);
                 let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
                 any_match |= sink.matched;
+                if sink.matched && heading {
+                    if !out.is_empty() {
+                        out.push(b'\n');
+                    }
+                    writeln!(out, "{}", candidate.rel_path.display())?;
+                }
+                out.extend(bytes);
                 if output.emission == OutputEmission::Quiet && any_match {
                     break;
                 }
@@ -228,6 +281,7 @@ impl CompiledSearch {
             flush_chunk_output(std::iter::once(ChunkOutput {
                 bytes: out,
                 matched: any_match,
+                heading: false,
             }))
         })
     }
@@ -245,7 +299,7 @@ impl CompiledSearch {
                 let result =
                     summary_search_file(searcher, matcher, output.mode, &candidate.abs_path);
                 any_match |= mode_is_success(output.mode, result);
-                write_summary_record(&mut out, output, &candidate.abs_path, result)?;
+                write_summary_record(&mut out, output, &candidate.rel_path, result)?;
                 if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result)
                 {
                     break;
@@ -255,21 +309,24 @@ impl CompiledSearch {
             flush_chunk_output(std::iter::once(ChunkOutput {
                 bytes: out,
                 matched: any_match,
+                heading: false,
             }))
         })
     }
 
-    // Legacy methods kept for backward compat in tests
+    // Test-only helpers
 
     #[cfg(test)]
     pub(crate) fn collect_index_matches(&self, index: &Index) -> crate::Result<Vec<Match>> {
         let config = SearchFilterConfig {
             scopes: vec![],
+            exclude_paths: vec![],
             glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
                 ignore: IgnoreConfig::default(),
             },
+            follow_links: false,
         };
         let filter = SearchFilter::new(&config, &index.root)?;
         let candidate_ids = self.candidate_file_ids(index, false);
@@ -351,15 +408,16 @@ impl CompiledSearch {
     }
 }
 
-struct StandardWorker {
-    matcher: RegexMatcher,
+struct StandardWorker<'a> {
+    /// Shared across Rayon threads; [`Matcher`] is implemented for `&RegexMatcher`.
+    matcher: &'a RegexMatcher,
     searcher: Searcher,
     output: SearchOutput,
     bytes: Vec<u8>,
 }
 
-impl StandardWorker {
-    fn new(search: &CompiledSearch, matcher: RegexMatcher, output: SearchOutput) -> Self {
+impl<'a> StandardWorker<'a> {
+    fn new(search: &CompiledSearch, matcher: &'a RegexMatcher, output: SearchOutput) -> Self {
         Self {
             searcher: search.build_searcher(output.line_number, search.opts.max_results),
             matcher,
@@ -383,15 +441,20 @@ impl StandardWorker {
         }
 
         let matched = {
+            let heading = self.output.heading && self.output.filename_mode != FilenameMode::Never;
+            let mut sink_output = self.output;
+            if heading {
+                sink_output.filename_mode = FilenameMode::Never;
+            }
             let mut sink = StandardSink::new(
-                &self.matcher,
-                self.output,
-                &candidate.abs_path,
+                self.matcher,
+                sink_output,
+                &candidate.rel_path,
                 &mut self.bytes,
             );
             let _ = self
                 .searcher
-                .search_path(&self.matcher, &candidate.abs_path, &mut sink);
+                .search_path(self.matcher, &candidate.abs_path, &mut sink);
             sink.matched
         };
 
@@ -403,8 +466,23 @@ impl StandardWorker {
         FileResult {
             index: result_index,
             output: ChunkOutput {
-                bytes: std::mem::take(&mut self.bytes),
+                bytes: if matched
+                    && self.output.heading
+                    && self.output.filename_mode != FilenameMode::Never
+                    && self.output.emission != OutputEmission::Quiet
+                {
+                    let mut out = Vec::new();
+                    let _ = writeln!(out, "{}", candidate.rel_path.display());
+                    out.extend(std::mem::take(&mut self.bytes));
+                    out
+                } else {
+                    std::mem::take(&mut self.bytes)
+                },
                 matched,
+                heading: matched
+                    && self.output.heading
+                    && self.output.filename_mode != FilenameMode::Never
+                    && self.output.emission != OutputEmission::Quiet,
             },
         }
     }
@@ -413,7 +491,8 @@ impl StandardWorker {
 struct StandardSink<'a> {
     matcher: &'a RegexMatcher,
     output: SearchOutput,
-    path: &'a Path,
+    /// Path printed in prefixes (relative to search root, `grep`-style).
+    display_path: &'a Path,
     bytes: &'a mut Vec<u8>,
     matched: bool,
     match_count: usize,
@@ -423,13 +502,13 @@ impl<'a> StandardSink<'a> {
     const fn new(
         matcher: &'a RegexMatcher,
         output: SearchOutput,
-        path: &'a Path,
+        display_path: &'a Path,
         bytes: &'a mut Vec<u8>,
     ) -> Self {
         Self {
             matcher,
             output,
-            path,
+            display_path,
             bytes,
             matched: false,
             match_count: 0,
@@ -452,7 +531,8 @@ impl Sink for StandardSink<'_> {
             let line_number = mat.line_number();
             let line = mat.bytes();
             let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
-                let _ = write_standard_prefix(self.bytes, self.output, self.path, line_number);
+                let _ =
+                    write_standard_prefix(self.bytes, self.output, self.display_path, line_number);
                 let _ = self.bytes.write_all(&line[m.start()..m.end()]);
                 let _ = self.bytes.write_all(b"\n");
                 true
@@ -460,7 +540,12 @@ impl Sink for StandardSink<'_> {
             return Ok(true);
         }
 
-        write_standard_prefix(self.bytes, self.output, self.path, mat.line_number())?;
+        write_standard_prefix(
+            self.bytes,
+            self.output,
+            self.display_path,
+            mat.line_number(),
+        )?;
         self.bytes.write_all(mat.bytes())?;
         if !mat.bytes().ends_with(b"\n") {
             self.bytes.write_all(b"\n")?;
@@ -485,16 +570,16 @@ fn summary_search_file(
     sink.finish()
 }
 
-struct SummaryWorker {
-    matcher: RegexMatcher,
+struct SummaryWorker<'a> {
+    matcher: &'a RegexMatcher,
     searcher: Searcher,
     mode: SearchMode,
 }
 
-impl SummaryWorker {
+impl<'a> SummaryWorker<'a> {
     fn new(
         search: &CompiledSearch,
-        matcher: RegexMatcher,
+        matcher: &'a RegexMatcher,
         max_results: Option<usize>,
         mode: SearchMode,
     ) -> Self {
@@ -506,12 +591,12 @@ impl SummaryWorker {
     }
 
     fn search_file(&mut self, path: &Path) -> FileSummary {
-        summary_search_file(&mut self.searcher, &self.matcher, self.mode, path)
+        summary_search_file(&mut self.searcher, self.matcher, self.mode, path)
     }
 
     fn search_candidate(
         &mut self,
-        path: &Path,
+        candidate: &CandidateInfo,
         result_index: usize,
         output: SearchOutput,
         stop: &AtomicBool,
@@ -523,17 +608,21 @@ impl SummaryWorker {
             };
         }
 
-        let result = self.search_file(path);
+        let result = self.search_file(&candidate.abs_path);
         let matched = mode_is_success(output.mode, result);
         let mut bytes = Vec::new();
-        let _ = write_summary_record(&mut bytes, output, path, result);
+        let _ = write_summary_record(&mut bytes, output, &candidate.rel_path, result);
         if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result) {
             stop.store(true, Ordering::SeqCst);
         }
 
         FileResult {
             index: result_index,
-            output: ChunkOutput { bytes, matched },
+            output: ChunkOutput {
+                bytes,
+                matched,
+                heading: false,
+            },
         }
     }
 }
@@ -546,6 +635,7 @@ struct FileResult {
 struct ChunkOutput {
     bytes: Vec<u8>,
     matched: bool,
+    heading: bool,
 }
 
 impl ChunkOutput {
@@ -553,6 +643,7 @@ impl ChunkOutput {
         Self {
             bytes: Vec::new(),
             matched: false,
+            heading: false,
         }
     }
 }
@@ -560,12 +651,17 @@ impl ChunkOutput {
 fn flush_chunk_output(outputs: impl IntoIterator<Item = ChunkOutput>) -> crate::Result<bool> {
     let mut stdout = io::stdout().lock();
     let mut any_match = false;
+    let mut emitted = false;
     for output in outputs {
         any_match |= output.matched;
         if output.bytes.is_empty() {
             continue;
         }
+        if output.heading && emitted {
+            stdout.write_all(b"\n")?;
+        }
         stdout.write_all(&output.bytes)?;
+        emitted = true;
     }
     Ok(any_match)
 }
@@ -691,13 +787,136 @@ const fn mode_is_success(mode: SearchMode, result: FileSummary) -> bool {
     }
 }
 
+fn walk_directory_files(root: &Path, follow_links: bool) -> crate::Result<Vec<PathBuf>> {
+    let root = root.canonicalize()?;
+    let mut out = Vec::new();
+    let walker = ignore::WalkBuilder::new(&root)
+        .follow_links(follow_links)
+        .hidden(false)
+        .parents(false)
+        .ignore(false)
+        .git_global(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .require_git(false)
+        .build();
+    for entry in walker {
+        let entry = entry.map_err(crate::Error::Ignore)?;
+        if entry.file_type().is_some_and(|ft| ft.is_file()) {
+            out.push(entry.path().to_path_buf());
+        }
+    }
+    Ok(out)
+}
+
+/// Collect absolute file paths for each scope under `filter_root` (same walk policy as index build).
+fn collect_abs_paths_for_scopes(
+    filter_root: &Path,
+    scopes: &[PathBuf],
+    follow_links: bool,
+) -> crate::Result<Vec<PathBuf>> {
+    let filter_root = filter_root.canonicalize()?;
+    let mut out = Vec::new();
+    for scope in scopes {
+        let path = if scope.as_os_str().is_empty() {
+            filter_root.clone()
+        } else {
+            filter_root.join(scope)
+        };
+        if !path.exists() {
+            continue;
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        if path.is_file() {
+            out.push(path);
+        } else if path.is_dir() {
+            out.extend(walk_directory_files(&path, follow_links)?);
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+fn prepare_walk_candidates(
+    filter_root: &Path,
+    abs_paths: &[PathBuf],
+    filter: &SearchFilter,
+    threshold: usize,
+) -> Vec<CandidateInfo> {
+    let filter_root = filter_root
+        .canonicalize()
+        .unwrap_or_else(|_| filter_root.to_path_buf());
+    let cap = abs_paths.len();
+    let need_rel = filter.needs_rel_str_for_matching();
+
+    if abs_paths.len() >= threshold {
+        abs_paths
+            .par_iter()
+            .enumerate()
+            .filter_map(|(id, abs_path)| {
+                let rel_path = abs_path
+                    .strip_prefix(&filter_root)
+                    .unwrap_or(abs_path.as_path())
+                    .to_path_buf();
+                let rel_str = if need_rel {
+                    rel_path.to_string_lossy().replace('\\', "/")
+                } else {
+                    String::new()
+                };
+                let info = CandidateInfo {
+                    id,
+                    rel_path,
+                    rel_str,
+                    abs_path: abs_path.clone(),
+                };
+                filter.is_candidate_info(&info).then_some(info)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut c)| {
+                c.id = i;
+                c
+            })
+            .collect()
+    } else {
+        let mut out = Vec::with_capacity(cap);
+        for (id, abs_path) in abs_paths.iter().enumerate() {
+            let rel_path = abs_path
+                .strip_prefix(&filter_root)
+                .unwrap_or(abs_path.as_path())
+                .to_path_buf();
+            let rel_str = if need_rel {
+                rel_path.to_string_lossy().replace('\\', "/")
+            } else {
+                String::new()
+            };
+            let info = CandidateInfo {
+                id,
+                rel_path,
+                rel_str,
+                abs_path: abs_path.clone(),
+            };
+            if filter.is_candidate_info(&info) {
+                let mut c = info;
+                c.id = out.len();
+                out.push(c);
+            }
+        }
+        out
+    }
+}
+
 /// # Errors
 ///
 /// Returns an error when canonicalizing `root` or while walking the tree.
-pub fn walk_file_paths(root: &Path) -> crate::Result<HashSet<PathBuf>> {
+pub fn walk_file_paths(root: &Path, follow_links: bool) -> crate::Result<HashSet<PathBuf>> {
     let root = root.canonicalize()?;
     let mut set = HashSet::new();
-    let walker = ignore::WalkBuilder::new(&root).follow_links(false).build();
+    let walker = ignore::WalkBuilder::new(&root)
+        .follow_links(follow_links)
+        .build();
     for entry in walker {
         let entry = entry.map_err(crate::Error::Ignore)?;
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {

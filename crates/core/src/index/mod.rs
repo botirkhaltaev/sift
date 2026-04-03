@@ -7,6 +7,7 @@ pub mod trigram;
 use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use builder::build_index_tables;
@@ -22,15 +23,31 @@ pub struct QueryPlan {
 ///
 /// All data is accessed zero-copy from mapped files. Opening an index is cheap
 /// — just memory-mapping the three index files, no deserialization.
-#[derive(Debug)]
 pub struct Index {
     pub root: PathBuf,
     pub corpus_kind: CorpusKind,
     files: files::MappedFilesView,
     file_paths: Vec<PathBuf>,
+    /// `root.join(rel)` for each `file_paths` entry; built once at open/build so search avoids repeated joins.
+    abs_paths: Vec<PathBuf>,
     lexicon: crate::storage::lexicon::MappedLexicon,
     postings: crate::storage::postings::MappedPostings,
     pub index_dir: Option<PathBuf>,
+}
+
+impl fmt::Debug for Index {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Index")
+            .field("root", &self.root)
+            .field("corpus_kind", &self.corpus_kind)
+            .field("files", &self.files)
+            .field("file_paths", &self.file_paths)
+            .field("abs_paths_len", &self.abs_paths.len())
+            .field("lexicon", &self.lexicon)
+            .field("postings", &self.postings)
+            .field("index_dir", &self.index_dir)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +114,10 @@ fn validate_file_paths(
     Ok(())
 }
 
+fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
+    file_paths.iter().map(|p| root.join(p)).collect()
+}
+
 impl Index {
     /// Open an index directory produced by [`IndexBuilder::build`].
     ///
@@ -131,6 +152,7 @@ impl Index {
         let files = files::MappedFilesView::open(&paths[0]).map_err(crate::Error::Io)?;
         let file_paths = files.to_path_bufs().map_err(crate::Error::Io)?;
         validate_file_paths(&meta.kind, &file_paths, &meta_path)?;
+        let abs_paths = compute_abs_paths(&meta.root, &file_paths);
         let lexicon =
             crate::storage::lexicon::MappedLexicon::open(&paths[1]).map_err(crate::Error::Io)?;
         let postings =
@@ -141,6 +163,7 @@ impl Index {
             corpus_kind: meta.kind,
             files,
             file_paths,
+            abs_paths,
             lexicon,
             postings,
             index_dir: Some(sift_dir),
@@ -274,6 +297,12 @@ impl Index {
         self.file_paths.get(id).map(PathBuf::as_path)
     }
 
+    /// Absolute path for file `id` (same as `self.root.join(self.file_path(id)?)`).
+    #[must_use]
+    pub fn file_abs_path(&self, id: usize) -> Option<PathBuf> {
+        self.abs_paths.get(id).cloned()
+    }
+
     #[must_use]
     pub const fn file_count(&self) -> usize {
         self.files.len()
@@ -396,18 +425,51 @@ fn merge_sorted_runs(lists: Vec<Vec<u32>>) -> Vec<u32> {
 pub struct IndexBuilder<'a> {
     root: &'a Path,
     dir: Option<PathBuf>,
+    follow_links: bool,
 }
 
 impl<'a> IndexBuilder<'a> {
     #[must_use]
     pub const fn new(root: &'a Path) -> Self {
-        Self { root, dir: None }
+        Self {
+            root,
+            dir: None,
+            follow_links: false,
+        }
     }
 
     #[must_use]
     pub fn with_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.dir = Some(dir.into());
         self
+    }
+
+    /// Follow symbolic links when collecting files for the index.
+    #[must_use]
+    pub const fn with_follow_links(mut self, follow_links: bool) -> Self {
+        self.follow_links = follow_links;
+        self
+    }
+
+    fn excluded_build_paths(&self, root: &Path) -> crate::Result<Vec<PathBuf>> {
+        let Some(dir) = self.dir.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let abs = if dir.is_absolute() {
+            dir.clone()
+        } else {
+            std::env::current_dir()?.join(dir)
+        };
+        let abs = abs.canonicalize().unwrap_or(abs);
+        if abs.starts_with(root) {
+            Ok(vec![
+                abs.strip_prefix(root)
+                    .expect("prefix checked")
+                    .to_path_buf(),
+            ])
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Walk `root`, extract trigrams, and return an in-memory [`Index`].
@@ -429,17 +491,21 @@ impl<'a> IndexBuilder<'a> {
         } else {
             (canonical.clone(), canonical)
         };
-        let (corpus_kind, tables) = build_index_tables(&build_root)?;
+        let exclude_paths = self.excluded_build_paths(&root)?;
+        let (corpus_kind, tables) =
+            build_index_tables(&build_root, self.follow_links, &exclude_paths)?;
 
         let files = files::MappedFilesView::from_paths(&tables.files);
         let lexicon = crate::storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
         let postings = crate::storage::postings::MappedPostings::from_bytes(&tables.postings);
 
+        let abs_paths = compute_abs_paths(&root, &tables.files);
         let mut index = Index {
             root,
             corpus_kind,
             files,
             file_paths: tables.files,
+            abs_paths,
             lexicon,
             postings,
             index_dir: None,

@@ -49,8 +49,11 @@ pub struct GlobConfig {
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilterConfig {
     pub scopes: Vec<PathBuf>,
+    pub exclude_paths: Vec<PathBuf>,
     pub glob: GlobConfig,
     pub visibility: VisibilityConfig,
+    /// Follow symbolic links when walking the tree (search and index build).
+    pub follow_links: bool,
 }
 
 /// Pre-computed candidate for efficient batch filtering and search.
@@ -62,23 +65,44 @@ pub struct CandidateInfo {
     pub rel_path: PathBuf,
     /// Normalized relative path string (forward slashes, for gitignore/glob). Empty when neither applies.
     pub rel_str: String,
-    /// Absolute path on disk (`index.root.join(&rel_path)`).
+    /// Absolute path on disk (same as [`Index::file_abs_path`](crate::Index::file_abs_path)).
     pub abs_path: PathBuf,
 }
 
 #[derive(Debug)]
 pub struct SearchFilter {
     scopes: Vec<PathBuf>,
+    exclude_paths: Vec<PathBuf>,
     hidden: HiddenMode,
     gitignore: Option<Gitignore>,
     glob: Option<Override>,
     glob_case_insensitive: bool,
+    follow_links: bool,
 }
 
 impl SearchFilter {
+    fn path_is_hidden(rel_path: &Path) -> bool {
+        rel_path.components().any(|component| {
+            let bytes = component.as_os_str().as_encoded_bytes();
+            bytes.starts_with(b".") && bytes.len() > 1
+        })
+    }
+
+    /// Path scopes (relative to the search root) limiting which files are considered.
+    #[must_use]
+    pub fn scopes(&self) -> &[PathBuf] {
+        &self.scopes
+    }
+
     #[must_use]
     pub(crate) const fn needs_rel_str_for_matching(&self) -> bool {
         self.gitignore.is_some() || self.glob.is_some()
+    }
+
+    /// Whether symlinked files and directories should be followed when walking.
+    #[must_use]
+    pub const fn follow_links(&self) -> bool {
+        self.follow_links
     }
 
     /// Build a search filter from configuration.
@@ -118,10 +142,12 @@ impl SearchFilter {
 
         Ok(Self {
             scopes,
+            exclude_paths: config.exclude_paths.clone(),
             hidden: config.visibility.hidden,
             gitignore,
             glob,
             glob_case_insensitive,
+            follow_links: config.follow_links,
         })
     }
 
@@ -171,6 +197,9 @@ impl SearchFilter {
         if !self.in_scope(rel_path) {
             return false;
         }
+        if self.is_excluded(rel_path) {
+            return false;
+        }
         self.matches_file(rel_path)
     }
 
@@ -181,7 +210,16 @@ impl SearchFilter {
         if !self.in_scope_info(info) {
             return false;
         }
+        if self.is_excluded(&info.rel_path) {
+            return false;
+        }
         self.matches_file_info(info)
+    }
+
+    fn is_excluded(&self, rel_path: &Path) -> bool {
+        self.exclude_paths
+            .iter()
+            .any(|excluded| !excluded.as_os_str().is_empty() && rel_path.starts_with(excluded))
     }
 
     fn in_scope(&self, rel_path: &Path) -> bool {
@@ -209,15 +247,8 @@ impl SearchFilter {
     }
 
     fn matches_file(&self, rel_path: &Path) -> bool {
-        // Fast hidden check - no allocation using as_encoded_bytes()
-        if self.hidden == HiddenMode::Respect {
-            let skip_hidden = rel_path.file_name().is_some_and(|name| {
-                let bytes = name.as_encoded_bytes();
-                bytes.starts_with(b".") && bytes.len() > 1
-            });
-            if skip_hidden {
-                return false;
-            }
+        if self.hidden == HiddenMode::Respect && Self::path_is_hidden(rel_path) {
+            return false;
         }
 
         // Both gitignore and glob require path stringification - do once
@@ -231,15 +262,8 @@ impl SearchFilter {
     }
 
     fn matches_file_info(&self, info: &CandidateInfo) -> bool {
-        // Fast hidden check - no allocation
-        if self.hidden == HiddenMode::Respect {
-            let skip_hidden = info.rel_path.file_name().is_some_and(|name| {
-                let bytes = name.as_encoded_bytes();
-                bytes.starts_with(b".") && bytes.len() > 1
-            });
-            if skip_hidden {
-                return false;
-            }
+        if self.hidden == HiddenMode::Respect && Self::path_is_hidden(&info.rel_path) {
+            return false;
         }
 
         if !self.needs_rel_str_for_matching() {

@@ -2,7 +2,7 @@ mod common;
 
 use std::fs;
 
-use common::{abs_match, assert_success, build_index, command, fresh_dir, normalized_stdout};
+use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout, rel_match};
 
 #[test]
 fn pattern_file_roundtrip() {
@@ -12,7 +12,7 @@ fn pattern_file_roundtrip() {
     fs::write(&pat, "# comment\nbeta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-f")
@@ -34,7 +34,7 @@ fn repeated_e_patterns_are_or_combined() {
     fs::write(root.join("b.txt"), "beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-e")
@@ -48,8 +48,8 @@ fn repeated_e_patterns_are_or_combined() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&abs_match(&root, "a.txt", "alpha")));
-    assert!(stdout.contains(&abs_match(&root, "b.txt", "beta")));
+    assert!(stdout.contains(&rel_match("a.txt", "alpha")));
+    assert!(stdout.contains(&rel_match("b.txt", "beta")));
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn pattern_file_and_positional_pattern_are_combined() {
     fs::write(&pat, "alpha\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-f")
@@ -74,8 +74,8 @@ fn pattern_file_and_positional_pattern_are_combined() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&abs_match(&root, "a.txt", "alpha")));
-    assert!(stdout.contains(&abs_match(&root, "b.txt", "beta")));
+    assert!(stdout.contains(&rel_match("a.txt", "alpha")));
+    assert!(stdout.contains(&rel_match("b.txt", "beta")));
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn smart_case_lowercase_matches_casei() {
     fs::write(root.join("t.txt"), "alpha beta BETA Beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-o")
@@ -108,7 +108,7 @@ fn smart_case_uppercase_matches_case_sensitive() {
     fs::write(root.join("t.txt"), "alpha beta Beta BETA\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-o")
@@ -132,7 +132,7 @@ fn case_sensitive_flag_overrides_ignore_case() {
     fs::write(root.join("t.txt"), "alpha beta Beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-o")
@@ -156,7 +156,7 @@ fn smart_case_flag_overrides_ignore_case() {
     fs::write(root.join("t.txt"), "alpha beta BETA\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-o")
@@ -180,7 +180,7 @@ fn case_flag_precedence_last_wins_sensitive_over_smart() {
     fs::write(root.join("t.txt"), "alpha beta Beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-o")
@@ -204,7 +204,7 @@ fn case_flag_precedence_smart_over_sensitive() {
     fs::write(root.join("t.txt"), "alpha beta Beta BETA\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("-o")

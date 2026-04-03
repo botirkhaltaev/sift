@@ -31,6 +31,10 @@ cargo test --workspace --all-features
 - Prefer small, focused changes; match existing style.
 - Do not commit `target/`, `.cursor/`, local `.sift/` (see root `.gitignore`).
 
+## Phased work (roadmap slices)
+
+After **each** roadmap phase (see `plan.md`): do a **full pass review** of the code touched in that phase—not only the happy path. Check structure and naming, duplication vs. small focused helpers, error handling (`Result` / `anyhow` without losing context), tests and integration coverage for new behavior, and that `cargo fmt`, `cargo clippy-check`, and `cargo test --workspace --all-features` are clean. Prefer best-practice Rust over preserving obsolete CLI semantics when they conflict with the target behavior.
+
 ## Embedding / API
 
 Consumers typically call `IndexBuilder::build`, `Index::open`, `CompiledSearch::new`, then `run_index` or `walk_file_paths`. Details live in `crates/core/README.md`.

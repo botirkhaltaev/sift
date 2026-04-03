@@ -18,7 +18,11 @@ pub struct IndexTables {
     pub postings: Vec<u8>,
 }
 
-fn collect_paths(root: &Path) -> crate::Result<(CorpusKind, Vec<PathBuf>)> {
+fn collect_paths(
+    root: &Path,
+    follow_links: bool,
+    exclude_paths: &[PathBuf],
+) -> crate::Result<(CorpusKind, Vec<PathBuf>)> {
     if root.is_file() {
         let Some(name) = root.file_name() else {
             return Err(crate::Error::Io(std::io::Error::new(
@@ -37,7 +41,7 @@ fn collect_paths(root: &Path) -> crate::Result<(CorpusKind, Vec<PathBuf>)> {
 
     let mut paths: Vec<PathBuf> = Vec::new();
     let walker = WalkBuilder::new(root)
-        .follow_links(false)
+        .follow_links(follow_links)
         .hidden(false)
         .parents(false)
         .ignore(false)
@@ -53,6 +57,12 @@ fn collect_paths(root: &Path) -> crate::Result<(CorpusKind, Vec<PathBuf>)> {
         }
         let path = entry.path();
         let display = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+        if exclude_paths
+            .iter()
+            .any(|excluded| display.starts_with(excluded))
+        {
+            continue;
+        }
         paths.push(display);
     }
     Ok((CorpusKind::Directory, paths))
@@ -78,8 +88,12 @@ fn actual_path(root: &Path, corpus_kind: &CorpusKind, display: &Path) -> PathBuf
     }
 }
 
-pub fn build_index_tables(root: &Path) -> crate::Result<(CorpusKind, IndexTables)> {
-    let (corpus_kind, mut paths) = collect_paths(root)?;
+pub fn build_index_tables(
+    root: &Path,
+    follow_links: bool,
+    exclude_paths: &[PathBuf],
+) -> crate::Result<(CorpusKind, IndexTables)> {
+    let (corpus_kind, mut paths) = collect_paths(root, follow_links, exclude_paths)?;
     paths.sort_unstable();
 
     let min_parallel = parallel_candidate_threshold();

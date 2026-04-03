@@ -1,8 +1,12 @@
 mod common;
 
+use std::ffi::OsString;
 use std::fs;
 
-use common::{abs, abs_match, assert_success, build_index, command, fresh_dir, normalized_stdout};
+use common::{
+    BuildIndexOptions, assert_index_and_walk_output, assert_success, command, fresh_dir,
+    normalized_stdout, rel_match,
+};
 
 #[test]
 fn quiet_exit_codes() {
@@ -10,7 +14,7 @@ fn quiet_exit_codes() {
     fs::write(root.join("a.txt"), "found\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let ok = command(None)
         .arg("-q")
@@ -38,7 +42,7 @@ fn files_with_matches_print_each_path_once() {
     fs::write(root.join("b.txt"), "match\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -53,7 +57,7 @@ fn files_with_matches_print_each_path_once() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(lines, [abs(&root, "a.txt"), abs(&root, "b.txt")]);
+    assert_eq!(lines, ["a.txt".to_string(), "b.txt".to_string()]);
 }
 
 #[test]
@@ -64,12 +68,12 @@ fn files_without_match_print_only_non_matching_paths() {
     fs::write(root.join("c.txt"), "hit too\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
         .arg(&idx)
-        .arg("-L")
+        .arg("--files-without-match")
         .arg("hit")
         .output()
         .unwrap();
@@ -79,7 +83,53 @@ fn files_without_match_print_only_non_matching_paths() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(lines, [abs(&root, "b.txt")]);
+    assert_eq!(lines, ["b.txt".to_string()]);
+}
+
+#[test]
+fn files_without_match_is_consistent_between_index_and_walk() {
+    let root = fresh_dir("output-files-without-match-consistent");
+    fs::write(root.join("sherlock.txt"), "Sherlock Holmes\n").unwrap();
+    fs::write(root.join("file.py"), "foo\n").unwrap();
+    let abs_root = root.canonicalize().unwrap();
+    let args = vec![
+        OsString::from("--files-without-match"),
+        OsString::from("Sherlock"),
+        abs_root.into_os_string(),
+    ];
+
+    assert_index_and_walk_output(&root, &args, "file.py\n");
+}
+
+#[test]
+fn heading_prints_a_single_file_header() {
+    let root = fresh_dir("output-heading");
+    fs::write(root.join("sherlock.txt"), "For Sherlock Holmes.\n").unwrap();
+    let args = vec![
+        OsString::from("-H"),
+        OsString::from("--heading"),
+        OsString::from("Sherlock"),
+        OsString::from("sherlock.txt"),
+    ];
+
+    let expected = "sherlock.txt\nFor Sherlock Holmes.\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+#[test]
+fn no_heading_overrides_heading() {
+    let root = fresh_dir("output-no-heading");
+    fs::write(root.join("sherlock.txt"), "For Sherlock Holmes.\n").unwrap();
+    let args = vec![
+        OsString::from("-H"),
+        OsString::from("--heading"),
+        OsString::from("--no-heading"),
+        OsString::from("Sherlock"),
+        OsString::from("sherlock.txt"),
+    ];
+
+    let expected = format!("{}\n", rel_match("sherlock.txt", "For Sherlock Holmes."));
+    assert_index_and_walk_output(&root, &args, &expected);
 }
 
 #[test]
@@ -89,7 +139,7 @@ fn count_prints_match_totals_per_file() {
     fs::write(root.join("b.txt"), "miss\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -104,7 +154,7 @@ fn count_prints_match_totals_per_file() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(lines, [abs_match(&root, "a.txt", "2")]);
+    assert_eq!(lines, [rel_match("a.txt", "2")]);
 }
 
 #[test]
@@ -113,7 +163,7 @@ fn line_number_and_no_filename_format_output() {
     fs::write(root.join("t.txt"), "alpha\nbeta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -138,7 +188,7 @@ fn only_matching_prints_each_match_span() {
     fs::write(root.join("t.txt"), "alpha beta beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -164,7 +214,7 @@ fn max_count_limits_per_file() {
     fs::write(root.join("b.txt"), "match three\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -191,7 +241,7 @@ fn count_matches_counts_individual_spans() {
     fs::write(root.join("a.txt"), "beta beta beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -207,7 +257,7 @@ fn count_matches_counts_individual_spans() {
         .map(str::to_string)
         .collect();
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines, &[abs_match(&root, "a.txt", "3")]);
+    assert_eq!(lines, &[rel_match("a.txt", "3")]);
 }
 
 #[test]
@@ -216,7 +266,7 @@ fn count_lines_not_matches() {
     fs::write(root.join("a.txt"), "beta beta beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -232,7 +282,7 @@ fn count_lines_not_matches() {
         .map(str::to_string)
         .collect();
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines, &[abs_match(&root, "a.txt", "1")]);
+    assert_eq!(lines, &[rel_match("a.txt", "1")]);
 }
 
 #[test]
@@ -241,7 +291,7 @@ fn c_o_normalizes_to_count_matches() {
     fs::write(root.join("a.txt"), "beta beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     for args in &[&["-c", "-o"][..], &["-o", "-c"][..]] {
         let out = command(None)
@@ -267,7 +317,7 @@ fn count_matches_quiet_match() {
     fs::write(root.join("a.txt"), "beta beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -287,7 +337,7 @@ fn count_matches_quiet_no_match() {
     fs::write(root.join("a.txt"), "beta beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -307,7 +357,7 @@ fn count_matches_no_filename() {
     fs::write(root.join("a.txt"), "beta beta\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -328,7 +378,7 @@ fn count_omits_zero_count_files() {
     fs::write(root.join("b.txt"), "miss\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -344,7 +394,7 @@ fn count_omits_zero_count_files() {
         .map(str::to_string)
         .collect();
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines, &[abs_match(&root, "a.txt", "1")]);
+    assert_eq!(lines, &[rel_match("a.txt", "1")]);
 }
 
 #[test]
@@ -353,7 +403,7 @@ fn count_matches_multi_line() {
     fs::write(root.join("a.txt"), "a a a\nx\na\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -369,7 +419,7 @@ fn count_matches_multi_line() {
         .map(str::to_string)
         .collect();
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines, &[abs_match(&root, "a.txt", "4")]);
+    assert_eq!(lines, &[rel_match("a.txt", "4")]);
 
     let out_c = command(None)
         .arg("--sift-dir")
@@ -385,5 +435,5 @@ fn count_matches_multi_line() {
         .map(str::to_string)
         .collect();
     assert_eq!(lines_c.len(), 1);
-    assert_eq!(lines_c, &[abs_match(&root, "a.txt", "2")]);
+    assert_eq!(lines_c, &[rel_match("a.txt", "2")]);
 }

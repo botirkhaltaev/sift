@@ -1,6 +1,6 @@
 //! Fast indexed regex search over codebases — core engine.
 //!
-//! **Walking:** [`WalkBuilder`] from the [`ignore`] crate (ripgrep-class ignore rules).
+//! **Walking:** [`WalkBuilder`] from the [`ignore`] crate.
 
 mod index;
 mod planner;

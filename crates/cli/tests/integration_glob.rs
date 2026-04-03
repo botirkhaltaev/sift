@@ -2,7 +2,7 @@ mod common;
 
 use std::fs;
 
-use common::{abs, assert_success, build_index, command, fresh_dir, line_path, normalized_stdout};
+use common::{BuildIndexOptions, assert_success, command, fresh_dir, line_path, normalized_stdout};
 
 #[test]
 fn glob_include_only_matching_files() {
@@ -12,7 +12,7 @@ fn glob_include_only_matching_files() {
     fs::write(root.join("c.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -26,9 +26,9 @@ fn glob_include_only_matching_files() {
 
     let stdout = normalized_stdout(&out);
     let candidates = vec![
-        abs(&root, "a.txt"),
-        abs(&root, "b.log"),
-        abs(&root, "c.txt"),
+        "a.txt".to_string(),
+        "b.log".to_string(),
+        "c.txt".to_string(),
     ];
     let lines: Vec<_> = stdout
         .lines()
@@ -58,7 +58,7 @@ fn glob_exclude_pattern_excludes_matched_files() {
     fs::write(root.join("c.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -72,9 +72,9 @@ fn glob_exclude_pattern_excludes_matched_files() {
 
     let stdout = normalized_stdout(&out);
     let candidates = vec![
-        abs(&root, "a.txt"),
-        abs(&root, "b.log"),
-        abs(&root, "c.txt"),
+        "a.txt".to_string(),
+        "b.log".to_string(),
+        "c.txt".to_string(),
     ];
     let lines: Vec<_> = stdout
         .lines()
@@ -102,7 +102,7 @@ fn glob_multiple_patterns_later_wins() {
     fs::write(root.join("b.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -136,7 +136,7 @@ fn glob_directory_matches_subtree() {
     fs::write(root.join("other.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -171,7 +171,7 @@ fn glob_whitelist_then_exclude() {
     fs::write(root.join("c.log"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -203,7 +203,7 @@ fn glob_only_whitelist_none_match_excludes_all() {
     fs::write(root.join("b.log"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -227,7 +227,7 @@ fn glob_invalid_pattern_returns_error() {
     fs::write(root.join("a.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -253,7 +253,7 @@ fn glob_files_with_matches_includes_only_glob_matched() {
     fs::write(root.join("b.log"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -284,7 +284,7 @@ fn glob_combined_with_path_scope() {
     fs::write(root.join("bar/c.log"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -315,7 +315,7 @@ fn glob_case_sensitive_by_default() {
     fs::write(root.join("upper.TXT"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -328,7 +328,7 @@ fn glob_case_sensitive_by_default() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    let candidates = vec![abs(&root, "lower.txt"), abs(&root, "upper.TXT")];
+    let candidates = vec!["lower.txt".to_string(), "upper.TXT".to_string()];
     let lines: Vec<_> = stdout
         .lines()
         .filter(|l| !l.is_empty())
@@ -351,7 +351,7 @@ fn glob_case_insensitive_flag() {
     fs::write(root.join("upper.TXT"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -365,7 +365,7 @@ fn glob_case_insensitive_flag() {
     assert_success(&out);
 
     let stdout = normalized_stdout(&out);
-    let candidates = vec![abs(&root, "lower.txt"), abs(&root, "upper.TXT")];
+    let candidates = vec!["lower.txt".to_string(), "upper.TXT".to_string()];
     let lines: Vec<_> = stdout
         .lines()
         .filter(|l| !l.is_empty())
@@ -389,7 +389,7 @@ fn glob_case_insensitive_with_negation() {
     fs::write(root.join("keep.txt"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out = command(None)
         .arg("--sift-dir")
@@ -404,9 +404,9 @@ fn glob_case_insensitive_with_negation() {
 
     let stdout = normalized_stdout(&out);
     let candidates = vec![
-        abs(&root, "skip.log"),
-        abs(&root, "skip.LOG"),
-        abs(&root, "keep.txt"),
+        "skip.log".to_string(),
+        "skip.LOG".to_string(),
+        "keep.txt".to_string(),
     ];
     let lines: Vec<_> = stdout
         .lines()
@@ -432,7 +432,7 @@ fn glob_case_insensitive_precedence_last_wins() {
     fs::write(root.join("upper.TXT"), "hello\n").unwrap();
     let idx = root.join(".sift");
 
-    build_index(None, &idx, &root);
+    BuildIndexOptions::default().run(None, &idx, &root);
 
     let out_on = command(None)
         .arg("--sift-dir")
@@ -446,7 +446,7 @@ fn glob_case_insensitive_precedence_last_wins() {
         .unwrap();
     assert_success(&out_on);
     let stdout_on = normalized_stdout(&out_on);
-    let candidates = vec![abs(&root, "lower.txt"), abs(&root, "upper.TXT")];
+    let candidates = vec!["lower.txt".to_string(), "upper.TXT".to_string()];
     let lines_on: Vec<_> = stdout_on
         .lines()
         .filter(|l| !l.is_empty())

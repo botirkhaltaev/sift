@@ -1,6 +1,6 @@
 //! Regex → trigram lookup arms using required-literal extraction.
 //!
-//! Models after ripgrep's `InnerLiterals` approach:
+//! Uses a required-literal extraction approach:
 //!   - Build Unicode-aware, flag-configured HIR via translation
 //!   - Shape HIR for `-w` and `-x`
 //!   - Extract required literals via both prefix and suffix extraction
@@ -68,7 +68,7 @@ fn build_configured_hir(pattern: &str, opts: &SearchOptions) -> Option<Hir> {
     Some(hir)
 }
 
-/// Wrap HIR in word boundary looks, mirroring ripgrep's `into_word`.
+/// Wrap HIR in word boundary looks.
 fn wrap_word(hir: Hir, unicode: bool) -> Hir {
     let start_half = if unicode {
         hir::Look::WordStartHalfUnicode
@@ -83,7 +83,7 @@ fn wrap_word(hir: Hir, unicode: bool) -> Hir {
     Hir::concat(vec![Hir::look(start_half), hir, Hir::look(end_half)])
 }
 
-/// Wrap HIR in line boundary looks, mirroring ripgrep's `into_whole_line`.
+/// Wrap HIR in line boundary looks.
 fn wrap_line(hir: Hir) -> Hir {
     Hir::concat(vec![
         Hir::look(hir::Look::StartLF),

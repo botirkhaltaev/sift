@@ -1,4 +1,4 @@
-//! Indexed search execution built on ripgrep's public grep crates.
+//! Indexed search execution built on the public grep crates.
 
 mod execute;
 mod filter;
