@@ -46,7 +46,11 @@ fn opts_from_bytes(data: &[u8]) -> SearchOptions {
         .map(|b| SearchMatchFlags::from_bits_truncate(*b))
         .unwrap_or_default();
     let max_results = data.get(1).map(|b| (*b as usize).min(10_000));
-    SearchOptions { flags, max_results }
+    SearchOptions {
+        flags,
+        max_results,
+        ..SearchOptions::default()
+    }
 }
 
 fuzz_target!(|data: &[u8]| {

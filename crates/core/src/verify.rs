@@ -64,6 +64,7 @@ pub fn compile_pattern(
         flags: SearchMatchFlags::default(),
         case_mode,
         max_results: None,
+        ..SearchOptions::default()
     };
     compile_search_pattern(&[pattern.to_string()], &opts)
 }
@@ -78,6 +79,7 @@ mod tests {
             flags,
             case_mode,
             max_results: None,
+            ..SearchOptions::default()
         }
     }
 

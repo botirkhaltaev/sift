@@ -84,6 +84,7 @@ fn word_literal() -> Scenario {
             flags: SearchMatchFlags::WORD_REGEXP,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         default_output(),
@@ -98,6 +99,7 @@ fn line_literal() -> Scenario {
             flags: SearchMatchFlags::LINE_REGEXP,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         default_output(),
@@ -112,6 +114,7 @@ fn fixed_string() -> Scenario {
             flags: SearchMatchFlags::FIXED_STRINGS,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         default_output(),
@@ -126,6 +129,7 @@ fn casei_literal() -> Scenario {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Insensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         default_output(),
@@ -140,6 +144,7 @@ fn smart_case_lower() -> Scenario {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Smart,
             max_results: None,
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         default_output(),
@@ -154,6 +159,7 @@ fn smart_case_upper() -> Scenario {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Smart,
             max_results: None,
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         default_output(),
@@ -198,6 +204,7 @@ fn alternation_casei() -> Scenario {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Insensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         default_output(),
@@ -474,6 +481,7 @@ fn max_count_1() -> Scenario {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Sensitive,
             max_results: Some(1),
+            ..SearchOptions::default()
         },
         Scenario::default_filter(),
         make_output(SearchMode::Standard, sift_core::OutputEmission::Normal),

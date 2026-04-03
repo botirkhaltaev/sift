@@ -306,6 +306,7 @@ fn bench_word_literal(c: &mut Criterion) {
             flags: SearchMatchFlags::WORD_REGEXP,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
     )
     .unwrap();
@@ -336,6 +337,7 @@ fn bench_line_literal(c: &mut Criterion) {
             flags: SearchMatchFlags::LINE_REGEXP,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
     )
     .unwrap();
@@ -366,6 +368,7 @@ fn bench_fixed_string(c: &mut Criterion) {
             flags: SearchMatchFlags::FIXED_STRINGS,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
     )
     .unwrap();
@@ -396,6 +399,7 @@ fn bench_casei_literal(c: &mut Criterion) {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Insensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
     )
     .unwrap();
@@ -426,6 +430,7 @@ fn bench_smart_case_lower(c: &mut Criterion) {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Smart,
             max_results: None,
+            ..SearchOptions::default()
         },
     )
     .unwrap();
@@ -456,6 +461,7 @@ fn bench_smart_case_upper(c: &mut Criterion) {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Smart,
             max_results: None,
+            ..SearchOptions::default()
         },
     )
     .unwrap();
@@ -574,6 +580,7 @@ fn bench_alternation_casei(c: &mut Criterion) {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Insensitive,
             max_results: None,
+            ..SearchOptions::default()
         },
     )
     .unwrap();
@@ -999,6 +1006,7 @@ fn bench_max_count_1(c: &mut Criterion) {
             flags: SearchMatchFlags::default(),
             case_mode: CaseMode::Sensitive,
             max_results: Some(1),
+            ..SearchOptions::default()
         },
     )
     .unwrap();
