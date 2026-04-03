@@ -68,9 +68,8 @@ fuzz_target!(|data: &[u8]| {
             index,
             &[],
             sift_core::SearchOutput {
-                mode: sift_core::SearchMode::Quiet,
-                with_filename: false,
-                line_number: false,
+                emission: sift_core::OutputEmission::Quiet,
+                ..sift_core::SearchOutput::default()
             },
         );
     }
@@ -85,9 +84,8 @@ fuzz_target!(|data: &[u8]| {
                 index,
                 &[],
                 sift_core::SearchOutput {
-                    mode: sift_core::SearchMode::Quiet,
-                    with_filename: false,
-                    line_number: false,
+                    emission: sift_core::OutputEmission::Quiet,
+                    ..sift_core::SearchOutput::default()
                 },
             );
         }

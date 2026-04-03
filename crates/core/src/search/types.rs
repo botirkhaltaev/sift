@@ -116,13 +116,57 @@ pub enum FilenameMode {
     Never,
 }
 
+/// When to emit ANSI colors (ripgrep-style `--color`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorChoice {
+    /// Color only when stdout is a terminal.
+    #[default]
+    Auto,
+    Never,
+    Always,
+}
+
+/// Per-line presentation: paths, headings, and line numbers (standard / only-matching modes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchLineStyle {
+    pub filename_mode: FilenameMode,
+    pub heading: bool,
+    pub line_number: bool,
+}
+
+impl Default for SearchLineStyle {
+    fn default() -> Self {
+        Self {
+            filename_mode: FilenameMode::Auto,
+            heading: false,
+            line_number: false,
+        }
+    }
+}
+
+/// Path record terminators and color (`-0`, `--color`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchRecordStyle {
+    /// `-0` / `--null`: end path-only records with NUL instead of newline.
+    pub null_data: bool,
+    pub color: ColorChoice,
+}
+
+impl Default for SearchRecordStyle {
+    fn default() -> Self {
+        Self {
+            null_data: false,
+            color: ColorChoice::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchOutput {
     pub mode: SearchMode,
     pub emission: OutputEmission,
-    pub filename_mode: FilenameMode,
-    pub heading: bool,
-    pub line_number: bool,
+    pub lines: SearchLineStyle,
+    pub records: SearchRecordStyle,
 }
 
 impl Default for SearchOutput {
@@ -130,9 +174,8 @@ impl Default for SearchOutput {
         Self {
             mode: SearchMode::Standard,
             emission: OutputEmission::Normal,
-            filename_mode: FilenameMode::Auto,
-            heading: false,
-            line_number: false,
+            lines: SearchLineStyle::default(),
+            records: SearchRecordStyle::default(),
         }
     }
 }

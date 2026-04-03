@@ -5,10 +5,10 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Args, Command, FromArgMatches, Parser, Subcommand, value_parser};
 use sift_core::{
-    CaseMode, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig, HiddenMode,
-    IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter,
-    SearchFilterConfig, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    VisibilityConfig,
+    CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig,
+    HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter,
+    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
+    SearchRecordStyle, VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -47,7 +47,18 @@ struct Cli {
     #[command(flatten)]
     context_decl: ContextDecl,
     #[command(flatten)]
+    null_color: NullColorDecl,
+    #[command(flatten)]
     paths: PathArgs,
+}
+
+/// `-0` / `--null` and `--color` for clap; effective null/color use argv resolvers.
+#[derive(Args)]
+struct NullColorDecl {
+    #[arg(short = '0', long = "null", action = ArgAction::SetTrue)]
+    _null: bool,
+    #[arg(long = "color", value_name = "WHEN")]
+    _color: Option<String>,
 }
 
 /// Declares `-A`/`-B`/`-C` for clap; effective values use [`resolve_context_from_args`].
@@ -320,6 +331,48 @@ fn resolve_context_from_args(args: &[String]) -> (usize, usize) {
         i += 1;
     }
     (before, after)
+}
+
+fn parse_color_when(s: &str) -> ColorChoice {
+    match s {
+        "never" => ColorChoice::Never,
+        "always" => ColorChoice::Always,
+        _ => ColorChoice::Auto,
+    }
+}
+
+/// `--color when` / `--color=when`; argv order, last wins.
+fn resolve_color_from_args(args: &[String]) -> ColorChoice {
+    let mut result = ColorChoice::Auto;
+    let mut i = 0usize;
+    while i < args.len() {
+        if let Some(rest) = args[i].strip_prefix("--color=") {
+            result = parse_color_when(rest);
+            i += 1;
+            continue;
+        }
+        if args[i] == "--color"
+            && let Some(v) = args.get(i + 1)
+        {
+            result = parse_color_when(v);
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    result
+}
+
+/// `-0` / `--null`; later flag wins (`--null` then `--no-null` style not in rg — we only enable).
+fn resolve_null_from_args(args: &[String]) -> bool {
+    let mut result = false;
+    for arg in args {
+        match arg.as_str() {
+            "-0" | "--null" => result = true,
+            _ => {}
+        }
+    }
+    result
 }
 
 fn resolve_heading_from_args(args: &[String]) -> bool {
@@ -825,9 +878,8 @@ fn excluded_search_paths(search_root: &Path, sift_dir: &Path) -> Vec<PathBuf> {
 const fn search_output(
     effective_mode: SearchMode,
     quiet: bool,
-    filename_mode: FilenameMode,
-    heading: bool,
-    line_number: bool,
+    lines: SearchLineStyle,
+    records: SearchRecordStyle,
 ) -> SearchOutput {
     SearchOutput {
         mode: effective_mode,
@@ -836,9 +888,8 @@ const fn search_output(
         } else {
             OutputEmission::Normal
         },
-        filename_mode,
-        heading,
-        line_number,
+        lines,
+        records,
     }
 }
 
@@ -856,14 +907,32 @@ const fn effective_filename_mode(
     }
 }
 
-/// Resolved output mode and filename/heading flags (from argv + clap) shared by index and walk search.
 #[derive(Clone, Copy)]
-struct SearchOutputCtx {
+struct SearchModeCtx {
     effective_mode: SearchMode,
     quiet: bool,
+}
+
+/// Heading and filename resolution (`-H` / `--no-filename`, path-only modes).
+#[derive(Clone, Copy)]
+struct SearchLineResolveCtx {
     heading: bool,
     with_filename: Option<bool>,
     is_path_mode: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SearchFormatCtx {
+    null_data: bool,
+    color: ColorChoice,
+}
+
+/// Resolved output mode and line/format flags (from argv + clap) shared by index and walk search.
+#[derive(Clone, Copy)]
+struct SearchOutputCtx {
+    mode: SearchModeCtx,
+    lines: SearchLineResolveCtx,
+    format: SearchFormatCtx,
 }
 
 /// Resolved visibility, ignore sources, and glob case (from argv order + clap) for [`SearchFilterConfig`].
@@ -922,14 +991,23 @@ fn run_search_with_index(
     let prefixes = corpus_path_prefixes(&index.root, cwd, &cli.search_scope.paths)?;
     let exclude_paths = excluded_search_paths(&index.root, &cli.paths.sift_dir);
     let corpus_is_single_file = matches!(index.corpus_kind, sift_core::CorpusKind::File { .. });
-    let filename_mode =
-        effective_filename_mode(out.with_filename, out.is_path_mode, corpus_is_single_file);
+    let filename_mode = effective_filename_mode(
+        out.lines.with_filename,
+        out.lines.is_path_mode,
+        corpus_is_single_file,
+    );
     let output = search_output(
-        out.effective_mode,
-        out.quiet,
-        filename_mode,
-        out.heading,
-        cli.out1.line_number,
+        out.mode.effective_mode,
+        out.mode.quiet,
+        SearchLineStyle {
+            filename_mode,
+            heading: out.lines.heading,
+            line_number: cli.out1.line_number,
+        },
+        SearchRecordStyle {
+            null_data: out.format.null_data,
+            color: out.format.color,
+        },
     );
     let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
     let search_filter = SearchFilter::new(&filter_config, &index.root)?;
@@ -947,13 +1025,20 @@ fn run_search_walk(
 ) -> anyhow::Result<bool> {
     let prefixes = walk_path_prefixes(filter_root, &cli.search_scope.paths)?;
     let exclude_paths = excluded_search_paths(filter_root, &cli.paths.sift_dir);
-    let filename_mode = effective_filename_mode(out.with_filename, out.is_path_mode, false);
+    let filename_mode =
+        effective_filename_mode(out.lines.with_filename, out.lines.is_path_mode, false);
     let output = search_output(
-        out.effective_mode,
-        out.quiet,
-        filename_mode,
-        out.heading,
-        cli.out1.line_number,
+        out.mode.effective_mode,
+        out.mode.quiet,
+        SearchLineStyle {
+            filename_mode,
+            heading: out.lines.heading,
+            line_number: cli.out1.line_number,
+        },
+        SearchRecordStyle {
+            null_data: out.format.null_data,
+            color: out.format.color,
+        },
     );
     let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
     let search_filter = SearchFilter::new(&filter_config, filter_root)?;
@@ -974,6 +1059,8 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
     let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
     let (before_context, after_context) = resolve_context_from_args(&args);
+    let null_data = resolve_null_from_args(&args);
+    let color = resolve_color_from_args(&args);
     let heading = resolve_heading_from_args(&args);
     let with_filename = resolve_with_filename_from_args(&args);
 
@@ -1015,11 +1102,16 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     );
 
     let out = SearchOutputCtx {
-        effective_mode,
-        quiet,
-        heading,
-        with_filename,
-        is_path_mode,
+        mode: SearchModeCtx {
+            effective_mode,
+            quiet,
+        },
+        lines: SearchLineResolveCtx {
+            heading,
+            with_filename,
+            is_path_mode,
+        },
+        format: SearchFormatCtx { null_data, color },
     };
     let filter = SearchFilterCtx {
         hidden,
