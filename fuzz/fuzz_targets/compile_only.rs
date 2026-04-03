@@ -23,6 +23,7 @@ fuzz_target!(|data: &[u8]| {
     let opts = SearchOptions {
         flags,
         max_results,
+        ..SearchOptions::default()
     };
 
     let rest = data.get(2..).unwrap_or_default();

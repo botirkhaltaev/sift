@@ -219,6 +219,7 @@ mod tests {
             flags: SearchMatchFlags::WORD_REGEXP,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         };
         assert!(narrow(&["beta".to_string()], &opts));
     }
@@ -229,6 +230,7 @@ mod tests {
             flags: SearchMatchFlags::LINE_REGEXP,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         };
         assert!(narrow(&["beta".to_string()], &opts));
     }
@@ -239,6 +241,7 @@ mod tests {
             flags: SearchMatchFlags::empty(),
             case_mode: CaseMode::Insensitive,
             max_results: None,
+            ..SearchOptions::default()
         };
         assert!(narrow(&["beta".to_string()], &opts));
     }
@@ -278,6 +281,7 @@ mod tests {
             flags: SearchMatchFlags::FIXED_STRINGS,
             case_mode: CaseMode::Sensitive,
             max_results: None,
+            ..SearchOptions::default()
         };
         assert!(narrow(&["beta.gamma".to_string()], &opts));
     }

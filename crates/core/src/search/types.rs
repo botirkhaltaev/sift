@@ -7,7 +7,7 @@ use once_cell::sync::OnceCell;
 
 use crate::planner::TrigramPlan;
 
-type SearcherCacheEntry = ((bool, Option<usize>), Searcher);
+type SearcherCacheEntry = ((bool, Option<usize>, usize, usize), Searcher);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaseMode {
@@ -40,6 +40,10 @@ pub struct SearchOptions {
     pub flags: SearchMatchFlags,
     pub case_mode: CaseMode,
     pub max_results: Option<usize>,
+    /// Lines of context before each match (`-B` / leading part of `-C`).
+    pub before_context: usize,
+    /// Lines of context after each match (`-A` / trailing part of `-C`).
+    pub after_context: usize,
 }
 
 impl SearchOptions {
@@ -140,7 +144,7 @@ pub struct CompiledSearch {
     pub plan: TrigramPlan,
     /// Lazily filled by [`Self::run_index`] via [`Self::build_matcher`]; repeated searches reuse one matcher.
     pub matcher: OnceCell<RegexMatcher>,
-    /// Last [`Searcher`](grep_searcher::Searcher) built for `(line_number, max_matches)`; reused across `run_index` calls when the key matches.
+    /// Last [`Searcher`] built for `(line_number, max_matches, before_context, after_context)`; reused when the key matches.
     pub searcher_cache: Mutex<Option<SearcherCacheEntry>>,
 }
 

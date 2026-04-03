@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
-use grep_searcher::{Searcher, Sink, SinkMatch};
+use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
 use crate::Index;
@@ -252,6 +252,8 @@ impl CompiledSearch {
         matcher: &RegexMatcher,
         output: SearchOutput,
     ) -> crate::Result<bool> {
+        let show_line_numbers =
+            output.line_number || self.opts.before_context > 0 || self.opts.after_context > 0;
         self.with_cached_searcher(output.line_number, self.opts.max_results, |searcher| {
             let mut any_match = false;
             let mut out = Vec::new();
@@ -262,8 +264,13 @@ impl CompiledSearch {
                     sink_output.filename_mode = FilenameMode::Never;
                 }
                 let mut bytes = Vec::new();
-                let mut sink =
-                    StandardSink::new(matcher, sink_output, &candidate.rel_path, &mut bytes);
+                let mut sink = StandardSink::new(
+                    matcher,
+                    sink_output,
+                    show_line_numbers,
+                    &candidate.rel_path,
+                    &mut bytes,
+                );
                 let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
                 any_match |= sink.matched;
                 if sink.matched && heading {
@@ -413,15 +420,20 @@ struct StandardWorker<'a> {
     matcher: &'a RegexMatcher,
     searcher: Searcher,
     output: SearchOutput,
+    /// `-C` / `-A` / `-B` imply line numbers in output (ripgrep-style).
+    show_line_numbers: bool,
     bytes: Vec<u8>,
 }
 
 impl<'a> StandardWorker<'a> {
     fn new(search: &CompiledSearch, matcher: &'a RegexMatcher, output: SearchOutput) -> Self {
+        let show_line_numbers =
+            output.line_number || search.opts.before_context > 0 || search.opts.after_context > 0;
         Self {
-            searcher: search.build_searcher(output.line_number, search.opts.max_results),
+            searcher: search.build_searcher(output.line_number, search.opts.max_results, true),
             matcher,
             output,
+            show_line_numbers,
             bytes: Vec::new(),
         }
     }
@@ -449,6 +461,7 @@ impl<'a> StandardWorker<'a> {
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
+                self.show_line_numbers,
                 &candidate.rel_path,
                 &mut self.bytes,
             );
@@ -491,6 +504,7 @@ impl<'a> StandardWorker<'a> {
 struct StandardSink<'a> {
     matcher: &'a RegexMatcher,
     output: SearchOutput,
+    show_line_numbers: bool,
     /// Path printed in prefixes (relative to search root, `grep`-style).
     display_path: &'a Path,
     bytes: &'a mut Vec<u8>,
@@ -502,12 +516,14 @@ impl<'a> StandardSink<'a> {
     const fn new(
         matcher: &'a RegexMatcher,
         output: SearchOutput,
+        show_line_numbers: bool,
         display_path: &'a Path,
         bytes: &'a mut Vec<u8>,
     ) -> Self {
         Self {
             matcher,
             output,
+            show_line_numbers,
             display_path,
             bytes,
             matched: false,
@@ -531,8 +547,14 @@ impl Sink for StandardSink<'_> {
             let line_number = mat.line_number();
             let line = mat.bytes();
             let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
-                let _ =
-                    write_standard_prefix(self.bytes, self.output, self.display_path, line_number);
+                let _ = write_standard_prefix(
+                    self.bytes,
+                    self.output,
+                    self.display_path,
+                    line_number,
+                    self.show_line_numbers,
+                    false,
+                );
                 let _ = self.bytes.write_all(&line[m.start()..m.end()]);
                 let _ = self.bytes.write_all(b"\n");
                 true
@@ -545,11 +567,46 @@ impl Sink for StandardSink<'_> {
             self.output,
             self.display_path,
             mat.line_number(),
+            self.show_line_numbers,
+            false,
         )?;
         self.bytes.write_all(mat.bytes())?;
         if !mat.bytes().ends_with(b"\n") {
             self.bytes.write_all(b"\n")?;
         }
+        Ok(true)
+    }
+
+    fn context(&mut self, _: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, Self::Error> {
+        if self.output.emission == OutputEmission::Quiet {
+            return Ok(true);
+        }
+        if matches!(self.output.mode, SearchMode::OnlyMatching) {
+            return Ok(true);
+        }
+        write_standard_prefix(
+            self.bytes,
+            self.output,
+            self.display_path,
+            ctx.line_number(),
+            self.show_line_numbers,
+            true,
+        )?;
+        self.bytes.write_all(ctx.bytes())?;
+        if !ctx.bytes().ends_with(b"\n") {
+            self.bytes.write_all(b"\n")?;
+        }
+        Ok(true)
+    }
+
+    fn context_break(&mut self, _: &Searcher) -> Result<bool, Self::Error> {
+        if self.output.emission == OutputEmission::Quiet {
+            return Ok(true);
+        }
+        if matches!(self.output.mode, SearchMode::OnlyMatching) {
+            return Ok(true);
+        }
+        self.bytes.write_all(b"--\n")?;
         Ok(true)
     }
 }
@@ -584,7 +641,7 @@ impl<'a> SummaryWorker<'a> {
         mode: SearchMode,
     ) -> Self {
         Self {
-            searcher: search.build_searcher(false, max_results),
+            searcher: search.build_searcher(false, max_results, false),
             matcher,
             mode,
         }
@@ -766,13 +823,16 @@ fn write_standard_prefix(
     output: SearchOutput,
     path: &Path,
     line_number: Option<u64>,
+    show_line_numbers: bool,
+    is_context_line: bool,
 ) -> io::Result<()> {
     let print_filename = output.filename_mode != FilenameMode::Never;
     if print_filename {
         write!(out, "{}:", path.display())?;
     }
-    if output.line_number {
-        write!(out, "{}:", line_number.unwrap_or(0))?;
+    if show_line_numbers {
+        let sep = if is_context_line { '-' } else { ':' };
+        write!(out, "{}{}", line_number.unwrap_or(0), sep)?;
     }
     Ok(())
 }

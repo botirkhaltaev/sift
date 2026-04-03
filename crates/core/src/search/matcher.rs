@@ -4,8 +4,6 @@ use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
 use super::{CaseMode, CompiledSearch};
 
-type SearcherCacheKey = (bool, Option<usize>);
-
 impl CompiledSearch {
     /// # Errors
     /// Returns an error if pattern compilation fails.
@@ -35,13 +33,27 @@ impl CompiledSearch {
             .map_err(|e| crate::Error::RegexBuild(e.to_string()))
     }
 
-    pub(super) fn build_searcher(&self, line_number: bool, max_matches: Option<usize>) -> Searcher {
+    /// `include_context`: standard search uses configured `-A`/`-B`/`-C`; summary/count modes pass `false`.
+    pub(super) fn build_searcher(
+        &self,
+        line_number: bool,
+        max_matches: Option<usize>,
+        include_context: bool,
+    ) -> Searcher {
+        let (before_context, after_context) = if include_context {
+            (self.opts.before_context, self.opts.after_context)
+        } else {
+            (0, 0)
+        };
+        let line_number = line_number || before_context > 0 || after_context > 0;
         let mut builder = SearcherBuilder::new();
         builder
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .line_terminator(LineTerminator::byte(b'\n'))
             .invert_match(self.opts.invert_match())
             .line_number(line_number)
+            .before_context(before_context)
+            .after_context(after_context)
             .max_matches(max_matches.map(|n| n as u64));
         builder.build()
     }
@@ -52,7 +64,12 @@ impl CompiledSearch {
         max_matches: Option<usize>,
         f: impl FnOnce(&mut Searcher) -> R,
     ) -> R {
-        let key: SearcherCacheKey = (line_number, max_matches);
+        let key = (
+            line_number,
+            max_matches,
+            self.opts.before_context,
+            self.opts.after_context,
+        );
         let mut inner = {
             let mut guard = self
                 .searcher_cache
@@ -60,7 +77,7 @@ impl CompiledSearch {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let need_new = guard.as_ref().is_none_or(|(k, _)| *k != key);
             if need_new {
-                *guard = Some((key, self.build_searcher(line_number, max_matches)));
+                *guard = Some((key, self.build_searcher(line_number, max_matches, true)));
             }
             guard.take().expect("searcher_cache populated above")
         };

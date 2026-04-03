@@ -45,7 +45,20 @@ struct Cli {
     #[command(flatten)]
     unrestricted: UnrestrictedDecl,
     #[command(flatten)]
+    context_decl: ContextDecl,
+    #[command(flatten)]
     paths: PathArgs,
+}
+
+/// Declares `-A`/`-B`/`-C` for clap; effective values use [`resolve_context_from_args`].
+#[derive(Args)]
+struct ContextDecl {
+    #[arg(short = 'A', long = "after-context", value_name = "NUM", action = ArgAction::Append)]
+    _after: Vec<usize>,
+    #[arg(short = 'B', long = "before-context", value_name = "NUM", action = ArgAction::Append)]
+    _before: Vec<usize>,
+    #[arg(short = 'C', long = "context", value_name = "NUM", action = ArgAction::Append)]
+    _context: Vec<usize>,
 }
 
 /// Clap declarations only; effective values come from [`resolve_visibility_and_ignore`].
@@ -219,6 +232,94 @@ fn resolve_visibility_and_ignore(args: &[String]) -> (bool, IgnoreSources, bool)
     }
 
     (hidden, sources, require_git)
+}
+
+fn parse_usize_token(s: &str) -> Option<usize> {
+    s.parse().ok()
+}
+
+/// `-A` / `-B` / `-C` and long forms; argv order with later flags overriding (ripgrep-style).
+fn resolve_context_from_args(args: &[String]) -> (usize, usize) {
+    let mut before = 0usize;
+    let mut after = 0usize;
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if let Some(rest) = arg.strip_prefix("--after-context=") {
+            if let Some(n) = parse_usize_token(rest) {
+                after = n;
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = arg.strip_prefix("--before-context=") {
+            if let Some(n) = parse_usize_token(rest) {
+                before = n;
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = arg.strip_prefix("--context=") {
+            if let Some(n) = parse_usize_token(rest) {
+                before = n;
+                after = n;
+            }
+            i += 1;
+            continue;
+        }
+        match arg {
+            "-A" | "--after-context" => {
+                if let Some(n) = args.get(i + 1).and_then(|s| parse_usize_token(s)) {
+                    after = n;
+                    i += 2;
+                    continue;
+                }
+            }
+            "-B" | "--before-context" => {
+                if let Some(n) = args.get(i + 1).and_then(|s| parse_usize_token(s)) {
+                    before = n;
+                    i += 2;
+                    continue;
+                }
+            }
+            "-C" | "--context" => {
+                if let Some(n) = args.get(i + 1).and_then(|s| parse_usize_token(s)) {
+                    before = n;
+                    after = n;
+                    i += 2;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        if let Some(body) = arg.strip_prefix("-A")
+            && !body.is_empty()
+            && let Some(n) = parse_usize_token(body)
+        {
+            after = n;
+            i += 1;
+            continue;
+        }
+        if let Some(body) = arg.strip_prefix("-B")
+            && !body.is_empty()
+            && let Some(n) = parse_usize_token(body)
+        {
+            before = n;
+            i += 1;
+            continue;
+        }
+        if let Some(body) = arg.strip_prefix("-C")
+            && !body.is_empty()
+            && let Some(n) = parse_usize_token(body)
+        {
+            before = n;
+            after = n;
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+    (before, after)
 }
 
 fn resolve_heading_from_args(args: &[String]) -> bool {
@@ -607,6 +708,7 @@ impl SearchFlags {
             flags,
             case_mode: self.case_mode,
             max_results: None,
+            ..SearchOptions::default()
         }
     }
 }
@@ -871,6 +973,7 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     let invert_match = resolve_invert_match_from_args(&args);
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
     let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
+    let (before_context, after_context) = resolve_context_from_args(&args);
     let heading = resolve_heading_from_args(&args);
     let with_filename = resolve_with_filename_from_args(&args);
 
@@ -889,6 +992,12 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     }
     if only_matching {
         opts.flags |= SearchMatchFlags::ONLY_MATCHING;
+    }
+    opts.before_context = before_context;
+    opts.after_context = after_context;
+    if only_matching {
+        opts.before_context = 0;
+        opts.after_context = 0;
     }
 
     let effective_mode = if only_matching {
