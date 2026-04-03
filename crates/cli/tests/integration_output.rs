@@ -95,10 +95,14 @@ fn files_without_match_is_consistent_between_index_and_walk() {
     let args = vec![
         OsString::from("--files-without-match"),
         OsString::from("Sherlock"),
-        abs_root.into_os_string(),
+        abs_root.clone().into_os_string(),
     ];
 
-    assert_index_and_walk_output(&root, &args, "file.py\n");
+    assert_index_and_walk_output(
+        &root,
+        &args,
+        &format!("{}\n", abs_root.join("file.py").display()),
+    );
 }
 
 #[test]
