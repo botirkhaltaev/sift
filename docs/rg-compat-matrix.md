@@ -13,10 +13,11 @@ back each implemented row with Rust tests that run `rg` and `sift` side by side.
 | `-L` / `--follow` | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/misc.rs` (`symlink_follow`) | Partial | Flag semantics now match `rg`; add rg-backed traversal/path-output parity tests. |
 | `--files-without-match` | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/misc.rs` (`files_without_match`) | Partial | Long flag only, no `-L`; first rg-backed golden test should cover walk and index. |
 | Default path printing | `ripgrep/crates/printer/src/standard.rs`, `ripgrep/tests/misc.rs` | Partial | Current `sift` still differs from `rg` in relative vs absolute output in some modes. |
-| `--heading` / `--no-heading` | `ripgrep/crates/printer/src/standard.rs`, `ripgrep/tests/misc.rs` (`with_heading`) | Missing | Needs CLI flags plus printer behavior. |
+| `--heading` / `--no-heading` | `ripgrep/crates/printer/src/standard.rs`, `ripgrep/tests/misc.rs` (`with_heading`) | Implemented | See `integration_output.rs`; rg golden tests still TODO. |
 | Ignore / git defaults | `ripgrep/crates/ignore`, `ripgrep/crates/core/flags/defs.rs` | Partial | Hidden and glob basics exist; no full `--no-ignore*` family yet. |
-| Context output (`-A/-B/-C`) | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/misc.rs` (`after_context`) | Missing | Needs shared printer semantics and regression tests. |
-| Color / separators / null | `ripgrep/crates/printer/src/standard.rs`, `ripgrep/crates/printer/src/summary.rs` | Missing | Implement after baseline path/heading parity. |
+| Context output (`-A/-B/-C`) | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/misc.rs` (`after_context`) | Implemented | See `integration_context.rs`; rg golden tests still TODO. |
+| Color / separators / null | `ripgrep/crates/printer/src/standard.rs`, `ripgrep/crates/printer/src/summary.rs` | Implemented | `--color`, `-0` / `--null`; see `integration_null_color.rs`. |
+| `--stats` | `ripgrep/crates/printer/stats.rs` (approx.) | Partial | Two lines on stderr: match tally + files searched; no bytes/time yet. |
 | Encoding / multiline | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/json.rs`, `ripgrep/tests/multiline.rs` | Missing | In scope, but after basic output parity lands. |
 | `--json`, `--vimgrep`, `--stats`, `--debug` | `ripgrep/tests/json.rs`, `ripgrep/tests/misc.rs` (`vimgrep`) | Missing | In scope for non-engine parity. |
 | `-P` / PCRE2 | `ripgrep/crates/pcre2`, `ripgrep/crates/core/flags/defs.rs` | Deferred | Explicitly out of scope for the current parity phase. |

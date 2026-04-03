@@ -8,7 +8,7 @@ use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig,
     HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter,
     SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchRecordStyle, VisibilityConfig,
+    SearchRecordStyle, SearchStats, VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -50,6 +50,15 @@ struct Cli {
     null_color: NullColorDecl,
     #[command(flatten)]
     paths: PathArgs,
+    #[command(flatten)]
+    stats_decl: StatsDecl,
+}
+
+/// Declares `--stats` for clap; effective value uses [`resolve_stats_from_args`].
+#[derive(Args)]
+struct StatsDecl {
+    #[arg(long = "stats", action = ArgAction::SetTrue)]
+    _stats: bool,
 }
 
 /// `-0` / `--null` and `--color` for clap; effective null/color use argv resolvers.
@@ -342,6 +351,18 @@ fn parse_color_when(s: &str) -> ColorChoice {
 }
 
 /// `--color when` / `--color=when`; argv order, last wins.
+fn resolve_stats_from_args(args: &[String]) -> bool {
+    let mut last_idx = 0usize;
+    let mut result = false;
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--stats" && i >= last_idx {
+            last_idx = i;
+            result = true;
+        }
+    }
+    result
+}
+
 fn resolve_color_from_args(args: &[String]) -> ColorChoice {
     let mut result = ColorChoice::Auto;
     let mut i = 0usize;
@@ -980,6 +1001,11 @@ fn build_search_filter_config(
     }
 }
 
+fn write_search_stats(stats: &SearchStats) {
+    eprintln!("{} matches", stats.matches);
+    eprintln!("{} files searched", stats.files_searched);
+}
+
 fn run_search_with_index(
     cli: &Cli,
     query: &CompiledSearch,
@@ -987,6 +1013,7 @@ fn run_search_with_index(
     cwd: &Path,
     out: SearchOutputCtx,
     filter: SearchFilterCtx,
+    print_stats: bool,
 ) -> anyhow::Result<bool> {
     let prefixes = corpus_path_prefixes(&index.root, cwd, &cli.search_scope.paths)?;
     let exclude_paths = excluded_search_paths(&index.root, &cli.paths.sift_dir);
@@ -1011,6 +1038,12 @@ fn run_search_with_index(
     );
     let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
     let search_filter = SearchFilter::new(&filter_config, &index.root)?;
+    if print_stats {
+        let mut stats = SearchStats::default();
+        let ok = query.run_index_with_stats(index, &search_filter, output, &mut stats)?;
+        write_search_stats(&stats);
+        return Ok(ok);
+    }
     query
         .run_index(index, &search_filter, output)
         .map_err(Into::into)
@@ -1022,6 +1055,7 @@ fn run_search_walk(
     filter_root: &Path,
     out: SearchOutputCtx,
     filter: SearchFilterCtx,
+    print_stats: bool,
 ) -> anyhow::Result<bool> {
     let prefixes = walk_path_prefixes(filter_root, &cli.search_scope.paths)?;
     let exclude_paths = excluded_search_paths(filter_root, &cli.paths.sift_dir);
@@ -1042,6 +1076,12 @@ fn run_search_walk(
     );
     let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
     let search_filter = SearchFilter::new(&filter_config, filter_root)?;
+    if print_stats {
+        let mut stats = SearchStats::default();
+        let ok = query.run_walk_with_stats(filter_root, &search_filter, output, &mut stats)?;
+        write_search_stats(&stats);
+        return Ok(ok);
+    }
     query
         .run_walk(filter_root, &search_filter, output)
         .map_err(Into::into)
@@ -1055,6 +1095,7 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     )?;
 
     let args: Vec<String> = std::env::args().collect();
+    let print_stats = resolve_stats_from_args(&args);
     let invert_match = resolve_invert_match_from_args(&args);
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
     let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
@@ -1121,12 +1162,12 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     };
 
     match Index::open(&cli.paths.sift_dir) {
-        Ok(index) => run_search_with_index(cli, &query, &index, &cwd, out, filter),
+        Ok(index) => run_search_with_index(cli, &query, &index, &cwd, out, filter, print_stats),
         Err(
             SiftError::MissingMeta(_) | SiftError::MissingComponent(_) | SiftError::InvalidMeta(_),
         ) => {
             let filter_root = cwd.canonicalize().map_err(|e| anyhow::anyhow!("{e}"))?;
-            run_search_walk(cli, &query, &filter_root, out, filter)
+            run_search_walk(cli, &query, &filter_root, out, filter, print_stats)
         }
         Err(e) => Err(anyhow::anyhow!("{e}")),
     }

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
@@ -14,7 +14,7 @@ use crate::planner::TrigramPlan;
 
 use super::{
     CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, OutputEmission, SearchFilter,
-    SearchMode, SearchOutput, SearchRecordStyle,
+    SearchMode, SearchOutput, SearchRecordStyle, SearchStats,
 };
 
 #[cfg(test)]
@@ -79,6 +79,31 @@ impl CompiledSearch {
         filter: &SearchFilter,
         output: SearchOutput,
     ) -> crate::Result<bool> {
+        self.run_index_impl(index, filter, output, None)
+    }
+
+    /// Like [`Self::run_index`], but fills `stats` with search counters (ripgrep-style `--stats`).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::run_index`].
+    pub fn run_index_with_stats(
+        &self,
+        index: &Index,
+        filter: &SearchFilter,
+        output: SearchOutput,
+        stats: &mut SearchStats,
+    ) -> crate::Result<bool> {
+        self.run_index_impl(index, filter, output, Some(stats))
+    }
+
+    fn run_index_impl(
+        &self,
+        index: &Index,
+        filter: &SearchFilter,
+        output: SearchOutput,
+        stats: Option<&mut SearchStats>,
+    ) -> crate::Result<bool> {
         if self.opts.max_results == Some(0) {
             return Err(crate::Error::InvalidMaxCount);
         }
@@ -86,6 +111,9 @@ impl CompiledSearch {
         // Stage 1: Get raw candidate IDs from index (trigram or full scan)
         let raw_ids = self.candidate_file_ids(index, Self::uses_exhaustive_candidates(output.mode));
         if raw_ids.is_empty() {
+            if let Some(s) = stats {
+                *s = SearchStats::default();
+            }
             return Ok(false);
         }
 
@@ -93,6 +121,9 @@ impl CompiledSearch {
         let threshold = parallel_candidate_threshold();
         let candidates = Self::prepare_candidates(index, &raw_ids, filter, threshold);
         if candidates.is_empty() {
+            if let Some(s) = stats {
+                *s = SearchStats::default();
+            }
             return Ok(false);
         }
 
@@ -100,17 +131,37 @@ impl CompiledSearch {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
-        match output.mode {
+        let match_counter = AtomicUsize::new(0);
+        let counter_ref = stats.is_some().then_some(&match_counter);
+        let summary_counter = AtomicUsize::new(0);
+        let summary_ref = stats.is_some().then_some(&summary_counter);
+
+        let ok = match output.mode {
             SearchMode::Standard | SearchMode::OnlyMatching => {
-                self.run_standard_with_info(&candidates, matcher, output, parallel)
+                self.run_standard_with_info(&candidates, matcher, output, parallel, counter_ref)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
             | SearchMode::FilesWithMatches
             | SearchMode::FilesWithoutMatch => {
-                self.run_summary_with_info(&candidates, matcher, output, parallel)
+                self.run_summary_with_info(&candidates, matcher, output, parallel, summary_ref)?
             }
+        };
+
+        if let Some(s) = stats {
+            s.files_searched = candidates.len();
+            s.matches = match output.mode {
+                SearchMode::Standard | SearchMode::OnlyMatching => {
+                    match_counter.load(Ordering::Relaxed)
+                }
+                SearchMode::Count
+                | SearchMode::CountMatches
+                | SearchMode::FilesWithMatches
+                | SearchMode::FilesWithoutMatch => summary_counter.load(Ordering::Relaxed),
+            };
         }
+
+        Ok(ok)
     }
 
     /// Search by walking the filesystem under `filter_root` (no trigram index).
@@ -127,6 +178,31 @@ impl CompiledSearch {
         filter: &SearchFilter,
         output: SearchOutput,
     ) -> crate::Result<bool> {
+        self.run_walk_impl(filter_root, filter, output, None)
+    }
+
+    /// Like [`Self::run_walk`], but fills `stats` with search counters.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::run_walk`].
+    pub fn run_walk_with_stats(
+        &self,
+        filter_root: &Path,
+        filter: &SearchFilter,
+        output: SearchOutput,
+        stats: &mut SearchStats,
+    ) -> crate::Result<bool> {
+        self.run_walk_impl(filter_root, filter, output, Some(stats))
+    }
+
+    fn run_walk_impl(
+        &self,
+        filter_root: &Path,
+        filter: &SearchFilter,
+        output: SearchOutput,
+        stats: Option<&mut SearchStats>,
+    ) -> crate::Result<bool> {
         if self.opts.max_results == Some(0) {
             return Err(crate::Error::InvalidMaxCount);
         }
@@ -134,29 +210,55 @@ impl CompiledSearch {
         let abs_paths =
             collect_abs_paths_for_scopes(filter_root, filter.scopes(), filter.follow_links())?;
         if abs_paths.is_empty() {
+            if let Some(s) = stats {
+                *s = SearchStats::default();
+            }
             return Ok(false);
         }
 
         let threshold = parallel_candidate_threshold();
         let candidates = prepare_walk_candidates(filter_root, &abs_paths, filter, threshold);
         if candidates.is_empty() {
+            if let Some(s) = stats {
+                *s = SearchStats::default();
+            }
             return Ok(false);
         }
 
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
-        match output.mode {
+        let match_counter = AtomicUsize::new(0);
+        let counter_ref = stats.is_some().then_some(&match_counter);
+        let summary_counter = AtomicUsize::new(0);
+        let summary_ref = stats.is_some().then_some(&summary_counter);
+
+        let ok = match output.mode {
             SearchMode::Standard | SearchMode::OnlyMatching => {
-                self.run_standard_with_info(&candidates, matcher, output, parallel)
+                self.run_standard_with_info(&candidates, matcher, output, parallel, counter_ref)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
             | SearchMode::FilesWithMatches
             | SearchMode::FilesWithoutMatch => {
-                self.run_summary_with_info(&candidates, matcher, output, parallel)
+                self.run_summary_with_info(&candidates, matcher, output, parallel, summary_ref)?
             }
+        };
+
+        if let Some(s) = stats {
+            s.files_searched = candidates.len();
+            s.matches = match output.mode {
+                SearchMode::Standard | SearchMode::OnlyMatching => {
+                    match_counter.load(Ordering::Relaxed)
+                }
+                SearchMode::Count
+                | SearchMode::CountMatches
+                | SearchMode::FilesWithMatches
+                | SearchMode::FilesWithoutMatch => summary_counter.load(Ordering::Relaxed),
+            };
         }
+
+        Ok(ok)
     }
 
     /// Prepare `CandidateInfo` with parallel filter + path prep.
@@ -216,6 +318,7 @@ impl CompiledSearch {
         matcher: &RegexMatcher,
         output: SearchOutput,
         parallel: bool,
+        match_counter: Option<&AtomicUsize>,
     ) -> crate::Result<bool> {
         if parallel {
             let stop = AtomicBool::new(false);
@@ -225,7 +328,7 @@ impl CompiledSearch {
                 .par_iter()
                 .enumerate()
                 .map_init(
-                    || StandardWorker::new(self, matcher, output),
+                    || StandardWorker::new(self, matcher, output, match_counter),
                     |worker: &mut StandardWorker<'_>,
                      (result_index, candidate): (usize, &CandidateInfo)| {
                         worker.search_candidate(candidate, result_index, &stop)
@@ -236,7 +339,7 @@ impl CompiledSearch {
             return flush_chunk_output(files.into_iter().map(|file| file.output));
         }
 
-        self.run_standard_capped_with_info(candidates, matcher, output)
+        self.run_standard_capped_with_info(candidates, matcher, output, match_counter)
     }
 
     fn run_summary_with_info(
@@ -245,6 +348,7 @@ impl CompiledSearch {
         matcher: &RegexMatcher,
         output: SearchOutput,
         parallel: bool,
+        summary_counter: Option<&AtomicUsize>,
     ) -> crate::Result<bool> {
         if parallel {
             let stop = AtomicBool::new(false);
@@ -254,7 +358,15 @@ impl CompiledSearch {
                 .par_iter()
                 .enumerate()
                 .map_init(
-                    || SummaryWorker::new(self, matcher, self.opts.max_results, output.mode),
+                    || {
+                        SummaryWorker::new(
+                            self,
+                            matcher,
+                            self.opts.max_results,
+                            output.mode,
+                            summary_counter,
+                        )
+                    },
                     |worker: &mut SummaryWorker<'_>,
                      (result_index, candidate): (usize, &CandidateInfo)| {
                         worker.search_candidate(candidate, result_index, output, &stop)
@@ -265,7 +377,7 @@ impl CompiledSearch {
             return flush_chunk_output(files.into_iter().map(|file| file.output));
         }
 
-        self.run_summary_capped_with_info(candidates, matcher, output)
+        self.run_summary_capped_with_info(candidates, matcher, output, summary_counter)
     }
 
     fn run_standard_capped_with_info(
@@ -273,6 +385,7 @@ impl CompiledSearch {
         candidates: &[CandidateInfo],
         matcher: &RegexMatcher,
         output: SearchOutput,
+        match_counter: Option<&AtomicUsize>,
     ) -> crate::Result<bool> {
         let show_line_numbers =
             output.lines.line_number || self.opts.before_context > 0 || self.opts.after_context > 0;
@@ -298,6 +411,9 @@ impl CompiledSearch {
                         &mut bytes,
                     );
                     let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
+                    if let Some(c) = match_counter {
+                        c.fetch_add(sink.match_count, Ordering::Relaxed);
+                    }
                     any_match |= sink.matched;
                     if sink.matched && heading {
                         if !out.is_empty() {
@@ -332,6 +448,7 @@ impl CompiledSearch {
         candidates: &[CandidateInfo],
         matcher: &RegexMatcher,
         output: SearchOutput,
+        summary_counter: Option<&AtomicUsize>,
     ) -> crate::Result<bool> {
         self.with_cached_searcher(false, self.opts.max_results, |searcher| {
             let mut any_match = false;
@@ -339,6 +456,12 @@ impl CompiledSearch {
             for candidate in candidates {
                 let result =
                     summary_search_file(searcher, matcher, output.mode, &candidate.abs_path);
+                if let Some(c) = summary_counter {
+                    c.fetch_add(
+                        summary_matches_tally(output.mode, result),
+                        Ordering::Relaxed,
+                    );
+                }
                 any_match |= mode_is_success(output.mode, result);
                 write_summary_record(&mut out, output, &candidate.rel_path, result)?;
                 if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result)
@@ -457,10 +580,16 @@ struct StandardWorker<'a> {
     /// `-C` / `-A` / `-B` imply line numbers in output (ripgrep-style).
     show_line_numbers: bool,
     bytes: Vec<u8>,
+    match_counter: Option<&'a AtomicUsize>,
 }
 
 impl<'a> StandardWorker<'a> {
-    fn new(search: &CompiledSearch, matcher: &'a RegexMatcher, output: SearchOutput) -> Self {
+    fn new(
+        search: &CompiledSearch,
+        matcher: &'a RegexMatcher,
+        output: SearchOutput,
+        match_counter: Option<&'a AtomicUsize>,
+    ) -> Self {
         let show_line_numbers = output.lines.line_number
             || search.opts.before_context > 0
             || search.opts.after_context > 0;
@@ -474,6 +603,7 @@ impl<'a> StandardWorker<'a> {
             output,
             show_line_numbers,
             bytes: Vec::new(),
+            match_counter,
         }
     }
 
@@ -508,6 +638,10 @@ impl<'a> StandardWorker<'a> {
             let _ = self
                 .searcher
                 .search_path(self.matcher, &candidate.abs_path, &mut sink);
+            let n = sink.match_count;
+            if let Some(c) = self.match_counter {
+                c.fetch_add(n, Ordering::Relaxed);
+            }
             sink.matched
         };
 
@@ -678,6 +812,7 @@ struct SummaryWorker<'a> {
     matcher: &'a RegexMatcher,
     searcher: Searcher,
     mode: SearchMode,
+    summary_counter: Option<&'a AtomicUsize>,
 }
 
 impl<'a> SummaryWorker<'a> {
@@ -686,11 +821,13 @@ impl<'a> SummaryWorker<'a> {
         matcher: &'a RegexMatcher,
         max_results: Option<usize>,
         mode: SearchMode,
+        summary_counter: Option<&'a AtomicUsize>,
     ) -> Self {
         Self {
             searcher: search.build_searcher(false, max_results, false),
             matcher,
             mode,
+            summary_counter,
         }
     }
 
@@ -713,6 +850,9 @@ impl<'a> SummaryWorker<'a> {
         }
 
         let result = self.search_file(&candidate.abs_path);
+        if let Some(c) = self.summary_counter {
+            c.fetch_add(summary_matches_tally(self.mode, result), Ordering::Relaxed);
+        }
         let matched = mode_is_success(output.mode, result);
         let mut bytes = Vec::new();
         let _ = write_summary_record(&mut bytes, output, &candidate.rel_path, result);
@@ -774,6 +914,16 @@ fn flush_chunk_output(outputs: impl IntoIterator<Item = ChunkOutput>) -> crate::
 struct FileSummary {
     matched: bool,
     count: usize,
+}
+
+#[inline]
+fn summary_matches_tally(mode: SearchMode, result: FileSummary) -> usize {
+    match mode {
+        SearchMode::Count | SearchMode::CountMatches => result.count,
+        SearchMode::FilesWithMatches => usize::from(result.matched),
+        SearchMode::FilesWithoutMatch => usize::from(!result.matched),
+        SearchMode::Standard | SearchMode::OnlyMatching => 0,
+    }
 }
 
 struct SummarySink {
