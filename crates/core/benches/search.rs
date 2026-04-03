@@ -41,8 +41,8 @@ use std::hint::black_box;
 use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
     IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter, SearchFilterConfig,
-    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle,
-    VisibilityConfig,
+    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
+    SearchRecordStyle, VisibilityConfig,
 };
 
 fn make_parity_corpus(root: &Path) {
@@ -176,6 +176,7 @@ fn default_filter() -> SearchFilterConfig {
 
 const fn output_std() -> SearchOutput {
     SearchOutput {
+        format: SearchOutputFormat::Text,
         mode: SearchMode::Standard,
         emission: OutputEmission::Normal,
         lines: SearchLineStyle {
@@ -192,6 +193,7 @@ const fn output_std() -> SearchOutput {
 
 const fn output_quiet(mode: SearchMode) -> SearchOutput {
     SearchOutput {
+        format: SearchOutputFormat::Text,
         mode,
         emission: OutputEmission::Quiet,
         lines: SearchLineStyle {

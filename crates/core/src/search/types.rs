@@ -162,8 +162,19 @@ impl Default for SearchRecordStyle {
     }
 }
 
+/// Stdout encoding for search results (`--json` uses [JSON Lines](https://jsonlines.org/) like ripgrep).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchOutputFormat {
+    /// Human-readable lines (default).
+    #[default]
+    Text,
+    /// Machine-readable JSON Lines (`grep_printer::JSON`, ripgrep-compatible wire format).
+    Json,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchOutput {
+    pub format: SearchOutputFormat,
     pub mode: SearchMode,
     pub emission: OutputEmission,
     pub lines: SearchLineStyle,
@@ -173,6 +184,7 @@ pub struct SearchOutput {
 impl Default for SearchOutput {
     fn default() -> Self {
         Self {
+            format: SearchOutputFormat::Text,
             mode: SearchMode::Standard,
             emission: OutputEmission::Normal,
             lines: SearchLineStyle::default(),
