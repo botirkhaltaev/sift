@@ -82,8 +82,7 @@ fn fill_json_search_stats(
     summary_line_bytes: u64,
 ) {
     s.matches = usize::try_from(merged.matches()).unwrap_or(usize::MAX);
-    s.files_with_matches =
-        usize::try_from(merged.searches_with_match()).unwrap_or(usize::MAX);
+    s.files_with_matches = usize::try_from(merged.searches_with_match()).unwrap_or(usize::MAX);
     s.files_searched = candidates_len;
     s.bytes_printed = merged.bytes_printed() + summary_line_bytes;
     s.bytes_searched = bytes_searched_sum;
