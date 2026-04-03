@@ -180,6 +180,19 @@ impl Default for SearchOutput {
     }
 }
 
+/// Counters filled when running with [`CompiledSearch::run_index_with_stats`] /
+/// [`CompiledSearch::run_walk_with_stats`].
+///
+/// `matches` is mode-dependent: line hits for standard / only-matching / count modes,
+/// one per matching file for `-l`, and one per listed file for `--files-without-match`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SearchStats {
+    /// Files searched after filtering (same length as the candidate list).
+    pub files_searched: usize,
+    /// Mode-dependent match tally (see struct docs).
+    pub matches: usize,
+}
+
 #[derive(Debug)]
 pub struct CompiledSearch {
     pub patterns: Vec<String>,
