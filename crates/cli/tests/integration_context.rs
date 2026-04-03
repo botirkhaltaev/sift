@@ -5,8 +5,7 @@ mod common;
 use std::fs;
 
 use common::{
-    BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout, rel_match,
-    rel_match_context,
+    BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout,
 };
 
 #[test]
@@ -22,12 +21,7 @@ fn context_c_shows_surrounding_lines() {
     let output = cmd.output().unwrap();
     assert_success(&output);
 
-    let expected = format!(
-        "{}\n{}\n{}\n",
-        rel_match_context("t.txt", "1-alpha"),
-        rel_match("t.txt", "2:beta match"),
-        rel_match_context("t.txt", "3-gamma"),
-    );
+    let expected = "t.txt-1-alpha\nt.txt:2:beta match\nt.txt-3-gamma\n";
     assert_eq!(normalized_stdout(&output), expected);
 }
 
@@ -44,12 +38,7 @@ fn context_a_shows_lines_after_match() {
     let output = cmd.output().unwrap();
     assert_success(&output);
 
-    let expected = format!(
-        "{}\n{}\n{}\n",
-        rel_match("t.txt", "2:beta match"),
-        rel_match_context("t.txt", "3-gamma"),
-        rel_match_context("t.txt", "4-delta"),
-    );
+    let expected = "t.txt:2:beta match\nt.txt-3-gamma\nt.txt-4-delta\n";
     assert_eq!(normalized_stdout(&output), expected);
 }
 
