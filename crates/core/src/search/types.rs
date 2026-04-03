@@ -189,12 +189,27 @@ impl Default for SearchOutput {
 ///
 /// `elapsed` covers wall time for the search stage (matcher build + scanning candidates), not
 /// index open or filter prep.
+///
+/// `bytes_searched` is the sum of [`std::fs::Metadata::len`] for each candidate path (best-effort;
+/// missing metadata counts as 0). This approximates ripgrep’s “bytes searched” for `--stats`.
+///
+/// `bytes_printed` counts bytes written to stdout (including separators between heading blocks).
+///
+/// `files_with_matches` follows ripgrep’s “files contained matches”: files that had a positive hit
+/// for the current [`SearchMode`] (for `--files-without-match`, this stays 0 because listed paths are
+/// non-matching files only).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SearchStats {
-    /// Files searched after filtering (same length as the candidate list).
-    pub files_searched: usize,
     /// Mode-dependent match tally (see struct docs).
     pub matches: usize,
+    /// Files that contained at least one hit (mode-dependent; see struct docs).
+    pub files_with_matches: usize,
+    /// Files searched after filtering (same length as the candidate list).
+    pub files_searched: usize,
+    /// Bytes written to stdout for this search (best-effort).
+    pub bytes_printed: u64,
+    /// Sum of candidate file sizes from metadata (see struct docs).
+    pub bytes_searched: u64,
     /// Wall-clock time spent in the search phase after candidates are ready.
     pub elapsed: Duration,
 }

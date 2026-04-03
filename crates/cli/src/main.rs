@@ -1003,7 +1003,10 @@ fn build_search_filter_config(
 
 fn write_search_stats(stats: &SearchStats) {
     eprintln!("{} matches", stats.matches);
+    eprintln!("{} files contained matches", stats.files_with_matches);
     eprintln!("{} files searched", stats.files_searched);
+    eprintln!("{} bytes printed", stats.bytes_printed);
+    eprintln!("{} bytes searched", stats.bytes_searched);
     eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
 }
 

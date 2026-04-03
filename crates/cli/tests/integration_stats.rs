@@ -25,10 +25,22 @@ fn stats_reports_matches_and_files_searched() {
         stderr.contains("1 matches"),
         "expected match count in stderr, got: {stderr:?}"
     );
+    assert!(
+        stderr.contains("1 files contained matches"),
+        "expected files-with-matches count in stderr, got: {stderr:?}"
+    );
     // Trigram narrowing only opens candidate files that can match; `b.txt` is not searched.
     assert!(
         stderr.contains("1 files searched"),
         "expected files searched in stderr, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("bytes printed"),
+        "expected bytes printed line in stderr, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("bytes searched"),
+        "expected bytes searched line in stderr, got: {stderr:?}"
     );
     assert!(
         stderr.contains("s elapsed"),

@@ -17,7 +17,7 @@ back each implemented row with Rust tests that run `rg` and `sift` side by side.
 | Ignore / git defaults | `ripgrep/crates/ignore`, `ripgrep/crates/core/flags/defs.rs` | Partial | Hidden and glob basics exist; no full `--no-ignore*` family yet. |
 | Context output (`-A/-B/-C`) | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/misc.rs` (`after_context`) | Implemented | See `integration_context.rs`; rg golden tests still TODO. |
 | Color / separators / null | `ripgrep/crates/printer/src/standard.rs`, `ripgrep/crates/printer/src/summary.rs` | Implemented | `--color`, `-0` / `--null`; see `integration_null_color.rs`. |
-| `--stats` | `ripgrep/crates/printer/stats.rs` (approx.) | Partial | Match tally, files searched, elapsed seconds on stderr; bytes scanned not yet. |
+| `--stats` | `ripgrep/crates/printer/stats.rs` (approx.) | Partial | Match tally, files contained matches, files searched, bytes printed, bytes searched (metadata sum), elapsed on stderr; no “matched lines” / split timing like rg; parity vs rg totals not guaranteed. See `integration_stats.rs`. |
 | Encoding / multiline | `ripgrep/crates/core/flags/defs.rs`, `ripgrep/tests/json.rs`, `ripgrep/tests/multiline.rs` | Missing | In scope, but after basic output parity lands. |
-| `--json`, `--vimgrep`, `--stats`, `--debug` | `ripgrep/tests/json.rs`, `ripgrep/tests/misc.rs` (`vimgrep`) | Missing | In scope for non-engine parity. |
+| `--json`, `--vimgrep`, `--debug` | `ripgrep/tests/json.rs`, `ripgrep/tests/misc.rs` (`vimgrep`) | Missing | In scope for non-engine parity. |
 | `-P` / PCRE2 | `ripgrep/crates/pcre2`, `ripgrep/crates/core/flags/defs.rs` | Deferred | Explicitly out of scope for the current parity phase. |
