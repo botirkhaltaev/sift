@@ -828,7 +828,8 @@ fn write_standard_prefix(
 ) -> io::Result<()> {
     let print_filename = output.filename_mode != FilenameMode::Never;
     if print_filename {
-        write!(out, "{}:", path.display())?;
+        let sep = if is_context_line { '-' } else { ':' };
+        write!(out, "{}{}", path.display(), sep)?;
     }
     if show_line_numbers {
         let sep = if is_context_line { '-' } else { ':' };

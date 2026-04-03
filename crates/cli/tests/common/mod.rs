@@ -117,6 +117,12 @@ pub fn rel_match(rel: &str, rest: &str) -> String {
     format!("{}:{rest}", normalize_path_str(rel))
 }
 
+/// `path-rest` for context lines (uses hyphen separator like grep).
+#[allow(dead_code)]
+pub fn rel_match_context(rel: &str, rest: &str) -> String {
+    format!("{}-{}", normalize_path_str(rel), rest)
+}
+
 #[allow(dead_code)]
 pub fn line_path<'a>(line: &'a str, candidates: &[String]) -> &'a str {
     candidates
