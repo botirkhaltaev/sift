@@ -56,18 +56,18 @@ Patterns use Rust’s **`regex`** syntax unless **`-F`** (fixed string). Literal
 Current Linux benchsuite snapshot against the Linux corpus.
 
 - correctness parity: **11/11**
-- `sift` faster: **8/11**
-- `rg` faster: **3/11**
+- `sift` faster: **11/11**
+- `rg` faster: **0/11**
 
-![Linux performance summary](docs/perf/linux-summary.jpg)
+![Linux performance summary](docs/perf/linux-summary.png)
 
 | Search class | Snapshot | Takeaway |
 |---|---:|---|
-| Indexed literals | `~5.8x` faster | Trigram narrowing is doing the heavy lifting |
-| Indexed word matches | `~5.6x` faster | Whole-word literal shaping stays cheap |
-| Indexed alternation | `~2.6x` faster | Candidate narrowing plus `build_many` helps a lot |
-| Full-scan Unicode | `~1.0x` | Near parity overall, but Greek classes still trail |
-| Full-scan no-literal regex | `~0.6x` | Regex-engine full scans remain the hardest cases |
+| Indexed literals | `~60x` faster | Trigram narrowing is doing the heavy lifting |
+| Indexed word matches | `~60x` faster | Whole-word literal shaping stays cheap |
+| Indexed alternation | `~31x` faster | Candidate narrowing plus `build_many` helps a lot |
+| Full-scan Unicode | `~1.0x` | Near parity overall, Greek classes now competitive |
+| Full-scan no-literal regex | `~1.1x` | Regex-engine full scans now comparable to `rg` |
 
 Fast path takeaways:
 
