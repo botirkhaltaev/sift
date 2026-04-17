@@ -6,9 +6,9 @@ use std::process::ExitCode;
 use clap::{Arg, ArgAction, Args, Command, FromArgMatches, Parser, Subcommand, value_parser};
 use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, SearchFilter,
-    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, SearchStats, VisibilityConfig,
+    HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, PathDisplay,
+    SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
+    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchStats, VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -958,6 +958,15 @@ const fn effective_filename_mode(
     }
 }
 
+fn effective_path_display(scopes: &[PathBuf]) -> PathDisplay {
+    for scope in scopes {
+        if scope.is_absolute() {
+            return PathDisplay::Absolute;
+        }
+    }
+    PathDisplay::Relative
+}
+
 #[derive(Clone, Copy)]
 struct SearchModeCtx {
     effective_mode: SearchMode,
@@ -1058,6 +1067,7 @@ fn run_search_with_index(
         out.lines.is_path_mode,
         corpus_is_single_file,
     );
+    let path_display = effective_path_display(&cli.search_scope.paths);
     let output = search_output(
         out.output_format,
         out.mode.effective_mode,
@@ -1067,6 +1077,7 @@ fn run_search_with_index(
             heading: out.lines.heading,
             line_number: cli.out1.line_number
                 || matches!(out.output_format, SearchOutputFormat::Json),
+            path_display,
         },
         SearchRecordStyle {
             null_data: out.format.null_data,
@@ -1098,6 +1109,7 @@ fn run_search_walk(
     let exclude_paths = excluded_search_paths(filter_root, &cli.paths.sift_dir);
     let filename_mode =
         effective_filename_mode(out.lines.with_filename, out.lines.is_path_mode, false);
+    let path_display = effective_path_display(&cli.search_scope.paths);
     let output = search_output(
         out.output_format,
         out.mode.effective_mode,
@@ -1107,6 +1119,7 @@ fn run_search_walk(
             heading: out.lines.heading,
             line_number: cli.out1.line_number
                 || matches!(out.output_format, SearchOutputFormat::Json),
+            path_display,
         },
         SearchRecordStyle {
             null_data: out.format.null_data,

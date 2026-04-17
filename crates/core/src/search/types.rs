@@ -127,12 +127,20 @@ pub enum ColorChoice {
     Always,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PathDisplay {
+    #[default]
+    Relative,
+    Absolute,
+}
+
 /// Per-line presentation: paths, headings, and line numbers (standard / only-matching modes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchLineStyle {
     pub filename_mode: FilenameMode,
     pub heading: bool,
     pub line_number: bool,
+    pub path_display: PathDisplay,
 }
 
 impl Default for SearchLineStyle {
@@ -141,6 +149,7 @@ impl Default for SearchLineStyle {
             filename_mode: FilenameMode::Auto,
             heading: false,
             line_number: false,
+            path_display: PathDisplay::default(),
         }
     }
 }

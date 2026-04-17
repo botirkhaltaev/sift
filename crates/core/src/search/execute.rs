@@ -15,8 +15,8 @@ use crate::Index;
 use crate::planner::TrigramPlan;
 
 use super::{
-    CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, OutputEmission, SearchFilter,
-    SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchStats,
+    CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, OutputEmission, PathDisplay,
+    SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchStats,
 };
 
 #[cfg(test)]
@@ -32,6 +32,14 @@ fn should_color(records: SearchRecordStyle) -> bool {
         ColorChoice::Never => false,
         ColorChoice::Always => true,
         ColorChoice::Auto => std::io::stdout().is_terminal(),
+    }
+}
+
+#[inline]
+fn display_path_for_candidate(candidate: &CandidateInfo, display: PathDisplay) -> String {
+    match display {
+        PathDisplay::Absolute => candidate.abs_path.display().to_string(),
+        PathDisplay::Relative => candidate.rel_path.display().to_string(),
     }
 }
 
@@ -627,11 +635,12 @@ impl CompiledSearch {
                         sink_output.lines.filename_mode = FilenameMode::Never;
                     }
                     let mut bytes = Vec::new();
+                    let display = display_path_for_candidate(candidate, output.lines.path_display);
                     let mut sink = StandardSink::new(
                         matcher,
                         sink_output,
                         show_line_numbers,
-                        &candidate.rel_path,
+                        display,
                         &mut bytes,
                     );
                     let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
@@ -651,7 +660,9 @@ impl CompiledSearch {
                         if should_color(output.records) {
                             out.extend_from_slice(ANSI_PATH);
                         }
-                        write!(out, "{}", candidate.rel_path.display())?;
+                        let display =
+                            display_path_for_candidate(candidate, output.lines.path_display);
+                        write!(out, "{display}")?;
                         if should_color(output.records) {
                             out.extend_from_slice(ANSI_RESET);
                         }
@@ -700,7 +711,8 @@ impl CompiledSearch {
                     c.fetch_add(1, Ordering::Relaxed);
                 }
                 any_match |= mode_is_success(output.mode, result);
-                write_summary_record(&mut out, output, &candidate.rel_path, result)?;
+                let display = display_path_for_candidate(candidate, output.lines.path_display);
+                write_summary_record(&mut out, output, &display, result)?;
                 if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result)
                 {
                     break;
@@ -904,11 +916,12 @@ impl<'a> StandardWorker<'a> {
             if heading {
                 sink_output.lines.filename_mode = FilenameMode::Never;
             }
+            let display = display_path_for_candidate(candidate, self.output.lines.path_display);
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
                 self.show_line_numbers,
-                &candidate.rel_path,
+                display,
                 &mut self.bytes,
             );
             let _ = self
@@ -943,7 +956,9 @@ impl<'a> StandardWorker<'a> {
                     if should_color(self.output.records) {
                         out.extend_from_slice(ANSI_PATH);
                     }
-                    let _ = write!(out, "{}", candidate.rel_path.display());
+                    let display =
+                        display_path_for_candidate(candidate, self.output.lines.path_display);
+                    let _ = write!(out, "{display}");
                     if should_color(self.output.records) {
                         out.extend_from_slice(ANSI_RESET);
                     }
@@ -968,8 +983,7 @@ struct StandardSink<'a> {
     matcher: &'a RegexMatcher,
     output: SearchOutput,
     show_line_numbers: bool,
-    /// Path printed in prefixes (relative to search root, `grep`-style).
-    display_path: &'a Path,
+    display_path: String,
     bytes: &'a mut Vec<u8>,
     matched: bool,
     match_count: usize,
@@ -980,7 +994,7 @@ impl<'a> StandardSink<'a> {
         matcher: &'a RegexMatcher,
         output: SearchOutput,
         show_line_numbers: bool,
-        display_path: &'a Path,
+        display_path: String,
         bytes: &'a mut Vec<u8>,
     ) -> Self {
         Self {
@@ -1013,7 +1027,7 @@ impl Sink for StandardSink<'_> {
                 let _ = write_standard_prefix(
                     self.bytes,
                     self.output,
-                    self.display_path,
+                    self.display_path.as_str(),
                     line_number,
                     self.show_line_numbers,
                     false,
@@ -1028,7 +1042,7 @@ impl Sink for StandardSink<'_> {
         write_standard_prefix(
             self.bytes,
             self.output,
-            self.display_path,
+            self.display_path.as_str(),
             mat.line_number(),
             self.show_line_numbers,
             false,
@@ -1050,7 +1064,7 @@ impl Sink for StandardSink<'_> {
         write_standard_prefix(
             self.bytes,
             self.output,
-            self.display_path,
+            self.display_path.as_str(),
             ctx.line_number(),
             self.show_line_numbers,
             true,
@@ -1146,7 +1160,8 @@ impl<'a> SummaryWorker<'a> {
         }
         let matched = mode_is_success(output.mode, result);
         let mut bytes = Vec::new();
-        let _ = write_summary_record(&mut bytes, output, &candidate.rel_path, result);
+        let display = display_path_for_candidate(candidate, output.lines.path_display);
+        let _ = write_summary_record(&mut bytes, output, &display, result);
         if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result) {
             stop.store(true, Ordering::SeqCst);
         }
@@ -1371,7 +1386,7 @@ impl Sink for SummarySink {
 fn write_summary_record(
     out: &mut Vec<u8>,
     output: SearchOutput,
-    path: &Path,
+    display_path: &str,
     result: FileSummary,
 ) -> io::Result<()> {
     if output.emission == OutputEmission::Quiet {
@@ -1387,7 +1402,7 @@ fn write_summary_record(
                 if should_color(output.records) {
                     out.extend_from_slice(ANSI_PATH);
                 }
-                write!(out, "{}", path.display())?;
+                write!(out, "{display_path}")?;
                 if should_color(output.records) {
                     out.extend_from_slice(ANSI_RESET);
                 }
@@ -1402,7 +1417,7 @@ fn write_summary_record(
                 if should_color(output.records) {
                     out.extend_from_slice(ANSI_PATH);
                 }
-                write!(out, "{}", path.display())?;
+                write!(out, "{display_path}")?;
                 if should_color(output.records) {
                     out.extend_from_slice(ANSI_RESET);
                 }
@@ -1417,7 +1432,7 @@ fn write_summary_record(
             if should_color(output.records) {
                 out.extend_from_slice(ANSI_PATH);
             }
-            write!(out, "{}", path.display())?;
+            write!(out, "{display_path}")?;
             if should_color(output.records) {
                 out.extend_from_slice(ANSI_RESET);
             }
@@ -1431,7 +1446,7 @@ fn write_summary_record(
 fn write_standard_prefix(
     out: &mut Vec<u8>,
     output: SearchOutput,
-    path: &Path,
+    path: &str,
     line_number: Option<u64>,
     show_line_numbers: bool,
     is_context_line: bool,
@@ -1442,7 +1457,7 @@ fn write_standard_prefix(
         if color {
             out.extend_from_slice(ANSI_PATH);
         }
-        write!(out, "{}", path.display())?;
+        write!(out, "{path}")?;
         if color {
             out.extend_from_slice(ANSI_RESET);
         }
