@@ -63,18 +63,29 @@ fn write_line_terminator(out: &mut Vec<u8>, null_data: bool) {
     }
 }
 
-/// Check whether a line exceeds the column limit.
-/// Returns `None` if no limit is set or the line is within bounds.
-/// Returns `Some(true)` if the line exceeds the limit and a preview should be shown.
-/// Returns `Some(false)` if the line exceeds the limit and should be omitted entirely.
-fn exceeds_max_columns(line: &[u8], max_columns: Option<u64>, preview: bool) -> Option<bool> {
-    let limit = max_columns?;
+enum ColumnAction {
+    /// Line is within the column limit (or no limit set).
+    Normal,
+    /// Line exceeds the limit and should be silently omitted.
+    Omit,
+    /// Line exceeds the limit; print a truncated preview.
+    Preview,
+}
+
+fn check_max_columns(line: &[u8], max_columns: Option<u64>, preview: bool) -> ColumnAction {
+    let Some(limit) = max_columns else {
+        return ColumnAction::Normal;
+    };
     let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
     let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
     if trimmed.len() as u64 > limit {
-        Some(preview)
+        if preview {
+            ColumnAction::Preview
+        } else {
+            ColumnAction::Omit
+        }
     } else {
-        None
+        ColumnAction::Normal
     }
 }
 
@@ -1194,9 +1205,9 @@ impl Sink for StandardSink<'_> {
         let line_bytes = mat.bytes();
         let max_cols = self.output.lines.max_columns;
         let preview = self.output.lines.max_columns_preview;
-        match exceeds_max_columns(line_bytes, max_cols, preview) {
-            Some(false) => return Ok(true),
-            Some(true) => {
+        match check_max_columns(line_bytes, max_cols, preview) {
+            ColumnAction::Omit => return Ok(true),
+            ColumnAction::Preview => {
                 write_standard_prefix(
                     self.bytes,
                     self.output,
@@ -1218,7 +1229,7 @@ impl Sink for StandardSink<'_> {
                 self.bytes.write_all(&truncated)?;
                 return Ok(true);
             }
-            None => {}
+            ColumnAction::Normal => {}
         }
 
         let col = if show_column {
@@ -1282,9 +1293,9 @@ impl Sink for StandardSink<'_> {
         let ctx_bytes = ctx.bytes();
         let max_cols = self.output.lines.max_columns;
         let preview = self.output.lines.max_columns_preview;
-        match exceeds_max_columns(ctx_bytes, max_cols, preview) {
-            Some(false) => return Ok(true),
-            Some(true) => {
+        match check_max_columns(ctx_bytes, max_cols, preview) {
+            ColumnAction::Omit => return Ok(true),
+            ColumnAction::Preview => {
                 write_standard_prefix(
                     self.bytes,
                     self.output,
@@ -1306,7 +1317,7 @@ impl Sink for StandardSink<'_> {
                 self.bytes.write_all(&truncated)?;
                 return Ok(true);
             }
-            None => {}
+            ColumnAction::Normal => {}
         }
         write_standard_prefix(
             self.bytes,
