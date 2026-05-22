@@ -1115,7 +1115,7 @@ impl SearchFilterCtx {
     }
 }
 
-fn parse_filesize(s: &str) -> anyhow::Result<u64> {
+fn parse_size_suffix(s: &str) -> anyhow::Result<u64> {
     let s = s.trim();
     let (num_part, suffix) = s.find(|c: char| c.is_ascii_alphabetic()).map_or_else(
         || (s, String::new()),
@@ -1123,13 +1123,13 @@ fn parse_filesize(s: &str) -> anyhow::Result<u64> {
     );
     let base: u64 = num_part
         .parse()
-        .map_err(|_| anyhow::anyhow!("invalid max-filesize number: '{s}'"))?;
+        .map_err(|_| anyhow::anyhow!("invalid size: '{s}'"))?;
     let multiplier: u64 = match suffix.as_str() {
         "" | "B" => 1,
         "K" | "KB" => 1024,
         "M" | "MB" => 1024 * 1024,
         "G" | "GB" => 1024 * 1024 * 1024,
-        _ => anyhow::bail!("unknown filesize suffix: '{suffix}'"),
+        _ => anyhow::bail!("unknown size suffix: '{suffix}'"),
     };
     Ok(base * multiplier)
 }
@@ -1211,7 +1211,7 @@ fn build_search_filter_config(
         .filter_decl
         .max_filesize
         .as_ref()
-        .map(|s| parse_filesize(s))
+        .map(|s| parse_size_suffix(s))
         .transpose()?;
 
     let mut glob_patterns = cli.glob_flags.glob.clone();
