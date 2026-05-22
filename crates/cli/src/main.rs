@@ -26,15 +26,15 @@ struct Cli {
     #[command(flatten)]
     regex2: RegexFlagsB,
     #[command(flatten)]
-    out1: OutputFlagsA,
+    line_number_decl: LineNumberDecl,
     #[command(flatten)]
     search_flags: SearchFlags,
     #[command(flatten)]
-    out3: OutputFlagsC,
+    filename_decl: FilenameDecl,
     #[command(flatten)]
-    out4: OutputFlagsD,
+    heading_decl: HeadingDecl,
     #[command(flatten)]
-    out5: OutputFlagsE,
+    column_decl: ColumnDecl,
     #[command(flatten)]
     glob_flags: GlobFlags,
     #[command(flatten)]
@@ -166,7 +166,7 @@ struct RegexFlagsB {
 }
 
 #[derive(Args)]
-struct OutputFlagsA {
+struct LineNumberDecl {
     #[arg(short = 'n', long = "line-number")]
     line_number: bool,
     #[arg(short = 'N', long = "no-line-number")]
@@ -174,7 +174,7 @@ struct OutputFlagsA {
 }
 
 #[derive(Args)]
-struct OutputFlagsC {
+struct FilenameDecl {
     #[arg(short = 'I', long = "no-filename")]
     no_filename: bool,
     #[arg(short = 'H', long = "with-filename")]
@@ -182,7 +182,7 @@ struct OutputFlagsC {
 }
 
 #[derive(Args)]
-struct OutputFlagsD {
+struct HeadingDecl {
     #[arg(long = "heading")]
     heading: bool,
     #[arg(long = "no-heading")]
@@ -190,7 +190,7 @@ struct OutputFlagsD {
 }
 
 #[derive(Args)]
-struct OutputFlagsE {
+struct ColumnDecl {
     #[arg(long = "column")]
     column: bool,
     #[arg(long = "vimgrep")]
@@ -1116,7 +1116,7 @@ fn run_search_with_index(
     );
     let path_display = effective_path_display(&cli.search_scope.paths);
     let line_number = resolve_effective_line_number(
-        cli.out1.line_number,
+        cli.line_number_decl.line_number,
         out.lines.line_number,
         out.output_format,
     );
@@ -1178,7 +1178,7 @@ fn run_search_walk(
         effective_filename_mode(out.lines.with_filename, out.lines.is_path_mode, false);
     let path_display = effective_path_display(&cli.search_scope.paths);
     let line_number = resolve_effective_line_number(
-        cli.out1.line_number,
+        cli.line_number_decl.line_number,
         out.lines.line_number,
         out.output_format,
     );
@@ -1211,112 +1211,8 @@ fn run_search_walk(
         .map_err(Into::into)
 }
 
-struct ResolvedVisibility {
-    glob_case_insensitive: bool,
-    hidden: bool,
-    ignore_sources: IgnoreSources,
-    require_git: bool,
-}
-
-struct ResolvedMode {
-    effective: SearchMode,
-    only_matching: bool,
-    quiet: bool,
-}
-
-struct ResolvedSerialization {
-    use_json: bool,
-    print_stats: bool,
-}
-
-struct ResolvedFormat {
-    null_data: bool,
-    color: ColorChoice,
-    heading: bool,
-    with_filename: Option<bool>,
-    line_number_override: Option<bool>,
-}
-
-struct ResolvedArgs {
-    vis: ResolvedVisibility,
-    mode: ResolvedMode,
-    ser: ResolvedSerialization,
-    fmt: ResolvedFormat,
-    before_context: usize,
-    after_context: usize,
-}
-
-fn resolve_argv(cli: &Cli) -> ResolvedArgs {
-    let args: Vec<String> = std::env::args().collect();
-    let invert_match = resolve_invert_match_from_args(&args);
-    let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
-    let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
-    let (before_context, after_context) = resolve_context_from_args(&args);
-    let null_data = resolve_null_from_args(&args);
-    let color = resolve_color_from_args(&args);
-    let heading = resolve_heading_from_args(&args);
-    let with_filename = resolve_with_filename_from_args(&args);
-    let line_number_override = resolve_line_number_from_args(&args);
-    let (mode, only_matching, quiet) = resolve_output_mode(&args, invert_match);
-    let use_json = resolve_json_from_args(&args);
-    let print_stats = resolve_stats_from_args(&args) || use_json;
-
-    let pretty = cli.out5.pretty;
-    let vimgrep = cli.out5.vimgrep;
-
-    let line_number_override = if pretty || vimgrep {
-        Some(true)
-    } else {
-        line_number_override
-    };
-
-    let effective_mode = if only_matching {
-        SearchMode::OnlyMatching
-    } else {
-        mode
-    };
-
-    ResolvedArgs {
-        vis: ResolvedVisibility {
-            glob_case_insensitive,
-            hidden,
-            ignore_sources,
-            require_git,
-        },
-        mode: ResolvedMode {
-            effective: effective_mode,
-            only_matching,
-            quiet,
-        },
-        ser: ResolvedSerialization {
-            use_json,
-            print_stats,
-        },
-        fmt: ResolvedFormat {
-            null_data,
-            color,
-            heading,
-            with_filename,
-            line_number_override,
-        },
-        before_context,
-        after_context,
-    }
-}
-
-fn run_search(cli: &Cli) -> anyhow::Result<bool> {
-    let patterns = resolve_patterns(
-        &cli.patterns.regexp,
-        cli.patterns.pattern_file.as_deref(),
-        cli.patterns.pattern.as_deref(),
-    )?;
-
-    let ra = resolve_argv(cli);
-
-    let vimgrep = cli.out5.vimgrep;
-    let pretty = cli.out5.pretty;
-    let column = cli.out5.column || vimgrep;
-
+fn build_search_opts(cli: &Cli, args: &[String], only_matching: bool) -> SearchOptions {
+    let (before_context, after_context) = resolve_context_from_args(args);
     let mut opts = cli.search_flags.to_options();
     opts.max_results = cli.paths.max_count;
     if cli.regex1.invert_match {
@@ -1328,19 +1224,103 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     if cli.regex2.line_regexp {
         opts.flags |= SearchMatchFlags::LINE_REGEXP;
     }
-    if ra.mode.only_matching {
+    if only_matching {
         opts.flags |= SearchMatchFlags::ONLY_MATCHING;
+    } else {
+        opts.before_context = before_context;
+        opts.after_context = after_context;
     }
-    opts.before_context = ra.before_context;
-    opts.after_context = ra.after_context;
-    if ra.mode.only_matching {
-        opts.before_context = 0;
-        opts.after_context = 0;
-    }
+    opts
+}
 
-    let effective_mode = ra.mode.effective;
+fn build_output_and_filter(
+    args: &[String],
+    effective_mode: SearchMode,
+    quiet: bool,
+    pretty: bool,
+    column: bool,
+    line_number_override: Option<bool>,
+) -> (SearchOutputCtx, SearchFilterCtx, bool) {
+    let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
+    let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(args);
+    let null_data = resolve_null_from_args(args);
+    let color = resolve_color_from_args(args);
+    let heading = resolve_heading_from_args(args);
+    let with_filename = resolve_with_filename_from_args(args);
+    let use_json = resolve_json_from_args(args);
+    let print_stats = resolve_stats_from_args(args) || use_json;
 
-    if ra.ser.use_json {
+    let is_path_mode = matches!(
+        effective_mode,
+        SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
+    );
+    let effective_heading = heading || pretty;
+    let effective_color = if pretty && color == ColorChoice::Auto {
+        ColorChoice::Always
+    } else {
+        color
+    };
+
+    let out = SearchOutputCtx {
+        mode: SearchModeCtx {
+            effective_mode,
+            quiet,
+        },
+        lines: SearchLineResolveCtx {
+            heading: effective_heading,
+            with_filename,
+            is_path_mode,
+            column,
+            line_number: line_number_override,
+        },
+        format: SearchFormatCtx {
+            null_data,
+            color: effective_color,
+        },
+        output_format: if use_json {
+            SearchOutputFormat::Json
+        } else {
+            SearchOutputFormat::Text
+        },
+    };
+    let filter = SearchFilterCtx {
+        hidden,
+        ignore_sources,
+        require_git,
+        glob_case_insensitive,
+    };
+    (out, filter, print_stats)
+}
+
+fn run_search(cli: &Cli) -> anyhow::Result<bool> {
+    let patterns = resolve_patterns(
+        &cli.patterns.regexp,
+        cli.patterns.pattern_file.as_deref(),
+        cli.patterns.pattern.as_deref(),
+    )?;
+
+    let args: Vec<String> = std::env::args().collect();
+    let invert_match = resolve_invert_match_from_args(&args);
+    let (mode, only_matching, quiet) = resolve_output_mode(&args, invert_match);
+    let use_json = resolve_json_from_args(&args);
+
+    let pretty = cli.column_decl.pretty;
+    let vimgrep = cli.column_decl.vimgrep;
+    let column = cli.column_decl.column || vimgrep;
+
+    let line_number_override = if pretty || vimgrep {
+        Some(true)
+    } else {
+        resolve_line_number_from_args(&args)
+    };
+
+    let effective_mode = if only_matching {
+        SearchMode::OnlyMatching
+    } else {
+        mode
+    };
+
+    if use_json {
         match effective_mode {
             SearchMode::Count
             | SearchMode::CountMatches
@@ -1353,51 +1333,19 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
             SearchMode::Standard | SearchMode::OnlyMatching => {}
         }
     }
-    let print_stats = ra.ser.print_stats;
 
+    let opts = build_search_opts(cli, &args, only_matching);
     let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
     let cwd = std::env::current_dir()?;
 
-    let is_path_mode = matches!(
+    let (out, filter, print_stats) = build_output_and_filter(
+        &args,
         effective_mode,
-        SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
+        quiet,
+        pretty,
+        column,
+        line_number_override,
     );
-
-    let effective_heading = ra.fmt.heading || pretty;
-    let effective_color = if pretty && ra.fmt.color == ColorChoice::Auto {
-        ColorChoice::Always
-    } else {
-        ra.fmt.color
-    };
-
-    let out = SearchOutputCtx {
-        mode: SearchModeCtx {
-            effective_mode,
-            quiet: ra.mode.quiet,
-        },
-        lines: SearchLineResolveCtx {
-            heading: effective_heading,
-            with_filename: ra.fmt.with_filename,
-            is_path_mode,
-            column,
-            line_number: ra.fmt.line_number_override,
-        },
-        format: SearchFormatCtx {
-            null_data: ra.fmt.null_data,
-            color: effective_color,
-        },
-        output_format: if ra.ser.use_json {
-            SearchOutputFormat::Json
-        } else {
-            SearchOutputFormat::Text
-        },
-    };
-    let filter = SearchFilterCtx {
-        hidden: ra.vis.hidden,
-        ignore_sources: ra.vis.ignore_sources,
-        require_git: ra.vis.require_git,
-        glob_case_insensitive: ra.vis.glob_case_insensitive,
-    };
 
     match Index::open(&cli.paths.sift_dir) {
         Ok(index) => run_search_with_index(cli, &query, &index, &cwd, out, filter, print_stats),
