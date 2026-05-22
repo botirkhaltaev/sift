@@ -8,7 +8,7 @@ use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig,
     HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, PathDisplay,
     SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
-    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
+    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
     VisibilityConfig,
 };
 
@@ -60,6 +60,8 @@ struct Cli {
     json_decl: JsonDecl,
     #[command(flatten)]
     separator_decl: SeparatorDecl,
+    #[command(flatten)]
+    filter_decl: FilterDecl,
 }
 
 #[derive(Args)]
@@ -620,6 +622,35 @@ struct PathArgs {
     follow: bool,
 }
 
+#[derive(Args)]
+struct FilterDecl {
+    #[arg(long = "max-depth", value_name = "NUM")]
+    max_depth: Option<usize>,
+    #[arg(long = "max-filesize", value_name = "NUM+SUFFIX?")]
+    max_filesize: Option<String>,
+    #[arg(long = "iglob", action = ArgAction::Append, value_name = "GLOB")]
+    iglob: Vec<String>,
+    #[arg(long = "ignore-file", action = ArgAction::Append, value_name = "PATH")]
+    ignore_file: Vec<PathBuf>,
+    /// Print each file that would be searched (no actual search).
+    #[arg(long = "files")]
+    files: bool,
+    #[arg(short = 't', long = "type", action = ArgAction::Append, value_name = "TYPE")]
+    type_include: Vec<String>,
+    #[arg(short = 'T', long = "type-not", action = ArgAction::Append, value_name = "TYPE")]
+    type_exclude: Vec<String>,
+    #[arg(long = "type-list")]
+    type_list: bool,
+    #[arg(long = "type-add", action = ArgAction::Append, value_name = "TYPE_SPEC")]
+    type_add: Vec<String>,
+    #[arg(long = "type-clear", action = ArgAction::Append, value_name = "TYPE")]
+    type_clear: Vec<String>,
+    #[arg(long = "sort", value_name = "SORTBY")]
+    sort: Option<String>,
+    #[arg(long = "sortr", value_name = "SORTBY")]
+    sortr: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     Build {
@@ -1084,6 +1115,182 @@ impl SearchFilterCtx {
     }
 }
 
+fn parse_filesize(s: &str) -> anyhow::Result<u64> {
+    let s = s.trim();
+    let (num_part, suffix) = s.find(|c: char| c.is_ascii_alphabetic()).map_or_else(
+        || (s, String::new()),
+        |i| (&s[..i], s[i..].to_ascii_uppercase()),
+    );
+    let base: u64 = num_part
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid max-filesize number: '{s}'"))?;
+    let multiplier: u64 = match suffix.as_str() {
+        "" | "B" => 1,
+        "K" | "KB" => 1024,
+        "M" | "MB" => 1024 * 1024,
+        "G" | "GB" => 1024 * 1024 * 1024,
+        _ => anyhow::bail!("unknown filesize suffix: '{suffix}'"),
+    };
+    Ok(base * multiplier)
+}
+
+fn builtin_type_defs() -> Vec<TypeDef> {
+    [
+        ("rust", &["*.rs"][..]),
+        ("py", &["*.py", "*.pyi"]),
+        ("js", &["*.js", "*.mjs", "*.cjs"]),
+        ("ts", &["*.ts", "*.tsx", "*.mts", "*.cts"]),
+        ("c", &["*.c", "*.h"]),
+        ("cpp", &["*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hxx", "*.h"]),
+        ("java", &["*.java"]),
+        ("go", &["*.go"]),
+        ("html", &["*.html", "*.htm", "*.xhtml"]),
+        ("css", &["*.css", "*.scss", "*.less"]),
+        ("json", &["*.json", "*.jsonl"]),
+        ("yaml", &["*.yaml", "*.yml"]),
+        ("toml", &["*.toml"]),
+        ("xml", &["*.xml", "*.xsl", "*.xslt", "*.svg"]),
+        ("md", &["*.md", "*.markdown", "*.mdown"]),
+        ("txt", &["*.txt"]),
+        ("sh", &["*.sh", "*.bash", "*.zsh", "*.fish"]),
+        ("ruby", &["*.rb", "*.erb", "*.gemspec", "Gemfile"]),
+        ("php", &["*.php"]),
+        ("swift", &["*.swift"]),
+        ("kotlin", &["*.kt", "*.kts"]),
+        ("scala", &["*.scala", "*.sbt"]),
+        ("lua", &["*.lua"]),
+        ("perl", &["*.pl", "*.pm"]),
+        ("r", &["*.r", "*.R", "*.Rmd"]),
+        ("sql", &["*.sql"]),
+        ("protobuf", &["*.proto"]),
+        ("make", &["Makefile", "*.mk"]),
+        ("cmake", &["CMakeLists.txt", "*.cmake"]),
+        ("docker", &["Dockerfile", "*.dockerfile"]),
+        ("tf", &["*.tf", "*.tfvars"]),
+        ("hcl", &["*.hcl"]),
+        ("nix", &["*.nix"]),
+        ("zig", &["*.zig"]),
+        ("elixir", &["*.ex", "*.exs"]),
+        ("erlang", &["*.erl", "*.hrl"]),
+        ("haskell", &["*.hs", "*.lhs"]),
+        ("ocaml", &["*.ml", "*.mli"]),
+        ("clojure", &["*.clj", "*.cljs", "*.cljc", "*.edn"]),
+        ("csv", &["*.csv", "*.tsv"]),
+        ("log", &["*.log"]),
+        ("config", &["*.cfg", "*.conf", "*.ini"]),
+        ("lock", &["*.lock"]),
+        ("graphql", &["*.graphql", "*.gql"]),
+        ("wasm", &["*.wasm", "*.wat"]),
+        ("csharp", &["*.cs"]),
+        ("fsharp", &["*.fs", "*.fsi", "*.fsx"]),
+        ("dart", &["*.dart"]),
+        ("vim", &["*.vim"]),
+        ("tex", &["*.tex", "*.sty", "*.cls"]),
+        ("rst", &["*.rst"]),
+        ("org", &["*.org"]),
+        ("asm", &["*.asm", "*.s", "*.S"]),
+        ("bazel", &["*.bzl", "BUILD", "WORKSPACE"]),
+        ("readme", &["README*"]),
+        ("license", &["LICENSE*", "LICENCE*"]),
+    ]
+    .into_iter()
+    .map(|(name, globs)| TypeDef {
+        name: name.to_string(),
+        globs: globs.iter().map(|s| (*s).to_string()).collect(),
+    })
+    .collect()
+}
+
+fn build_search_filter_config(
+    cli: &Cli,
+    filter: SearchFilterCtx,
+    scopes: Vec<PathBuf>,
+    exclude_paths: Vec<PathBuf>,
+) -> anyhow::Result<SearchFilterConfig> {
+    let max_filesize = cli
+        .filter_decl
+        .max_filesize
+        .as_ref()
+        .map(|s| parse_filesize(s))
+        .transpose()?;
+
+    let mut glob_patterns = cli.glob_flags.glob.clone();
+    for ig in &cli.filter_decl.iglob {
+        glob_patterns.push(ig.clone());
+    }
+
+    let glob_ci = filter.glob_case_insensitive || !cli.filter_decl.iglob.is_empty();
+
+    let type_definitions = resolve_type_defs(&cli.filter_decl);
+
+    Ok(SearchFilterConfig {
+        scopes,
+        exclude_paths,
+        glob: GlobConfig {
+            patterns: glob_patterns,
+            case_insensitive: glob_ci,
+        },
+        visibility: VisibilityConfig {
+            hidden: filter.hidden_mode(),
+            ignore: IgnoreConfig {
+                sources: filter.ignore_sources,
+                custom_files: cli.filter_decl.ignore_file.clone(),
+                require_git: filter.require_git,
+            },
+        },
+        follow_links: cli.paths.follow,
+        max_depth: cli.filter_decl.max_depth,
+        max_filesize,
+        type_definitions,
+        type_include: cli.filter_decl.type_include.clone(),
+        type_exclude: cli.filter_decl.type_exclude.clone(),
+    })
+}
+
+fn resolve_type_defs(decl: &FilterDecl) -> Vec<TypeDef> {
+    let mut defs = builtin_type_defs();
+
+    for spec in &decl.type_clear {
+        defs.retain(|d| d.name != *spec);
+    }
+
+    for spec in &decl.type_add {
+        if let Some((name, globs_str)) = spec.split_once(':') {
+            if let Some(rest) = globs_str.strip_prefix("include:") {
+                let includes: Vec<&str> = rest.split(',').collect();
+                let mut new_globs = Vec::new();
+                for inc_name in &includes {
+                    for d in &defs {
+                        if d.name == *inc_name {
+                            new_globs.extend(d.globs.clone());
+                        }
+                    }
+                }
+                if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
+                    existing.globs.extend(new_globs);
+                } else {
+                    defs.push(TypeDef {
+                        name: name.to_string(),
+                        globs: new_globs,
+                    });
+                }
+            } else {
+                let globs: Vec<String> =
+                    globs_str.split(',').map(|s| s.trim().to_string()).collect();
+                if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
+                    existing.globs.extend(globs);
+                } else {
+                    defs.push(TypeDef {
+                        name: name.to_string(),
+                        globs,
+                    });
+                }
+            }
+        }
+    }
+
+    defs
+}
 fn write_search_stats(stats: &SearchStats) {
     eprintln!("{} matches", stats.matches);
     eprintln!("{} files contained matches", stats.files_with_matches);
@@ -1093,7 +1300,6 @@ fn write_search_stats(stats: &SearchStats) {
     eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
 }
 
-/// Resolve effective `line_number` from `-n`/`-N`/`--pretty`/`--vimgrep` + JSON override.
 const fn resolve_effective_line_number(
     clap_line_number: bool,
     line_number_override: Option<bool>,
@@ -1163,24 +1369,45 @@ impl Cli {
         filter: SearchFilterCtx,
         scopes: Vec<PathBuf>,
         exclude_paths: Vec<PathBuf>,
-    ) -> SearchFilterConfig {
-        SearchFilterConfig {
+    ) -> anyhow::Result<SearchFilterConfig> {
+        let max_filesize = self
+            .filter_decl
+            .max_filesize
+            .as_ref()
+            .map(|s| parse_filesize(s))
+            .transpose()?;
+
+        let mut glob_patterns = self.glob_flags.glob.clone();
+        for ig in &self.filter_decl.iglob {
+            glob_patterns.push(ig.clone());
+        }
+
+        let glob_ci = filter.glob_case_insensitive || !self.filter_decl.iglob.is_empty();
+
+        let type_definitions = resolve_type_defs(&self.filter_decl);
+
+        Ok(SearchFilterConfig {
             scopes,
             exclude_paths,
             glob: GlobConfig {
-                patterns: self.glob_flags.glob.clone(),
-                case_insensitive: filter.glob_case_insensitive,
+                patterns: glob_patterns,
+                case_insensitive: glob_ci,
             },
             visibility: VisibilityConfig {
                 hidden: filter.hidden_mode(),
                 ignore: IgnoreConfig {
                     sources: filter.ignore_sources,
-                    custom_files: Vec::new(),
+                    custom_files: self.filter_decl.ignore_file.clone(),
                     require_git: filter.require_git,
                 },
             },
             follow_links: self.paths.follow,
-        }
+            max_depth: self.filter_decl.max_depth,
+            max_filesize,
+            type_definitions,
+            type_include: self.filter_decl.type_include.clone(),
+            type_exclude: self.filter_decl.type_exclude.clone(),
+        })
     }
 
     fn build_search_opts(&self, args: &[String], only_matching: bool) -> SearchOptions {
@@ -1307,7 +1534,7 @@ impl Cli {
                 color: out.format.color,
             },
         );
-        let filter_config = self.build_filter_config(filter, prefixes, exclude_paths);
+        let filter_config = self.build_filter_config(filter, prefixes, exclude_paths)?;
         let search_filter = SearchFilter::new(&filter_config, &index.root)?;
         if out.print_stats {
             let mut stats = SearchStats::default();
@@ -1359,7 +1586,7 @@ impl Cli {
                 color: out.format.color,
             },
         );
-        let filter_config = self.build_filter_config(filter, prefixes, exclude_paths);
+        let filter_config = self.build_filter_config(filter, prefixes, exclude_paths)?;
         let search_filter = SearchFilter::new(&filter_config, filter_root)?;
         if out.print_stats {
             let mut stats = SearchStats::default();
@@ -1441,8 +1668,67 @@ impl Cli {
     }
 }
 
+fn run_type_list(cli: &Cli) {
+    let defs = resolve_type_defs(&cli.filter_decl);
+    let mut sorted = defs;
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    for def in &sorted {
+        println!("{}: {}", def.name, def.globs.join(", "));
+    }
+}
+
+fn run_files_mode(cli: &Cli) -> anyhow::Result<bool> {
+    let args: Vec<String> = std::env::args().collect();
+    let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
+    let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
+    let null_data = resolve_null_from_args(&args);
+
+    let filter_ctx = SearchFilterCtx {
+        hidden,
+        ignore_sources,
+        require_git,
+        glob_case_insensitive,
+    };
+
+    let cwd = std::env::current_dir()?;
+
+    let (filter_root, scopes, exclude_paths) = if let Ok(index) = Index::open(&cli.paths.sift_dir) {
+        let prefixes = corpus_path_prefixes(&index.root, &cwd, &cli.search_scope.paths)?;
+        let excludes = excluded_search_paths(&index.root, &cli.paths.sift_dir);
+        (index.root, prefixes, excludes)
+    } else {
+        let root = cwd.canonicalize()?;
+        let prefixes = walk_path_prefixes(&root, &cli.search_scope.paths)?;
+        let excludes = excluded_search_paths(&root, &cli.paths.sift_dir);
+        (root, prefixes, excludes)
+    };
+
+    let filter_config = build_search_filter_config(cli, filter_ctx, scopes, exclude_paths)?;
+    let search_filter = SearchFilter::new(&filter_config, &filter_root)?;
+
+    let paths = sift_core::walk_file_paths(&filter_root, search_filter.follow_links())?;
+    let mut sorted_paths: Vec<_> = paths
+        .into_iter()
+        .filter(|p| search_filter.is_candidate(p))
+        .collect();
+    sorted_paths.sort();
+    let sep = if null_data { '\0' } else { '\n' };
+    let mut any = false;
+    for p in &sorted_paths {
+        any = true;
+        let display = filter_root.join(p);
+        print!("{}{sep}", display.display());
+    }
+    Ok(any)
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    if cli.filter_decl.type_list {
+        run_type_list(&cli);
+        return ExitCode::SUCCESS;
+    }
 
     if let Some(Commands::Build { path }) = cli.command {
         return match IndexBuilder::new(&path)
@@ -1458,6 +1744,17 @@ fn main() -> ExitCode {
                 );
                 ExitCode::SUCCESS
             }
+            Err(e) => {
+                eprintln!("sift: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+
+    if cli.filter_decl.files {
+        return match run_files_mode(&cli) {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::from(1),
             Err(e) => {
                 eprintln!("sift: {e}");
                 ExitCode::from(2)

@@ -46,6 +46,13 @@ pub struct GlobConfig {
     pub case_insensitive: bool,
 }
 
+/// A named file-type definition mapping a type name to a set of glob patterns.
+#[derive(Debug, Clone)]
+pub struct TypeDef {
+    pub name: String,
+    pub globs: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilterConfig {
     pub scopes: Vec<PathBuf>,
@@ -54,6 +61,19 @@ pub struct SearchFilterConfig {
     pub visibility: VisibilityConfig,
     /// Follow symbolic links when walking the tree (search and index build).
     pub follow_links: bool,
+    /// Maximum directory depth for walk-based search (`--max-depth`).
+    /// `None` means no limit.
+    pub max_depth: Option<usize>,
+    /// Maximum file size in bytes (`--max-filesize`).
+    /// Files larger than this are skipped. `None` means no limit.
+    pub max_filesize: Option<u64>,
+    /// Type definitions for `--type`/`--type-not` filtering.
+    /// Each entry maps a type name to its glob patterns.
+    pub type_definitions: Vec<TypeDef>,
+    /// Type names to include (`-t`/`--type`).
+    pub type_include: Vec<String>,
+    /// Type names to exclude (`-T`/`--type-not`).
+    pub type_exclude: Vec<String>,
 }
 
 /// Pre-computed candidate for efficient batch filtering and search.
@@ -78,6 +98,9 @@ pub struct SearchFilter {
     glob: Option<Override>,
     glob_case_insensitive: bool,
     follow_links: bool,
+    max_depth: Option<usize>,
+    max_filesize: Option<u64>,
+    type_glob: Option<Override>,
 }
 
 impl SearchFilter {
@@ -96,13 +119,25 @@ impl SearchFilter {
 
     #[must_use]
     pub(crate) const fn needs_rel_str_for_matching(&self) -> bool {
-        self.gitignore.is_some() || self.glob.is_some()
+        self.gitignore.is_some() || self.glob.is_some() || self.type_glob.is_some()
     }
 
     /// Whether symlinked files and directories should be followed when walking.
     #[must_use]
     pub const fn follow_links(&self) -> bool {
         self.follow_links
+    }
+
+    /// Maximum directory depth for walk-based search.
+    #[must_use]
+    pub const fn max_depth(&self) -> Option<usize> {
+        self.max_depth
+    }
+
+    /// Maximum file size in bytes; files above this are skipped.
+    #[must_use]
+    pub const fn max_filesize(&self) -> Option<u64> {
+        self.max_filesize
     }
 
     /// Build a search filter from configuration.
@@ -140,6 +175,13 @@ impl SearchFilter {
             )
         };
 
+        let type_glob = Self::build_type_glob(
+            index_root,
+            &config.type_definitions,
+            &config.type_include,
+            &config.type_exclude,
+        )?;
+
         Ok(Self {
             scopes,
             exclude_paths: config.exclude_paths.clone(),
@@ -148,6 +190,9 @@ impl SearchFilter {
             glob,
             glob_case_insensitive,
             follow_links: config.follow_links,
+            max_depth: config.max_depth,
+            max_filesize: config.max_filesize,
+            type_glob,
         })
     }
 
@@ -189,6 +234,51 @@ impl SearchFilter {
 
         let matcher = builder.build().map_err(crate::Error::Ignore)?;
         Ok(Some(matcher))
+    }
+
+    fn build_type_glob(
+        root: &Path,
+        defs: &[TypeDef],
+        include: &[String],
+        exclude: &[String],
+    ) -> crate::Result<Option<Override>> {
+        if include.is_empty() && exclude.is_empty() {
+            return Ok(None);
+        }
+        let mut builder = OverrideBuilder::new(root);
+        for name in include {
+            let patterns = Self::globs_for_type(defs, name)?;
+            for g in patterns {
+                builder.add(&g).map_err(|e| {
+                    crate::Error::RegexBuild(format!("type glob for '{name}': {e}"))
+                })?;
+            }
+        }
+        for name in exclude {
+            let patterns = Self::globs_for_type(defs, name)?;
+            for g in patterns {
+                let negated = format!("!{g}");
+                builder.add(&negated).map_err(|e| {
+                    crate::Error::RegexBuild(format!("type glob for '{name}': {e}"))
+                })?;
+            }
+        }
+        Ok(Some(
+            builder
+                .build()
+                .map_err(|e| crate::Error::RegexBuild(e.to_string()))?,
+        ))
+    }
+
+    fn globs_for_type(defs: &[TypeDef], name: &str) -> crate::Result<Vec<String>> {
+        for def in defs {
+            if def.name == name {
+                return Ok(def.globs.clone());
+            }
+        }
+        Err(crate::Error::RegexBuild(format!(
+            "unknown file type: '{name}'"
+        )))
     }
 
     /// Check if a relative path passes all filters.
@@ -251,9 +341,7 @@ impl SearchFilter {
             return false;
         }
 
-        // Both gitignore and glob require path stringification - do once
-        let needs_str = self.gitignore.is_some() || self.glob.is_some();
-        if needs_str {
+        if self.needs_rel_str_for_matching() {
             let rel_str = rel_path.to_string_lossy().replace('\\', "/");
             return self.matches_file_str(Path::new(&rel_str));
         }
@@ -290,7 +378,7 @@ impl SearchFilter {
                     if glob.matched(Path::new(&rel_lower), false).is_ignore() {
                         return false;
                     }
-                    return true;
+                    return self.matches_type_glob(rel_path);
                 }
             }
             if glob.matched(rel_path, false).is_ignore() {
@@ -298,6 +386,13 @@ impl SearchFilter {
             }
         }
 
+        self.matches_type_glob(rel_path)
+    }
+
+    fn matches_type_glob(&self, rel_path: &Path) -> bool {
+        if let Some(ref tg) = self.type_glob {
+            return !tg.matched(rel_path, false).is_ignore();
+        }
         true
     }
 }

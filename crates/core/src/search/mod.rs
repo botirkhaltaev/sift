@@ -8,7 +8,7 @@ mod types;
 pub use execute::{parallel_candidate_threshold, walk_file_paths};
 pub use filter::{
     CandidateInfo, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilter,
-    SearchFilterConfig, VisibilityConfig,
+    SearchFilterConfig, TypeDef, VisibilityConfig,
 };
 pub use types::{
     CaseMode, ColorChoice, CompiledSearch, FilenameMode, Match, OutputEmission, PathDisplay,

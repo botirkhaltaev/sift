@@ -21,7 +21,7 @@ use super::{
 };
 
 #[cfg(test)]
-use super::{GlobConfig, HiddenMode, IgnoreConfig, Match, SearchFilterConfig, VisibilityConfig};
+use super::{HiddenMode, IgnoreConfig, Match, SearchFilterConfig, VisibilityConfig};
 
 const ANSI_RESET: &[u8] = b"\x1b[0m";
 const ANSI_PATH: &[u8] = b"\x1b[35m\x1b[1m";
@@ -327,8 +327,7 @@ impl CompiledSearch {
             return Err(crate::Error::InvalidMaxCount);
         }
 
-        let abs_paths =
-            collect_abs_paths_for_scopes(filter_root, filter.scopes(), filter.follow_links())?;
+        let abs_paths = collect_abs_paths_for_scopes(filter_root, filter)?;
         if abs_paths.is_empty() {
             if let Some(s) = stats {
                 *s = SearchStats::default();
@@ -431,17 +430,32 @@ impl CompiledSearch {
         threshold: usize,
     ) -> Vec<CandidateInfo> {
         let need_rel = filter.needs_rel_str_for_matching();
+        let max_fs = filter.max_filesize();
+        let max_d = filter.max_depth();
         let cap = ids.len();
+
+        let exceeds_depth = |rel: &Path| -> bool {
+            max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
+        };
+
         if ids.len() >= threshold {
             ids.par_iter()
                 .filter_map(|&id| {
                     let rel_path = index.file_path(id)?.to_path_buf();
+                    if exceeds_depth(&rel_path) {
+                        return None;
+                    }
                     let rel_str = if need_rel {
                         rel_path.to_string_lossy().replace('\\', "/")
                     } else {
                         String::new()
                     };
                     let abs_path = index.file_abs_path(id)?;
+                    if max_fs.is_some_and(|limit| {
+                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                    }) {
+                        return None;
+                    }
                     let info = CandidateInfo {
                         id,
                         rel_path,
@@ -455,12 +469,20 @@ impl CompiledSearch {
             let mut out = Vec::with_capacity(cap);
             out.extend(ids.iter().filter_map(|&id| {
                 let rel_path = index.file_path(id)?.to_path_buf();
+                if exceeds_depth(&rel_path) {
+                    return None;
+                }
                 let rel_str = if need_rel {
                     rel_path.to_string_lossy().replace('\\', "/")
                 } else {
                     String::new()
                 };
                 let abs_path = index.file_abs_path(id)?;
+                if max_fs.is_some_and(|limit| {
+                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                }) {
+                    return None;
+                }
                 let info = CandidateInfo {
                     id,
                     rel_path,
@@ -748,14 +770,11 @@ impl CompiledSearch {
     #[cfg(test)]
     pub(crate) fn collect_index_matches(&self, index: &Index) -> crate::Result<Vec<Match>> {
         let config = SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
-            glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
                 ignore: IgnoreConfig::default(),
             },
-            follow_links: false,
+            ..SearchFilterConfig::default()
         };
         let filter = SearchFilter::new(&config, &index.root)?;
         let candidate_ids = self.candidate_file_ids(index, false);
@@ -1561,10 +1580,15 @@ const fn mode_is_success(mode: SearchMode, result: FileSummary) -> bool {
     }
 }
 
-fn walk_directory_files(root: &Path, follow_links: bool) -> crate::Result<Vec<PathBuf>> {
+fn walk_directory_files(
+    root: &Path,
+    follow_links: bool,
+    max_depth: Option<usize>,
+    max_filesize: Option<u64>,
+) -> crate::Result<Vec<PathBuf>> {
     let root = root.canonicalize()?;
-    let mut out = Vec::new();
-    let walker = ignore::WalkBuilder::new(&root)
+    let mut builder = ignore::WalkBuilder::new(&root);
+    builder
         .follow_links(follow_links)
         .hidden(false)
         .parents(false)
@@ -1572,13 +1596,26 @@ fn walk_directory_files(root: &Path, follow_links: bool) -> crate::Result<Vec<Pa
         .git_global(false)
         .git_ignore(false)
         .git_exclude(false)
-        .require_git(false)
-        .build();
-    for entry in walker {
+        .require_git(false);
+    if let Some(d) = max_depth {
+        // User-facing semantics: 0 = root files only, 1 = root + one subdir level.
+        // WalkBuilder counts depth from the root dir entry (depth 0), so files at
+        // the root are depth 1. Shift by +1 to match ripgrep's convention.
+        builder.max_depth(Some(d + 1));
+    }
+    let mut out = Vec::new();
+    for entry in builder.build() {
         let entry = entry.map_err(crate::Error::Ignore)?;
-        if entry.file_type().is_some_and(|ft| ft.is_file()) {
-            out.push(entry.path().to_path_buf());
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
         }
+        if let Some(limit) = max_filesize {
+            let skip = entry.metadata().is_ok_and(|m| m.len() > limit);
+            if skip {
+                continue;
+            }
+        }
+        out.push(entry.path().to_path_buf());
     }
     Ok(out)
 }
@@ -1586,12 +1623,11 @@ fn walk_directory_files(root: &Path, follow_links: bool) -> crate::Result<Vec<Pa
 /// Collect absolute file paths for each scope under `filter_root` (same walk policy as index build).
 fn collect_abs_paths_for_scopes(
     filter_root: &Path,
-    scopes: &[PathBuf],
-    follow_links: bool,
+    filter: &SearchFilter,
 ) -> crate::Result<Vec<PathBuf>> {
     let filter_root = filter_root.canonicalize()?;
     let mut out = Vec::new();
-    for scope in scopes {
+    for scope in filter.scopes() {
         let path = if scope.as_os_str().is_empty() {
             filter_root.clone()
         } else {
@@ -1604,7 +1640,12 @@ fn collect_abs_paths_for_scopes(
         if path.is_file() {
             out.push(path);
         } else if path.is_dir() {
-            out.extend(walk_directory_files(&path, follow_links)?);
+            out.extend(walk_directory_files(
+                &path,
+                filter.follow_links(),
+                filter.max_depth(),
+                filter.max_filesize(),
+            )?);
         }
     }
     out.sort();
