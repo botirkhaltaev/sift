@@ -63,6 +63,44 @@ fn write_line_terminator(out: &mut Vec<u8>, null_data: bool) {
     }
 }
 
+enum ColumnAction {
+    /// Line is within the column limit (or no limit set).
+    Normal,
+    /// Line exceeds the limit and should be silently omitted.
+    Omit,
+    /// Line exceeds the limit; print a truncated preview.
+    Preview,
+}
+
+fn check_max_columns(line: &[u8], max_columns: Option<u64>, preview: bool) -> ColumnAction {
+    let Some(limit) = max_columns else {
+        return ColumnAction::Normal;
+    };
+    let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
+    let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
+    if trimmed.len() as u64 > limit {
+        if preview {
+            ColumnAction::Preview
+        } else {
+            ColumnAction::Omit
+        }
+    } else {
+        ColumnAction::Normal
+    }
+}
+
+/// Truncate a line to `max_columns` bytes, appending " [... omitted end ...]".
+fn truncate_line(line: &[u8], max_columns: u64) -> Vec<u8> {
+    let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
+    let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
+    let limit = usize::try_from(max_columns).unwrap_or(usize::MAX);
+    let mut out = Vec::with_capacity(limit.saturating_add(30));
+    out.extend_from_slice(&trimmed[..limit.min(trimmed.len())]);
+    out.extend_from_slice(b" [... omitted end ...]");
+    out.push(b'\n');
+    out
+}
+
 fn sum_candidate_file_bytes(candidates: &[CandidateInfo]) -> u64 {
     candidates.iter().fold(0u64, |acc, c| {
         acc + std::fs::metadata(&c.abs_path).map_or(0, |m| m.len())
@@ -1164,6 +1202,36 @@ impl Sink for StandardSink<'_> {
             return Ok(true);
         }
 
+        let line_bytes = mat.bytes();
+        let max_cols = self.output.lines.max_columns;
+        let preview = self.output.lines.max_columns_preview;
+        match check_max_columns(line_bytes, max_cols, preview) {
+            ColumnAction::Omit => return Ok(true),
+            ColumnAction::Preview => {
+                write_standard_prefix(
+                    self.bytes,
+                    self.output,
+                    self.display_path.as_str(),
+                    mat.line_number(),
+                    self.show_line_numbers,
+                    &PrefixCtx {
+                        is_context_line: false,
+                        column: None,
+                        separators: self.separators,
+                    },
+                    if self.output.lines.byte_offset() {
+                        Some(mat.absolute_byte_offset())
+                    } else {
+                        None
+                    },
+                )?;
+                let truncated = truncate_line(line_bytes, max_cols.unwrap_or(0));
+                self.bytes.write_all(&truncated)?;
+                return Ok(true);
+            }
+            ColumnAction::Normal => {}
+        }
+
         let col = if show_column {
             let line = mat.bytes();
             let mut first_col = None;
@@ -1175,7 +1243,6 @@ impl Sink for StandardSink<'_> {
         } else {
             None
         };
-
         write_standard_prefix(
             self.bytes,
             self.output,
@@ -1222,6 +1289,35 @@ impl Sink for StandardSink<'_> {
         }
         if matches!(self.output.mode, SearchMode::OnlyMatching) {
             return Ok(true);
+        }
+        let ctx_bytes = ctx.bytes();
+        let max_cols = self.output.lines.max_columns;
+        let preview = self.output.lines.max_columns_preview;
+        match check_max_columns(ctx_bytes, max_cols, preview) {
+            ColumnAction::Omit => return Ok(true),
+            ColumnAction::Preview => {
+                write_standard_prefix(
+                    self.bytes,
+                    self.output,
+                    self.display_path.as_str(),
+                    ctx.line_number(),
+                    self.show_line_numbers,
+                    &PrefixCtx {
+                        is_context_line: true,
+                        column: None,
+                        separators: self.separators,
+                    },
+                    if self.output.lines.byte_offset() {
+                        Some(ctx.absolute_byte_offset())
+                    } else {
+                        None
+                    },
+                )?;
+                let truncated = truncate_line(ctx_bytes, max_cols.unwrap_or(0));
+                self.bytes.write_all(&truncated)?;
+                return Ok(true);
+            }
+            ColumnAction::Normal => {}
         }
         write_standard_prefix(
             self.bytes,

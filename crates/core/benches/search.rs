@@ -180,6 +180,8 @@ const fn output_std() -> SearchOutput {
             filename_mode: FilenameMode::Auto,
             flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
+            max_columns: None,
+            max_columns_preview: false,
         },
         records: SearchRecordStyle {
             null_data: false,
@@ -200,6 +202,8 @@ const fn output_quiet(mode: SearchMode) -> SearchOutput {
             filename_mode: FilenameMode::Auto,
             flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
+            max_columns: None,
+            max_columns_preview: false,
         },
         records: SearchRecordStyle {
             null_data: false,
