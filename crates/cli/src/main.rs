@@ -53,11 +53,11 @@ struct Cli {
     #[command(flatten)]
     ignore_parent: IgnoreParentDecl,
     #[command(flatten)]
+    ignore_files_decl: IgnoreFilesDecl,
+    #[command(flatten)]
     messages_decl: MessagesDecl,
     #[command(flatten)]
     ignore_messages_decl: IgnoreMessagesDecl,
-    #[command(flatten)]
-    ignore_files: IgnoreFilesDecl,
     #[command(flatten)]
     unrestricted: UnrestrictedDecl,
     #[command(flatten)]
@@ -163,6 +163,7 @@ struct IgnoreGitDecl {
     _require_git: bool,
 }
 
+/// Clap-only; resolved via argv.
 #[derive(Args)]
 struct IgnoreGlobalDecl {
     #[arg(long = "no-ignore-global", action = ArgAction::SetTrue)]
@@ -171,6 +172,7 @@ struct IgnoreGlobalDecl {
     _ignore_global: bool,
 }
 
+/// Clap-only; resolved via argv.
 #[derive(Args)]
 struct IgnoreExcludeDecl {
     #[arg(long = "no-ignore-exclude", action = ArgAction::SetTrue)]
@@ -179,6 +181,7 @@ struct IgnoreExcludeDecl {
     _ignore_exclude: bool,
 }
 
+/// Clap-only; resolved via argv.
 #[derive(Args)]
 struct IgnoreParentDecl {
     #[arg(long = "no-ignore-parent", action = ArgAction::SetTrue)]
@@ -187,6 +190,17 @@ struct IgnoreParentDecl {
     _ignore_parent: bool,
 }
 
+/// Clap-only; resolved via argv.
+#[derive(Args)]
+struct IgnoreFilesDecl {
+    /// Ignore any --ignore-file flags (even ones that come after).
+    #[arg(long = "no-ignore-files", action = ArgAction::SetTrue)]
+    _no_ignore_files: bool,
+    #[arg(long = "ignore-files", action = ArgAction::SetTrue)]
+    _ignore_files: bool,
+}
+
+/// Clap-only; resolved via argv.
 #[derive(Args)]
 struct MessagesDecl {
     /// Suppress all error messages related to opening and reading files.
@@ -196,6 +210,7 @@ struct MessagesDecl {
     _messages: bool,
 }
 
+/// Clap-only; resolved via argv.
 #[derive(Args)]
 struct IgnoreMessagesDecl {
     /// Suppress error messages related to parsing ignore files.
@@ -203,15 +218,6 @@ struct IgnoreMessagesDecl {
     _no_ignore_messages: bool,
     #[arg(long = "ignore-messages", action = ArgAction::SetTrue)]
     _ignore_messages: bool,
-}
-
-#[derive(Args)]
-struct IgnoreFilesDecl {
-    /// Ignore any --ignore-file flags (even ones that come after).
-    #[arg(long = "no-ignore-files", action = ArgAction::SetTrue)]
-    _no_ignore_files: bool,
-    #[arg(long = "ignore-files", action = ArgAction::SetTrue)]
-    _ignore_files: bool,
 }
 
 #[derive(Args)]
