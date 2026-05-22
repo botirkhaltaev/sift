@@ -54,7 +54,7 @@ fn write_line_terminator(out: &mut Vec<u8>, null_data: bool) {
 
 fn sum_candidate_file_bytes(candidates: &[CandidateInfo]) -> u64 {
     candidates.iter().fold(0u64, |acc, c| {
-        acc + std::fs::metadata(&c.abs_path).map(|m| m.len()).unwrap_or(0)
+        acc + std::fs::metadata(&c.abs_path).map_or(0, |m| m.len())
     })
 }
 
@@ -1643,9 +1643,7 @@ static PARALLEL_CANDIDATE_THRESHOLD: OnceLock<usize> = OnceLock::new();
 #[must_use]
 pub fn parallel_candidate_threshold() -> usize {
     *PARALLEL_CANDIDATE_THRESHOLD.get_or_init(|| {
-        let cpus = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1);
+        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
         let rayon_threads = std::env::var("RAYON_NUM_THREADS")
             .ok()
             .and_then(|s| s.parse::<usize>().ok());

@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 
 use common::{
-    BuildIndexOptions, assert_index_and_walk_output, assert_success, command, fresh_dir,
+    BuildIndexOptions, abs, assert_index_and_walk_output, assert_success, command, fresh_dir,
     normalized_stdout, rel_match,
 };
 
@@ -95,14 +95,10 @@ fn files_without_match_is_consistent_between_index_and_walk() {
     let args = vec![
         OsString::from("--files-without-match"),
         OsString::from("Sherlock"),
-        abs_root.clone().into_os_string(),
+        abs_root.into_os_string(),
     ];
 
-    assert_index_and_walk_output(
-        &root,
-        &args,
-        &format!("{}\n", abs_root.join("file.py").display()),
-    );
+    assert_index_and_walk_output(&root, &args, &format!("{}\n", abs(&root, "file.py")));
 }
 
 #[test]

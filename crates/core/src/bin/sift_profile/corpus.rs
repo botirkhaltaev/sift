@@ -22,8 +22,7 @@ pub enum CorpusKind {
 
 pub fn corpus_kind_from_env() -> CorpusKind {
     let large = std::env::var("SIFT_PROFILE_LARGE")
-        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+        .is_ok_and(|s| s == "1" || s.eq_ignore_ascii_case("true"));
     let files = std::env::var("SIFT_PROFILE_CORPUS_FILES")
         .ok()
         .and_then(|s| s.parse().ok());
