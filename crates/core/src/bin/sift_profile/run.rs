@@ -3,7 +3,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use sift_core::{CompiledSearch, Index, SearchFilter, TrigramPlan};
+use sift_core::{CompiledSearch, Index, SearchFilter, SearchSeparators, TrigramPlan};
 
 use crate::corpus::CorpusKind;
 use crate::metrics::{print_profile, resident_set_bytes, rss_enabled};
@@ -84,32 +84,7 @@ pub fn run_scenario(index: &Index, scenario: &Scenario, loop_cfg: &Loop, search_
         .unwrap();
     let matcher_us = t_matcher.elapsed().as_micros();
 
-    let warm = warmup_iters();
-    for _ in 0..warm {
-        black_box(query.run_index(index, &filter, scenario.output).unwrap());
-    }
-
-    let mut samples: Vec<Duration> = Vec::new();
-
-    let t_search = Instant::now();
-    match loop_cfg {
-        Loop::Timed(d) => {
-            let deadline = Instant::now() + *d;
-            while Instant::now() < deadline {
-                let t0 = Instant::now();
-                black_box(query.run_index(index, &filter, scenario.output).unwrap());
-                samples.push(t0.elapsed());
-            }
-        }
-        Loop::Iters(n) => {
-            for _ in 0..*n {
-                let t0 = Instant::now();
-                black_box(query.run_index(index, &filter, scenario.output).unwrap());
-                samples.push(t0.elapsed());
-            }
-        }
-    }
-    let search_wall = t_search.elapsed();
+    let (samples, search_wall) = run_search_loop(&query, index, &filter, scenario, loop_cfg);
 
     let measured_count = samples.len();
     let search_us: u128 = samples.iter().map(Duration::as_micros).sum();
@@ -117,7 +92,7 @@ pub fn run_scenario(index: &Index, scenario: &Scenario, loop_cfg: &Loop, search_
     print_profile("scenario", scenario.name);
     print_profile("command", if search_only { "search_only" } else { "run" });
     print_profile("search_only", if search_only { "true" } else { "false" });
-    print_profile("warmup_iters", &warm.to_string());
+    print_profile("warmup_iters", &warmup_iters().to_string());
     print_profile("measured_iters", &measured_count.to_string());
     print_profile("plan_kind", plan_kind);
     print_profile("search_mode", &format!("{:?}", scenario.output.mode));
@@ -219,4 +194,51 @@ pub fn build_iters_from_env(kind: &CorpusKind) -> usize {
         .ok()
         .and_then(|x| x.parse().ok())
         .unwrap_or_else(|| default_build_iters(kind))
+}
+
+fn run_search_loop(
+    query: &CompiledSearch,
+    index: &Index,
+    filter: &SearchFilter,
+    scenario: &Scenario,
+    loop_cfg: &Loop,
+) -> (Vec<Duration>, Duration) {
+    let seps = SearchSeparators::default();
+    let warm = warmup_iters();
+    for _ in 0..warm {
+        black_box(
+            query
+                .run_index(index, filter, scenario.output, &seps)
+                .unwrap(),
+        );
+    }
+
+    let mut samples: Vec<Duration> = Vec::new();
+    let t_search = Instant::now();
+    match loop_cfg {
+        Loop::Timed(d) => {
+            let deadline = Instant::now() + *d;
+            while Instant::now() < deadline {
+                let t0 = Instant::now();
+                black_box(
+                    query
+                        .run_index(index, filter, scenario.output, &seps)
+                        .unwrap(),
+                );
+                samples.push(t0.elapsed());
+            }
+        }
+        Loop::Iters(n) => {
+            for _ in 0..*n {
+                let t0 = Instant::now();
+                black_box(
+                    query
+                        .run_index(index, filter, scenario.output, &seps)
+                        .unwrap(),
+                );
+                samples.push(t0.elapsed());
+            }
+        }
+    }
+    (samples, t_search.elapsed())
 }

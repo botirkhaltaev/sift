@@ -17,7 +17,8 @@ pub use search::{
     CandidateInfo, CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode,
     IgnoreConfig, IgnoreSources, Match, OutputEmission, PathDisplay, SearchFilter,
     SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, SearchStats, VisibilityConfig, walk_file_paths,
+    SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, VisibilityConfig,
+    walk_file_paths,
 };
 
 pub use ignore::{Walk, WalkBuilder};

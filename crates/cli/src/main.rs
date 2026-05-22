@@ -8,7 +8,8 @@ use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig,
     HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, PathDisplay,
     SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
-    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchStats, VisibilityConfig,
+    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
+    VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -57,6 +58,24 @@ struct Cli {
     stats_decl: StatsDecl,
     #[command(flatten)]
     json_decl: JsonDecl,
+    #[command(flatten)]
+    separator_decl: SeparatorDecl,
+}
+
+#[derive(Args)]
+struct SeparatorDecl {
+    #[arg(
+        long = "context-separator",
+        value_name = "SEPARATOR",
+        allow_hyphen_values = true
+    )]
+    context_sep: Option<String>,
+    #[arg(long = "no-context-separator")]
+    suppress_context_sep: bool,
+    #[arg(long = "field-match-separator", value_name = "SEPARATOR")]
+    field_match: Option<String>,
+    #[arg(long = "field-context-separator", value_name = "SEPARATOR")]
+    field_context: Option<String>,
 }
 
 /// Declares `--json` / `--no-json` for clap; effective value uses [`resolve_json_from_args`].
@@ -1035,12 +1054,14 @@ struct SearchFormatCtx {
 }
 
 /// Resolved output mode and line/format flags (from argv + clap) shared by index and walk search.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SearchOutputCtx {
     mode: SearchModeCtx,
     lines: SearchLineResolveCtx,
     format: SearchFormatCtx,
     output_format: SearchOutputFormat,
+    separators: SearchSeparators,
+    print_stats: bool,
 }
 
 /// Resolved visibility, ignore sources, and glob case (from argv order + clap) for [`SearchFilterConfig`].
@@ -1087,7 +1108,56 @@ const fn resolve_effective_line_number(
     }
 }
 
+fn unescape_separator(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push(b'\n'),
+                Some('t') => out.push(b'\t'),
+                Some('\\') | None => out.push(b'\\'),
+                Some('0') => out.push(0),
+                Some(other) => {
+                    out.push(b'\\');
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+                }
+            }
+        } else {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    out
+}
+
 impl Cli {
+    fn resolve_separators(&self) -> SearchSeparators {
+        let context_separator = if self.separator_decl.suppress_context_sep {
+            None
+        } else if let Some(ref s) = self.separator_decl.context_sep {
+            Some(unescape_separator(s))
+        } else {
+            Some(b"--".to_vec())
+        };
+        let field_match_separator = self
+            .separator_decl
+            .field_match
+            .as_ref()
+            .map_or_else(|| b":".to_vec(), |s| unescape_separator(s));
+        let field_context_separator = self
+            .separator_decl
+            .field_context
+            .as_ref()
+            .map_or_else(|| b"-".to_vec(), |s| unescape_separator(s));
+        SearchSeparators {
+            context_separator,
+            field_match_separator,
+            field_context_separator,
+        }
+    }
+
     fn build_filter_config(
         &self,
         filter: SearchFilterCtx,
@@ -1141,7 +1211,7 @@ impl Cli {
         effective_mode: SearchMode,
         quiet: bool,
         line_number_override: Option<bool>,
-    ) -> (SearchOutputCtx, SearchFilterCtx, bool) {
+    ) -> (SearchOutputCtx, SearchFilterCtx) {
         let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
         let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(args);
         let null_data = resolve_null_from_args(args);
@@ -1187,6 +1257,8 @@ impl Cli {
             } else {
                 SearchOutputFormat::Text
             },
+            separators: self.resolve_separators(),
+            print_stats,
         };
         let filter = SearchFilterCtx {
             hidden,
@@ -1194,7 +1266,7 @@ impl Cli {
             require_git,
             glob_case_insensitive,
         };
-        (out, filter, print_stats)
+        (out, filter)
     }
 
     fn run_search_with_index(
@@ -1202,9 +1274,8 @@ impl Cli {
         query: &CompiledSearch,
         index: &Index,
         cwd: &Path,
-        out: SearchOutputCtx,
+        out: &SearchOutputCtx,
         filter: SearchFilterCtx,
-        print_stats: bool,
     ) -> anyhow::Result<bool> {
         let prefixes = corpus_path_prefixes(&index.root, cwd, &self.search_scope.paths)?;
         let exclude_paths = excluded_search_paths(&index.root, &self.paths.sift_dir);
@@ -1238,14 +1309,20 @@ impl Cli {
         );
         let filter_config = self.build_filter_config(filter, prefixes, exclude_paths);
         let search_filter = SearchFilter::new(&filter_config, &index.root)?;
-        if print_stats {
+        if out.print_stats {
             let mut stats = SearchStats::default();
-            let ok = query.run_index_with_stats(index, &search_filter, output, &mut stats)?;
+            let ok = query.run_index_with_stats(
+                index,
+                &search_filter,
+                output,
+                &out.separators,
+                &mut stats,
+            )?;
             write_search_stats(&stats);
             return Ok(ok);
         }
         query
-            .run_index(index, &search_filter, output)
+            .run_index(index, &search_filter, output, &out.separators)
             .map_err(Into::into)
     }
 
@@ -1253,9 +1330,8 @@ impl Cli {
         &self,
         query: &CompiledSearch,
         filter_root: &Path,
-        out: SearchOutputCtx,
+        out: &SearchOutputCtx,
         filter: SearchFilterCtx,
-        print_stats: bool,
     ) -> anyhow::Result<bool> {
         let prefixes = walk_path_prefixes(filter_root, &self.search_scope.paths)?;
         let exclude_paths = excluded_search_paths(filter_root, &self.paths.sift_dir);
@@ -1285,14 +1361,20 @@ impl Cli {
         );
         let filter_config = self.build_filter_config(filter, prefixes, exclude_paths);
         let search_filter = SearchFilter::new(&filter_config, filter_root)?;
-        if print_stats {
+        if out.print_stats {
             let mut stats = SearchStats::default();
-            let ok = query.run_walk_with_stats(filter_root, &search_filter, output, &mut stats)?;
+            let ok = query.run_walk_with_stats(
+                filter_root,
+                &search_filter,
+                output,
+                &out.separators,
+                &mut stats,
+            )?;
             write_search_stats(&stats);
             return Ok(ok);
         }
         query
-            .run_walk(filter_root, &search_filter, output)
+            .run_walk(filter_root, &search_filter, output, &out.separators)
             .map_err(Into::into)
     }
 
@@ -1341,18 +1423,18 @@ impl Cli {
         let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
         let cwd = std::env::current_dir()?;
 
-        let (out, filter, print_stats) =
+        let (out, filter) =
             self.build_output_and_filter(&args, effective_mode, quiet, line_number_override);
 
         match Index::open(&self.paths.sift_dir) {
-            Ok(index) => self.run_search_with_index(&query, &index, &cwd, out, filter, print_stats),
+            Ok(index) => self.run_search_with_index(&query, &index, &cwd, &out, filter),
             Err(
                 SiftError::MissingMeta(_)
                 | SiftError::MissingComponent(_)
                 | SiftError::InvalidMeta(_),
             ) => {
                 let filter_root = cwd.canonicalize().map_err(|e| anyhow::anyhow!("{e}"))?;
-                self.run_search_walk(&query, &filter_root, out, filter, print_stats)
+                self.run_search_walk(&query, &filter_root, &out, filter)
             }
             Err(e) => Err(anyhow::anyhow!("{e}")),
         }

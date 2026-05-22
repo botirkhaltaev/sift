@@ -16,7 +16,8 @@ use crate::planner::TrigramPlan;
 
 use super::{
     CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, OutputEmission, PathDisplay,
-    SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchStats,
+    SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle,
+    SearchSeparators, SearchStats,
 };
 
 #[cfg(test)]
@@ -150,8 +151,9 @@ impl CompiledSearch {
         index: &Index,
         filter: &SearchFilter,
         output: SearchOutput,
+        separators: &SearchSeparators,
     ) -> crate::Result<bool> {
-        self.run_index_impl(index, filter, output, None)
+        self.run_index_impl(index, filter, output, separators, None)
     }
 
     /// Like [`Self::run_index`], but fills `stats` with search counters (ripgrep-style `--stats`).
@@ -164,9 +166,10 @@ impl CompiledSearch {
         index: &Index,
         filter: &SearchFilter,
         output: SearchOutput,
+        separators: &SearchSeparators,
         stats: &mut SearchStats,
     ) -> crate::Result<bool> {
-        self.run_index_impl(index, filter, output, Some(stats))
+        self.run_index_impl(index, filter, output, separators, Some(stats))
     }
 
     fn run_index_impl(
@@ -174,6 +177,7 @@ impl CompiledSearch {
         index: &Index,
         filter: &SearchFilter,
         output: SearchOutput,
+        separators: &SearchSeparators,
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         if self.opts.max_results == Some(0) {
@@ -233,6 +237,7 @@ impl CompiledSearch {
                 &candidates,
                 matcher,
                 output,
+                separators,
                 parallel,
                 StatsCollection {
                     primary: counter_ref,
@@ -289,8 +294,9 @@ impl CompiledSearch {
         filter_root: &Path,
         filter: &SearchFilter,
         output: SearchOutput,
+        separators: &SearchSeparators,
     ) -> crate::Result<bool> {
-        self.run_walk_impl(filter_root, filter, output, None)
+        self.run_walk_impl(filter_root, filter, output, separators, None)
     }
 
     /// Like [`Self::run_walk`], but fills `stats` with search counters.
@@ -303,9 +309,10 @@ impl CompiledSearch {
         filter_root: &Path,
         filter: &SearchFilter,
         output: SearchOutput,
+        separators: &SearchSeparators,
         stats: &mut SearchStats,
     ) -> crate::Result<bool> {
-        self.run_walk_impl(filter_root, filter, output, Some(stats))
+        self.run_walk_impl(filter_root, filter, output, separators, Some(stats))
     }
 
     fn run_walk_impl(
@@ -313,6 +320,7 @@ impl CompiledSearch {
         filter_root: &Path,
         filter: &SearchFilter,
         output: SearchOutput,
+        separators: &SearchSeparators,
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         if self.opts.max_results == Some(0) {
@@ -370,6 +378,7 @@ impl CompiledSearch {
                 &candidates,
                 matcher,
                 output,
+                separators,
                 parallel,
                 StatsCollection {
                     primary: counter_ref,
@@ -534,6 +543,7 @@ impl CompiledSearch {
         candidates: &[CandidateInfo],
         matcher: &RegexMatcher,
         output: SearchOutput,
+        separators: &SearchSeparators,
         parallel: bool,
         stats: StatsCollection<'_>,
     ) -> crate::Result<bool> {
@@ -550,6 +560,7 @@ impl CompiledSearch {
                             self,
                             matcher,
                             output,
+                            separators,
                             stats.primary,
                             stats.files_with_matches,
                         )
@@ -567,7 +578,7 @@ impl CompiledSearch {
             );
         }
 
-        self.run_standard_capped_with_info(candidates, matcher, output, stats)
+        self.run_standard_capped_with_info(candidates, matcher, output, separators, stats)
     }
 
     fn run_summary_with_info(
@@ -617,6 +628,7 @@ impl CompiledSearch {
         candidates: &[CandidateInfo],
         matcher: &RegexMatcher,
         output: SearchOutput,
+        separators: &SearchSeparators,
         stats: StatsCollection<'_>,
     ) -> crate::Result<bool> {
         let show_line_numbers =
@@ -642,6 +654,7 @@ impl CompiledSearch {
                         show_line_numbers,
                         display,
                         &mut bytes,
+                        separators,
                     );
                     let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
                     if let Some(c) = stats.primary {
@@ -861,6 +874,7 @@ struct StandardWorker<'a> {
     matcher: &'a RegexMatcher,
     searcher: Searcher,
     output: SearchOutput,
+    separators: &'a SearchSeparators,
     /// `-C` / `-A` / `-B` imply line numbers in output (ripgrep-style).
     show_line_numbers: bool,
     bytes: Vec<u8>,
@@ -873,6 +887,7 @@ impl<'a> StandardWorker<'a> {
         search: &CompiledSearch,
         matcher: &'a RegexMatcher,
         output: SearchOutput,
+        separators: &'a SearchSeparators,
         match_counter: Option<&'a AtomicUsize>,
         files_with_matches: Option<&'a AtomicUsize>,
     ) -> Self {
@@ -887,6 +902,7 @@ impl<'a> StandardWorker<'a> {
             ),
             matcher,
             output,
+            separators,
             show_line_numbers,
             bytes: Vec::new(),
             match_counter,
@@ -923,6 +939,7 @@ impl<'a> StandardWorker<'a> {
                 self.show_line_numbers,
                 display,
                 &mut self.bytes,
+                self.separators,
             );
             let _ = self
                 .searcher
@@ -985,6 +1002,7 @@ struct StandardSink<'a> {
     show_line_numbers: bool,
     display_path: String,
     bytes: &'a mut Vec<u8>,
+    separators: &'a SearchSeparators,
     matched: bool,
     match_count: usize,
 }
@@ -996,6 +1014,7 @@ impl<'a> StandardSink<'a> {
         show_line_numbers: bool,
         display_path: String,
         bytes: &'a mut Vec<u8>,
+        separators: &'a SearchSeparators,
     ) -> Self {
         Self {
             matcher,
@@ -1003,6 +1022,7 @@ impl<'a> StandardSink<'a> {
             show_line_numbers,
             display_path,
             bytes,
+            separators,
             matched: false,
             match_count: 0,
         }
@@ -1037,8 +1057,11 @@ impl Sink for StandardSink<'_> {
                     self.display_path.as_str(),
                     line_number,
                     self.show_line_numbers,
-                    false,
-                    col,
+                    &PrefixCtx {
+                        is_context_line: false,
+                        column: col,
+                        separators: self.separators,
+                    },
                 );
                 let _ = self.bytes.write_all(&line[m.start()..m.end()]);
                 let _ = self.bytes.write_all(b"\n");
@@ -1065,8 +1088,11 @@ impl Sink for StandardSink<'_> {
             self.display_path.as_str(),
             mat.line_number(),
             self.show_line_numbers,
-            false,
-            col,
+            &PrefixCtx {
+                is_context_line: false,
+                column: col,
+                separators: self.separators,
+            },
         )?;
         self.bytes.write_all(mat.bytes())?;
         if !mat.bytes().ends_with(b"\n") {
@@ -1088,8 +1114,11 @@ impl Sink for StandardSink<'_> {
             self.display_path.as_str(),
             ctx.line_number(),
             self.show_line_numbers,
-            true,
-            None,
+            &PrefixCtx {
+                is_context_line: true,
+                column: None,
+                separators: self.separators,
+            },
         )?;
         self.bytes.write_all(ctx.bytes())?;
         if !ctx.bytes().ends_with(b"\n") {
@@ -1105,7 +1134,10 @@ impl Sink for StandardSink<'_> {
         if matches!(self.output.mode, SearchMode::OnlyMatching) {
             return Ok(true);
         }
-        self.bytes.write_all(b"--\n")?;
+        if let Some(ref sep) = self.separators.context_separator {
+            self.bytes.write_all(sep)?;
+            self.bytes.write_all(b"\n")?;
+        }
         Ok(true)
     }
 }
@@ -1465,17 +1497,27 @@ fn write_summary_record(
     }
 }
 
+struct PrefixCtx<'a> {
+    is_context_line: bool,
+    column: Option<usize>,
+    separators: &'a SearchSeparators,
+}
+
 fn write_standard_prefix(
     out: &mut Vec<u8>,
     output: SearchOutput,
     path: &str,
     line_number: Option<u64>,
     show_line_numbers: bool,
-    is_context_line: bool,
-    column: Option<usize>,
+    prefix: &PrefixCtx<'_>,
 ) -> io::Result<()> {
     let color = should_color(output.records);
     let print_filename = output.lines.filename_mode != FilenameMode::Never;
+    let field_sep = if prefix.is_context_line {
+        &prefix.separators.field_context_separator
+    } else {
+        &prefix.separators.field_match_separator
+    };
     if print_filename {
         if color {
             out.extend_from_slice(ANSI_PATH);
@@ -1484,27 +1526,27 @@ fn write_standard_prefix(
         if color {
             out.extend_from_slice(ANSI_RESET);
         }
-        let sep = if is_context_line { '-' } else { ':' };
-        write!(out, "{sep}")?;
+        out.extend_from_slice(field_sep);
     }
     if show_line_numbers {
         if color {
             out.extend_from_slice(ANSI_LINE);
         }
-        let sep = if is_context_line { '-' } else { ':' };
-        write!(out, "{}{}", line_number.unwrap_or(0), sep)?;
+        write!(out, "{}", line_number.unwrap_or(0))?;
         if color {
             out.extend_from_slice(ANSI_RESET);
         }
+        out.extend_from_slice(field_sep);
     }
-    if let Some(col) = column {
+    if let Some(col) = prefix.column {
         if color {
             out.extend_from_slice(ANSI_LINE);
         }
-        write!(out, "{col}:")?;
+        write!(out, "{col}")?;
         if color {
             out.extend_from_slice(ANSI_RESET);
         }
+        out.extend_from_slice(field_sep);
     }
     Ok(())
 }
