@@ -1,17 +1,20 @@
-# Agent notes (fuzz/)
+# AGENTS.md — fuzz/
 
 ## Isolation
 
-This directory is a **standalone** package: root `Cargo.toml` lists `exclude = ["fuzz"]`. Use **`./scripts/fuzz.sh`** or `cd fuzz && cargo fuzz …` so `fuzz/rust-toolchain.toml` (nightly) applies.
+Standalone package excluded from the root workspace (`Cargo.toml` `exclude = ["fuzz"]`). Use `./scripts/fuzz.sh` or `cd fuzz && cargo fuzz …` so `fuzz/rust-toolchain.toml` (nightly) applies.
 
 ## Targets
 
-- **`search_usage`** — one shared tiny index per process (`OnceLock`); fuzzes pattern strings + `SearchOptions` against `CompiledSearch` + `search_index`.
-- **`compile_only`** — fuzzes `compile_search_pattern` only (no FS).
+- **`search_usage`** — shared tiny index per process (`OnceLock`); fuzzes pattern strings + `SearchOptions` against `CompiledSearch` + `search_index`.
+- **`compile_only`** — fuzzes `compile_search_pattern` only (no filesystem).
 
-## Do not
+## Scope
 
-- Add the fuzz crate to the main workspace `members` without a strong reason (breaks `cargo-fuzz` layout expectations).
-- Assume `sift-cli` is fuzzed here; scope is **`sift-core`** only.
+Fuzz targets cover **`sift-core` only** — not the CLI.
 
-See **`README.md`** in this directory for install and run examples.
+## Do NOT
+
+- Add the fuzz crate to the main workspace `members` (breaks `cargo-fuzz` layout).
+- Assume `sift-cli` is fuzzed here.
+- Run without nightly toolchain (sanitizers require it).

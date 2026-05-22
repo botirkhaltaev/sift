@@ -1,30 +1,48 @@
 # sift-core
 
-Indexed, grep-style search over a directory tree: build a **trigram index** on disk, then run **regex** (Rust dialect) or **fixed-string** queries with optional narrowing from the index.
+Indexed grep-style search engine. Build a trigram index on disk, then run regex or fixed-string queries with automatic candidate narrowing.
 
-## Main API
+## Modules
 
-- **`build_index(corpus_root, index_dir)`** — walk corpus (ignore rules via `ignore`), write `files.bin` / `lexicon.bin` / `postings.bin` + metadata.
-- **`Index::open(index_dir)`** — load tables; holds corpus root path and file list.
-- **`CompiledSearch::new(patterns, SearchOptions)`** — compile once; then **`search_index`** (indexed) or **`search_walk`** (walk + match, optional path subset). Repeated **`search_index`** / **`run_index`** calls on the same **`CompiledSearch`** reuse the compiled regex matcher (`matcher`) and, for the same line-number / max-matches settings, the line **`Searcher`** (`searcher_cache`).
+| Module | Description |
+|--------|-------------|
+| [`index/`](src/index/) | Corpus walker, trigram extraction, index builder, and `Index` handle |
+| [`search/`](src/search/) | `CompiledSearch`, parallel file scanning, filtering, and output formatting |
+| [`storage/`](src/storage/) | On-disk binary format for files, lexicon, and postings tables |
+| [`planner.rs`](src/planner.rs) | Regex → trigram plan: literal extraction, arm decomposition, or full-scan fallback |
+| [`verify.rs`](src/verify.rs) | Pattern shaping (`-F`/`-w`/`-x`) and regex compilation |
+| [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
+| [`bin/sift_profile/`](src/bin/sift_profile/) | `sift-profile` binary for hot-loop benchmarking (feature-gated) |
 
-## Internals (high level)
+## API
 
-- **`planner`** — trigram plan: narrow candidates vs full scan.
-- **`query`** — posting intersections over mmap-friendly byte slices.
-- **`search`** — line scan, `-F` substring fast path, optional regex prefilter (`prefilter`), Rayon when candidate count and thread count justify it.
-- **`index`** — trigram extraction (`trigram`), `build_trigram_index`.
-- **`verify`** — pattern shaping (`-w`/`-x`/`-F`) and regex compilation.
+```rust
+use sift_core::{IndexBuilder, Index, CompiledSearch, SearchOptions};
+
+// Build
+IndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?;
+
+// Open
+let index = Index::open(&index_dir)?;
+
+// Search
+let search = CompiledSearch::new(&patterns, SearchOptions::default())?;
+let hits = search.collect_index_matches(&index)?;
+```
+
+`CompiledSearch` compiles the regex once; repeated `search_index` / `run_index` calls reuse the compiled matcher and searcher cache.
 
 ## Features
 
-- **`profile`** — enables `sift-profile` binary and `tempfile` for scripted benchmarks (`./scripts/profile.sh`).
+| Feature | Effect |
+|---------|--------|
+| `profile` | Enables `sift-profile` binary and `tempfile` dependency |
 
-## Dev
+## Testing
 
 ```bash
 cargo test -p sift-core
-cargo bench -p sift-core --bench search   # or ./scripts/bench.sh
+cargo bench -p sift-core --bench search
 ```
 
-See **`crates/core/benches/README.md`** for benchmark and profiling entry points.
+See [`benches/README.md`](benches/README.md) for the full benchmark and profiling workflow.

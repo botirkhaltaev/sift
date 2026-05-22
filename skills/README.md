@@ -1,33 +1,28 @@
-# Agent skills (skills.sh / `npx skills`)
+# Agent Skills
 
-Skills here follow the [Agent Skills](https://agentskills.io) shape: each skill is a directory with **`SKILL.md`** (YAML frontmatter + instructions). They install with the **[skills CLI](https://skills.sh)** (`npx skills`, open source: [vercel-labs/skills](https://github.com/vercel-labs/skills)).
+Installable agent skills following the [Agent Skills](https://agentskills.io) format. Each skill is a directory with `SKILL.md` (YAML frontmatter + instructions).
 
-## Install this skill
-
-From a clone of this repo (project install — symlinks or copies into your agent’s skills dir):
+## Install
 
 ```bash
+# From a clone of this repo
 npx skills add ./skills/sift-cli
-# or pick agents explicitly, e.g.:
+
+# Pick specific agents
 npx skills add ./skills/sift-cli -a cursor -a claude-code -y
-```
 
-After this repo is on GitHub, others can install from a path (branch name may be `main` or `master`):
-
-```bash
+# From GitHub
 npx skills add https://github.com/botirk38/sift/tree/master/skills/sift-cli
 ```
 
-Use your fork’s `org/repo` if it differs from the workspace `repository` URL in the root `Cargo.toml`.
+## Available Skills
 
-List skills in the repo without installing:
+| Directory | Description |
+|-----------|-------------|
+| [`sift-cli/`](sift-cli/) | Work on the `sift` CLI — flags, tests, integration |
+
+## Listing
 
 ```bash
 npx skills add ./skills --list
 ```
-
-## Skills
-
-| Directory | Purpose |
-|-----------|---------|
-| [`sift-cli/`](sift-cli/) | Work on the **`sift`** CLI (`crates/cli`), flags, tests |

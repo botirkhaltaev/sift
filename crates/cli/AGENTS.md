@@ -1,21 +1,29 @@
-# Agent notes (sift-cli)
+# AGENTS.md — sift-cli
 
-Installable agent skill ([skills.sh](https://skills.sh) / `npx skills`): [`skills/sift-cli/SKILL.md`](../../skills/sift-cli/SKILL.md).
+## Responsibility
+
+Thin CLI binary over `sift-core`. Parses flags with clap, maps them to `SearchOptions`/`SearchMatchFlags`, and dispatches to core.
 
 ## Structure
 
-- **`src/main.rs`** — single binary: `Cli` (clap `Parser`), subcommand `build`, default search mode when no subcommand.
-- **`tests/integration_*.rs`** — domain-focused integration tests that spawn the real `sift` binary.
+- **`src/main.rs`** — `Cli` (clap Parser), `build` subcommand, search mode dispatch.
+- **`tests/integration_*.rs`** — domain-focused integration tests spawning the real `sift` binary.
 
-## Behavior notes
+## Behavior Notes
 
 - Global options (e.g. `--index`) must appear **before** `build` when indexing.
-- Search paths are resolved and must sit under the corpus root recorded in the index metadata (see main error messages in `main.rs`).
-- Prefer extending flags by threading new `SearchMatchFlags` / `SearchOptions` fields through to `CompiledSearch::new` in core rather than duplicating regex logic here.
+- Search paths are resolved and must sit under the corpus root in the index metadata.
+- Extend flags by threading new `SearchMatchFlags`/`SearchOptions` fields through to `CompiledSearch::new` in core — do not duplicate regex logic here.
 
-## Commands
+## Testing
 
 ```bash
 cargo test -p sift-cli
 cargo build --release -p sift-cli
 ```
+
+## Do NOT
+
+- Duplicate regex or search logic from `sift-core`.
+- Add heavy dependencies — this crate should stay thin.
+- Change flag semantics without updating integration tests.

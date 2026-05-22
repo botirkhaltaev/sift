@@ -1,56 +1,37 @@
 # Benchsuite
 
-Adapted from the ripgrep benchsuite. Benchmarks `sift` against `ripgrep` on
-real-world code-search workloads.
+Comparative benchmarks: `sift` vs `ripgrep` on real-world code-search workloads. Adapted from the ripgrep benchsuite.
 
 ## Prerequisites
 
-- `ripgrep` (`rg`) in PATH
-- `sift` binary at `../target/release/sift` (or set `--sift-binary`)
-- Corpus downloads require `git`, `curl`, `gunzip`
+- `rg` (ripgrep) in `PATH`
+- `sift` binary at `../target/release/sift` (or `--sift-binary`)
+- `git`, `curl`, `gunzip` for corpus downloads
 
-## Download corpora
+## Usage
 
 ```bash
-# Linux kernel (~1 GB clone + build artifacts)
-python3 benchsuite/benchsuite --download linux
-
-# English OpenSubtitles sample (~500 MB)
-python3 benchsuite/benchsuite --download subtitles-en
-
-# Russian OpenSubtitles (~1 GB)
-python3 benchsuite/benchsuite --download subtitles-ru
-
-# All three
+# Download corpora
+python3 benchsuite/benchsuite --download linux        # ~1 GB
+python3 benchsuite/benchsuite --download subtitles-en  # ~500 MB
 python3 benchsuite/benchsuite --download all
-```
 
-## Run benchmarks
-
-```bash
-# List all benchmarks
-python3 benchsuite/benchsuite --list
-
-# Run all benchmarks with default settings (1 warmup, 3 iterations)
+# Run benchmarks
 python3 benchsuite/benchsuite --dir /tmp/benchsuite
+python3 benchsuite/benchsuite --dir /tmp/benchsuite linux_literal  # specific family
 
-# Run a specific benchmark family
-python3 benchsuite/benchsuite --dir /tmp/benchsuite linux_literal
-
-# More warmup/iteration runs
+# More iterations
 python3 benchsuite/benchsuite --dir /tmp/benchsuite --warmup-iter 3 --bench-iter 5
 
-# Save raw CSV results
+# Raw CSV output
 python3 benchsuite/benchsuite --dir /tmp/benchsuite --raw /tmp/results.csv
 ```
 
-## How indexing works
+## Indexing
 
-`sift` requires a per-corpus index. The benchsuite builds each index once on first
-use (Linux kernel → `linux/.sift/`, subtitles → `subtitles/.sift/`). The index
-is cached — subsequent benchmarks on the same corpus reuse it without rebuilding.
+`sift` requires a per-corpus trigram index. The benchsuite builds each index once on first use and caches it for subsequent runs.
 
-## Custom sift binary
+## Custom Binary
 
 ```bash
 python3 benchsuite/benchsuite --sift-binary /path/to/sift --dir /tmp/benchsuite
