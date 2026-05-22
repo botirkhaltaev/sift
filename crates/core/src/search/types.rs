@@ -36,6 +36,18 @@ bitflags::bitflags! {
     }
 }
 
+/// Binary file handling mode (ripgrep's `-a`/`--text` and `--binary`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BinaryMode {
+    /// Quit searching a file when a NUL byte is found (default).
+    #[default]
+    Quit,
+    /// Continue searching binary files but convert NUL bytes (`--binary`).
+    SearchBinary,
+    /// Treat binary files as text; no NUL detection at all (`-a`/`--text`).
+    AsText,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SearchOptions {
     pub flags: SearchMatchFlags,
@@ -45,6 +57,8 @@ pub struct SearchOptions {
     pub before_context: usize,
     /// Lines of context after each match (`-A` / trailing part of `-C`).
     pub after_context: usize,
+    /// How to handle binary files.
+    pub binary_mode: BinaryMode,
 }
 
 impl SearchOptions {

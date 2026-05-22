@@ -5,11 +5,11 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Args, Command, FromArgMatches, Parser, Subcommand, value_parser};
 use sift_core::{
-    CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission, PathDisplay,
-    SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
-    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
-    VisibilityConfig,
+    BinaryMode, CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode,
+    GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission,
+    PathDisplay, SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode,
+    SearchOptions, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators,
+    SearchStats, TypeDef, VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -62,6 +62,8 @@ struct Cli {
     separator_decl: SeparatorDecl,
     #[command(flatten)]
     filter_decl: FilterDecl,
+    #[command(flatten)]
+    binary_decl: BinaryDecl,
 }
 
 #[derive(Args)]
@@ -153,6 +155,16 @@ struct IgnoreGitDecl {
 struct UnrestrictedDecl {
     #[arg(short = 'u', long = "unrestricted", action = ArgAction::Count)]
     _unrestricted: u8,
+}
+
+#[derive(Args)]
+struct BinaryDecl {
+    /// Search binary files as if they were text.
+    #[arg(short = 'a', long = "text")]
+    text: bool,
+    /// Search binary files; NUL bytes are converted, matches after NUL are shown.
+    #[arg(long = "binary")]
+    binary: bool,
 }
 
 #[derive(Args)]
@@ -1374,7 +1386,7 @@ impl Cli {
             .filter_decl
             .max_filesize
             .as_ref()
-            .map(|s| parse_filesize(s))
+            .map(|s| parse_size_suffix(s))
             .transpose()?;
 
         let mut glob_patterns = self.glob_flags.glob.clone();
@@ -1410,6 +1422,16 @@ impl Cli {
         })
     }
 
+    const fn resolve_binary_mode(&self) -> BinaryMode {
+        if self.binary_decl.text {
+            BinaryMode::AsText
+        } else if self.binary_decl.binary {
+            BinaryMode::SearchBinary
+        } else {
+            BinaryMode::Quit
+        }
+    }
+
     fn build_search_opts(&self, args: &[String], only_matching: bool) -> SearchOptions {
         let (before_context, after_context) = resolve_context_from_args(args);
         let mut opts = self.search_flags.to_options();
@@ -1429,6 +1451,7 @@ impl Cli {
             opts.before_context = before_context;
             opts.after_context = after_context;
         }
+        opts.binary_mode = self.resolve_binary_mode();
         opts
     }
 
