@@ -437,3 +437,216 @@ fn count_matches_multi_line() {
     assert_eq!(lines_c.len(), 1);
     assert_eq!(lines_c, &[rel_match("a.txt", "2")]);
 }
+
+// ── PR1 tests: --column, --vimgrep, --pretty, --no-line-number, --version ──
+
+#[test]
+fn column_shows_1_based_byte_offset() {
+    let root = fresh_dir("output-column");
+    fs::write(root.join("a.txt"), "hello world\n").unwrap();
+    let idx = root.join(".sift");
+    BuildIndexOptions::default().run(None, &idx, &root);
+
+    let out = command(None)
+        .arg("--sift-dir")
+        .arg(&idx)
+        .arg("--column")
+        .arg("-n")
+        .arg("world")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert_eq!(stdout.trim(), "a.txt:1:7:hello world");
+}
+
+#[test]
+fn column_walk_mode() {
+    let root = fresh_dir("output-column-walk");
+    fs::write(root.join("a.txt"), "hello world\n").unwrap();
+    let missing_idx = fresh_dir("column-walk-idx").join(".sift");
+
+    let out = command(Some(&root))
+        .arg("--sift-dir")
+        .arg(&missing_idx)
+        .arg("--column")
+        .arg("-n")
+        .arg("world")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert_eq!(stdout.trim(), "a.txt:1:7:hello world");
+}
+
+#[test]
+fn column_only_matching() {
+    let root = fresh_dir("output-column-om");
+    fs::write(root.join("a.txt"), "aXbXc\n").unwrap();
+    let idx = root.join(".sift");
+    BuildIndexOptions::default().run(None, &idx, &root);
+
+    let out = command(None)
+        .arg("--sift-dir")
+        .arg(&idx)
+        .arg("--column")
+        .arg("-o")
+        .arg("-n")
+        .arg("X")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let lines: Vec<_> = normalized_stdout(&out)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "a.txt:1:2:X");
+    assert_eq!(lines[1], "a.txt:1:4:X");
+}
+
+#[test]
+fn vimgrep_implies_line_and_column() {
+    let root = fresh_dir("output-vimgrep");
+    fs::write(root.join("a.txt"), "hello world\n").unwrap();
+    let idx = root.join(".sift");
+    BuildIndexOptions::default().run(None, &idx, &root);
+
+    let out = command(None)
+        .arg("--sift-dir")
+        .arg(&idx)
+        .arg("--vimgrep")
+        .arg("world")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert_eq!(stdout.trim(), "a.txt:1:7:hello world");
+}
+
+#[test]
+fn vimgrep_walk_mode() {
+    let root = fresh_dir("output-vimgrep-walk");
+    fs::write(root.join("a.txt"), "hello world\n").unwrap();
+    let missing_idx = fresh_dir("vimgrep-walk-idx").join(".sift");
+
+    let out = command(Some(&root))
+        .arg("--sift-dir")
+        .arg(&missing_idx)
+        .arg("--vimgrep")
+        .arg("world")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert_eq!(stdout.trim(), "a.txt:1:7:hello world");
+}
+
+#[test]
+fn no_line_number_suppresses_line_numbers() {
+    let root = fresh_dir("output-no-line");
+    fs::write(root.join("a.txt"), "hello\nworld\n").unwrap();
+    let idx = root.join(".sift");
+    BuildIndexOptions::default().run(None, &idx, &root);
+
+    let out = command(None)
+        .arg("--sift-dir")
+        .arg(&idx)
+        .arg("-n")
+        .arg("-N")
+        .arg("hello")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert_eq!(stdout.trim(), "a.txt:hello");
+}
+
+#[test]
+fn no_line_number_long_form() {
+    let root = fresh_dir("output-no-line-long");
+    fs::write(root.join("a.txt"), "hello\n").unwrap();
+    let idx = root.join(".sift");
+    BuildIndexOptions::default().run(None, &idx, &root);
+
+    let out = command(None)
+        .arg("--sift-dir")
+        .arg(&idx)
+        .arg("--line-number")
+        .arg("--no-line-number")
+        .arg("hello")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert_eq!(stdout.trim(), "a.txt:hello");
+}
+
+#[test]
+fn pretty_enables_heading_and_line_numbers() {
+    let root = fresh_dir("output-pretty");
+    fs::write(root.join("a.txt"), "hello\n").unwrap();
+    let idx = root.join(".sift");
+    BuildIndexOptions::default().run(None, &idx, &root);
+
+    let out = command(None)
+        .arg("--sift-dir")
+        .arg(&idx)
+        .arg("-p")
+        .arg("--color")
+        .arg("never")
+        .arg("hello")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "expected heading + match, got: {lines:?}");
+    assert_eq!(lines[0], "a.txt");
+    assert_eq!(lines[1], "1:hello");
+}
+
+#[test]
+fn pretty_walk_mode() {
+    let root = fresh_dir("output-pretty-walk");
+    fs::write(root.join("a.txt"), "hello\n").unwrap();
+    let missing_idx = fresh_dir("pretty-walk-idx").join(".sift");
+
+    let out = command(Some(&root))
+        .arg("--sift-dir")
+        .arg(&missing_idx)
+        .arg("-p")
+        .arg("--color")
+        .arg("never")
+        .arg("hello")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "expected heading + match, got: {lines:?}");
+    assert_eq!(lines[0], "a.txt");
+    assert_eq!(lines[1], "1:hello");
+}
+
+#[test]
+fn version_flag_prints_version() {
+    let out = command(None).arg("--version").output().unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert!(
+        stdout.contains("sift-cli"),
+        "expected version string, got: {stdout}"
+    );
+}
+
+#[test]
+fn version_short_flag() {
+    let out = command(None).arg("-V").output().unwrap();
+    assert_success(&out);
+    let stdout = normalized_stdout(&out);
+    assert!(
+        stdout.contains("sift-cli"),
+        "expected version string, got: {stdout}"
+    );
+}

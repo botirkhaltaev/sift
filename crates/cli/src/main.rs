@@ -12,6 +12,7 @@ use sift_core::{
 };
 
 #[derive(Parser)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -25,13 +26,15 @@ struct Cli {
     #[command(flatten)]
     regex2: RegexFlagsB,
     #[command(flatten)]
-    out1: OutputFlagsA,
+    line_number_decl: LineNumberDecl,
     #[command(flatten)]
     search_flags: SearchFlags,
     #[command(flatten)]
-    out3: OutputFlagsC,
+    filename_decl: FilenameDecl,
     #[command(flatten)]
-    out4: OutputFlagsD,
+    heading_decl: HeadingDecl,
+    #[command(flatten)]
+    column_decl: ColumnDecl,
     #[command(flatten)]
     glob_flags: GlobFlags,
     #[command(flatten)]
@@ -163,13 +166,15 @@ struct RegexFlagsB {
 }
 
 #[derive(Args)]
-struct OutputFlagsA {
+struct LineNumberDecl {
     #[arg(short = 'n', long = "line-number")]
     line_number: bool,
+    #[arg(short = 'N', long = "no-line-number")]
+    no_line_number: bool,
 }
 
 #[derive(Args)]
-struct OutputFlagsC {
+struct FilenameDecl {
     #[arg(short = 'I', long = "no-filename")]
     no_filename: bool,
     #[arg(short = 'H', long = "with-filename")]
@@ -177,11 +182,21 @@ struct OutputFlagsC {
 }
 
 #[derive(Args)]
-struct OutputFlagsD {
+struct HeadingDecl {
     #[arg(long = "heading")]
     heading: bool,
     #[arg(long = "no-heading")]
     no_heading: bool,
+}
+
+#[derive(Args)]
+struct ColumnDecl {
+    #[arg(long = "column")]
+    column: bool,
+    #[arg(long = "vimgrep")]
+    vimgrep: bool,
+    #[arg(short = 'p', long = "pretty")]
+    pretty: bool,
 }
 
 fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
@@ -441,6 +456,36 @@ fn resolve_heading_from_args(args: &[String]) -> bool {
                 last_idx = i;
                 result = value;
             }
+        }
+    }
+    result
+}
+
+fn resolve_line_number_from_args(args: &[String]) -> Option<bool> {
+    let mut last_idx = 0usize;
+    let mut result = None;
+    for (i, arg) in args.iter().enumerate() {
+        let bytes = arg.as_bytes();
+        let value = if bytes.len() == 2 && bytes[0] == b'-' {
+            match bytes.get(1) {
+                Some(&b'n') => Some(true),
+                Some(&b'N') => Some(false),
+                _ => None,
+            }
+        } else if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
+            match &bytes[2..] {
+                b"line-number" => Some(true),
+                b"no-line-number" => Some(false),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(value) = value
+            && i > last_idx
+        {
+            last_idx = i;
+            result = Some(value);
         }
     }
     result
@@ -979,6 +1024,8 @@ struct SearchLineResolveCtx {
     heading: bool,
     with_filename: Option<bool>,
     is_path_mode: bool,
+    column: bool,
+    line_number: Option<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -1016,31 +1063,6 @@ impl SearchFilterCtx {
     }
 }
 
-fn build_search_filter_config(
-    cli: &Cli,
-    filter: SearchFilterCtx,
-    scopes: Vec<PathBuf>,
-    exclude_paths: Vec<PathBuf>,
-) -> SearchFilterConfig {
-    SearchFilterConfig {
-        scopes,
-        exclude_paths,
-        glob: GlobConfig {
-            patterns: cli.glob_flags.glob.clone(),
-            case_insensitive: filter.glob_case_insensitive,
-        },
-        visibility: VisibilityConfig {
-            hidden: filter.hidden_mode(),
-            ignore: IgnoreConfig {
-                sources: filter.ignore_sources,
-                custom_files: Vec::new(),
-                require_git: filter.require_git,
-            },
-        },
-        follow_links: cli.paths.follow,
-    }
-}
-
 fn write_search_stats(stats: &SearchStats) {
     eprintln!("{} matches", stats.matches);
     eprintln!("{} files contained matches", stats.files_with_matches);
@@ -1050,198 +1072,290 @@ fn write_search_stats(stats: &SearchStats) {
     eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
 }
 
-fn run_search_with_index(
-    cli: &Cli,
-    query: &CompiledSearch,
-    index: &Index,
-    cwd: &Path,
-    out: SearchOutputCtx,
-    filter: SearchFilterCtx,
-    print_stats: bool,
-) -> anyhow::Result<bool> {
-    let prefixes = corpus_path_prefixes(&index.root, cwd, &cli.search_scope.paths)?;
-    let exclude_paths = excluded_search_paths(&index.root, &cli.paths.sift_dir);
-    let corpus_is_single_file = matches!(index.corpus_kind, sift_core::CorpusKind::File { .. });
-    let filename_mode = effective_filename_mode(
-        out.lines.with_filename,
-        out.lines.is_path_mode,
-        corpus_is_single_file,
-    );
-    let path_display = effective_path_display(&cli.search_scope.paths);
-    let output = search_output(
-        out.output_format,
-        out.mode.effective_mode,
-        out.mode.quiet,
-        SearchLineStyle {
-            filename_mode,
-            heading: out.lines.heading,
-            line_number: cli.out1.line_number
-                || matches!(out.output_format, SearchOutputFormat::Json),
-            path_display,
-        },
-        SearchRecordStyle {
-            null_data: out.format.null_data,
-            color: out.format.color,
-        },
-    );
-    let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
-    let search_filter = SearchFilter::new(&filter_config, &index.root)?;
-    if print_stats {
-        let mut stats = SearchStats::default();
-        let ok = query.run_index_with_stats(index, &search_filter, output, &mut stats)?;
-        write_search_stats(&stats);
-        return Ok(ok);
+/// Resolve effective `line_number` from `-n`/`-N`/`--pretty`/`--vimgrep` + JSON override.
+const fn resolve_effective_line_number(
+    clap_line_number: bool,
+    line_number_override: Option<bool>,
+    output_format: SearchOutputFormat,
+) -> bool {
+    if matches!(output_format, SearchOutputFormat::Json) {
+        return true;
     }
-    query
-        .run_index(index, &search_filter, output)
-        .map_err(Into::into)
+    match line_number_override {
+        Some(val) => val,
+        None => clap_line_number,
+    }
 }
 
-fn run_search_walk(
-    cli: &Cli,
-    query: &CompiledSearch,
-    filter_root: &Path,
-    out: SearchOutputCtx,
-    filter: SearchFilterCtx,
-    print_stats: bool,
-) -> anyhow::Result<bool> {
-    let prefixes = walk_path_prefixes(filter_root, &cli.search_scope.paths)?;
-    let exclude_paths = excluded_search_paths(filter_root, &cli.paths.sift_dir);
-    let filename_mode =
-        effective_filename_mode(out.lines.with_filename, out.lines.is_path_mode, false);
-    let path_display = effective_path_display(&cli.search_scope.paths);
-    let output = search_output(
-        out.output_format,
-        out.mode.effective_mode,
-        out.mode.quiet,
-        SearchLineStyle {
-            filename_mode,
-            heading: out.lines.heading,
-            line_number: cli.out1.line_number
-                || matches!(out.output_format, SearchOutputFormat::Json),
-            path_display,
-        },
-        SearchRecordStyle {
-            null_data: out.format.null_data,
-            color: out.format.color,
-        },
-    );
-    let filter_config = build_search_filter_config(cli, filter, prefixes, exclude_paths);
-    let search_filter = SearchFilter::new(&filter_config, filter_root)?;
-    if print_stats {
-        let mut stats = SearchStats::default();
-        let ok = query.run_walk_with_stats(filter_root, &search_filter, output, &mut stats)?;
-        write_search_stats(&stats);
-        return Ok(ok);
-    }
-    query
-        .run_walk(filter_root, &search_filter, output)
-        .map_err(Into::into)
-}
-
-fn run_search(cli: &Cli) -> anyhow::Result<bool> {
-    let patterns = resolve_patterns(
-        &cli.patterns.regexp,
-        cli.patterns.pattern_file.as_deref(),
-        cli.patterns.pattern.as_deref(),
-    )?;
-
-    let args: Vec<String> = std::env::args().collect();
-    let invert_match = resolve_invert_match_from_args(&args);
-    let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
-    let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
-    let (before_context, after_context) = resolve_context_from_args(&args);
-    let null_data = resolve_null_from_args(&args);
-    let color = resolve_color_from_args(&args);
-    let heading = resolve_heading_from_args(&args);
-    let with_filename = resolve_with_filename_from_args(&args);
-
-    let (mode, only_matching, quiet) = resolve_output_mode(&args, invert_match);
-
-    let mut opts = cli.search_flags.to_options();
-    opts.max_results = cli.paths.max_count;
-    if cli.regex1.invert_match {
-        opts.flags |= SearchMatchFlags::INVERT_MATCH;
-    }
-    if cli.regex1.word_regexp {
-        opts.flags |= SearchMatchFlags::WORD_REGEXP;
-    }
-    if cli.regex2.line_regexp {
-        opts.flags |= SearchMatchFlags::LINE_REGEXP;
-    }
-    if only_matching {
-        opts.flags |= SearchMatchFlags::ONLY_MATCHING;
-    }
-    opts.before_context = before_context;
-    opts.after_context = after_context;
-    if only_matching {
-        opts.before_context = 0;
-        opts.after_context = 0;
-    }
-
-    let effective_mode = if only_matching {
-        SearchMode::OnlyMatching
-    } else {
-        mode
-    };
-
-    let use_json = resolve_json_from_args(&args);
-    if use_json {
-        match effective_mode {
-            SearchMode::Count
-            | SearchMode::CountMatches
-            | SearchMode::FilesWithMatches
-            | SearchMode::FilesWithoutMatch => {
-                anyhow::bail!(
-                    "sift: --json cannot be used with --count, --count-matches, --files-with-matches, or --files-without-match"
-                );
-            }
-            SearchMode::Standard | SearchMode::OnlyMatching => {}
+impl Cli {
+    fn build_filter_config(
+        &self,
+        filter: SearchFilterCtx,
+        scopes: Vec<PathBuf>,
+        exclude_paths: Vec<PathBuf>,
+    ) -> SearchFilterConfig {
+        SearchFilterConfig {
+            scopes,
+            exclude_paths,
+            glob: GlobConfig {
+                patterns: self.glob_flags.glob.clone(),
+                case_insensitive: filter.glob_case_insensitive,
+            },
+            visibility: VisibilityConfig {
+                hidden: filter.hidden_mode(),
+                ignore: IgnoreConfig {
+                    sources: filter.ignore_sources,
+                    custom_files: Vec::new(),
+                    require_git: filter.require_git,
+                },
+            },
+            follow_links: self.paths.follow,
         }
     }
-    let print_stats = resolve_stats_from_args(&args) || use_json;
 
-    let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let cwd = std::env::current_dir()?;
-
-    let is_path_mode = matches!(
-        effective_mode,
-        SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
-    );
-
-    let out = SearchOutputCtx {
-        mode: SearchModeCtx {
-            effective_mode,
-            quiet,
-        },
-        lines: SearchLineResolveCtx {
-            heading,
-            with_filename,
-            is_path_mode,
-        },
-        format: SearchFormatCtx { null_data, color },
-        output_format: if use_json {
-            SearchOutputFormat::Json
+    fn build_search_opts(&self, args: &[String], only_matching: bool) -> SearchOptions {
+        let (before_context, after_context) = resolve_context_from_args(args);
+        let mut opts = self.search_flags.to_options();
+        opts.max_results = self.paths.max_count;
+        if self.regex1.invert_match {
+            opts.flags |= SearchMatchFlags::INVERT_MATCH;
+        }
+        if self.regex1.word_regexp {
+            opts.flags |= SearchMatchFlags::WORD_REGEXP;
+        }
+        if self.regex2.line_regexp {
+            opts.flags |= SearchMatchFlags::LINE_REGEXP;
+        }
+        if only_matching {
+            opts.flags |= SearchMatchFlags::ONLY_MATCHING;
         } else {
-            SearchOutputFormat::Text
-        },
-    };
-    let filter = SearchFilterCtx {
-        hidden,
-        ignore_sources,
-        require_git,
-        glob_case_insensitive,
-    };
-
-    match Index::open(&cli.paths.sift_dir) {
-        Ok(index) => run_search_with_index(cli, &query, &index, &cwd, out, filter, print_stats),
-        Err(
-            SiftError::MissingMeta(_) | SiftError::MissingComponent(_) | SiftError::InvalidMeta(_),
-        ) => {
-            let filter_root = cwd.canonicalize().map_err(|e| anyhow::anyhow!("{e}"))?;
-            run_search_walk(cli, &query, &filter_root, out, filter, print_stats)
+            opts.before_context = before_context;
+            opts.after_context = after_context;
         }
-        Err(e) => Err(anyhow::anyhow!("{e}")),
+        opts
+    }
+
+    fn build_output_and_filter(
+        &self,
+        args: &[String],
+        effective_mode: SearchMode,
+        quiet: bool,
+        line_number_override: Option<bool>,
+    ) -> (SearchOutputCtx, SearchFilterCtx, bool) {
+        let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
+        let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(args);
+        let null_data = resolve_null_from_args(args);
+        let color = resolve_color_from_args(args);
+        let heading = resolve_heading_from_args(args);
+        let with_filename = resolve_with_filename_from_args(args);
+        let use_json = resolve_json_from_args(args);
+        let print_stats = resolve_stats_from_args(args) || use_json;
+
+        let pretty = self.column_decl.pretty;
+        let vimgrep = self.column_decl.vimgrep;
+        let column = self.column_decl.column || vimgrep;
+
+        let is_path_mode = matches!(
+            effective_mode,
+            SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
+        );
+        let effective_heading = heading || pretty;
+        let effective_color = if pretty && color == ColorChoice::Auto {
+            ColorChoice::Always
+        } else {
+            color
+        };
+
+        let out = SearchOutputCtx {
+            mode: SearchModeCtx {
+                effective_mode,
+                quiet,
+            },
+            lines: SearchLineResolveCtx {
+                heading: effective_heading,
+                with_filename,
+                is_path_mode,
+                column,
+                line_number: line_number_override,
+            },
+            format: SearchFormatCtx {
+                null_data,
+                color: effective_color,
+            },
+            output_format: if use_json {
+                SearchOutputFormat::Json
+            } else {
+                SearchOutputFormat::Text
+            },
+        };
+        let filter = SearchFilterCtx {
+            hidden,
+            ignore_sources,
+            require_git,
+            glob_case_insensitive,
+        };
+        (out, filter, print_stats)
+    }
+
+    fn run_search_with_index(
+        &self,
+        query: &CompiledSearch,
+        index: &Index,
+        cwd: &Path,
+        out: SearchOutputCtx,
+        filter: SearchFilterCtx,
+        print_stats: bool,
+    ) -> anyhow::Result<bool> {
+        let prefixes = corpus_path_prefixes(&index.root, cwd, &self.search_scope.paths)?;
+        let exclude_paths = excluded_search_paths(&index.root, &self.paths.sift_dir);
+        let corpus_is_single_file = matches!(index.corpus_kind, sift_core::CorpusKind::File { .. });
+        let filename_mode = effective_filename_mode(
+            out.lines.with_filename,
+            out.lines.is_path_mode,
+            corpus_is_single_file,
+        );
+        let path_display = effective_path_display(&self.search_scope.paths);
+        let line_number = resolve_effective_line_number(
+            self.line_number_decl.line_number,
+            out.lines.line_number,
+            out.output_format,
+        );
+        let output = search_output(
+            out.output_format,
+            out.mode.effective_mode,
+            out.mode.quiet,
+            SearchLineStyle {
+                filename_mode,
+                heading: out.lines.heading,
+                line_number,
+                column: out.lines.column,
+                path_display,
+            },
+            SearchRecordStyle {
+                null_data: out.format.null_data,
+                color: out.format.color,
+            },
+        );
+        let filter_config = self.build_filter_config(filter, prefixes, exclude_paths);
+        let search_filter = SearchFilter::new(&filter_config, &index.root)?;
+        if print_stats {
+            let mut stats = SearchStats::default();
+            let ok = query.run_index_with_stats(index, &search_filter, output, &mut stats)?;
+            write_search_stats(&stats);
+            return Ok(ok);
+        }
+        query
+            .run_index(index, &search_filter, output)
+            .map_err(Into::into)
+    }
+
+    fn run_search_walk(
+        &self,
+        query: &CompiledSearch,
+        filter_root: &Path,
+        out: SearchOutputCtx,
+        filter: SearchFilterCtx,
+        print_stats: bool,
+    ) -> anyhow::Result<bool> {
+        let prefixes = walk_path_prefixes(filter_root, &self.search_scope.paths)?;
+        let exclude_paths = excluded_search_paths(filter_root, &self.paths.sift_dir);
+        let filename_mode =
+            effective_filename_mode(out.lines.with_filename, out.lines.is_path_mode, false);
+        let path_display = effective_path_display(&self.search_scope.paths);
+        let line_number = resolve_effective_line_number(
+            self.line_number_decl.line_number,
+            out.lines.line_number,
+            out.output_format,
+        );
+        let output = search_output(
+            out.output_format,
+            out.mode.effective_mode,
+            out.mode.quiet,
+            SearchLineStyle {
+                filename_mode,
+                heading: out.lines.heading,
+                line_number,
+                column: out.lines.column,
+                path_display,
+            },
+            SearchRecordStyle {
+                null_data: out.format.null_data,
+                color: out.format.color,
+            },
+        );
+        let filter_config = self.build_filter_config(filter, prefixes, exclude_paths);
+        let search_filter = SearchFilter::new(&filter_config, filter_root)?;
+        if print_stats {
+            let mut stats = SearchStats::default();
+            let ok = query.run_walk_with_stats(filter_root, &search_filter, output, &mut stats)?;
+            write_search_stats(&stats);
+            return Ok(ok);
+        }
+        query
+            .run_walk(filter_root, &search_filter, output)
+            .map_err(Into::into)
+    }
+
+    fn run_search(&self) -> anyhow::Result<bool> {
+        let patterns = resolve_patterns(
+            &self.patterns.regexp,
+            self.patterns.pattern_file.as_deref(),
+            self.patterns.pattern.as_deref(),
+        )?;
+
+        let args: Vec<String> = std::env::args().collect();
+        let invert_match = resolve_invert_match_from_args(&args);
+        let (mode, only_matching, quiet) = resolve_output_mode(&args, invert_match);
+        let use_json = resolve_json_from_args(&args);
+
+        let pretty = self.column_decl.pretty;
+        let vimgrep = self.column_decl.vimgrep;
+
+        let line_number_override = if pretty || vimgrep {
+            Some(true)
+        } else {
+            resolve_line_number_from_args(&args)
+        };
+
+        let effective_mode = if only_matching {
+            SearchMode::OnlyMatching
+        } else {
+            mode
+        };
+
+        if use_json {
+            match effective_mode {
+                SearchMode::Count
+                | SearchMode::CountMatches
+                | SearchMode::FilesWithMatches
+                | SearchMode::FilesWithoutMatch => {
+                    anyhow::bail!(
+                        "sift: --json cannot be used with --count, --count-matches, --files-with-matches, or --files-without-match"
+                    );
+                }
+                SearchMode::Standard | SearchMode::OnlyMatching => {}
+            }
+        }
+
+        let opts = self.build_search_opts(&args, only_matching);
+        let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let cwd = std::env::current_dir()?;
+
+        let (out, filter, print_stats) =
+            self.build_output_and_filter(&args, effective_mode, quiet, line_number_override);
+
+        match Index::open(&self.paths.sift_dir) {
+            Ok(index) => self.run_search_with_index(&query, &index, &cwd, out, filter, print_stats),
+            Err(
+                SiftError::MissingMeta(_)
+                | SiftError::MissingComponent(_)
+                | SiftError::InvalidMeta(_),
+            ) => {
+                let filter_root = cwd.canonicalize().map_err(|e| anyhow::anyhow!("{e}"))?;
+                self.run_search_walk(&query, &filter_root, out, filter, print_stats)
+            }
+            Err(e) => Err(anyhow::anyhow!("{e}")),
+        }
     }
 }
 
@@ -1269,7 +1383,7 @@ fn main() -> ExitCode {
         };
     }
 
-    match run_search(&cli) {
+    match cli.run_search() {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(e) => {
