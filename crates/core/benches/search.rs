@@ -42,7 +42,7 @@ use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
     IgnoreSources, Index, IndexBuilder, OutputEmission, PathDisplay, SearchFilter,
     SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, VisibilityConfig,
+    SearchOutputFormat, SearchRecordStyle, SearchSeparators, VisibilityConfig,
 };
 
 fn make_parity_corpus(root: &Path) {
@@ -212,6 +212,10 @@ const fn output_quiet(mode: SearchMode) -> SearchOutput {
     }
 }
 
+fn default_seps() -> SearchSeparators {
+    SearchSeparators::default()
+}
+
 // ─── Build benchmarks ────────────────────────────────────────────────────────
 
 fn bench_build_index(c: &mut Criterion) {
@@ -253,6 +257,7 @@ fn bench_literal_narrow(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -275,6 +280,7 @@ fn bench_literal_narrow_large(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -307,6 +313,7 @@ fn bench_literal_narrow_corpus_scale(c: &mut Criterion) {
                             black_box(&index),
                             &filter,
                             output_quiet(SearchMode::Standard),
+                            &default_seps(),
                         )
                         .unwrap(),
                 );
@@ -339,6 +346,7 @@ fn bench_word_literal(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -370,6 +378,7 @@ fn bench_line_literal(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -401,6 +410,7 @@ fn bench_fixed_string(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -432,6 +442,7 @@ fn bench_casei_literal(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -463,6 +474,7 @@ fn bench_smart_case_lower(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -494,6 +506,7 @@ fn bench_smart_case_upper(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -516,6 +529,7 @@ fn bench_required_literal(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -538,6 +552,7 @@ fn bench_unicode_class(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -560,6 +575,7 @@ fn bench_no_literal(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -582,6 +598,7 @@ fn bench_alternation(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -613,6 +630,7 @@ fn bench_alternation_casei(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -748,6 +766,7 @@ fn bench_glob_include(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -770,6 +789,7 @@ fn bench_glob_exclude(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -792,6 +812,7 @@ fn bench_glob_casei(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -814,6 +835,7 @@ fn bench_hidden_default(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -836,6 +858,7 @@ fn bench_hidden_include(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -858,6 +881,7 @@ fn bench_ignore_default(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -880,6 +904,7 @@ fn bench_ignore_custom(c: &mut Criterion) {
                         black_box(&index),
                         &filter,
                         output_quiet(SearchMode::Standard),
+                        &default_seps(),
                     )
                     .unwrap(),
             );
@@ -901,7 +926,11 @@ fn bench_scoped_search(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_scoped");
     g.bench_function("beta_subdir_filter_corpus", |b| {
         b.iter(|| {
-            black_box(query.run_index(black_box(&index), &filter, output).unwrap());
+            black_box(
+                query
+                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .unwrap(),
+            );
         });
     });
     g.finish();
@@ -922,7 +951,11 @@ fn bench_only_matching(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_only_matching");
     g.bench_function("beta_parity", |b| {
         b.iter(|| {
-            black_box(query.run_index(black_box(&index), &filter, output).unwrap());
+            black_box(
+                query
+                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .unwrap(),
+            );
         });
     });
     g.finish();
@@ -941,7 +974,11 @@ fn bench_count(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_count");
     g.bench_function("beta_parity", |b| {
         b.iter(|| {
-            black_box(query.run_index(black_box(&index), &filter, output).unwrap());
+            black_box(
+                query
+                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .unwrap(),
+            );
         });
     });
     g.finish();
@@ -960,7 +997,11 @@ fn bench_count_matches(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_count_matches");
     g.bench_function("beta_parity", |b| {
         b.iter(|| {
-            black_box(query.run_index(black_box(&index), &filter, output).unwrap());
+            black_box(
+                query
+                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .unwrap(),
+            );
         });
     });
     g.finish();
@@ -979,7 +1020,11 @@ fn bench_files_with_matches(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_files_with_matches");
     g.bench_function("beta_parity", |b| {
         b.iter(|| {
-            black_box(query.run_index(black_box(&index), &filter, output).unwrap());
+            black_box(
+                query
+                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .unwrap(),
+            );
         });
     });
     g.finish();
@@ -998,7 +1043,11 @@ fn bench_files_without_match(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_files_without_match");
     g.bench_function("beta_parity", |b| {
         b.iter(|| {
-            black_box(query.run_index(black_box(&index), &filter, output).unwrap());
+            black_box(
+                query
+                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .unwrap(),
+            );
         });
     });
     g.finish();
@@ -1023,7 +1072,7 @@ fn bench_max_count_1(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output_std())
+                    .run_index(black_box(&index), &filter, output_std(), &default_seps())
                     .unwrap(),
             );
         });

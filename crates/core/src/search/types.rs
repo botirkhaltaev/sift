@@ -204,6 +204,30 @@ impl Default for SearchOutput {
     }
 }
 
+/// Configurable field and context-break separators (ripgrep `--context-separator`,
+/// `--field-match-separator`, `--field-context-separator`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchSeparators {
+    /// Printed between non-contiguous context groups (`--context-separator`).
+    /// `None` suppresses the break line entirely (`--no-context-separator`).
+    /// `Some(vec![])` prints just a newline (`--context-separator ""`).
+    pub context_separator: Option<Vec<u8>>,
+    /// Delimiter between path/line/col and the matched line (`--field-match-separator`).
+    pub field_match_separator: Vec<u8>,
+    /// Delimiter between path/line/col and a context line (`--field-context-separator`).
+    pub field_context_separator: Vec<u8>,
+}
+
+impl Default for SearchSeparators {
+    fn default() -> Self {
+        Self {
+            context_separator: Some(b"--".to_vec()),
+            field_match_separator: b":".to_vec(),
+            field_context_separator: b"-".to_vec(),
+        }
+    }
+}
+
 /// Counters filled when running with [`CompiledSearch::run_index_with_stats`] /
 /// [`CompiledSearch::run_walk_with_stats`].
 ///

@@ -1,10 +1,14 @@
-//! Context lines (`-A` / `-B` / `-C`).
+//! Context lines (`-A` / `-B` / `-C`) and separator flags.
 
 mod common;
 
+use std::ffi::OsString;
 use std::fs;
 
-use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout};
+use common::{
+    BuildIndexOptions, assert_index_and_walk_output, assert_success, command, fresh_dir,
+    normalized_stdout,
+};
 
 #[test]
 fn context_c_shows_surrounding_lines() {
@@ -129,4 +133,216 @@ fn context_c_with_filename_uses_hyphen_separator() {
         "expected 't.txt-3-' prefix for context line, got: {}",
         lines[2]
     );
+}
+
+// ─── --context-separator ─────────────────────────────────────────────────────
+
+#[test]
+fn custom_context_separator_index_and_walk() {
+    let root = fresh_dir("ctx-sep-custom");
+    fs::write(
+        root.join("t.txt"),
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    )
+    .unwrap();
+
+    let args: Vec<OsString> = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "===",
+        "match",
+        "t.txt",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+
+    let expected = "t.txt:1:m1 match\nt.txt-2-filler\n===\nt.txt-5-filler\nt.txt:6:m2 match\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+#[test]
+fn no_context_separator_suppresses_break_line() {
+    let root = fresh_dir("ctx-sep-none");
+    fs::write(
+        root.join("t.txt"),
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    )
+    .unwrap();
+
+    let args: Vec<OsString> = ["-n", "-C", "1", "--no-context-separator", "match", "t.txt"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+
+    let expected = "t.txt:1:m1 match\nt.txt-2-filler\nt.txt-5-filler\nt.txt:6:m2 match\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+#[test]
+fn context_separator_empty_string_prints_blank_line() {
+    let root = fresh_dir("ctx-sep-empty");
+    fs::write(
+        root.join("t.txt"),
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    )
+    .unwrap();
+
+    let args: Vec<OsString> = ["-n", "-C", "1", "--context-separator", "", "match", "t.txt"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+
+    let expected = "t.txt:1:m1 match\nt.txt-2-filler\n\nt.txt-5-filler\nt.txt:6:m2 match\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+#[test]
+fn context_separator_with_escape_sequences() {
+    let root = fresh_dir("ctx-sep-escape");
+    fs::write(
+        root.join("t.txt"),
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    )
+    .unwrap();
+
+    let args: Vec<OsString> = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "---\\n---",
+        "match",
+        "t.txt",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+
+    let expected = "t.txt:1:m1 match\nt.txt-2-filler\n---\n---\nt.txt-5-filler\nt.txt:6:m2 match\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+// ─── --field-match-separator ─────────────────────────────────────────────────
+
+#[test]
+fn field_match_separator_index_and_walk() {
+    let root = fresh_dir("field-match-sep");
+    fs::write(root.join("t.txt"), "hello world\n").unwrap();
+
+    let args: Vec<OsString> = ["-n", "--field-match-separator", "=", "hello", "t.txt"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+
+    let expected = "t.txt=1=hello world\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+// ─── --field-context-separator ───────────────────────────────────────────────
+
+#[test]
+fn field_context_separator_index_and_walk() {
+    let root = fresh_dir("field-ctx-sep");
+    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\n").unwrap();
+
+    let args: Vec<OsString> = [
+        "-n",
+        "-C",
+        "1",
+        "--field-context-separator",
+        "~",
+        "match",
+        "t.txt",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+
+    let expected = "t.txt~1~alpha\nt.txt:2:beta match\nt.txt~3~gamma\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+#[test]
+fn field_match_and_context_separator_combined() {
+    let root = fresh_dir("field-both-sep");
+    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\n").unwrap();
+
+    let args: Vec<OsString> = [
+        "-n",
+        "-C",
+        "1",
+        "--field-match-separator",
+        "|",
+        "--field-context-separator",
+        "~",
+        "match",
+        "t.txt",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+
+    let expected = "t.txt~1~alpha\nt.txt|2|beta match\nt.txt~3~gamma\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+#[test]
+fn all_separator_flags_combined() {
+    let root = fresh_dir("all-sep-combined");
+    fs::write(
+        root.join("t.txt"),
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\ngamma\n",
+    )
+    .unwrap();
+
+    let args: Vec<OsString> = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "***",
+        "--field-match-separator",
+        "|",
+        "--field-context-separator",
+        "~",
+        "match",
+        "t.txt",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+
+    let expected =
+        "t.txt|1|m1 match\nt.txt~2~filler\n***\nt.txt~5~filler\nt.txt|6|m2 match\nt.txt~7~gamma\n";
+    assert_index_and_walk_output(&root, &args, expected);
+}
+
+#[test]
+fn no_context_separator_overrides_context_separator() {
+    let root = fresh_dir("ctx-sep-override");
+    fs::write(
+        root.join("t.txt"),
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    )
+    .unwrap();
+
+    let args: Vec<OsString> = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "===",
+        "--no-context-separator",
+        "match",
+        "t.txt",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+
+    let expected = "t.txt:1:m1 match\nt.txt-2-filler\nt.txt-5-filler\nt.txt:6:m2 match\n";
+    assert_index_and_walk_output(&root, &args, expected);
 }

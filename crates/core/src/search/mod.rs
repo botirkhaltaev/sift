@@ -13,5 +13,5 @@ pub use filter::{
 pub use types::{
     CaseMode, ColorChoice, CompiledSearch, FilenameMode, Match, OutputEmission, PathDisplay,
     SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
-    SearchRecordStyle, SearchStats,
+    SearchRecordStyle, SearchSeparators, SearchStats,
 };
