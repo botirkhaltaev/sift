@@ -103,3 +103,112 @@ pub enum Commands {
         path: PathBuf,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::path::Path;
+
+    #[test]
+    fn cli_parses_positional_pattern() {
+        let cli = Cli::try_parse_from(["sift", "pattern"]).unwrap();
+        assert_eq!(cli.patterns.pattern.as_deref(), Some("pattern"));
+    }
+
+    #[test]
+    fn cli_parses_regexp_flag() {
+        let cli = Cli::try_parse_from(["sift", "-e", "pattern"]).unwrap();
+        assert_eq!(cli.patterns.regexp, vec!["pattern"]);
+    }
+
+    #[test]
+    fn cli_parses_multiple_regexp_flags() {
+        let cli = Cli::try_parse_from(["sift", "-e", "foo", "-e", "bar"]).unwrap();
+        assert_eq!(cli.patterns.regexp, vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn cli_parses_build_subcommand() {
+        let cli = Cli::try_parse_from(["sift", "build"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Build { .. })));
+    }
+
+    #[test]
+    fn cli_parses_build_subcommand_with_path() {
+        let cli = Cli::try_parse_from(["sift", "build", "/tmp"]).unwrap();
+        match cli.command {
+            Some(Commands::Build { path }) => {
+                assert_eq!(path, PathBuf::from("/tmp"));
+            }
+            _ => panic!("expected Build subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_no_search_scope() {
+        let cli = Cli::try_parse_from(["sift", "pattern"]).unwrap();
+        assert!(cli.search_scope.paths.is_empty());
+    }
+
+    #[test]
+    fn cli_parses_search_scope() {
+        let cli = Cli::try_parse_from(["sift", "pattern", "src/"]).unwrap();
+        assert_eq!(cli.search_scope.paths, vec![PathBuf::from("src/")]);
+    }
+
+    #[test]
+    fn cli_parses_multiple_paths() {
+        let cli = Cli::try_parse_from(["sift", "pattern", "src/", "tests/"]).unwrap();
+        assert_eq!(
+            cli.search_scope.paths,
+            vec![PathBuf::from("src/"), PathBuf::from("tests/")]
+        );
+    }
+
+    #[test]
+    fn cli_parses_version_flag() {
+        let result = Cli::try_parse_from(["sift", "--version"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_rejects_unknown_flags() {
+        let result = Cli::try_parse_from(["sift", "--nonexistent-flag"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_pattern_and_search_scope() {
+        let cli = Cli::try_parse_from(["sift", "pat", "dir1", "dir2"]).unwrap();
+        assert_eq!(cli.patterns.pattern.as_deref(), Some("pat"));
+        assert_eq!(
+            cli.search_scope.paths,
+            vec![PathBuf::from("dir1"), PathBuf::from("dir2")]
+        );
+    }
+
+    #[test]
+    fn cli_parses_short_flags_before_pattern() {
+        let cli = Cli::try_parse_from(["sift", "-n", "-H", "pattern"]).unwrap();
+        assert!(cli.line_number_decl.line_number);
+        assert!(cli.filename_decl.with_filename);
+    }
+
+    #[test]
+    fn cli_parses_long_flags_before_pattern() {
+        let cli =
+            Cli::try_parse_from(["sift", "--line-number", "--with-filename", "pattern"]).unwrap();
+        assert!(cli.line_number_decl.line_number);
+        assert!(cli.filename_decl.with_filename);
+    }
+
+    #[test]
+    fn cli_parses_empty_pattern_file() {
+        let cli = Cli::try_parse_from(["sift", "-f", "ignore.txt"]).unwrap();
+        assert_eq!(
+            cli.patterns.pattern_file.as_deref(),
+            Some(Path::new("ignore.txt"))
+        );
+    }
+}

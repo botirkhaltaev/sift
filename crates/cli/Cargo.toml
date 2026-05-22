@@ -12,6 +12,10 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "sift_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sift"
 path = "src/main.rs"

@@ -364,3 +364,178 @@ pub fn build_search_filter_config(
         one_file_system: cli.walker_decl.one_file_system,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_suffix_plain_number() {
+        assert_eq!(parse_size_suffix("42").unwrap(), 42);
+    }
+
+    #[test]
+    fn size_suffix_bytes() {
+        assert_eq!(parse_size_suffix("100B").unwrap(), 100);
+    }
+
+    #[test]
+    fn size_suffix_kilobytes() {
+        assert_eq!(parse_size_suffix("2K").unwrap(), 2048);
+        assert_eq!(parse_size_suffix("2KB").unwrap(), 2048);
+    }
+
+    #[test]
+    fn size_suffix_megabytes() {
+        assert_eq!(parse_size_suffix("3M").unwrap(), 3 * 1024 * 1024);
+        assert_eq!(parse_size_suffix("3MB").unwrap(), 3 * 1024 * 1024);
+    }
+
+    #[test]
+    fn size_suffix_gigabytes() {
+        assert_eq!(parse_size_suffix("1G").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn size_suffix_unknown_unit() {
+        assert!(parse_size_suffix("5X").is_err());
+    }
+
+    #[test]
+    fn size_suffix_invalid_number() {
+        assert!(parse_size_suffix("abc").is_err());
+    }
+
+    #[test]
+    fn builtin_type_defs_contains_rust() {
+        let defs = builtin_type_defs();
+        assert!(defs.iter().any(|d| d.name == "rust"));
+    }
+
+    #[test]
+    fn builtin_type_defs_contains_python() {
+        let defs = builtin_type_defs();
+        assert!(defs.iter().any(|d| d.name == "py"));
+    }
+
+    #[test]
+    fn builtin_type_defs_non_empty() {
+        let defs = builtin_type_defs();
+        assert!(!defs.is_empty());
+    }
+
+    #[test]
+    fn resolve_type_defs_clear_removes_type() {
+        let decl = FilterDecl {
+            max_depth: None,
+            max_filesize: None,
+            iglob: vec![],
+            ignore_file: vec![],
+            files: false,
+            type_include: vec![],
+            type_exclude: vec![],
+            type_list: false,
+            type_add: vec![],
+            type_clear: vec!["rust".into(), "py".into()],
+            sort: None,
+            sortr: None,
+        };
+        let defs = resolve_type_defs(&decl);
+        assert!(!defs.iter().any(|d| d.name == "rust"));
+        assert!(!defs.iter().any(|d| d.name == "py"));
+    }
+
+    #[test]
+    fn resolve_type_defs_add_custom_type() {
+        let decl = FilterDecl {
+            max_depth: None,
+            max_filesize: None,
+            iglob: vec![],
+            ignore_file: vec![],
+            files: false,
+            type_include: vec![],
+            type_exclude: vec![],
+            type_list: false,
+            type_add: vec!["mytype:*.my".into()],
+            type_clear: vec![],
+            sort: None,
+            sortr: None,
+        };
+        let defs = resolve_type_defs(&decl);
+        assert!(defs.iter().any(|d| d.name == "mytype"));
+    }
+
+    #[test]
+    fn resolve_type_defs_add_extends_existing() {
+        let decl = FilterDecl {
+            max_depth: None,
+            max_filesize: None,
+            iglob: vec![],
+            ignore_file: vec![],
+            files: false,
+            type_include: vec![],
+            type_exclude: vec![],
+            type_list: false,
+            type_add: vec!["rust:*.rsx".into()],
+            type_clear: vec![],
+            sort: None,
+            sortr: None,
+        };
+        let defs = resolve_type_defs(&decl);
+        let rust = defs.iter().find(|d| d.name == "rust").unwrap();
+        assert!(rust.globs.contains(&"*.rsx".to_string()));
+        assert!(rust.globs.contains(&"*.rs".to_string()));
+    }
+
+    #[test]
+    fn resolve_type_defs_add_include() {
+        let decl = FilterDecl {
+            max_depth: None,
+            max_filesize: None,
+            iglob: vec![],
+            ignore_file: vec![],
+            files: false,
+            type_include: vec![],
+            type_exclude: vec![],
+            type_list: false,
+            type_add: vec!["combined:include:rust,py".into()],
+            type_clear: vec![],
+            sort: None,
+            sortr: None,
+        };
+        let defs = resolve_type_defs(&decl);
+        let combined = defs.iter().find(|d| d.name == "combined").unwrap();
+        assert!(combined.globs.contains(&"*.rs".to_string()));
+        assert!(combined.globs.contains(&"*.py".to_string()));
+    }
+
+    #[test]
+    fn search_filter_ctx_hidden_mode_include() {
+        let ctx = SearchFilterCtx {
+            hidden: true,
+            ignore_sources: sift_core::IgnoreSources::empty(),
+            require_git: false,
+            glob_case_insensitive: false,
+            msg_flags: MessageFlags::empty(),
+        };
+        assert!(matches!(ctx.hidden_mode(), sift_core::HiddenMode::Include));
+    }
+
+    #[test]
+    fn search_filter_ctx_hidden_mode_respect() {
+        let ctx = SearchFilterCtx {
+            hidden: false,
+            ignore_sources: sift_core::IgnoreSources::empty(),
+            require_git: false,
+            glob_case_insensitive: false,
+            msg_flags: MessageFlags::empty(),
+        };
+        assert!(matches!(ctx.hidden_mode(), sift_core::HiddenMode::Respect));
+    }
+
+    #[test]
+    fn glob_flags_default_empty() {
+        let g = GlobFlags { glob: vec![] };
+        assert!(g.glob.is_empty());
+    }
+}

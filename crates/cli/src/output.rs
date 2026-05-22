@@ -624,3 +624,781 @@ impl Cli {
         (out, filter)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(ToString::to_string).collect()
+    }
+
+    // ── parse_usize_token ──
+
+    #[test]
+    fn parse_usize_token_valid() {
+        assert_eq!(parse_usize_token("42"), Some(42));
+    }
+
+    #[test]
+    fn parse_usize_token_zero() {
+        assert_eq!(parse_usize_token("0"), Some(0));
+    }
+
+    #[test]
+    fn parse_usize_token_invalid() {
+        assert_eq!(parse_usize_token("abc"), None);
+    }
+
+    #[test]
+    fn parse_usize_token_empty() {
+        assert_eq!(parse_usize_token(""), None);
+    }
+
+    // ── parse_color_when ──
+
+    #[test]
+    fn parse_color_when_never() {
+        assert!(matches!(parse_color_when("never"), ColorChoice::Never));
+    }
+
+    #[test]
+    fn parse_color_when_always() {
+        assert!(matches!(parse_color_when("always"), ColorChoice::Always));
+    }
+
+    #[test]
+    fn parse_color_when_auto() {
+        assert!(matches!(parse_color_when("auto"), ColorChoice::Auto));
+    }
+
+    #[test]
+    fn parse_color_when_unknown_defaults_auto() {
+        assert!(matches!(parse_color_when("xyz"), ColorChoice::Auto));
+    }
+
+    // ── resolve_null_from_args ──
+
+    #[test]
+    fn resolve_null_no_null() {
+        assert!(!resolve_null_from_args(&args(&["sift", "pat"])));
+    }
+
+    #[test]
+    fn resolve_null_short() {
+        assert!(resolve_null_from_args(&args(&["sift", "-0", "pat"])));
+    }
+
+    #[test]
+    fn resolve_null_long() {
+        assert!(resolve_null_from_args(&args(&["sift", "--null", "pat"])));
+    }
+
+    // ── resolve_color_from_args ──
+
+    #[test]
+    fn resolve_color_default_auto() {
+        assert!(matches!(
+            resolve_color_from_args(&args(&["sift", "pat"])),
+            ColorChoice::Auto
+        ));
+    }
+
+    #[test]
+    fn resolve_color_never_long() {
+        assert!(matches!(
+            resolve_color_from_args(&args(&["sift", "--color=never", "pat"])),
+            ColorChoice::Never
+        ));
+    }
+
+    #[test]
+    fn resolve_color_always_long() {
+        assert!(matches!(
+            resolve_color_from_args(&args(&["sift", "--color=always", "pat"])),
+            ColorChoice::Always
+        ));
+    }
+
+    #[test]
+    fn resolve_color_separate_arg() {
+        assert!(matches!(
+            resolve_color_from_args(&args(&["sift", "--color", "never", "pat"])),
+            ColorChoice::Never
+        ));
+    }
+
+    #[test]
+    fn resolve_color_last_wins() {
+        assert!(matches!(
+            resolve_color_from_args(&args(&["sift", "--color=never", "--color=always", "pat"])),
+            ColorChoice::Always
+        ));
+    }
+
+    // ── resolve_stats_from_args ──
+
+    #[test]
+    fn resolve_stats_no_flag() {
+        assert!(!resolve_stats_from_args(&args(&["sift", "pat"])));
+    }
+
+    #[test]
+    fn resolve_stats_flag() {
+        assert!(resolve_stats_from_args(&args(&["sift", "--stats", "pat"])));
+    }
+
+    // ── resolve_json_from_args ──
+
+    #[test]
+    fn resolve_json_no_flag() {
+        assert!(!resolve_json_from_args(&args(&["sift", "pat"])));
+    }
+
+    #[test]
+    fn resolve_json_flag() {
+        assert!(resolve_json_from_args(&args(&["sift", "--json", "pat"])));
+    }
+
+    #[test]
+    fn resolve_json_last_wins_true() {
+        assert!(resolve_json_from_args(&args(&[
+            "sift",
+            "--no-json",
+            "--json",
+            "pat"
+        ])));
+    }
+
+    #[test]
+    fn resolve_json_last_wins_false() {
+        assert!(!resolve_json_from_args(&args(&[
+            "sift",
+            "--json",
+            "--no-json",
+            "pat"
+        ])));
+    }
+
+    // ── resolve_heading_from_args ──
+
+    #[test]
+    fn resolve_heading_no_flag() {
+        assert!(!resolve_heading_from_args(&args(&["sift", "pat"])));
+    }
+
+    #[test]
+    fn resolve_heading_flag() {
+        assert!(resolve_heading_from_args(&args(&[
+            "sift",
+            "--heading",
+            "pat"
+        ])));
+    }
+
+    #[test]
+    fn resolve_heading_no_heading_flag() {
+        assert!(!resolve_heading_from_args(&args(&[
+            "sift",
+            "--no-heading",
+            "pat"
+        ])));
+    }
+
+    #[test]
+    fn resolve_heading_last_wins() {
+        assert!(!resolve_heading_from_args(&args(&[
+            "sift",
+            "--heading",
+            "--no-heading",
+            "pat"
+        ])));
+    }
+
+    // ── resolve_line_number_from_args ──
+
+    #[test]
+    fn resolve_line_number_no_flag() {
+        assert_eq!(resolve_line_number_from_args(&args(&["sift", "pat"])), None);
+    }
+
+    #[test]
+    fn resolve_line_number_short_n() {
+        assert_eq!(
+            resolve_line_number_from_args(&args(&["sift", "-n", "pat"])),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn resolve_line_number_short_n_upper() {
+        assert_eq!(
+            resolve_line_number_from_args(&args(&["sift", "-N", "pat"])),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn resolve_line_number_long() {
+        assert_eq!(
+            resolve_line_number_from_args(&args(&["sift", "--line-number", "pat"])),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn resolve_line_number_no_long() {
+        assert_eq!(
+            resolve_line_number_from_args(&args(&["sift", "--no-line-number", "pat"])),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn resolve_line_number_last_wins() {
+        assert_eq!(
+            resolve_line_number_from_args(&args(&["sift", "-n", "-N", "pat"])),
+            Some(false)
+        );
+    }
+
+    // ── resolve_with_filename_from_args ──
+
+    #[test]
+    fn resolve_with_filename_no_flag() {
+        assert_eq!(
+            resolve_with_filename_from_args(&args(&["sift", "pat"])),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_with_filename_short_h() {
+        assert_eq!(
+            resolve_with_filename_from_args(&args(&["sift", "-H", "pat"])),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn resolve_with_filename_short_i() {
+        assert_eq!(
+            resolve_with_filename_from_args(&args(&["sift", "-I", "pat"])),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn resolve_with_filename_long_with() {
+        assert_eq!(
+            resolve_with_filename_from_args(&args(&["sift", "--with-filename", "pat"])),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn resolve_with_filename_long_no() {
+        assert_eq!(
+            resolve_with_filename_from_args(&args(&["sift", "--no-filename", "pat"])),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn resolve_with_filename_last_wins() {
+        assert_eq!(
+            resolve_with_filename_from_args(&args(&["sift", "-H", "-I", "pat"])),
+            Some(false)
+        );
+    }
+
+    // ── resolve_context_from_args ──
+
+    #[test]
+    fn resolve_context_default() {
+        assert_eq!(resolve_context_from_args(&args(&["sift", "pat"])), (0, 0));
+    }
+
+    #[test]
+    fn resolve_context_after_short() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-A", "5", "pat"])),
+            (0, 5)
+        );
+    }
+
+    #[test]
+    fn resolve_context_before_short() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-B", "3", "pat"])),
+            (3, 0)
+        );
+    }
+
+    #[test]
+    fn resolve_context_both_short() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-C", "2", "pat"])),
+            (2, 2)
+        );
+    }
+
+    #[test]
+    fn resolve_context_combined() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-B1", "-A2", "pat"])),
+            (1, 2)
+        );
+    }
+
+    #[test]
+    fn resolve_context_last_wins() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-A1", "-A5", "pat"])),
+            (0, 5)
+        );
+    }
+
+    #[test]
+    fn resolve_context_context_overrides_individual() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-A5", "-C2", "pat"])),
+            (2, 2)
+        );
+    }
+
+    #[test]
+    fn resolve_context_after_long() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "--after-context=5", "pat"])),
+            (0, 5)
+        );
+    }
+
+    #[test]
+    fn resolve_context_before_long() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "--before-context=3", "pat"])),
+            (3, 0)
+        );
+    }
+
+    #[test]
+    fn resolve_context_context_long() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "--context=2", "pat"])),
+            (2, 2)
+        );
+    }
+
+    #[test]
+    fn resolve_context_inline_after() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-A5", "pat"])),
+            (0, 5)
+        );
+    }
+
+    #[test]
+    fn resolve_context_inline_before() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-B3", "pat"])),
+            (3, 0)
+        );
+    }
+
+    #[test]
+    fn resolve_context_inline_context() {
+        assert_eq!(
+            resolve_context_from_args(&args(&["sift", "-C2", "pat"])),
+            (2, 2)
+        );
+    }
+
+    // ── resolve_glob_case_insensitive_from_args ──
+
+    #[test]
+    fn glob_case_insensitive_default() {
+        assert!(!resolve_glob_case_insensitive_from_args(&args(&[
+            "sift", "pat"
+        ])));
+    }
+
+    #[test]
+    fn glob_case_insensitive_flag() {
+        assert!(resolve_glob_case_insensitive_from_args(&args(&[
+            "sift",
+            "--glob-case-insensitive",
+            "pat"
+        ])));
+    }
+
+    #[test]
+    fn glob_case_no_insensitive_flag() {
+        assert!(!resolve_glob_case_insensitive_from_args(&args(&[
+            "sift",
+            "--no-glob-case-insensitive",
+            "pat"
+        ])));
+    }
+
+    #[test]
+    fn glob_case_insensitive_last_wins() {
+        assert!(!resolve_glob_case_insensitive_from_args(&args(&[
+            "sift",
+            "--glob-case-insensitive",
+            "--no-glob-case-insensitive",
+            "pat"
+        ])));
+    }
+
+    // ── effective_filename_mode ──
+
+    #[test]
+    fn filename_mode_path_mode() {
+        assert!(matches!(
+            effective_filename_mode(None, true, false),
+            FilenameMode::Always
+        ));
+    }
+
+    #[test]
+    fn filename_mode_with_filename_true() {
+        assert!(matches!(
+            effective_filename_mode(Some(true), false, false),
+            FilenameMode::Always
+        ));
+    }
+
+    #[test]
+    fn filename_mode_with_filename_false() {
+        assert!(matches!(
+            effective_filename_mode(Some(false), false, false),
+            FilenameMode::Never
+        ));
+    }
+
+    #[test]
+    fn filename_mode_single_file() {
+        assert!(matches!(
+            effective_filename_mode(None, false, true),
+            FilenameMode::Never
+        ));
+    }
+
+    #[test]
+    fn filename_mode_default() {
+        assert!(matches!(
+            effective_filename_mode(None, false, false),
+            FilenameMode::Always
+        ));
+    }
+
+    // ── resolve_effective_line_number ──
+
+    #[test]
+    fn effective_line_number_json() {
+        assert!(resolve_effective_line_number(
+            false,
+            None,
+            SearchOutputFormat::Json
+        ));
+    }
+
+    #[test]
+    fn effective_line_number_override_true() {
+        assert!(resolve_effective_line_number(
+            false,
+            Some(true),
+            SearchOutputFormat::Text
+        ));
+    }
+
+    #[test]
+    fn effective_line_number_override_false() {
+        assert!(!resolve_effective_line_number(
+            true,
+            Some(false),
+            SearchOutputFormat::Text
+        ));
+    }
+
+    #[test]
+    fn effective_line_number_fallback_true() {
+        assert!(resolve_effective_line_number(
+            true,
+            None,
+            SearchOutputFormat::Text
+        ));
+    }
+
+    #[test]
+    fn effective_line_number_fallback_false() {
+        assert!(!resolve_effective_line_number(
+            false,
+            None,
+            SearchOutputFormat::Text
+        ));
+    }
+
+    // ── unescape_separator ──
+
+    #[test]
+    fn unescape_separator_plain() {
+        assert_eq!(unescape_separator("hello"), b"hello");
+    }
+
+    #[test]
+    fn unescape_separator_newline() {
+        assert_eq!(unescape_separator(r"\n"), b"\n");
+    }
+
+    #[test]
+    fn unescape_separator_tab() {
+        assert_eq!(unescape_separator(r"\t"), b"\t");
+    }
+
+    #[test]
+    fn unescape_separator_backslash() {
+        assert_eq!(unescape_separator(r"\\"), b"\\");
+    }
+
+    #[test]
+    fn unescape_separator_null() {
+        assert_eq!(unescape_separator(r"\0"), b"\0");
+    }
+
+    #[test]
+    fn unescape_separator_unknown_escape() {
+        assert_eq!(unescape_separator(r"\x"), b"\\x");
+    }
+
+    #[test]
+    fn unescape_separator_trailing_backslash() {
+        assert_eq!(unescape_separator(r"ab\"), b"ab\\");
+    }
+
+    #[test]
+    fn unescape_separator_mixed() {
+        assert_eq!(unescape_separator(r"a\nb\tc"), b"a\nb\tc");
+    }
+
+    // ── build_line_style_flags ──
+
+    fn ctx_with_lines(lines: SearchLineResolveCtx) -> SearchOutputCtx {
+        SearchOutputCtx {
+            mode: SearchModeCtx {
+                effective_mode: SearchMode::Standard,
+                quiet: false,
+            },
+            lines,
+            format: SearchFormatCtx {
+                null_data: false,
+                color: ColorChoice::Auto,
+            },
+            output_format: SearchOutputFormat::Text,
+            separators: SearchSeparators {
+                context_separator: None,
+                field_match_separator: vec![],
+                field_context_separator: vec![],
+            },
+            print_stats: false,
+            byte_offset: false,
+            trim: false,
+            include_zero: false,
+            path_separator: None,
+            max_columns: None,
+            max_columns_preview: false,
+        }
+    }
+
+    #[test]
+    fn line_style_flags_empty() {
+        let out = ctx_with_lines(SearchLineResolveCtx {
+            heading: false,
+            with_filename: None,
+            is_path_mode: false,
+            column: false,
+            line_number: None,
+        });
+        let flags = build_line_style_flags(&out, false);
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn line_style_flags_heading() {
+        let out = ctx_with_lines(SearchLineResolveCtx {
+            heading: true,
+            with_filename: None,
+            is_path_mode: false,
+            column: false,
+            line_number: None,
+        });
+        let flags = build_line_style_flags(&out, false);
+        assert!(flags.contains(LineStyleFlags::HEADING));
+        assert!(!flags.contains(LineStyleFlags::LINE_NUMBER));
+    }
+
+    #[test]
+    fn line_style_flags_line_number() {
+        let out = ctx_with_lines(SearchLineResolveCtx {
+            heading: false,
+            with_filename: None,
+            is_path_mode: false,
+            column: false,
+            line_number: None,
+        });
+        let flags = build_line_style_flags(&out, true);
+        assert!(flags.contains(LineStyleFlags::LINE_NUMBER));
+    }
+
+    #[test]
+    fn line_style_flags_column() {
+        let out = ctx_with_lines(SearchLineResolveCtx {
+            heading: false,
+            with_filename: None,
+            is_path_mode: false,
+            column: true,
+            line_number: None,
+        });
+        let flags = build_line_style_flags(&out, false);
+        assert!(flags.contains(LineStyleFlags::COLUMN));
+    }
+
+    #[test]
+    fn line_style_flags_byte_offset() {
+        let mut out = ctx_with_lines(SearchLineResolveCtx {
+            heading: false,
+            with_filename: None,
+            is_path_mode: false,
+            column: false,
+            line_number: None,
+        });
+        out.byte_offset = true;
+        let flags = build_line_style_flags(&out, false);
+        assert!(flags.contains(LineStyleFlags::BYTE_OFFSET));
+    }
+
+    #[test]
+    fn line_style_flags_trim() {
+        let mut out = ctx_with_lines(SearchLineResolveCtx {
+            heading: false,
+            with_filename: None,
+            is_path_mode: false,
+            column: false,
+            line_number: None,
+        });
+        out.trim = true;
+        let flags = build_line_style_flags(&out, false);
+        assert!(flags.contains(LineStyleFlags::TRIM));
+    }
+
+    #[test]
+    fn line_style_flags_all() {
+        let mut out = ctx_with_lines(SearchLineResolveCtx {
+            heading: true,
+            with_filename: None,
+            is_path_mode: false,
+            column: true,
+            line_number: None,
+        });
+        out.byte_offset = true;
+        out.trim = true;
+        let flags = build_line_style_flags(&out, true);
+        assert!(flags.contains(LineStyleFlags::HEADING));
+        assert!(flags.contains(LineStyleFlags::LINE_NUMBER));
+        assert!(flags.contains(LineStyleFlags::COLUMN));
+        assert!(flags.contains(LineStyleFlags::BYTE_OFFSET));
+        assert!(flags.contains(LineStyleFlags::TRIM));
+    }
+
+    // ── search_output ──
+
+    #[test]
+    fn search_output_quiet() {
+        let result = search_output(
+            SearchOutputFormat::Text,
+            SearchMode::Standard,
+            true,
+            SearchLineStyle {
+                filename_mode: FilenameMode::Always,
+                flags: LineStyleFlags::empty(),
+                path_display: sift_core::PathDisplay::Relative,
+                max_columns: None,
+                max_columns_preview: false,
+            },
+            SearchRecordStyle {
+                null_data: false,
+                color: ColorChoice::Auto,
+                path_separator: None,
+            },
+            false,
+        );
+        assert!(matches!(result.emission, OutputEmission::Quiet));
+        assert!(!result.passthru);
+    }
+
+    #[test]
+    fn search_output_normal() {
+        let result = search_output(
+            SearchOutputFormat::Text,
+            SearchMode::Standard,
+            false,
+            SearchLineStyle {
+                filename_mode: FilenameMode::Always,
+                flags: LineStyleFlags::empty(),
+                path_display: sift_core::PathDisplay::Relative,
+                max_columns: None,
+                max_columns_preview: false,
+            },
+            SearchRecordStyle {
+                null_data: false,
+                color: ColorChoice::Auto,
+                path_separator: None,
+            },
+            true,
+        );
+        assert!(matches!(result.emission, OutputEmission::Normal));
+        assert!(result.include_zero);
+    }
+
+    // ── Cli::resolve_separators ──
+
+    #[test]
+    fn resolve_separators_default_context_sep() {
+        let cli = crate::cli::Cli::try_parse_from(["sift", "pat"]).unwrap();
+        let sep = cli.resolve_separators();
+        assert_eq!(sep.context_separator, Some(b"--".to_vec()));
+    }
+
+    #[test]
+    fn resolve_separators_custom_separator() {
+        let cli =
+            crate::cli::Cli::try_parse_from(["sift", "--context-separator", "===", "pat"]).unwrap();
+        let sep = cli.resolve_separators();
+        assert_eq!(sep.context_separator, Some(b"===".to_vec()));
+    }
+
+    #[test]
+    fn resolve_separators_suppress_context_sep() {
+        let cli =
+            crate::cli::Cli::try_parse_from(["sift", "--no-context-separator", "pat"]).unwrap();
+        let sep = cli.resolve_separators();
+        assert_eq!(sep.context_separator, None);
+    }
+
+    #[test]
+    fn resolve_separators_field_match_default() {
+        let cli = crate::cli::Cli::try_parse_from(["sift", "pat"]).unwrap();
+        let sep = cli.resolve_separators();
+        assert_eq!(sep.field_match_separator, b":");
+    }
+
+    #[test]
+    fn resolve_separators_field_context_default() {
+        let cli = crate::cli::Cli::try_parse_from(["sift", "pat"]).unwrap();
+        let sep = cli.resolve_separators();
+        assert_eq!(sep.field_context_separator, b"-");
+    }
+}

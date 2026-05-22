@@ -102,3 +102,45 @@ pub fn effective_path_display(scopes: &[PathBuf]) -> PathDisplay {
     }
     PathDisplay::Relative
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_display_relative_when_empty() {
+        assert_eq!(effective_path_display(&[]), PathDisplay::Relative);
+    }
+
+    #[test]
+    fn path_display_relative_when_relative() {
+        assert_eq!(
+            effective_path_display(&[PathBuf::from("src")]),
+            PathDisplay::Relative
+        );
+    }
+
+    #[test]
+    fn path_display_absolute_when_absolute() {
+        assert_eq!(
+            effective_path_display(&[PathBuf::from("/home/user")]),
+            PathDisplay::Absolute
+        );
+    }
+
+    #[test]
+    fn path_display_absolute_when_first_is_absolute() {
+        assert_eq!(
+            effective_path_display(&[PathBuf::from("/root"), PathBuf::from("sub")]),
+            PathDisplay::Absolute
+        );
+    }
+
+    #[test]
+    fn path_display_relative_when_all_relative() {
+        assert_eq!(
+            effective_path_display(&[PathBuf::from("a"), PathBuf::from("b/c")]),
+            PathDisplay::Relative
+        );
+    }
+}
