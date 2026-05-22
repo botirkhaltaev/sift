@@ -16,9 +16,8 @@ pub use planner::TrigramPlan;
 pub use search::{
     BinaryMode, CandidateInfo, CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig,
     HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, Match, OutputEmission, PathDisplay,
-    SearchFilter,
-    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
+    SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
+    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
     VisibilityConfig, walk_file_paths,
 };
 
