@@ -1159,17 +1159,24 @@ impl Sink for StandardSink<'_> {
             },
         )?;
         let line_bytes = mat.bytes();
-        let text = if let Some(rep) = self.replace {
-            apply_replace(self.matcher, line_bytes, rep)
+        if let Some(rep) = self.replace {
+            let text = apply_replace(self.matcher, line_bytes, rep);
+            self.bytes.write_all(text.as_bytes())?;
+            if !text.ends_with('\n') {
+                self.bytes.write_all(b"\n")?;
+            }
         } else if self.trim {
-            let s = String::from_utf8_lossy(line_bytes);
-            s.trim_start().to_string()
+            let trimmed = String::from_utf8_lossy(line_bytes);
+            let trimmed = trimmed.trim_start();
+            self.bytes.write_all(trimmed.as_bytes())?;
+            if !trimmed.ends_with('\n') {
+                self.bytes.write_all(b"\n")?;
+            }
         } else {
-            String::from_utf8_lossy(line_bytes).into_owned()
-        };
-        self.bytes.write_all(text.as_bytes())?;
-        if !text.ends_with('\n') {
-            self.bytes.write_all(b"\n")?;
+            self.bytes.write_all(line_bytes)?;
+            if !line_bytes.ends_with(b"\n") {
+                self.bytes.write_all(b"\n")?;
+            }
         }
         Ok(true)
     }
@@ -1201,8 +1208,9 @@ impl Sink for StandardSink<'_> {
         let line_bytes = ctx.bytes();
         if self.trim {
             let s = String::from_utf8_lossy(line_bytes);
-            self.bytes.write_all(s.trim_start().as_bytes())?;
-            if !s.trim_start().ends_with('\n') {
+            let trimmed = s.trim_start();
+            self.bytes.write_all(trimmed.as_bytes())?;
+            if !trimmed.ends_with('\n') {
                 self.bytes.write_all(b"\n")?;
             }
         } else {
