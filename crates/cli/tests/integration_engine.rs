@@ -3,9 +3,7 @@ mod common;
 use std::ffi::OsString;
 use std::fs;
 
-use common::{
-    assert_index_and_walk_output, assert_success, command, fresh_dir, normalized_stdout,
-};
+use common::{assert_index_and_walk_output, assert_success, command, fresh_dir, normalized_stdout};
 
 // ─── --no-config ──────────────────────────────────────────────────────────────
 
