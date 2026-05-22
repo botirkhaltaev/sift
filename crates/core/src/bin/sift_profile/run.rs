@@ -70,11 +70,9 @@ pub fn run_scenario(index: &Index, scenario: &Scenario, loop_cfg: &Loop, search_
     let t_candidates = Instant::now();
     let filter = SearchFilter::new(&scenario.filter_config, &index.root).unwrap();
     let raw_ids = query.candidate_file_ids(index, false);
-    let threshold = raw_ids.len().min(
-        8 * std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1),
-    );
+    let threshold = raw_ids
+        .len()
+        .min(8 * std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get));
     let candidates = CompiledSearch::prepare_candidates(index, &raw_ids, &filter, threshold);
     let candidates_us = t_candidates.elapsed().as_micros();
     let candidate_count = candidates.len();

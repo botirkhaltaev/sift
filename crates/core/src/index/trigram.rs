@@ -110,14 +110,11 @@ mod tests {
 
     #[test]
     fn ascii_three_chars_one_trigram() {
-        assert_eq!(extract_trigrams("abc"), vec![[b'a', b'b', b'c']]);
+        assert_eq!(extract_trigrams("abc"), vec![*b"abc"]);
     }
 
     #[test]
     fn overlapping_windows() {
-        assert_eq!(
-            extract_trigrams("abcd"),
-            vec![[b'a', b'b', b'c'], [b'b', b'c', b'd']]
-        );
+        assert_eq!(extract_trigrams("abcd"), vec![*b"abc", *b"bcd"]);
     }
 }

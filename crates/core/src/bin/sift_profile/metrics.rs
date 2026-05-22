@@ -36,7 +36,5 @@ pub const fn resident_set_bytes() -> Option<usize> {
 }
 
 pub fn rss_enabled() -> bool {
-    std::env::var("SIFT_PROFILE_RSS")
-        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    std::env::var("SIFT_PROFILE_RSS").is_ok_and(|s| s == "1" || s.eq_ignore_ascii_case("true"))
 }
