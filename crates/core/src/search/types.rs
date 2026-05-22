@@ -48,7 +48,7 @@ pub enum BinaryMode {
     AsText,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SearchOptions {
     pub flags: SearchMatchFlags,
     pub case_mode: CaseMode,
@@ -59,41 +59,43 @@ pub struct SearchOptions {
     pub after_context: usize,
     /// How to handle binary files.
     pub binary_mode: BinaryMode,
+    /// Replacement string for `--replace`; `None` = no replacement.
+    pub replace: Option<String>,
 }
 
 impl SearchOptions {
     #[must_use]
-    pub const fn case_insensitive(self) -> bool {
+    pub const fn case_insensitive(&self) -> bool {
         self.case_mode.is_case_insensitive()
     }
 
     #[must_use]
-    pub const fn invert_match(self) -> bool {
+    pub const fn invert_match(&self) -> bool {
         self.flags.contains(SearchMatchFlags::INVERT_MATCH)
     }
 
     #[must_use]
-    pub const fn fixed_strings(self) -> bool {
+    pub const fn fixed_strings(&self) -> bool {
         self.flags.contains(SearchMatchFlags::FIXED_STRINGS)
     }
 
     #[must_use]
-    pub const fn word_regexp(self) -> bool {
+    pub const fn word_regexp(&self) -> bool {
         self.flags.contains(SearchMatchFlags::WORD_REGEXP)
     }
 
     #[must_use]
-    pub const fn line_regexp(self) -> bool {
+    pub const fn line_regexp(&self) -> bool {
         self.flags.contains(SearchMatchFlags::LINE_REGEXP)
     }
 
     #[must_use]
-    pub const fn only_matching(self) -> bool {
+    pub const fn only_matching(&self) -> bool {
         self.flags.contains(SearchMatchFlags::ONLY_MATCHING)
     }
 
     #[must_use]
-    pub const fn precludes_trigram_index(self) -> bool {
+    pub const fn precludes_trigram_index(&self) -> bool {
         self.invert_match()
     }
 }
@@ -148,23 +150,52 @@ pub enum PathDisplay {
     Absolute,
 }
 
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct LineStyleFlags: u8 {
+        const HEADING     = 1 << 0;
+        const LINE_NUMBER = 1 << 1;
+        const BYTE_OFFSET = 1 << 2;
+        const TRIM        = 1 << 3;
+        const COLUMN      = 1 << 4;
+    }
+}
+
 /// Per-line presentation: paths, headings, and line numbers (standard / only-matching modes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchLineStyle {
     pub filename_mode: FilenameMode,
-    pub heading: bool,
-    pub line_number: bool,
-    pub column: bool,
+    pub flags: LineStyleFlags,
     pub path_display: PathDisplay,
+}
+
+impl SearchLineStyle {
+    #[must_use]
+    pub const fn heading(self) -> bool {
+        self.flags.contains(LineStyleFlags::HEADING)
+    }
+
+    #[must_use]
+    pub const fn line_number(self) -> bool {
+        self.flags.contains(LineStyleFlags::LINE_NUMBER)
+    }
+
+    #[must_use]
+    pub const fn byte_offset(self) -> bool {
+        self.flags.contains(LineStyleFlags::BYTE_OFFSET)
+    }
+
+    #[must_use]
+    pub const fn trim(self) -> bool {
+        self.flags.contains(LineStyleFlags::TRIM)
+    }
 }
 
 impl Default for SearchLineStyle {
     fn default() -> Self {
         Self {
             filename_mode: FilenameMode::Auto,
-            heading: false,
-            line_number: false,
-            column: false,
+            flags: LineStyleFlags::empty(),
             path_display: PathDisplay::default(),
         }
     }
@@ -204,6 +235,10 @@ pub struct SearchOutput {
     pub emission: OutputEmission,
     pub lines: SearchLineStyle,
     pub records: SearchRecordStyle,
+    /// `--passthru`: show every line (non-matching as context).
+    pub passthru: bool,
+    /// `--include-zero`: in count mode, print files with zero matches.
+    pub include_zero: bool,
 }
 
 impl Default for SearchOutput {
@@ -214,6 +249,8 @@ impl Default for SearchOutput {
             emission: OutputEmission::Normal,
             lines: SearchLineStyle::default(),
             records: SearchRecordStyle::default(),
+            passthru: false,
+            include_zero: false,
         }
     }
 }

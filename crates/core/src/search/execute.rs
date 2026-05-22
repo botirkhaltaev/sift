@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
-use grep_matcher::Matcher;
+use grep_matcher::{Captures, Matcher};
 use grep_printer::{JSON, Stats as JsonStats};
 use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
@@ -15,8 +15,8 @@ use crate::Index;
 use crate::planner::TrigramPlan;
 
 use super::{
-    CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, OutputEmission, PathDisplay,
-    SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle,
+    CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, LineStyleFlags, OutputEmission,
+    PathDisplay, SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle,
     SearchSeparators, SearchStats,
 };
 
@@ -653,17 +653,18 @@ impl CompiledSearch {
         separators: &SearchSeparators,
         stats: StatsCollection<'_>,
     ) -> crate::Result<bool> {
-        let show_line_numbers =
-            output.lines.line_number || self.opts.before_context > 0 || self.opts.after_context > 0;
+        let show_line_numbers = output.lines.line_number()
+            || self.opts.before_context > 0
+            || self.opts.after_context > 0;
         self.with_cached_searcher(
-            output.lines.line_number,
+            output.lines.line_number(),
             self.opts.max_results,
             |searcher| {
                 let mut any_match = false;
                 let mut out = Vec::new();
                 for candidate in candidates {
                     let heading =
-                        output.lines.heading && output.lines.filename_mode != FilenameMode::Never;
+                        output.lines.heading() && output.lines.filename_mode != FilenameMode::Never;
                     let mut sink_output = output;
                     if heading {
                         sink_output.lines.filename_mode = FilenameMode::Never;
@@ -677,6 +678,7 @@ impl CompiledSearch {
                         display,
                         &mut bytes,
                         separators,
+                        self.opts.replace.as_deref(),
                     );
                     let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
                     if let Some(c) = stats.primary {
@@ -899,6 +901,7 @@ struct StandardWorker<'a> {
     bytes: Vec<u8>,
     match_counter: Option<&'a AtomicUsize>,
     files_with_matches: Option<&'a AtomicUsize>,
+    replace: Option<String>,
 }
 
 impl<'a> StandardWorker<'a> {
@@ -910,12 +913,12 @@ impl<'a> StandardWorker<'a> {
         match_counter: Option<&'a AtomicUsize>,
         files_with_matches: Option<&'a AtomicUsize>,
     ) -> Self {
-        let show_line_numbers = output.lines.line_number
+        let show_line_numbers = output.lines.line_number()
             || search.opts.before_context > 0
             || search.opts.after_context > 0;
         Self {
             searcher: search.build_searcher(
-                output.lines.line_number,
+                output.lines.line_number(),
                 search.opts.max_results,
                 true,
             ),
@@ -926,6 +929,7 @@ impl<'a> StandardWorker<'a> {
             bytes: Vec::new(),
             match_counter,
             files_with_matches,
+            replace: search.opts.replace.clone(),
         }
     }
 
@@ -945,8 +949,8 @@ impl<'a> StandardWorker<'a> {
         }
 
         let matched = {
-            let heading =
-                self.output.lines.heading && self.output.lines.filename_mode != FilenameMode::Never;
+            let heading = self.output.lines.heading()
+                && self.output.lines.filename_mode != FilenameMode::Never;
             let mut sink_output = self.output;
             if heading {
                 sink_output.lines.filename_mode = FilenameMode::Never;
@@ -959,6 +963,7 @@ impl<'a> StandardWorker<'a> {
                 display,
                 &mut self.bytes,
                 self.separators,
+                self.replace.as_deref(),
             );
             let _ = self
                 .searcher
@@ -984,7 +989,7 @@ impl<'a> StandardWorker<'a> {
             index: result_index,
             output: ChunkOutput {
                 bytes: if matched
-                    && self.output.lines.heading
+                    && self.output.lines.heading()
                     && self.output.lines.filename_mode != FilenameMode::Never
                     && self.output.emission != OutputEmission::Quiet
                 {
@@ -1006,13 +1011,30 @@ impl<'a> StandardWorker<'a> {
                 },
                 matched,
                 heading: matched
-                    && self.output.lines.heading
+                    && self.output.lines.heading()
                     && self.output.lines.filename_mode != FilenameMode::Never
                     && self.output.emission != OutputEmission::Quiet,
             },
             json_stats: None,
         }
     }
+}
+
+fn apply_replace(matcher: &RegexMatcher, line: &[u8], replacement: &str) -> String {
+    let Ok(mut caps) = matcher.new_captures() else {
+        return String::from_utf8_lossy(line).into_owned();
+    };
+    let mut dst = Vec::new();
+    let _ = matcher.replace_with_captures(line, &mut caps, &mut dst, |caps, dst| {
+        caps.interpolate(
+            |name| matcher.capture_index(name),
+            line,
+            replacement.as_bytes(),
+            dst,
+        );
+        true
+    });
+    String::from_utf8_lossy(&dst).into_owned()
 }
 
 struct StandardSink<'a> {
@@ -1024,9 +1046,12 @@ struct StandardSink<'a> {
     separators: &'a SearchSeparators,
     matched: bool,
     match_count: usize,
+    replace: Option<&'a str>,
+    trim: bool,
 }
 
 impl<'a> StandardSink<'a> {
+    #[allow(clippy::too_many_arguments)]
     const fn new(
         matcher: &'a RegexMatcher,
         output: SearchOutput,
@@ -1034,6 +1059,7 @@ impl<'a> StandardSink<'a> {
         display_path: String,
         bytes: &'a mut Vec<u8>,
         separators: &'a SearchSeparators,
+        replace: Option<&'a str>,
     ) -> Self {
         Self {
             matcher,
@@ -1044,6 +1070,8 @@ impl<'a> StandardSink<'a> {
             separators,
             matched: false,
             match_count: 0,
+            replace,
+            trim: output.lines.trim(),
         }
     }
 }
@@ -1059,16 +1087,23 @@ impl Sink for StandardSink<'_> {
             return Ok(true);
         }
 
-        let show_column = self.output.lines.column;
+        let show_column = self.output.lines.flags.contains(LineStyleFlags::COLUMN);
 
         if matches!(self.output.mode, SearchMode::OnlyMatching) {
             let line_number = mat.line_number();
             let line = mat.bytes();
+            let byte_offset = mat.absolute_byte_offset();
             let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
                 let col = if show_column {
                     Some(m.start() + 1)
                 } else {
                     None
+                };
+                let matched_slice = &line[m.start()..m.end()];
+                let text = if let Some(rep) = self.replace {
+                    apply_replace(self.matcher, matched_slice, rep)
+                } else {
+                    String::from_utf8_lossy(matched_slice).into_owned()
                 };
                 let _ = write_standard_prefix(
                     self.bytes,
@@ -1081,8 +1116,13 @@ impl Sink for StandardSink<'_> {
                         column: col,
                         separators: self.separators,
                     },
+                    if self.output.lines.byte_offset() {
+                        Some(byte_offset)
+                    } else {
+                        None
+                    },
                 );
-                let _ = self.bytes.write_all(&line[m.start()..m.end()]);
+                let _ = self.bytes.write_all(text.as_bytes());
                 let _ = self.bytes.write_all(b"\n");
                 true
             });
@@ -1112,10 +1152,31 @@ impl Sink for StandardSink<'_> {
                 column: col,
                 separators: self.separators,
             },
+            if self.output.lines.byte_offset() {
+                Some(mat.absolute_byte_offset())
+            } else {
+                None
+            },
         )?;
-        self.bytes.write_all(mat.bytes())?;
-        if !mat.bytes().ends_with(b"\n") {
-            self.bytes.write_all(b"\n")?;
+        let line_bytes = mat.bytes();
+        if let Some(rep) = self.replace {
+            let text = apply_replace(self.matcher, line_bytes, rep);
+            self.bytes.write_all(text.as_bytes())?;
+            if !text.ends_with('\n') {
+                self.bytes.write_all(b"\n")?;
+            }
+        } else if self.trim {
+            let trimmed = String::from_utf8_lossy(line_bytes);
+            let trimmed = trimmed.trim_start();
+            self.bytes.write_all(trimmed.as_bytes())?;
+            if !trimmed.ends_with('\n') {
+                self.bytes.write_all(b"\n")?;
+            }
+        } else {
+            self.bytes.write_all(line_bytes)?;
+            if !line_bytes.ends_with(b"\n") {
+                self.bytes.write_all(b"\n")?;
+            }
         }
         Ok(true)
     }
@@ -1138,10 +1199,25 @@ impl Sink for StandardSink<'_> {
                 column: None,
                 separators: self.separators,
             },
+            if self.output.lines.byte_offset() {
+                Some(ctx.absolute_byte_offset())
+            } else {
+                None
+            },
         )?;
-        self.bytes.write_all(ctx.bytes())?;
-        if !ctx.bytes().ends_with(b"\n") {
-            self.bytes.write_all(b"\n")?;
+        let line_bytes = ctx.bytes();
+        if self.trim {
+            let s = String::from_utf8_lossy(line_bytes);
+            let trimmed = s.trim_start();
+            self.bytes.write_all(trimmed.as_bytes())?;
+            if !trimmed.ends_with('\n') {
+                self.bytes.write_all(b"\n")?;
+            }
+        } else {
+            self.bytes.write_all(line_bytes)?;
+            if !line_bytes.ends_with(b"\n") {
+                self.bytes.write_all(b"\n")?;
+            }
         }
         Ok(true)
     }
@@ -1467,7 +1543,7 @@ fn write_summary_record(
     }
     match output.mode {
         SearchMode::Count | SearchMode::CountMatches => {
-            if result.count == 0 {
+            if result.count == 0 && !output.include_zero {
                 return Ok(());
             }
             let print_filename = output.lines.filename_mode != FilenameMode::Never;
@@ -1529,6 +1605,7 @@ fn write_standard_prefix(
     line_number: Option<u64>,
     show_line_numbers: bool,
     prefix: &PrefixCtx<'_>,
+    byte_offset: Option<u64>,
 ) -> io::Result<()> {
     let color = should_color(output.records);
     let print_filename = output.lines.filename_mode != FilenameMode::Never;
@@ -1566,6 +1643,16 @@ fn write_standard_prefix(
             out.extend_from_slice(ANSI_RESET);
         }
         out.extend_from_slice(field_sep);
+    }
+    if let Some(offset) = byte_offset {
+        if color {
+            out.extend_from_slice(ANSI_LINE);
+        }
+        let sep = if prefix.is_context_line { '-' } else { ':' };
+        write!(out, "{offset}{sep}")?;
+        if color {
+            out.extend_from_slice(ANSI_RESET);
+        }
     }
     Ok(())
 }
