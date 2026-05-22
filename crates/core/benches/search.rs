@@ -184,6 +184,7 @@ const fn output_std() -> SearchOutput {
         records: SearchRecordStyle {
             null_data: false,
             color: ColorChoice::Never,
+            path_separator: None,
         },
         passthru: false,
         include_zero: false,
@@ -203,6 +204,7 @@ const fn output_quiet(mode: SearchMode) -> SearchOutput {
         records: SearchRecordStyle {
             null_data: false,
             color: ColorChoice::Never,
+            path_separator: None,
         },
         passthru: false,
         include_zero: false,

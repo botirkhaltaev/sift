@@ -80,6 +80,12 @@ struct Cli {
     replace_decl: ReplaceDecl,
     #[command(flatten)]
     extra_output: ExtraOutputDecl,
+    #[command(flatten)]
+    threading: ThreadingDecl,
+    #[command(flatten)]
+    multiline_decl: MultilineDecl,
+    #[command(flatten)]
+    walker_decl: WalkerDecl,
 }
 
 #[derive(Args)]
@@ -112,6 +118,51 @@ struct JsonDecl {
 struct StatsDecl {
     #[arg(long = "stats", action = ArgAction::SetTrue)]
     _stats: bool,
+}
+
+/// Threading and output-buffering flags.
+#[derive(Args)]
+struct ThreadingDecl {
+    /// Number of threads to use for searching.
+    #[arg(short = 'j', long = "threads", value_name = "NUM")]
+    threads: Option<usize>,
+    /// Force line-buffered output.
+    #[arg(long = "line-buffered")]
+    line_buffered: bool,
+    /// Force block-buffered output.
+    #[arg(long = "block-buffered")]
+    block_buffered: bool,
+    /// Override the path separator in output.
+    #[arg(long = "path-separator", value_name = "SEPARATOR")]
+    path_separator: Option<String>,
+}
+
+/// Filesystem-level flags for the walker.
+#[derive(Args)]
+struct WalkerDecl {
+    /// Do not cross filesystem boundaries.
+    #[arg(long = "one-file-system")]
+    one_file_system: bool,
+    /// Use memory-mapped I/O when searching (advisory).
+    #[arg(long = "mmap")]
+    mmap: bool,
+    /// Never use memory-mapped I/O (advisory).
+    #[arg(long = "no-mmap")]
+    no_mmap: bool,
+}
+
+/// Multiline and CRLF flags.
+#[derive(Args)]
+struct MultilineDecl {
+    /// Enable multiline matching.
+    #[arg(short = 'U', long = "multiline")]
+    multiline: bool,
+    /// Make `.` match `\n` in multiline mode.
+    #[arg(long = "multiline-dotall")]
+    multiline_dotall: bool,
+    /// Treat CRLF (`\r\n`) as a line terminator.
+    #[arg(long = "crlf")]
+    crlf: bool,
 }
 
 /// `-0` / `--null` and `--color` for clap; effective null/color use argv resolvers.
@@ -1260,6 +1311,7 @@ struct SearchOutputCtx {
     byte_offset: bool,
     trim: bool,
     include_zero: bool,
+    path_separator: Option<u8>,
 }
 
 /// Resolved visibility, ignore sources, and glob case (from argv order + clap) for [`SearchFilterConfig`].
@@ -1418,6 +1470,7 @@ fn build_search_filter_config(
         type_definitions,
         type_include: cli.filter_decl.type_include.clone(),
         type_exclude: cli.filter_decl.type_exclude.clone(),
+        one_file_system: cli.walker_decl.one_file_system,
     })
 }
 
@@ -1585,6 +1638,7 @@ impl Cli {
             type_definitions,
             type_include: self.filter_decl.type_include.clone(),
             type_exclude: self.filter_decl.type_exclude.clone(),
+            one_file_system: self.walker_decl.one_file_system,
         })
     }
 
@@ -1613,6 +1667,15 @@ impl Cli {
         }
         if only_matching {
             opts.flags |= SearchMatchFlags::ONLY_MATCHING;
+        }
+        if self.multiline_decl.multiline {
+            opts.flags |= SearchMatchFlags::MULTILINE;
+        }
+        if self.multiline_decl.multiline_dotall {
+            opts.flags |= SearchMatchFlags::MULTILINE_DOTALL;
+        }
+        if self.multiline_decl.crlf {
+            opts.flags |= SearchMatchFlags::CRLF;
         }
         opts.replace.clone_from(&self.replace_decl.replace);
         opts.before_context = before_context;
@@ -1687,6 +1750,11 @@ impl Cli {
             byte_offset: self.extra_output.byte_offset,
             trim: self.replace_decl.trim,
             include_zero: self.extra_output.include_zero,
+            path_separator: self
+                .threading
+                .path_separator
+                .as_ref()
+                .and_then(|s| s.as_bytes().first().copied()),
         };
         let filter = SearchFilterCtx {
             hidden: ignore_res.hidden,
@@ -1733,6 +1801,7 @@ impl Cli {
             SearchRecordStyle {
                 null_data: out.format.null_data,
                 color: out.format.color,
+                path_separator: out.path_separator,
             },
             out.include_zero,
         );
@@ -1785,6 +1854,7 @@ impl Cli {
             SearchRecordStyle {
                 null_data: out.format.null_data,
                 color: out.format.color,
+                path_separator: out.path_separator,
             },
             out.include_zero,
         );
@@ -1848,6 +1918,13 @@ impl Cli {
             }
         }
 
+        if let Some(threads) = self.threading.threads {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build_global()
+                .ok();
+        }
+
         let opts = self.build_search_opts(&args, only_matching);
         let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
         let cwd = std::env::current_dir()?;
@@ -1892,6 +1969,13 @@ fn run_files_mode(cli: &Cli) -> anyhow::Result<bool> {
         glob_case_insensitive,
         msg_flags: ignore_res.msg_flags,
     };
+
+    if let Some(threads) = cli.threading.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()
+            .ok();
+    }
 
     let cwd = std::env::current_dir()?;
 

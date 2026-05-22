@@ -26,13 +26,26 @@ impl CompiledSearch {
         if self.opts.line_regexp() {
             builder.whole_line(true);
         }
-        builder.line_terminator(Some(b'\n'));
-        match self.opts.binary_mode {
-            BinaryMode::AsText => {
-                builder.ban_byte(None);
+        if self.opts.crlf() {
+            builder.crlf(true);
+        }
+        if self.opts.multiline() {
+            if self.opts.multiline_dotall() {
+                builder.dot_matches_new_line(true);
             }
-            _ => {
-                builder.ban_byte(Some(b'\x00'));
+        } else {
+            builder.line_terminator(Some(b'\n'));
+        }
+        if self.opts.multiline() {
+            builder.ban_byte(None);
+        } else {
+            match self.opts.binary_mode {
+                BinaryMode::AsText => {
+                    builder.ban_byte(None);
+                }
+                _ => {
+                    builder.ban_byte(Some(b'\x00'));
+                }
             }
         }
         builder
@@ -67,6 +80,9 @@ impl CompiledSearch {
             .before_context(before_context)
             .after_context(after_context)
             .max_matches(max_matches.map(|n| n as u64));
+        if self.opts.multiline() {
+            builder.multi_line(true);
+        }
         builder.build()
     }
 

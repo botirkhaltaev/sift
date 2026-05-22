@@ -21,4 +21,5 @@ anyhow = "1"
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
+rayon = "1"
 sift-core = { path = "../core" }
