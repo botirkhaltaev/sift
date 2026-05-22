@@ -1,17 +1,289 @@
-use std::ffi::OsString;
+// Test helpers — not every file uses every helper.
+#![allow(dead_code)]
+
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-static NEXT_TMP_ID: AtomicUsize = AtomicUsize::new(0);
+// ── Test Project ──────────────────────────────────────────────────────────────
 
-fn sift_exe() -> PathBuf {
+static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+fn exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_sift"))
 }
 
+/// A temporary directory with helpers to write files, build indexes, and run
+/// `sift` in index or walk mode.
+///
+/// # Example
+/// ```
+/// use common::TestProject;
+///
+/// let p = TestProject::new("example");
+/// p.write("a.txt", "hello world\n");
+/// p.build_index();
+/// let out = p.index_output(&["world"]);
+/// assert_success(&out);
+/// ```
+pub struct TestProject {
+    root: PathBuf,
+    sift_dir: PathBuf,
+    walk_sift_dir: PathBuf,
+}
+
+impl TestProject {
+    pub fn new(name: &str) -> Self {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "sift-cli-integration-{name}-{}-{id}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap_or(root);
+        Self {
+            sift_dir: root.join(".sift"),
+            walk_sift_dir: root.join(".sift-not-found"),
+            root,
+        }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn write(&self, rel: &str, content: impl AsRef<[u8]>) -> &Self {
+        let path = self.root.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&path, content.as_ref()).unwrap();
+        self
+    }
+
+    pub fn mkdir(&self, rel: &str) -> &Self {
+        fs::create_dir_all(self.root.join(rel)).unwrap();
+        self
+    }
+
+    pub fn build_index(&self) -> &Self {
+        self.build_index_opts(Path::new("."), false)
+    }
+
+    pub fn build_index_follow(&self) -> &Self {
+        self.build_index_opts(Path::new("."), true)
+    }
+
+    pub fn build_index_at(&self, corpus: &Path) -> &Self {
+        self.build_index_opts(corpus, false)
+    }
+
+    fn build_index_opts(&self, corpus: &Path, follow: bool) -> &Self {
+        let mut cmd = self.sift();
+        cmd.arg("--sift-dir").arg(&self.sift_dir);
+        if follow {
+            cmd.arg("--follow");
+        }
+        let status = cmd.arg("build").arg(corpus).status().unwrap();
+        assert!(
+            status.success(),
+            "build index over {} failed with status {status}",
+            corpus.display()
+        );
+        self
+    }
+
+    /// Create a `Command` with the project root as the working directory.
+    pub fn sift(&self) -> Command {
+        let mut cmd = Command::new(exe());
+        cmd.current_dir(&self.root);
+        cmd
+    }
+
+    /// Run `sift` in index mode, return the full `Output`.
+    pub fn index_output<I, S>(&self, args: I) -> Output
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut cmd = self.sift();
+        cmd.arg("--sift-dir").arg(&self.sift_dir);
+        cmd.args(args);
+        cmd.output().unwrap()
+    }
+
+    /// Run `sift` in index mode, return only the exit status.
+    pub fn index_status<I, S>(&self, args: I) -> ExitStatus
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut cmd = self.sift();
+        cmd.arg("--sift-dir").arg(&self.sift_dir);
+        cmd.args(args);
+        cmd.status().unwrap()
+    }
+
+    /// Run `sift` in walk mode (no index), return the full `Output`.
+    pub fn walk_output<I, S>(&self, args: I) -> Output
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut cmd = self.sift();
+        cmd.arg("--sift-dir").arg(&self.walk_sift_dir);
+        cmd.args(args);
+        cmd.output().unwrap()
+    }
+
+    /// Run `sift` in walk mode (no index), return only the exit status.
+    pub fn walk_status<I, S>(&self, args: I) -> ExitStatus
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut cmd = self.sift();
+        cmd.arg("--sift-dir").arg(&self.walk_sift_dir);
+        cmd.args(args);
+        cmd.status().unwrap()
+    }
+
+    /// Build the index, run both index and walk mode with the same args, and
+    /// assert they produce identical exit code 0, stdout, and empty stderr.
+    #[track_caller]
+    pub fn assert_index_walk_same<I, S>(&self, args: I, expected: &str)
+    where
+        I: IntoIterator<Item = S> + Clone,
+        S: AsRef<OsStr>,
+    {
+        self.build_index();
+        let idx = self.index_output(args.clone());
+        let walk = self.walk_output(args);
+        for (mode, output) in [("index", &idx), ("walk", &walk)] {
+            assert_success(output);
+            let n = normalize_stdout(output);
+            assert_eq!(n, expected, "{mode}: stdout mismatch");
+            assert!(
+                normalize_stderr(output).is_empty(),
+                "{mode}: unexpected stderr"
+            );
+        }
+    }
+}
+
+// ── Normalization ─────────────────────────────────────────────────────────────
+
+pub fn normalize(s: &str) -> String {
+    s.replace("\r\n", "\n")
+        .replace('\\', "/")
+        .replace("//?/", "")
+}
+
+pub fn normalize_stdout(out: &Output) -> String {
+    normalize(&String::from_utf8_lossy(&out.stdout))
+}
+
+pub fn normalize_stderr(out: &Output) -> String {
+    normalize(&String::from_utf8_lossy(&out.stderr))
+}
+
+// ── Path helpers ──────────────────────────────────────────────────────────────
+
+/// `path:rest` where `path` is printed relative to the corpus root (like `grep`).
+pub fn rel_match(rel: &str, rest: &str) -> String {
+    format!("{}:{rest}", normalize(rel))
+}
+
+pub fn abs_match(root: &Path, rel: &str, rest: &str) -> String {
+    let abs = root.join(rel);
+    format!("{}:{rest}", normalize(&abs.display().to_string()))
+}
+
+pub fn abs_path(root: &Path, rel: &str) -> String {
+    let joined = root.join(rel);
+    let canonical = joined.canonicalize().unwrap_or(joined);
+    normalize(&canonical.display().to_string())
+}
+
+// ── Assertion helpers ─────────────────────────────────────────────────────────
+
+#[track_caller]
+pub fn assert_success(out: &Output) {
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        out.status.code(),
+        normalize_stdout(out),
+        normalize_stderr(out),
+    );
+}
+
+#[track_caller]
+pub fn assert_exit_code(out: &Output, expected: i32) {
+    let got = out.status.code().unwrap_or(-1);
+    assert_eq!(
+        got,
+        expected,
+        "exit code mismatch\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        normalize_stdout(out),
+        normalize_stderr(out),
+    );
+}
+
+#[track_caller]
+pub fn assert_stdout_eq(out: &Output, expected: &str) {
+    let n = normalize_stdout(out);
+    assert_eq!(
+        n,
+        expected,
+        "stdout mismatch\n--- stderr ---\n{}",
+        normalize_stderr(out),
+    );
+}
+
+#[track_caller]
+pub fn assert_stdout_contains(out: &Output, substr: &str) {
+    let n = normalize_stdout(out);
+    assert!(
+        n.contains(substr),
+        "expected stdout to contain {substr:?}\n--- stdout ---\n{n}\n--- stderr ---\n{}",
+        normalize_stderr(out),
+    );
+}
+
+#[track_caller]
+pub fn assert_stdout_not_contains(out: &Output, substr: &str) {
+    let n = normalize_stdout(out);
+    assert!(
+        !n.contains(substr),
+        "expected stdout to not contain {substr:?}\n--- stdout ---\n{n}",
+    );
+}
+
+#[track_caller]
+pub fn assert_stderr_empty(out: &Output) {
+    let n = normalize_stderr(out);
+    assert!(
+        n.is_empty(),
+        "expected empty stderr, got:\n--- stderr ---\n{n}"
+    );
+}
+
+// ── Legacy aliases (for incremental migration) ────────────────────────────────
+
+pub fn normalized_stdout(out: &Output) -> String {
+    normalize_stdout(out)
+}
+
+pub fn abs(root: &Path, rel: &str) -> String {
+    abs_path(root, rel)
+}
+
 pub fn fresh_dir(name: &str) -> PathBuf {
-    let id = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
         "sift-cli-integration-{name}-{}-{id}",
         std::process::id()
@@ -22,17 +294,15 @@ pub fn fresh_dir(name: &str) -> PathBuf {
 }
 
 pub fn command(cwd: Option<&Path>) -> Command {
-    let mut cmd = Command::new(sift_exe());
+    let mut cmd = Command::new(exe());
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
     cmd
 }
 
-/// Build-time flags for `sift build` in integration tests. Add fields as the CLI grows.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BuildIndexOptions {
-    /// Pass `--follow` / `-L` to `sift build`.
     pub follow_symlinks: bool,
 }
 
@@ -48,15 +318,6 @@ impl BuildIndexOptions {
     }
 }
 
-pub fn assert_success(output: &Output) {
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[allow(dead_code)]
 pub fn assert_index_and_walk_output(cwd: &Path, args: &[OsString], expected_stdout: &str) {
     let idx = cwd.join(".sift");
     let missing_idx = fresh_dir("missing-index").join(".sift");
@@ -68,19 +329,14 @@ pub fn assert_index_and_walk_output(cwd: &Path, args: &[OsString], expected_stdo
     for (name, output) in [("index", &index), ("walk", &walk)] {
         assert_success(output);
         assert_eq!(
-            normalized_stdout(output),
+            normalize_stdout(output),
             expected_stdout,
             "{name}: stdout mismatch"
         );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stderr),
-            "",
-            "{name}: stderr mismatch"
-        );
+        assert_eq!(normalize_stderr(output), "", "{name}: stderr mismatch");
     }
 }
 
-#[allow(dead_code)]
 fn run_search(cwd: Option<&Path>, sift_dir: &Path, args: &[OsString]) -> Output {
     let mut cmd = command(cwd);
     cmd.arg("--sift-dir").arg(sift_dir);
@@ -88,36 +344,6 @@ fn run_search(cwd: Option<&Path>, sift_dir: &Path, args: &[OsString]) -> Output 
     cmd.output().unwrap()
 }
 
-fn normalize_path_str(path: &str) -> String {
-    let mut normalized = path.replace("\r\n", "\n").replace('\\', "/");
-    normalized = normalized.replace("//?/", "");
-    normalized
-}
-
-pub fn normalized_stdout(output: &Output) -> String {
-    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    normalize_path_str(&raw)
-}
-
-#[allow(dead_code)]
-pub fn abs(root: &Path, rel: &str) -> String {
-    let joined = root.join(rel);
-    let canonical = joined.canonicalize().unwrap_or(joined);
-    normalize_path_str(&canonical.display().to_string())
-}
-
-#[allow(dead_code)]
-pub fn abs_match(root: &Path, rel: &str, text: &str) -> String {
-    format!("{}:{text}", abs(root, rel))
-}
-
-/// `path:rest` where `path` is printed relative to the corpus root (like `grep`).
-#[allow(dead_code)]
-pub fn rel_match(rel: &str, rest: &str) -> String {
-    format!("{}:{rest}", normalize_path_str(rel))
-}
-
-#[allow(dead_code)]
 pub fn line_path<'a>(line: &'a str, candidates: &[String]) -> &'a str {
     candidates
         .iter()

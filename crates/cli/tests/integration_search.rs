@@ -3,257 +3,150 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout, rel_match};
+#[cfg(not(windows))]
+use common::assert_stdout_eq;
+use common::{
+    TestProject, assert_exit_code, assert_stdout_contains, assert_stdout_not_contains,
+    assert_success, normalize_stderr, rel_match,
+};
 
 #[test]
 fn build_then_search_finds_line() {
-    let root = fresh_dir("search-line");
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/lib.rs"), "fn f() {\n  let y = 2;\n}\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-line");
+    p.mkdir("src");
+    p.write("src/lib.rs", "fn f() {\n  let y = 2;\n}\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg(r"let\s+y")
-        .output()
-        .unwrap();
+    let out = p.index_output([r"let\s+y"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains(&rel_match("src/lib.rs", "")) && stdout.contains("let y = 2;"),
-        "unexpected stdout: {stdout}"
-    );
+    assert_stdout_contains(&out, &rel_match("src/lib.rs", ""));
+    assert_stdout_contains(&out, "let y = 2;");
 }
 
 #[test]
 fn search_no_match_exits_1() {
-    let root = fresh_dir("search-no-match");
-    fs::write(root.join("a.txt"), "nope\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-no-match");
+    p.write("a.txt", "nope\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let status = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("ZZZ_NOT_THERE")
-        .status()
-        .unwrap();
+    let status = p.index_status(["ZZZ_NOT_THERE"]);
     assert_eq!(status.code(), Some(1));
 }
 
 #[test]
 fn fixed_string_ignore_case_finds_match() {
-    let root = fresh_dir("search-fixed-ignore-case");
-    fs::write(root.join("t.txt"), "hello world\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-fixed-ignore-case");
+    p.write("t.txt", "hello world\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-i")
-        .arg("-F")
-        .arg("HELLO")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-i", "-F", "HELLO"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&rel_match("t.txt", "")) && stdout.contains("hello world"));
+    assert_stdout_contains(&out, &rel_match("t.txt", ""));
+    assert_stdout_contains(&out, "hello world");
 }
 
 #[test]
 fn invert_match_returns_non_matching_lines() {
-    let root = fresh_dir("search-invert-match");
-    fs::write(root.join("t.txt"), "keep\nskip\nkeep too\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-invert-match");
+    p.write("t.txt", "keep\nskip\nkeep too\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-v")
-        .arg("skip")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-v", "skip"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(stdout.contains("keep"));
-    assert!(stdout.contains("keep too"));
-    assert!(
-        !stdout.contains("t.txt:skip"),
-        "unexpected stdout: {stdout}"
-    );
+    assert_stdout_contains(&out, "keep");
+    assert_stdout_contains(&out, "keep too");
+    assert_stdout_not_contains(&out, "t.txt:skip");
 }
 
 #[test]
 fn word_regexp_matches_whole_words_only() {
-    let root = fresh_dir("search-word-regexp");
-    fs::write(root.join("t.txt"), "cat\nscatter\ncatnip\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-word-regexp");
+    p.write("t.txt", "cat\nscatter\ncatnip\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-w")
-        .arg("cat")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-w", "cat"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&rel_match("t.txt", "cat")));
-    assert!(!stdout.contains("scatter"), "unexpected stdout: {stdout}");
-    assert!(!stdout.contains("catnip"), "unexpected stdout: {stdout}");
+    assert_stdout_contains(&out, &rel_match("t.txt", "cat"));
+    assert_stdout_not_contains(&out, "scatter");
+    assert_stdout_not_contains(&out, "catnip");
 }
 
 #[test]
 fn line_regexp_matches_whole_lines_only() {
-    let root = fresh_dir("search-line-regexp");
-    fs::write(root.join("t.txt"), "cat\ncat dog\ndog cat\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-line-regexp");
+    p.write("t.txt", "cat\ncat dog\ndog cat\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-x")
-        .arg("cat")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-x", "cat"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&rel_match("t.txt", "cat")));
-    assert!(!stdout.contains("cat dog"), "unexpected stdout: {stdout}");
-    assert!(!stdout.contains("dog cat"), "unexpected stdout: {stdout}");
+    assert_stdout_contains(&out, &rel_match("t.txt", "cat"));
+    assert_stdout_not_contains(&out, "cat dog");
+    assert_stdout_not_contains(&out, "dog cat");
 }
 
 #[test]
 fn missing_pattern_exits_2() {
-    let root = fresh_dir("search-missing-pattern");
-    fs::write(root.join("t.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-missing-pattern");
+    p.write("t.txt", "hello\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None).arg("--sift-dir").arg(&idx).output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("no pattern"));
+    let out = p
+        .sift()
+        .arg("--sift-dir")
+        .arg(p.root().join(".sift"))
+        .output()
+        .unwrap();
+    assert_exit_code(&out, 2);
+    assert!(normalize_stderr(&out).contains("no pattern"));
 }
 
 #[test]
 fn search_literal_index_without_subcommand() {
-    let root = fresh_dir("search-literal-index");
-    fs::write(root.join("t.txt"), "word index here\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-literal-index");
+    p.write("t.txt", "word index here\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(Some(&root), &idx, Path::new("."));
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("index")
-        .output()
-        .unwrap();
+    let out = p.index_output(["index"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(stdout.contains(&rel_match("t.txt", "")) && stdout.contains("index"));
+    assert_stdout_contains(&out, &rel_match("t.txt", ""));
+    assert_stdout_contains(&out, "index");
 }
 
 #[test]
 fn build_single_file_then_search_finds_match() {
-    let root = fresh_dir("search-single-file");
-    let file = root.join("one.txt");
-    fs::write(&file, "alpha\nbeta needle\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-single-file");
+    p.write("one.txt", "alpha\nbeta needle\n");
+    p.build_index_at(Path::new("one.txt"));
 
-    BuildIndexOptions::default().run(None, &idx, &file);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("needle")
-        .output()
-        .unwrap();
+    let out = p.index_output(["needle"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("beta needle"),
-        "single-file index search should not print filename, got: {stdout}"
-    );
-    assert!(!stdout.contains("one.txt"));
+    assert_stdout_contains(&out, "beta needle");
+    assert_stdout_not_contains(&out, "one.txt");
 }
 
 #[test]
 fn build_single_file_then_search_path_scope_accepts_that_file() {
-    let root = fresh_dir("search-single-file-scope");
-    let file = root.join("one.txt");
-    fs::write(&file, "needle here\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-single-file-scope");
+    p.write("one.txt", "needle here\n");
+    p.build_index_at(Path::new("one.txt"));
 
-    BuildIndexOptions::default().run(None, &idx, &file);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("needle")
-        .arg(&file)
-        .output()
-        .unwrap();
+    let out = p.index_output(["needle", "one.txt"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("needle here"),
-        "single-file explicit target should not print filename, got: {stdout}"
-    );
-    assert!(!stdout.contains("one.txt"));
+    assert_stdout_contains(&out, "needle here");
+    assert_stdout_not_contains(&out, "one.txt");
 }
 
 #[test]
 fn binary_files_are_skipped_by_default() {
-    let root = fresh_dir("search-binary-skip");
-    fs::write(root.join("text.txt"), "alpha βeta\n").unwrap();
-    fs::write(
-        root.join("bin.dat"),
-        b"prefix\0\xce\xb2\xce\xb5\xcf\x84\xce\xb1\n",
-    )
-    .unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-binary-skip");
+    p.write("text.txt", "alpha βeta\n");
+    p.write("bin.dat", b"prefix\0\xce\xb2\xce\xb5\xcf\x84\xce\xb1\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg(r"\p{Greek}+")
-        .output()
-        .unwrap();
+    let out = p.index_output([r"\p{Greek}+"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains(&rel_match("text.txt", "alpha βeta")),
-        "unexpected stdout: {stdout}"
-    );
-    assert!(
-        !stdout.contains("bin.dat"),
-        "binary file should be skipped: {stdout}"
-    );
+    assert_stdout_contains(&out, &rel_match("text.txt", "alpha βeta"));
+    assert_stdout_not_contains(&out, "bin.dat");
 }
 
 #[cfg(not(windows))]
@@ -261,28 +154,23 @@ fn binary_files_are_skipped_by_default() {
 fn symlinked_files_are_not_searched_by_default() {
     use std::os::unix::fs::symlink;
 
-    let root = fresh_dir("search-symlink-skip");
-    fs::create_dir_all(root.join("real")).unwrap();
-    fs::create_dir_all(root.join("link")).unwrap();
-    fs::write(root.join("real/target.txt"), "needle here\n").unwrap();
-    symlink(root.join("real/target.txt"), root.join("link/target.txt")).unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-symlink-skip");
+    p.mkdir("real");
+    p.mkdir("link");
+    p.write("real/target.txt", "needle here\n");
+    symlink(
+        p.root().join("real/target.txt"),
+        p.root().join("link/target.txt"),
+    )
+    .unwrap();
+    p.build_index();
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("needle")
-        .output()
-        .unwrap();
+    let out = p.index_output(["needle"]);
     assert_success(&out);
-
-    let lines: Vec<_> = normalized_stdout(&out)
-        .lines()
-        .map(str::to_string)
-        .collect();
-    assert_eq!(lines, [rel_match("real/target.txt", "needle here")]);
+    assert_stdout_eq(
+        &out,
+        &format!("{}\n", rel_match("real/target.txt", "needle here")),
+    );
 }
 
 #[cfg(not(windows))]
@@ -290,80 +178,46 @@ fn symlinked_files_are_not_searched_by_default() {
 fn follow_symlink_searches_linked_path() {
     use std::os::unix::fs::symlink;
 
-    let root = fresh_dir("search-follow-symlink");
-    fs::create_dir_all(root.join("real")).unwrap();
-    fs::create_dir_all(root.join("link")).unwrap();
-    fs::write(root.join("real/target.txt"), "needle here\n").unwrap();
-    symlink(root.join("real/target.txt"), root.join("link/target.txt")).unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("search-follow-symlink");
+    p.mkdir("real");
+    p.mkdir("link");
+    p.write("real/target.txt", "needle here\n");
+    symlink(
+        p.root().join("real/target.txt"),
+        p.root().join("link/target.txt"),
+    )
+    .unwrap();
+    p.build_index_follow();
 
-    BuildIndexOptions {
-        follow_symlinks: true,
-    }
-    .run(Some(&root), &idx, Path::new("."));
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--follow")
-        .arg("needle")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--follow", "needle"]);
     assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("needle here"),
-        "expected match through symlink: {stdout}"
-    );
-    assert!(
-        stdout.contains("link/target.txt"),
-        "expected symlink path in output: {stdout}"
-    );
+    assert_stdout_contains(&out, "needle here");
+    assert_stdout_contains(&out, "link/target.txt");
 }
 
 #[test]
 fn partial_index_missing_component_falls_back_to_walk() {
-    let root = fresh_dir("search-partial-index-walk");
-    fs::write(root.join("found.txt"), "unique_marker_partial_index\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, Path::new("."));
+    let p = TestProject::new("search-partial-index-walk");
+    p.write("found.txt", "unique_marker_partial_index\n");
+    p.build_index();
 
-    let postings = idx.join(".index").join("postings.bin");
+    let postings = p.root().join(".sift/.index/postings.bin");
     fs::remove_file(&postings).unwrap();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("unique_marker_partial_index")
-        .output()
-        .unwrap();
+    let out = p.index_output(["unique_marker_partial_index"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("unique_marker_partial_index"),
-        "expected walk fallback to find line: {stdout}"
-    );
+    assert_stdout_contains(&out, "unique_marker_partial_index");
 }
 
 #[test]
 fn invalid_meta_falls_back_to_walk() {
-    let root = fresh_dir("search-invalid-meta-walk");
-    fs::write(root.join("found.txt"), "unique_marker_bad_meta\n").unwrap();
-    let idx = root.join(".sift");
-    fs::create_dir_all(&idx).unwrap();
-    fs::write(idx.join("sift.meta"), "not valid json\n").unwrap();
+    let p = TestProject::new("search-invalid-meta-walk");
+    p.write("found.txt", "unique_marker_bad_meta\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("unique_marker_bad_meta")
-        .output()
-        .unwrap();
+    fs::create_dir_all(p.root().join(".sift")).unwrap();
+    fs::write(p.root().join(".sift/sift.meta"), "not valid json\n").unwrap();
+
+    let out = p.index_output(["unique_marker_bad_meta"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("unique_marker_bad_meta"),
-        "expected walk fallback to find line: {stdout}"
-    );
+    assert_stdout_contains(&out, "unique_marker_bad_meta");
 }

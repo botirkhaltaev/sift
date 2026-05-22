@@ -1,30 +1,21 @@
 mod common;
 
-use std::fs;
+use std::ffi::OsString;
 
-use common::{BuildIndexOptions, assert_success, command, fresh_dir, line_path, normalized_stdout};
+use common::{TestProject, assert_success, line_path, normalize_stdout};
 
 #[test]
 fn glob_include_only_matching_files() {
-    let root = fresh_dir("glob-include");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    fs::write(root.join("b.log"), "hello\n").unwrap();
-    fs::write(root.join("c.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-include");
+    p.write("a.txt", "hello\n");
+    p.write("b.log", "hello\n");
+    p.write("c.txt", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("*.txt")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "*.txt", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     let candidates = vec![
         "a.txt".to_string(),
         "b.log".to_string(),
@@ -52,25 +43,16 @@ fn glob_include_only_matching_files() {
 
 #[test]
 fn glob_exclude_pattern_excludes_matched_files() {
-    let root = fresh_dir("glob-exclude");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    fs::write(root.join("b.log"), "hello\n").unwrap();
-    fs::write(root.join("c.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-exclude");
+    p.write("a.txt", "hello\n");
+    p.write("b.log", "hello\n");
+    p.write("c.txt", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("!*.log")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "!*.log", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     let candidates = vec![
         "a.txt".to_string(),
         "b.log".to_string(),
@@ -97,26 +79,15 @@ fn glob_exclude_pattern_excludes_matched_files() {
 
 #[test]
 fn glob_multiple_patterns_later_wins() {
-    let root = fresh_dir("glob-multiple");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    fs::write(root.join("b.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-multiple");
+    p.write("a.txt", "hello\n");
+    p.write("b.txt", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("*.txt")
-        .arg("-g")
-        .arg("!a*.txt")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "*.txt", "-g", "!a*.txt", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("b.txt"),
         "b.txt should be included: {stdout}"
@@ -129,26 +100,17 @@ fn glob_multiple_patterns_later_wins() {
 
 #[test]
 fn glob_directory_matches_subtree() {
-    let root = fresh_dir("glob-dir");
-    fs::create_dir_all(root.join("foo/bar")).unwrap();
-    fs::write(root.join("foo/bar/baz.txt"), "hello\n").unwrap();
-    fs::write(root.join("foo/qux.log"), "hello\n").unwrap();
-    fs::write(root.join("other.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-dir");
+    p.mkdir("foo/bar");
+    p.write("foo/bar/baz.txt", "hello\n");
+    p.write("foo/qux.log", "hello\n");
+    p.write("other.txt", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("foo/**")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "foo/**", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("foo/bar/baz.txt"),
         "foo/** should match subdirectory: {stdout}"
@@ -165,27 +127,16 @@ fn glob_directory_matches_subtree() {
 
 #[test]
 fn glob_whitelist_then_exclude() {
-    let root = fresh_dir("glob-whitelist-exclude");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    fs::write(root.join("b.txt"), "hello\n").unwrap();
-    fs::write(root.join("c.log"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-whitelist-exclude");
+    p.write("a.txt", "hello\n");
+    p.write("b.txt", "hello\n");
+    p.write("c.log", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("*.txt")
-        .arg("-g")
-        .arg("!a*.txt")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "*.txt", "-g", "!a*.txt", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("b.txt"),
         "b.txt should be included: {stdout}"
@@ -198,23 +149,14 @@ fn glob_whitelist_then_exclude() {
 
 #[test]
 fn glob_only_whitelist_none_match_excludes_all() {
-    let root = fresh_dir("glob-no-match");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    fs::write(root.join("b.log"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-no-match");
+    p.write("a.txt", "hello\n");
+    p.write("b.log", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
+    let out = p.index_output(["-g", "*.xyz", "hello"]);
 
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("*.xyz")
-        .arg("hello")
-        .output()
-        .unwrap();
-
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.is_empty(),
         "no matching whitelist should exclude all: {stdout}"
@@ -223,20 +165,11 @@ fn glob_only_whitelist_none_match_excludes_all() {
 
 #[test]
 fn glob_invalid_pattern_returns_error() {
-    let root = fresh_dir("glob-invalid");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-invalid");
+    p.write("a.txt", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("[")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "[", "hello"]);
 
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -248,25 +181,15 @@ fn glob_invalid_pattern_returns_error() {
 
 #[test]
 fn glob_files_with_matches_includes_only_glob_matched() {
-    let root = fresh_dir("glob-files-with");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    fs::write(root.join("b.log"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-files-with");
+    p.write("a.txt", "hello\n");
+    p.write("b.log", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("*.txt")
-        .arg("-l")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "*.txt", "-l", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("a.txt"), "should contain a.txt: {stdout}");
     assert!(
         !stdout.contains("b.log"),
@@ -276,28 +199,24 @@ fn glob_files_with_matches_includes_only_glob_matched() {
 
 #[test]
 fn glob_combined_with_path_scope() {
-    let root = fresh_dir("glob-path-scope");
-    fs::create_dir_all(root.join("foo")).unwrap();
-    fs::create_dir_all(root.join("bar")).unwrap();
-    fs::write(root.join("foo/a.txt"), "hello\n").unwrap();
-    fs::write(root.join("bar/b.txt"), "hello\n").unwrap();
-    fs::write(root.join("bar/c.log"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-path-scope");
+    p.mkdir("foo");
+    p.mkdir("bar");
+    p.write("foo/a.txt", "hello\n");
+    p.write("bar/b.txt", "hello\n");
+    p.write("bar/c.log", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("*.txt")
-        .arg("hello")
-        .arg(root.join("foo"))
-        .output()
-        .unwrap();
+    let foo_arg: OsString = p.root().join("foo").into();
+    let out = p.index_output(vec![
+        OsString::from("-g"),
+        OsString::from("*.txt"),
+        OsString::from("hello"),
+        foo_arg,
+    ]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("foo/a.txt"),
         "should find foo/a.txt: {stdout}"
@@ -310,24 +229,15 @@ fn glob_combined_with_path_scope() {
 
 #[test]
 fn glob_case_sensitive_by_default() {
-    let root = fresh_dir("glob-case-sensitive-default");
-    fs::write(root.join("lower.txt"), "hello\n").unwrap();
-    fs::write(root.join("upper.TXT"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-case-sensitive-default");
+    p.write("lower.txt", "hello\n");
+    p.write("upper.TXT", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-g")
-        .arg("*.txt")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["-g", "*.txt", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     let candidates = vec!["lower.txt".to_string(), "upper.TXT".to_string()];
     let lines: Vec<_> = stdout
         .lines()
@@ -346,25 +256,15 @@ fn glob_case_sensitive_by_default() {
 
 #[test]
 fn glob_case_insensitive_flag() {
-    let root = fresh_dir("glob-case-insensitive");
-    fs::write(root.join("lower.txt"), "hello\n").unwrap();
-    fs::write(root.join("upper.TXT"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-case-insensitive");
+    p.write("lower.txt", "hello\n");
+    p.write("upper.TXT", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--glob-case-insensitive")
-        .arg("-g")
-        .arg("*.txt")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--glob-case-insensitive", "-g", "*.txt", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     let candidates = vec!["lower.txt".to_string(), "upper.TXT".to_string()];
     let lines: Vec<_> = stdout
         .lines()
@@ -383,26 +283,16 @@ fn glob_case_insensitive_flag() {
 
 #[test]
 fn glob_case_insensitive_with_negation() {
-    let root = fresh_dir("glob-case-insensitive-neg");
-    fs::write(root.join("skip.log"), "hello\n").unwrap();
-    fs::write(root.join("skip.LOG"), "hello\n").unwrap();
-    fs::write(root.join("keep.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-case-insensitive-neg");
+    p.write("skip.log", "hello\n");
+    p.write("skip.LOG", "hello\n");
+    p.write("keep.txt", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--glob-case-insensitive")
-        .arg("-g")
-        .arg("!*.log")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--glob-case-insensitive", "-g", "!*.log", "hello"]);
     assert_success(&out);
 
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     let candidates = vec![
         "skip.log".to_string(),
         "skip.LOG".to_string(),
@@ -427,25 +317,20 @@ fn glob_case_insensitive_with_negation() {
 
 #[test]
 fn glob_case_insensitive_precedence_last_wins() {
-    let root = fresh_dir("glob-case-insensitive-precedence");
-    fs::write(root.join("lower.txt"), "hello\n").unwrap();
-    fs::write(root.join("upper.TXT"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("glob-case-insensitive-precedence");
+    p.write("lower.txt", "hello\n");
+    p.write("upper.TXT", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out_on = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--glob-case-insensitive")
-        .arg("--no-glob-case-insensitive")
-        .arg("-g")
-        .arg("*.txt")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out_on = p.index_output([
+        "--glob-case-insensitive",
+        "--no-glob-case-insensitive",
+        "-g",
+        "*.txt",
+        "hello",
+    ]);
     assert_success(&out_on);
-    let stdout_on = normalized_stdout(&out_on);
+    let stdout_on = normalize_stdout(&out_on);
     let candidates = vec!["lower.txt".to_string(), "upper.TXT".to_string()];
     let lines_on: Vec<_> = stdout_on
         .lines()
@@ -461,18 +346,15 @@ fn glob_case_insensitive_precedence_last_wins() {
         "upper.TXT should not match when off: {lines_on:?}"
     );
 
-    let out_off = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--no-glob-case-insensitive")
-        .arg("--glob-case-insensitive")
-        .arg("-g")
-        .arg("*.txt")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out_off = p.index_output([
+        "--no-glob-case-insensitive",
+        "--glob-case-insensitive",
+        "-g",
+        "*.txt",
+        "hello",
+    ]);
     assert_success(&out_off);
-    let stdout_off = normalized_stdout(&out_off);
+    let stdout_off = normalize_stdout(&out_off);
     let lines_off: Vec<_> = stdout_off
         .lines()
         .filter(|l| !l.is_empty())

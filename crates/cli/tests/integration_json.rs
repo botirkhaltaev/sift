@@ -1,24 +1,15 @@
-//! `--json` JSON Lines output (ripgrep-compatible wire format via `grep-printer`).
-
 mod common;
 
-use std::ffi::OsString;
-use std::fs;
-
-use common::{BuildIndexOptions, assert_success, fresh_dir};
+use common::TestProject;
 
 #[test]
 fn json_emits_begin_match_end_and_summary() {
-    let root = fresh_dir("json-basic");
-    fs::write(root.join("a.txt"), "hello world\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("json-basic");
+    p.write("a.txt", "hello world\n");
+    p.build_index();
 
-    let mut cmd = common::command(Some(&root));
-    cmd.arg("--sift-dir").arg(&idx);
-    cmd.args([OsString::from("hello"), OsString::from("--json")]);
-    let output = cmd.output().unwrap();
-    assert_success(&output);
+    let output = p.index_output(["hello", "--json"]);
+    common::assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(
@@ -46,16 +37,12 @@ fn json_emits_begin_match_end_and_summary() {
 
 #[test]
 fn json_implies_stats_on_stderr() {
-    let root = fresh_dir("json-stats-stderr");
-    fs::write(root.join("a.txt"), "x\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("json-stats-stderr");
+    p.write("a.txt", "x\n");
+    p.build_index();
 
-    let mut cmd = common::command(Some(&root));
-    cmd.arg("--sift-dir").arg(&idx);
-    cmd.args([OsString::from("x"), OsString::from("--json")]);
-    let output = cmd.output().unwrap();
-    assert_success(&output);
+    let output = p.index_output(["x", "--json"]);
+    common::assert_success(&output);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("matches") && stderr.contains("bytes searched"),
@@ -65,19 +52,11 @@ fn json_implies_stats_on_stderr() {
 
 #[test]
 fn json_with_count_exits_error() {
-    let root = fresh_dir("json-bad-count");
-    fs::write(root.join("a.txt"), "a\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("json-bad-count");
+    p.write("a.txt", "a\n");
+    p.build_index();
 
-    let mut cmd = common::command(Some(&root));
-    cmd.arg("--sift-dir").arg(&idx);
-    cmd.args([
-        OsString::from("a"),
-        OsString::from("--json"),
-        OsString::from("--count"),
-    ]);
-    let output = cmd.output().unwrap();
+    let output = p.index_output(["a", "--json", "--count"]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

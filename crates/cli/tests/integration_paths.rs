@@ -1,88 +1,65 @@
 mod common;
 
-use std::fs;
-use std::path::Path;
-
-use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout};
+use common::TestProject;
 
 #[test]
 fn relative_path_scope_limits_matches() {
-    let root = fresh_dir("paths-relative-scope");
-    fs::create_dir_all(root.join("a")).unwrap();
-    fs::create_dir_all(root.join("b")).unwrap();
-    fs::write(root.join("a/x.txt"), "ONLY_IN_A\n").unwrap();
-    fs::write(root.join("b/y.txt"), "ONLY_IN_B\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("paths-relative-scope");
+    p.mkdir("a");
+    p.mkdir("b");
+    p.write("a/x.txt", "ONLY_IN_A\n");
+    p.write("b/y.txt", "ONLY_IN_B\n");
+    p.build_index();
 
-    BuildIndexOptions::default().run(Some(&root), &idx, Path::new("."));
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("ONLY_IN_")
-        .arg("a")
-        .output()
-        .unwrap();
-    assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
+    let out = p.index_output(["ONLY_IN_", "a"]);
+    common::assert_success(&out);
+    let stdout = common::normalize_stdout(&out);
     assert!(stdout.contains("a/x.txt") && stdout.contains("ONLY_IN_A"));
     assert!(!stdout.contains("b/y.txt"), "unexpected stdout: {stdout}");
 
-    let out_both = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("ONLY_IN_")
-        .arg("a")
-        .arg("b")
-        .output()
-        .unwrap();
-    assert_success(&out_both);
-
-    let stdout_both = normalized_stdout(&out_both);
+    let out_both = p.index_output(["ONLY_IN_", "a", "b"]);
+    common::assert_success(&out_both);
+    let stdout_both = common::normalize_stdout(&out_both);
     assert!(stdout_both.contains("a/x.txt") && stdout_both.contains("b/y.txt"));
 }
 
 #[test]
 fn absolute_path_scope_within_corpus_works() {
-    let root = fresh_dir("paths-absolute-scope");
-    fs::create_dir_all(root.join("a")).unwrap();
-    fs::create_dir_all(root.join("b")).unwrap();
-    fs::write(root.join("a/x.txt"), "alpha\n").unwrap();
-    fs::write(root.join("b/y.txt"), "alpha\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("paths-absolute-scope");
+    p.mkdir("a");
+    p.mkdir("b");
+    p.write("a/x.txt", "alpha\n");
+    p.write("b/y.txt", "alpha\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
+    let out = p
+        .sift()
         .arg("--sift-dir")
-        .arg(&idx)
+        .arg(p.root().join(".sift"))
         .arg("alpha")
-        .arg(root.join("a"))
+        .arg(p.root().join("a"))
         .output()
         .unwrap();
-    assert_success(&out);
-
-    let stdout = normalized_stdout(&out);
+    common::assert_success(&out);
+    let stdout = common::normalize_stdout(&out);
     assert!(stdout.contains("a/x.txt"));
     assert!(!stdout.contains("b/y.txt"), "unexpected stdout: {stdout}");
 }
 
 #[test]
 fn search_path_outside_corpus_exits_2() {
-    let root = fresh_dir("paths-outside-corpus");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    let outside = fresh_dir("paths-outside-corpus-elsewhere");
-    fs::write(outside.join("b.txt"), "hello\n").unwrap();
-    let idx = root.join(".sift");
+    let p = TestProject::new("paths-outside-corpus");
+    p.write("a.txt", "hello\n");
+    let outside = TestProject::new("paths-outside-corpus-elsewhere");
+    outside.write("b.txt", "hello\n");
+    p.build_index_at(p.root());
 
-    BuildIndexOptions::default().run(None, &idx, &root);
-
-    let out = command(None)
+    let out = p
+        .sift()
         .arg("--sift-dir")
-        .arg(&idx)
+        .arg(p.root().join(".sift"))
         .arg("hello")
-        .arg(outside)
+        .arg(outside.root())
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));

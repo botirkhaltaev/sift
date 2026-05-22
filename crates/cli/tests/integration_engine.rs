@@ -1,128 +1,76 @@
 mod common;
 
-use std::ffi::OsString;
-use std::fs;
-
-use common::{assert_index_and_walk_output, assert_success, command, fresh_dir, normalized_stdout};
+use common::{TestProject, assert_success, normalize_stdout};
 
 // ─── --no-config ──────────────────────────────────────────────────────────────
 
 #[test]
 fn no_config_flag_accepted_walk() {
-    let root = fresh_dir("engine-no-config");
-    fs::write(root.join("a.txt"), "hello world\n").unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("--no-config")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let p = TestProject::new("engine-no-config");
+    p.write("a.txt", "hello world\n");
+    let out = p.walk_output(["--no-config", "hello"]);
     assert_success(&out);
-    assert!(normalized_stdout(&out).contains("hello world"));
+    assert!(normalize_stdout(&out).contains("hello world"));
 }
 
 // ─── --unicode / --no-unicode ────────────────────────────────────────────────
 
 #[test]
 fn unicode_flag_accepted_walk() {
-    let root = fresh_dir("engine-unicode");
-    fs::write(root.join("a.txt"), "café\n").unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("--unicode")
-        .arg("café")
-        .output()
-        .unwrap();
+    let p = TestProject::new("engine-unicode");
+    p.write("a.txt", "café\n");
+    let out = p.walk_output(["--unicode", "café"]);
     assert_success(&out);
-    assert!(normalized_stdout(&out).contains("café"));
+    assert!(normalize_stdout(&out).contains("café"));
 }
 
 #[test]
 fn no_unicode_flag_accepted_walk() {
-    let root = fresh_dir("engine-no-unicode");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("--no-unicode")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let p = TestProject::new("engine-no-unicode");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--no-unicode", "hello"]);
     assert_success(&out);
-    assert!(normalized_stdout(&out).contains("hello"));
+    assert!(normalize_stdout(&out).contains("hello"));
 }
 
 #[test]
 fn unicode_consistent_index_and_walk() {
-    let root = fresh_dir("engine-unicode-idx");
-    fs::write(root.join("a.txt"), "café\n").unwrap();
-    assert_index_and_walk_output(
-        &root,
-        &[OsString::from("--unicode"), OsString::from("café")],
-        "a.txt:café\n",
-    );
+    let p = TestProject::new("engine-unicode-idx");
+    p.write("a.txt", "café\n");
+    p.assert_index_walk_same(&["--unicode", "café"], "a.txt:café\n");
 }
 
 // ─── --colors ────────────────────────────────────────────────────────────────
 
 #[test]
 fn colors_flag_accepted_walk() {
-    let root = fresh_dir("engine-colors");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("--colors")
-        .arg("match:fg:red")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let p = TestProject::new("engine-colors");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--colors", "match:fg:red", "hello"]);
     assert_success(&out);
-    assert!(normalized_stdout(&out).contains("hello"));
+    assert!(normalize_stdout(&out).contains("hello"));
 }
 
 // ─── --regex-size-limit ──────────────────────────────────────────────────────
 
 #[test]
 fn regex_size_limit_accepted_walk() {
-    let root = fresh_dir("engine-regex-limit");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("--regex-size-limit")
-        .arg("10M")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let p = TestProject::new("engine-regex-limit");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--regex-size-limit", "10M", "hello"]);
     assert_success(&out);
-    assert!(normalized_stdout(&out).contains("hello"));
+    assert!(normalize_stdout(&out).contains("hello"));
 }
 
 #[test]
 fn regex_size_limit_suffix_parsing_walk() {
-    let root = fresh_dir("engine-regex-limit-suffix");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    let sift_dir = root.join(".sift-missing");
+    let p = TestProject::new("engine-regex-limit-suffix");
+    p.write("a.txt", "hello\n");
     for suffix in ["1K", "1M", "1G"] {
-        let out = command(Some(&root))
-            .arg("--sift-dir")
-            .arg(&sift_dir)
-            .arg("--regex-size-limit")
-            .arg(suffix)
-            .arg("hello")
-            .output()
-            .unwrap();
+        let out = p.walk_output(["--regex-size-limit", suffix, "hello"]);
         assert_success(&out);
         assert!(
-            normalized_stdout(&out).contains("hello"),
+            normalize_stdout(&out).contains("hello"),
             "failed with suffix {suffix}"
         );
     }
@@ -132,42 +80,25 @@ fn regex_size_limit_suffix_parsing_walk() {
 
 #[test]
 fn dfa_size_limit_accepted_walk() {
-    let root = fresh_dir("engine-dfa-limit");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("--dfa-size-limit")
-        .arg("10M")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let p = TestProject::new("engine-dfa-limit");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--dfa-size-limit", "10M", "hello"]);
     assert_success(&out);
-    assert!(normalized_stdout(&out).contains("hello"));
+    assert!(normalize_stdout(&out).contains("hello"));
 }
 
 // ─── -M / --max-columns ─────────────────────────────────────────────────────
 
 #[test]
 fn max_columns_omits_long_lines_walk() {
-    let root = fresh_dir("engine-maxcol-omit");
-    fs::write(
-        root.join("a.txt"),
+    let p = TestProject::new("engine-maxcol-omit");
+    p.write(
+        "a.txt",
         "short\nthis line is very long and exceeds the limit\n",
-    )
-    .unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("-M")
-        .arg("10")
-        .arg(".")
-        .output()
-        .unwrap();
+    );
+    let out = p.walk_output(["-M", "10", "."]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("short"), "short line should appear");
     assert!(
         !stdout.contains("this line is very long"),
@@ -177,24 +108,14 @@ fn max_columns_omits_long_lines_walk() {
 
 #[test]
 fn max_columns_preview_truncates_long_lines_walk() {
-    let root = fresh_dir("engine-maxcol-preview");
-    fs::write(
-        root.join("a.txt"),
+    let p = TestProject::new("engine-maxcol-preview");
+    p.write(
+        "a.txt",
         "short\nthis line is very long and exceeds the limit\n",
-    )
-    .unwrap();
-    let sift_dir = root.join(".sift-missing");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&sift_dir)
-        .arg("-M")
-        .arg("10")
-        .arg("--max-columns-preview")
-        .arg(".")
-        .output()
-        .unwrap();
+    );
+    let out = p.walk_output(["-M", "10", "--max-columns-preview", "."]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("short"), "short line should appear");
     assert!(
         stdout.contains("[... omitted end ...]"),
@@ -204,71 +125,42 @@ fn max_columns_preview_truncates_long_lines_walk() {
 
 #[test]
 fn max_columns_consistent_index_and_walk() {
-    let root = fresh_dir("engine-maxcol-idx");
-    fs::write(
-        root.join("a.txt"),
+    let p = TestProject::new("engine-maxcol-idx");
+    p.write(
+        "a.txt",
         "short\nthis line is very long and exceeds the limit\n",
-    )
-    .unwrap();
-    assert_index_and_walk_output(
-        &root,
-        &[
-            OsString::from("-M"),
-            OsString::from("10"),
-            OsString::from("--max-columns-preview"),
-            OsString::from("."),
-        ],
+    );
+    p.assert_index_walk_same(
+        &["-M", "10", "--max-columns-preview", "."],
         "a.txt:short\na.txt:this line  [... omitted end ...]\n",
     );
 }
 
 #[test]
 fn max_columns_without_preview_omits_consistently() {
-    let root = fresh_dir("engine-maxcol-nopreview-idx");
-    fs::write(
-        root.join("a.txt"),
+    let p = TestProject::new("engine-maxcol-nopreview-idx");
+    p.write(
+        "a.txt",
         "short\nthis line is very long and exceeds the limit\n",
-    )
-    .unwrap();
-    assert_index_and_walk_output(
-        &root,
-        &[
-            OsString::from("-M"),
-            OsString::from("10"),
-            OsString::from("."),
-        ],
-        "a.txt:short\n",
     );
+    p.assert_index_walk_same(&["-M", "10", "."], "a.txt:short\n");
 }
 
 // ─── --regex-size-limit / --dfa-size-limit consistent index & walk ──────────
 
 #[test]
 fn regex_size_limit_consistent_index_and_walk() {
-    let root = fresh_dir("engine-regex-limit-idx");
-    fs::write(root.join("a.txt"), "hello world\n").unwrap();
-    assert_index_and_walk_output(
-        &root,
-        &[
-            OsString::from("--regex-size-limit"),
-            OsString::from("10M"),
-            OsString::from("hello"),
-        ],
+    let p = TestProject::new("engine-regex-limit-idx");
+    p.write("a.txt", "hello world\n");
+    p.assert_index_walk_same(
+        &["--regex-size-limit", "10M", "hello"],
         "a.txt:hello world\n",
     );
 }
 
 #[test]
 fn dfa_size_limit_consistent_index_and_walk() {
-    let root = fresh_dir("engine-dfa-limit-idx");
-    fs::write(root.join("a.txt"), "hello world\n").unwrap();
-    assert_index_and_walk_output(
-        &root,
-        &[
-            OsString::from("--dfa-size-limit"),
-            OsString::from("10M"),
-            OsString::from("hello"),
-        ],
-        "a.txt:hello world\n",
-    );
+    let p = TestProject::new("engine-dfa-limit-idx");
+    p.write("a.txt", "hello world\n");
+    p.assert_index_walk_same(&["--dfa-size-limit", "10M", "hello"], "a.txt:hello world\n");
 }

@@ -1,24 +1,16 @@
 mod common;
 
-use std::fs;
-
-use common::{assert_success, command, fresh_dir, normalized_stdout};
+use common::{TestProject, assert_success, normalize_stdout};
 
 // ─── --threads / -j ────────────────────────────────────────────────────────────
 
 #[test]
 fn threads_flag_runs_search_walk() {
-    let root = fresh_dir("threads-walk");
-    fs::write(root.join("a.txt"), "hello world\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-j", "1", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("threads-walk");
+    p.write("a.txt", "hello world\n");
+    let out = p.walk_output(["-j", "1", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("hello world"),
         "expected match with -j 1, got: {stdout}"
@@ -27,17 +19,11 @@ fn threads_flag_runs_search_walk() {
 
 #[test]
 fn threads_flag_accepts_larger_value_walk() {
-    let root = fresh_dir("threads-large-walk");
-    fs::write(root.join("a.txt"), "line\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--threads", "4", "line"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("threads-large-walk");
+    p.write("a.txt", "line\n");
+    let out = p.walk_output(["--threads", "4", "line"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("line"),
         "expected match with --threads 4, got: {stdout}"
@@ -48,17 +34,11 @@ fn threads_flag_accepts_larger_value_walk() {
 
 #[test]
 fn line_buffered_accepted_walk() {
-    let root = fresh_dir("line-buffered-walk");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--line-buffered", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("line-buffered-walk");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--line-buffered", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("hello"),
         "expected output with --line-buffered, got: {stdout}"
@@ -67,17 +47,11 @@ fn line_buffered_accepted_walk() {
 
 #[test]
 fn block_buffered_accepted_walk() {
-    let root = fresh_dir("block-buffered-walk");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--block-buffered", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("block-buffered-walk");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--block-buffered", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("hello"),
         "expected output with --block-buffered, got: {stdout}"
@@ -88,19 +62,11 @@ fn block_buffered_accepted_walk() {
 
 #[test]
 fn path_separator_replaces_separator_walk() {
-    let root = fresh_dir("path-sep-walk");
-    let sub = root.join("sub");
-    fs::create_dir_all(&sub).unwrap();
-    fs::write(sub.join("a.txt"), "match\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--path-separator", ":", "match"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("path-sep-walk");
+    p.write("sub/a.txt", "match\n");
+    let out = p.walk_output(["--path-separator", ":", "match"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("sub:a.txt"),
         "expected path with ':' separator, got: {stdout}"
@@ -111,17 +77,11 @@ fn path_separator_replaces_separator_walk() {
 
 #[test]
 fn one_file_system_accepted_walk() {
-    let root = fresh_dir("one-fs-walk");
-    fs::write(root.join("a.txt"), "data\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--one-file-system", "data"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("one-fs-walk");
+    p.write("a.txt", "data\n");
+    let out = p.walk_output(["--one-file-system", "data"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("data"),
         "expected match with --one-file-system, got: {stdout}"
@@ -132,17 +92,11 @@ fn one_file_system_accepted_walk() {
 
 #[test]
 fn mmap_flag_accepted_walk() {
-    let root = fresh_dir("mmap-walk");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--mmap", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("mmap-walk");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--mmap", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("hello"),
         "expected output with --mmap, got: {stdout}"
@@ -151,17 +105,11 @@ fn mmap_flag_accepted_walk() {
 
 #[test]
 fn no_mmap_flag_accepted_walk() {
-    let root = fresh_dir("no-mmap-walk");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--no-mmap", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("no-mmap-walk");
+    p.write("a.txt", "hello\n");
+    let out = p.walk_output(["--no-mmap", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("hello"),
         "expected output with --no-mmap, got: {stdout}"
@@ -172,17 +120,11 @@ fn no_mmap_flag_accepted_walk() {
 
 #[test]
 fn multiline_matches_across_lines_walk() {
-    let root = fresh_dir("multiline-walk");
-    fs::write(root.join("a.txt"), "foo\nbar\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-U", r"foo\nbar"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("multiline-walk");
+    p.write("a.txt", "foo\nbar\n");
+    let out = p.walk_output(["-U", r"foo\nbar"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("foo") && stdout.contains("bar"),
         "expected multiline match, got: {stdout}"
@@ -191,17 +133,11 @@ fn multiline_matches_across_lines_walk() {
 
 #[test]
 fn multiline_long_flag_walk() {
-    let root = fresh_dir("multiline-long-walk");
-    fs::write(root.join("a.txt"), "alpha\nbeta\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--multiline", r"alpha\nbeta"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("multiline-long-walk");
+    p.write("a.txt", "alpha\nbeta\n");
+    let out = p.walk_output(["--multiline", r"alpha\nbeta"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("alpha") && stdout.contains("beta"),
         "expected multiline match, got: {stdout}"
@@ -212,17 +148,11 @@ fn multiline_long_flag_walk() {
 
 #[test]
 fn multiline_dotall_dot_matches_newline_walk() {
-    let root = fresh_dir("dotall-walk");
-    fs::write(root.join("a.txt"), "start\nend\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-U", "--multiline-dotall", "start.end"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("dotall-walk");
+    p.write("a.txt", "start\nend\n");
+    let out = p.walk_output(["-U", "--multiline-dotall", "start.end"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("start") && stdout.contains("end"),
         "expected dotall match, got: {stdout}"
@@ -233,17 +163,11 @@ fn multiline_dotall_dot_matches_newline_walk() {
 
 #[test]
 fn crlf_flag_matches_with_carriage_return_walk() {
-    let root = fresh_dir("crlf-walk");
-    fs::write(root.join("a.txt"), "hello world\r\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--crlf", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("crlf-walk");
+    p.write("a.txt", "hello world\r\n");
+    let out = p.walk_output(["--crlf", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("hello"),
         "expected match with --crlf, got: {stdout}"
@@ -252,18 +176,11 @@ fn crlf_flag_matches_with_carriage_return_walk() {
 
 #[test]
 fn crlf_word_boundary_respects_cr_walk() {
-    let root = fresh_dir("crlf-word-walk");
-    // With CRLF, `world$` should match `world\r\n`
-    fs::write(root.join("a.txt"), "hello world\r\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--crlf", "world$"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("crlf-word-walk");
+    p.write("a.txt", "hello world\r\n");
+    let out = p.walk_output(["--crlf", "world$"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("world"),
         "expected 'world' with --crlf and $, got: {stdout}"
@@ -274,60 +191,32 @@ fn crlf_word_boundary_respects_cr_walk() {
 
 #[test]
 fn multiline_consistent_index_and_walk() {
-    let root = fresh_dir("multiline-consistency");
-    fs::write(root.join("a.txt"), "foo\nbar\n").unwrap();
-
-    let idx_dir = root.join(".sift");
-    common::BuildIndexOptions::default().run(Some(&root), &idx_dir, std::path::Path::new("."));
-
-    let index_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx_dir)
-        .args(["-U", r"foo\nbar"])
-        .output()
-        .unwrap();
-    let walk_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-U", r"foo\nbar"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("multiline-consistency");
+    p.write("a.txt", "foo\nbar\n");
+    p.build_index();
+    let index_out = p.index_output(["-U", r"foo\nbar"]);
+    let walk_out = p.walk_output(["-U", r"foo\nbar"]);
     assert_success(&index_out);
     assert_success(&walk_out);
-    let index_stdout = normalized_stdout(&index_out);
-    let walk_stdout = normalized_stdout(&walk_out);
     assert_eq!(
-        index_stdout, walk_stdout,
+        normalize_stdout(&index_out),
+        normalize_stdout(&walk_out),
         "index and walk multiline results differ"
     );
 }
 
 #[test]
 fn threads_consistent_index_and_walk() {
-    let root = fresh_dir("threads-consistency");
-    fs::write(root.join("a.txt"), "hello\n").unwrap();
-
-    let idx_dir = root.join(".sift");
-    common::BuildIndexOptions::default().run(Some(&root), &idx_dir, std::path::Path::new("."));
-
-    let index_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx_dir)
-        .args(["-j", "1", "hello"])
-        .output()
-        .unwrap();
-    let walk_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-j", "1", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("threads-consistency");
+    p.write("a.txt", "hello\n");
+    p.build_index();
+    let index_out = p.index_output(["-j", "1", "hello"]);
+    let walk_out = p.walk_output(["-j", "1", "hello"]);
     assert_success(&index_out);
     assert_success(&walk_out);
-    let index_stdout = normalized_stdout(&index_out);
-    let walk_stdout = normalized_stdout(&walk_out);
     assert_eq!(
-        index_stdout, walk_stdout,
+        normalize_stdout(&index_out),
+        normalize_stdout(&walk_out),
         "index and walk results differ with -j 1"
     );
 }

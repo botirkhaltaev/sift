@@ -1,27 +1,16 @@
 mod common;
 
-use std::fs;
-
-use common::{
-    BuildIndexOptions, assert_index_and_walk_output, assert_success, command, fresh_dir,
-    normalized_stdout, rel_match,
-};
+use common::{TestProject, assert_success, normalize_stdout, rel_match};
 
 // ─── --replace / -r ──────────────────────────────────────────────────────────
 
 #[test]
 fn replace_literal_walk() {
-    let root = fresh_dir("replace-literal-walk");
-    fs::write(root.join("a.txt"), "hello world\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-r", "planet", "world"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("replace-literal-walk");
+    p.write("a.txt", "hello world\n");
+    let out = p.walk_output(["-r", "planet", "world"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("hello planet"),
         "expected replacement output, got: {stdout}"
@@ -30,29 +19,21 @@ fn replace_literal_walk() {
 
 #[test]
 fn replace_literal_consistent_index_and_walk() {
-    let root = fresh_dir("replace-literal-both");
-    fs::write(root.join("a.txt"), "hello world\n").unwrap();
-
-    assert_index_and_walk_output(
-        &root,
-        &["-r".into(), "planet".into(), "world".into()],
+    let p = TestProject::new("replace-literal-both");
+    p.write("a.txt", "hello world\n");
+    p.assert_index_walk_same(
+        &["-r", "planet", "world"],
         &format!("{}\n", rel_match("a.txt", "hello planet")),
     );
 }
 
 #[test]
 fn replace_with_capture_groups_walk() {
-    let root = fresh_dir("replace-capture-walk");
-    fs::write(root.join("a.txt"), "foo123bar\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-r", "${1}_${2}", "(foo)(\\d+)", "a.txt"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("replace-capture-walk");
+    p.write("a.txt", "foo123bar\n");
+    let out = p.walk_output(["-r", "${1}_${2}", "(foo)(\\d+)", "a.txt"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("foo_123bar"),
         "expected capture-group replacement, got: {stdout}"
@@ -61,19 +42,12 @@ fn replace_with_capture_groups_walk() {
 
 #[test]
 fn replace_with_capture_groups_index() {
-    let root = fresh_dir("replace-capture-index");
-    fs::write(root.join("a.txt"), "foo123bar\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .args(["-r", "${1}_${2}", "(foo)(\\d+)"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("replace-capture-index");
+    p.write("a.txt", "foo123bar\n");
+    p.build_index();
+    let out = p.index_output(["-r", "${1}_${2}", "(foo)(\\d+)"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("foo_123bar"),
         "expected capture-group replacement, got: {stdout}"
@@ -84,17 +58,11 @@ fn replace_with_capture_groups_index() {
 
 #[test]
 fn trim_removes_leading_whitespace_walk() {
-    let root = fresh_dir("trim-walk");
-    fs::write(root.join("a.txt"), "    indented line\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--trim", "indented"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("trim-walk");
+    p.write("a.txt", "    indented line\n");
+    let out = p.walk_output(["--trim", "indented"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("indented line"),
         "expected trimmed output, got: {stdout}"
@@ -107,12 +75,10 @@ fn trim_removes_leading_whitespace_walk() {
 
 #[test]
 fn trim_consistent_index_and_walk() {
-    let root = fresh_dir("trim-both");
-    fs::write(root.join("a.txt"), "    hello world\n").unwrap();
-
-    assert_index_and_walk_output(
-        &root,
-        &["--trim".into(), "hello".into()],
+    let p = TestProject::new("trim-both");
+    p.write("a.txt", "    hello world\n");
+    p.assert_index_walk_same(
+        &["--trim", "hello"],
         &format!("{}\n", rel_match("a.txt", "hello world")),
     );
 }
@@ -121,19 +87,11 @@ fn trim_consistent_index_and_walk() {
 
 #[test]
 fn byte_offset_shows_position_walk() {
-    let root = fresh_dir("byte-offset-walk");
-    // "first line\n" = 11 bytes, then "hello world\n"
-    fs::write(root.join("a.txt"), "first line\nhello world\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["-b", "hello"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("byte-offset-walk");
+    p.write("a.txt", "first line\nhello world\n");
+    let out = p.walk_output(["-b", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    // byte offset of "hello world" is 11
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("11:"),
         "expected byte offset 11, got: {stdout}"
@@ -142,12 +100,10 @@ fn byte_offset_shows_position_walk() {
 
 #[test]
 fn byte_offset_consistent_index_and_walk() {
-    let root = fresh_dir("byte-offset-both");
-    fs::write(root.join("a.txt"), "abc\nhello\n").unwrap();
-
-    assert_index_and_walk_output(
-        &root,
-        &["-b".into(), "hello".into()],
+    let p = TestProject::new("byte-offset-both");
+    p.write("a.txt", "abc\nhello\n");
+    p.assert_index_walk_same(
+        &["-b", "hello"],
         &format!("{}\n", rel_match("a.txt", "4:hello")),
     );
 }
@@ -156,17 +112,11 @@ fn byte_offset_consistent_index_and_walk() {
 
 #[test]
 fn passthru_shows_all_lines_walk() {
-    let root = fresh_dir("passthru-walk");
-    fs::write(root.join("a.txt"), "first\nhello\nthird\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--passthru", "hello", "a.txt"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("passthru-walk");
+    p.write("a.txt", "first\nhello\nthird\n");
+    let out = p.walk_output(["--passthru", "hello", "a.txt"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("first"),
         "passthru should show non-matching lines, got: {stdout}"
@@ -183,17 +133,11 @@ fn passthru_shows_all_lines_walk() {
 
 #[test]
 fn passthru_alias_passthrough_walk() {
-    let root = fresh_dir("passthrough-alias-walk");
-    fs::write(root.join("a.txt"), "first\nhello\nthird\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--passthrough", "hello", "a.txt"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("passthrough-alias-walk");
+    p.write("a.txt", "first\nhello\nthird\n");
+    let out = p.walk_output(["--passthrough", "hello", "a.txt"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("first") && stdout.contains("third"),
         "passthrough alias should show all lines, got: {stdout}"
@@ -204,18 +148,12 @@ fn passthru_alias_passthrough_walk() {
 
 #[test]
 fn include_zero_in_count_mode_walk() {
-    let root = fresh_dir("include-zero-walk");
-    fs::write(root.join("a.txt"), "match\n").unwrap();
-    fs::write(root.join("b.txt"), "nothing here\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--count", "--include-zero", "match"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("include-zero-walk");
+    p.write("a.txt", "match\n");
+    p.write("b.txt", "nothing here\n");
+    let out = p.walk_output(["--count", "--include-zero", "match"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("a.txt:1"),
         "should show a.txt with count 1, got: {stdout}"
@@ -228,20 +166,13 @@ fn include_zero_in_count_mode_walk() {
 
 #[test]
 fn include_zero_in_count_mode_index() {
-    let root = fresh_dir("include-zero-index");
-    fs::write(root.join("a.txt"), "match\n").unwrap();
-    fs::write(root.join("b.txt"), "nothing here\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .args(["--count", "--include-zero", "match"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("include-zero-index");
+    p.write("a.txt", "match\n");
+    p.write("b.txt", "nothing here\n");
+    p.build_index();
+    let out = p.index_output(["--count", "--include-zero", "match"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("a.txt:1"),
         "should show a.txt with count 1, got: {stdout}"
@@ -254,18 +185,12 @@ fn include_zero_in_count_mode_index() {
 
 #[test]
 fn count_without_include_zero_omits_zero_files_walk() {
-    let root = fresh_dir("no-include-zero-walk");
-    fs::write(root.join("a.txt"), "match\n").unwrap();
-    fs::write(root.join("b.txt"), "nothing here\n").unwrap();
-
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(root.join("missing-index"))
-        .args(["--count", "match"])
-        .output()
-        .unwrap();
+    let p = TestProject::new("no-include-zero-walk");
+    p.write("a.txt", "match\n");
+    p.write("b.txt", "nothing here\n");
+    let out = p.walk_output(["--count", "match"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("a.txt:1"),
         "should show a.txt with count 1, got: {stdout}"
