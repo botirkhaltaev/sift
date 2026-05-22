@@ -27,12 +27,15 @@ impl CaseMode {
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub struct SearchMatchFlags: u8 {
+    pub struct SearchMatchFlags: u16 {
         const INVERT_MATCH     = 1 << 0;
         const FIXED_STRINGS    = 1 << 1;
         const WORD_REGEXP      = 1 << 2;
         const LINE_REGEXP      = 1 << 3;
         const ONLY_MATCHING    = 1 << 4;
+        const MULTILINE        = 1 << 5;
+        const MULTILINE_DOTALL = 1 << 6;
+        const CRLF             = 1 << 7;
     }
 }
 
@@ -92,6 +95,21 @@ impl SearchOptions {
     #[must_use]
     pub const fn only_matching(&self) -> bool {
         self.flags.contains(SearchMatchFlags::ONLY_MATCHING)
+    }
+
+    #[must_use]
+    pub const fn multiline(&self) -> bool {
+        self.flags.contains(SearchMatchFlags::MULTILINE)
+    }
+
+    #[must_use]
+    pub const fn multiline_dotall(&self) -> bool {
+        self.flags.contains(SearchMatchFlags::MULTILINE_DOTALL)
+    }
+
+    #[must_use]
+    pub const fn crlf(&self) -> bool {
+        self.flags.contains(SearchMatchFlags::CRLF)
     }
 
     #[must_use]
@@ -207,6 +225,8 @@ pub struct SearchRecordStyle {
     /// `-0` / `--null`: end path-only records with NUL instead of newline.
     pub null_data: bool,
     pub color: ColorChoice,
+    /// `--path-separator`: override the platform path separator in output.
+    pub path_separator: Option<u8>,
 }
 
 impl Default for SearchRecordStyle {
@@ -214,6 +234,7 @@ impl Default for SearchRecordStyle {
         Self {
             null_data: false,
             color: ColorChoice::Auto,
+            path_separator: None,
         }
     }
 }

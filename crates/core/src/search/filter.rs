@@ -75,6 +75,8 @@ pub struct SearchFilterConfig {
     pub type_include: Vec<String>,
     /// Type names to exclude (`-T`/`--type-not`).
     pub type_exclude: Vec<String>,
+    /// `--one-file-system`: do not cross filesystem boundaries.
+    pub one_file_system: bool,
 }
 
 /// Pre-computed candidate for efficient batch filtering and search.
@@ -102,6 +104,7 @@ pub struct SearchFilter {
     max_depth: Option<usize>,
     max_filesize: Option<u64>,
     type_glob: Option<Override>,
+    one_file_system: bool,
 }
 
 impl SearchFilter {
@@ -139,6 +142,12 @@ impl SearchFilter {
     #[must_use]
     pub const fn max_filesize(&self) -> Option<u64> {
         self.max_filesize
+    }
+
+    /// Whether to stay on the same filesystem when walking.
+    #[must_use]
+    pub const fn one_file_system(&self) -> bool {
+        self.one_file_system
     }
 
     /// Build a search filter from configuration.
@@ -194,6 +203,7 @@ impl SearchFilter {
             max_depth: config.max_depth,
             max_filesize: config.max_filesize,
             type_glob,
+            one_file_system: config.one_file_system,
         })
     }
 

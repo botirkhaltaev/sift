@@ -37,10 +37,20 @@ fn should_color(records: SearchRecordStyle) -> bool {
 }
 
 #[inline]
-fn display_path_for_candidate(candidate: &CandidateInfo, display: PathDisplay) -> String {
-    match display {
+fn display_path_for_candidate(
+    candidate: &CandidateInfo,
+    display: PathDisplay,
+    path_separator: Option<u8>,
+) -> String {
+    let raw = match display {
         PathDisplay::Absolute => candidate.abs_path.display().to_string(),
         PathDisplay::Relative => candidate.rel_path.display().to_string(),
+    };
+    if let Some(sep) = path_separator {
+        let sep_char = sep as char;
+        raw.replace(std::path::MAIN_SEPARATOR, &sep_char.to_string())
+    } else {
+        raw
     }
 }
 
@@ -327,7 +337,14 @@ impl CompiledSearch {
             return Err(crate::Error::InvalidMaxCount);
         }
 
-        let abs_paths = collect_abs_paths_for_scopes(filter_root, filter)?;
+        let abs_paths = collect_abs_paths_for_scopes(
+            filter_root,
+            filter.scopes(),
+            filter.follow_links(),
+            filter.one_file_system(),
+            filter.max_depth(),
+            filter.max_filesize(),
+        )?;
         if abs_paths.is_empty() {
             if let Some(s) = stats {
                 *s = SearchStats::default();
@@ -670,7 +687,11 @@ impl CompiledSearch {
                         sink_output.lines.filename_mode = FilenameMode::Never;
                     }
                     let mut bytes = Vec::new();
-                    let display = display_path_for_candidate(candidate, output.lines.path_display);
+                    let display = display_path_for_candidate(
+                        candidate,
+                        output.lines.path_display,
+                        output.records.path_separator,
+                    );
                     let mut sink = StandardSink::new(
                         matcher,
                         sink_output,
@@ -697,8 +718,11 @@ impl CompiledSearch {
                         if should_color(output.records) {
                             out.extend_from_slice(ANSI_PATH);
                         }
-                        let display =
-                            display_path_for_candidate(candidate, output.lines.path_display);
+                        let display = display_path_for_candidate(
+                            candidate,
+                            output.lines.path_display,
+                            output.records.path_separator,
+                        );
                         write!(out, "{display}")?;
                         if should_color(output.records) {
                             out.extend_from_slice(ANSI_RESET);
@@ -748,7 +772,11 @@ impl CompiledSearch {
                     c.fetch_add(1, Ordering::Relaxed);
                 }
                 any_match |= mode_is_success(output.mode, result);
-                let display = display_path_for_candidate(candidate, output.lines.path_display);
+                let display = display_path_for_candidate(
+                    candidate,
+                    output.lines.path_display,
+                    output.records.path_separator,
+                );
                 write_summary_record(&mut out, output, &display, result)?;
                 if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result)
                 {
@@ -955,7 +983,11 @@ impl<'a> StandardWorker<'a> {
             if heading {
                 sink_output.lines.filename_mode = FilenameMode::Never;
             }
-            let display = display_path_for_candidate(candidate, self.output.lines.path_display);
+            let display = display_path_for_candidate(
+                candidate,
+                self.output.lines.path_display,
+                self.output.records.path_separator,
+            );
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
@@ -997,8 +1029,11 @@ impl<'a> StandardWorker<'a> {
                     if should_color(self.output.records) {
                         out.extend_from_slice(ANSI_PATH);
                     }
-                    let display =
-                        display_path_for_candidate(candidate, self.output.lines.path_display);
+                    let display = display_path_for_candidate(
+                        candidate,
+                        self.output.lines.path_display,
+                        self.output.records.path_separator,
+                    );
                     let _ = write!(out, "{display}");
                     if should_color(self.output.records) {
                         out.extend_from_slice(ANSI_RESET);
@@ -1309,7 +1344,11 @@ impl<'a> SummaryWorker<'a> {
         }
         let matched = mode_is_success(output.mode, result);
         let mut bytes = Vec::new();
-        let display = display_path_for_candidate(candidate, output.lines.path_display);
+        let display = display_path_for_candidate(
+            candidate,
+            output.lines.path_display,
+            output.records.path_separator,
+        );
         let _ = write_summary_record(&mut bytes, output, &display, result);
         if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result) {
             stop.store(true, Ordering::SeqCst);
@@ -1670,6 +1709,7 @@ const fn mode_is_success(mode: SearchMode, result: FileSummary) -> bool {
 fn walk_directory_files(
     root: &Path,
     follow_links: bool,
+    one_file_system: bool,
     max_depth: Option<usize>,
     max_filesize: Option<u64>,
 ) -> crate::Result<Vec<PathBuf>> {
@@ -1677,6 +1717,7 @@ fn walk_directory_files(
     let mut builder = ignore::WalkBuilder::new(&root);
     builder
         .follow_links(follow_links)
+        .same_file_system(one_file_system)
         .hidden(false)
         .parents(false)
         .ignore(false)
@@ -1710,11 +1751,15 @@ fn walk_directory_files(
 /// Collect absolute file paths for each scope under `filter_root` (same walk policy as index build).
 fn collect_abs_paths_for_scopes(
     filter_root: &Path,
-    filter: &SearchFilter,
+    scopes: &[PathBuf],
+    follow_links: bool,
+    one_file_system: bool,
+    max_depth: Option<usize>,
+    max_filesize: Option<u64>,
 ) -> crate::Result<Vec<PathBuf>> {
     let filter_root = filter_root.canonicalize()?;
     let mut out = Vec::new();
-    for scope in filter.scopes() {
+    for scope in scopes {
         let path = if scope.as_os_str().is_empty() {
             filter_root.clone()
         } else {
@@ -1729,9 +1774,10 @@ fn collect_abs_paths_for_scopes(
         } else if path.is_dir() {
             out.extend(walk_directory_files(
                 &path,
-                filter.follow_links(),
-                filter.max_depth(),
-                filter.max_filesize(),
+                follow_links,
+                one_file_system,
+                max_depth,
+                max_filesize,
             )?);
         }
     }

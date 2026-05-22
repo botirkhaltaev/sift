@@ -62,6 +62,7 @@ const fn make_output(mode: SearchMode, emission: sift_core::OutputEmission) -> S
         records: SearchRecordStyle {
             null_data: false,
             color: ColorChoice::Never,
+            path_separator: None,
         },
         passthru: false,
         include_zero: false,

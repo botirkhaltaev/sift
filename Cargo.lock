@@ -797,6 +797,7 @@ dependencies = [
  "bitflags",
  "clap",
  "ignore",
+ "rayon",
  "sift-core",
 ]
 
