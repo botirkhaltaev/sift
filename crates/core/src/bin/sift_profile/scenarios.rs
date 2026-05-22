@@ -36,9 +36,6 @@ impl Scenario {
 
     pub fn default_filter() -> SearchFilterConfig {
         SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
-            glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Respect,
                 ignore: IgnoreConfig {
@@ -47,7 +44,7 @@ impl Scenario {
                     require_git: true,
                 },
             },
-            follow_links: false,
+            ..SearchFilterConfig::default()
         }
     }
 }
@@ -236,21 +233,11 @@ fn glob_include() -> Scenario {
         vec!["beta".to_string()],
         SearchOptions::default(),
         SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
             glob: GlobConfig {
                 patterns: vec!["**/*.txt".to_string()],
                 case_insensitive: false,
             },
-            visibility: VisibilityConfig {
-                hidden: HiddenMode::Respect,
-                ignore: IgnoreConfig {
-                    sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                    custom_files: Vec::new(),
-                    require_git: true,
-                },
-            },
-            follow_links: false,
+            ..Scenario::default_filter()
         },
         default_output(),
     )
@@ -262,21 +249,11 @@ fn glob_exclude() -> Scenario {
         vec!["beta".to_string()],
         SearchOptions::default(),
         SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
             glob: GlobConfig {
                 patterns: vec!["!**/*.txt".to_string()],
                 case_insensitive: false,
             },
-            visibility: VisibilityConfig {
-                hidden: HiddenMode::Respect,
-                ignore: IgnoreConfig {
-                    sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                    custom_files: Vec::new(),
-                    require_git: true,
-                },
-            },
-            follow_links: false,
+            ..Scenario::default_filter()
         },
         default_output(),
     )
@@ -288,21 +265,11 @@ fn glob_casei() -> Scenario {
         vec!["beta".to_string()],
         SearchOptions::default(),
         SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
             glob: GlobConfig {
                 patterns: vec!["**/*.TXT".to_string()],
                 case_insensitive: true,
             },
-            visibility: VisibilityConfig {
-                hidden: HiddenMode::Respect,
-                ignore: IgnoreConfig {
-                    sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                    custom_files: Vec::new(),
-                    require_git: true,
-                },
-            },
-            follow_links: false,
+            ..Scenario::default_filter()
         },
         default_output(),
     )
@@ -313,20 +280,7 @@ fn hidden_default() -> Scenario {
         "hidden_default",
         vec!["beta".to_string()],
         SearchOptions::default(),
-        SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
-            glob: GlobConfig::default(),
-            visibility: VisibilityConfig {
-                hidden: HiddenMode::Respect,
-                ignore: IgnoreConfig {
-                    sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                    custom_files: Vec::new(),
-                    require_git: true,
-                },
-            },
-            follow_links: false,
-        },
+        Scenario::default_filter(),
         default_output(),
     )
 }
@@ -337,18 +291,11 @@ fn hidden_include() -> Scenario {
         vec!["beta".to_string()],
         SearchOptions::default(),
         SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
-            glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
-                ignore: IgnoreConfig {
-                    sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                    custom_files: Vec::new(),
-                    require_git: true,
-                },
+                ..Scenario::default_filter().visibility
             },
-            follow_links: false,
+            ..Scenario::default_filter()
         },
         default_output(),
     )
@@ -359,20 +306,7 @@ fn ignore_default() -> Scenario {
         "ignore_default",
         vec!["beta".to_string()],
         SearchOptions::default(),
-        SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
-            glob: GlobConfig::default(),
-            visibility: VisibilityConfig {
-                hidden: HiddenMode::Respect,
-                ignore: IgnoreConfig {
-                    sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                    custom_files: Vec::new(),
-                    require_git: true,
-                },
-            },
-            follow_links: false,
-        },
+        Scenario::default_filter(),
         default_output(),
     )
 }
@@ -383,9 +317,6 @@ fn ignore_custom() -> Scenario {
         vec!["beta".to_string()],
         SearchOptions::default(),
         SearchFilterConfig {
-            scopes: vec![],
-            exclude_paths: vec![],
-            glob: GlobConfig::default(),
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Respect,
                 ignore: IgnoreConfig {
@@ -394,7 +325,7 @@ fn ignore_custom() -> Scenario {
                     require_git: false,
                 },
             },
-            follow_links: false,
+            ..SearchFilterConfig::default()
         },
         default_output(),
     )
@@ -407,17 +338,7 @@ fn scoped_search() -> Scenario {
         SearchOptions::default(),
         SearchFilterConfig {
             scopes: vec![PathBuf::from("subdir")],
-            exclude_paths: vec![],
-            glob: GlobConfig::default(),
-            visibility: VisibilityConfig {
-                hidden: HiddenMode::Respect,
-                ignore: IgnoreConfig {
-                    sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                    custom_files: Vec::new(),
-                    require_git: true,
-                },
-            },
-            follow_links: false,
+            ..Scenario::default_filter()
         },
         make_output(
             SearchMode::FilesWithMatches,

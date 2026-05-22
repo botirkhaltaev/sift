@@ -159,9 +159,6 @@ fn sift_criterion() -> Criterion {
 
 fn default_filter() -> SearchFilterConfig {
     SearchFilterConfig {
-        scopes: vec![],
-        exclude_paths: vec![],
-        glob: GlobConfig::default(),
         visibility: VisibilityConfig {
             hidden: HiddenMode::Respect,
             ignore: IgnoreConfig {
@@ -170,7 +167,7 @@ fn default_filter() -> SearchFilterConfig {
                 require_git: true,
             },
         },
-        follow_links: false,
+        ..SearchFilterConfig::default()
     }
 }
 
@@ -643,86 +640,46 @@ fn bench_alternation_casei(c: &mut Criterion) {
 
 fn glob_include_filter() -> SearchFilterConfig {
     SearchFilterConfig {
-        scopes: vec![],
-        exclude_paths: vec![],
         glob: GlobConfig {
             patterns: vec!["**/*.txt".to_string()],
             case_insensitive: false,
         },
-        visibility: VisibilityConfig {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                custom_files: Vec::new(),
-                require_git: true,
-            },
-        },
-        follow_links: false,
+        ..default_filter()
     }
 }
 
 fn glob_exclude_filter() -> SearchFilterConfig {
     SearchFilterConfig {
-        scopes: vec![],
-        exclude_paths: vec![],
         glob: GlobConfig {
             patterns: vec!["!**/*.txt".to_string()],
             case_insensitive: false,
         },
-        visibility: VisibilityConfig {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                custom_files: Vec::new(),
-                require_git: true,
-            },
-        },
-        follow_links: false,
+        ..default_filter()
     }
 }
 
 fn glob_casei_filter() -> SearchFilterConfig {
     SearchFilterConfig {
-        scopes: vec![],
-        exclude_paths: vec![],
         glob: GlobConfig {
             patterns: vec!["**/*.TXT".to_string()],
             case_insensitive: true,
         },
-        visibility: VisibilityConfig {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                custom_files: Vec::new(),
-                require_git: true,
-            },
-        },
-        follow_links: false,
+        ..default_filter()
     }
 }
 
 fn hidden_include_filter() -> SearchFilterConfig {
     SearchFilterConfig {
-        scopes: vec![],
-        exclude_paths: vec![],
-        glob: GlobConfig::default(),
         visibility: VisibilityConfig {
             hidden: HiddenMode::Include,
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                custom_files: Vec::new(),
-                require_git: true,
-            },
+            ..default_filter().visibility
         },
-        follow_links: false,
+        ..default_filter()
     }
 }
 
 fn ignore_custom_filter() -> SearchFilterConfig {
     SearchFilterConfig {
-        scopes: vec![],
-        exclude_paths: vec![],
-        glob: GlobConfig::default(),
         visibility: VisibilityConfig {
             hidden: HiddenMode::Respect,
             ignore: IgnoreConfig {
@@ -731,24 +688,14 @@ fn ignore_custom_filter() -> SearchFilterConfig {
                 require_git: false,
             },
         },
-        follow_links: false,
+        ..SearchFilterConfig::default()
     }
 }
 
 fn scoped_filter(subdir: &str) -> SearchFilterConfig {
     SearchFilterConfig {
         scopes: vec![PathBuf::from(subdir)],
-        exclude_paths: vec![],
-        glob: GlobConfig::default(),
-        visibility: VisibilityConfig {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                custom_files: Vec::new(),
-                require_git: true,
-            },
-        },
-        follow_links: false,
+        ..default_filter()
     }
 }
 
