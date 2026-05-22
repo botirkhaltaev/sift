@@ -19,12 +19,19 @@ impl CompiledSearch {
                 builder.case_smart(true);
             }
         }
+        builder.unicode(self.opts.unicode);
         builder.fixed_strings(self.opts.fixed_strings());
         if self.opts.word_regexp() {
             builder.word(true);
         }
         if self.opts.line_regexp() {
             builder.whole_line(true);
+        }
+        if self.opts.regex_size_limit > 0 {
+            builder.size_limit(self.opts.regex_size_limit);
+        }
+        if self.opts.dfa_size_limit > 0 {
+            builder.dfa_size_limit(self.opts.dfa_size_limit);
         }
         if self.opts.crlf() {
             builder.crlf(true);

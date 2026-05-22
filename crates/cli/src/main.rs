@@ -86,6 +86,10 @@ struct Cli {
     multiline_decl: MultilineDecl,
     #[command(flatten)]
     walker_decl: WalkerDecl,
+    #[command(flatten)]
+    engine_decl: EngineDecl,
+    #[command(flatten)]
+    columns_decl: ColumnsDecl,
 }
 
 #[derive(Args)]
@@ -102,6 +106,40 @@ struct SeparatorDecl {
     field_match: Option<String>,
     #[arg(long = "field-context-separator", value_name = "SEPARATOR")]
     field_context: Option<String>,
+}
+
+/// Regex engine and configuration flags.
+#[derive(Args)]
+struct EngineDecl {
+    /// Disable loading of ripgrep config files (no-op for sift).
+    #[arg(long = "no-config")]
+    no_config: bool,
+    /// Enable Unicode mode for the regex engine.
+    #[arg(long = "unicode")]
+    unicode: bool,
+    /// Disable Unicode mode for the regex engine.
+    #[arg(long = "no-unicode")]
+    no_unicode: bool,
+    /// Color specification strings (accepted for ripgrep compatibility).
+    #[arg(long = "colors", value_name = "COLOR_SPEC")]
+    colors: Vec<String>,
+    /// Compiled regex size limit (e.g. 10M, 1G).
+    #[arg(long = "regex-size-limit", value_name = "NUM+SUFFIX?")]
+    regex_size_limit: Option<String>,
+    /// DFA size limit (e.g. 10M, 1G).
+    #[arg(long = "dfa-size-limit", value_name = "NUM+SUFFIX?")]
+    dfa_size_limit: Option<String>,
+}
+
+/// Column-limit flags.
+#[derive(Args)]
+struct ColumnsDecl {
+    /// Omit or truncate lines longer than NUM columns.
+    #[arg(short = 'M', long = "max-columns", value_name = "NUM")]
+    max_columns: Option<u64>,
+    /// Show a preview of long lines instead of omitting them.
+    #[arg(long = "max-columns-preview")]
+    max_columns_preview: bool,
 }
 
 /// Declares `--json` / `--no-json` for clap; effective value uses [`resolve_json_from_args`].
@@ -1312,6 +1350,8 @@ struct SearchOutputCtx {
     trim: bool,
     include_zero: bool,
     path_separator: Option<u8>,
+    max_columns: Option<u64>,
+    max_columns_preview: bool,
 }
 
 /// Resolved visibility, ignore sources, and glob case (from argv order + clap) for [`SearchFilterConfig`].
@@ -1677,6 +1717,21 @@ impl Cli {
         if self.multiline_decl.crlf {
             opts.flags |= SearchMatchFlags::CRLF;
         }
+        if self.engine_decl.no_unicode {
+            opts.unicode = false;
+        } else if self.engine_decl.unicode {
+            opts.unicode = true;
+        }
+        if let Some(ref limit) = self.engine_decl.regex_size_limit {
+            if let Ok(bytes) = parse_size_suffix(limit) {
+                opts.regex_size_limit = bytes as usize;
+            }
+        }
+        if let Some(ref limit) = self.engine_decl.dfa_size_limit {
+            if let Ok(bytes) = parse_size_suffix(limit) {
+                opts.dfa_size_limit = bytes as usize;
+            }
+        }
         opts.replace.clone_from(&self.replace_decl.replace);
         opts.before_context = before_context;
         opts.after_context = after_context;
@@ -1755,6 +1810,8 @@ impl Cli {
                 .path_separator
                 .as_ref()
                 .and_then(|s| s.as_bytes().first().copied()),
+            max_columns: self.columns_decl.max_columns,
+            max_columns_preview: self.columns_decl.max_columns_preview,
         };
         let filter = SearchFilterCtx {
             hidden: ignore_res.hidden,
@@ -1797,6 +1854,8 @@ impl Cli {
                 filename_mode,
                 flags: line_flags,
                 path_display,
+                max_columns: out.max_columns,
+                max_columns_preview: out.max_columns_preview,
             },
             SearchRecordStyle {
                 null_data: out.format.null_data,
@@ -1850,6 +1909,8 @@ impl Cli {
                 filename_mode,
                 flags: line_flags,
                 path_display,
+                max_columns: out.max_columns,
+                max_columns_preview: out.max_columns_preview,
             },
             SearchRecordStyle {
                 null_data: out.format.null_data,

@@ -51,7 +51,7 @@ pub enum BinaryMode {
     AsText,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub flags: SearchMatchFlags,
     pub case_mode: CaseMode,
@@ -64,6 +64,29 @@ pub struct SearchOptions {
     pub binary_mode: BinaryMode,
     /// Replacement string for `--replace`; `None` = no replacement.
     pub replace: Option<String>,
+    /// Whether to enable Unicode mode in the regex engine (default: true).
+    pub unicode: bool,
+    /// Compiled regex size limit in bytes (0 = use engine default).
+    pub regex_size_limit: usize,
+    /// DFA size limit in bytes (0 = use engine default).
+    pub dfa_size_limit: usize,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            flags: SearchMatchFlags::default(),
+            case_mode: CaseMode::default(),
+            max_results: None,
+            before_context: 0,
+            after_context: 0,
+            binary_mode: BinaryMode::default(),
+            replace: None,
+            unicode: true,
+            regex_size_limit: 0,
+            dfa_size_limit: 0,
+        }
+    }
 }
 
 impl SearchOptions {
@@ -185,6 +208,10 @@ pub struct SearchLineStyle {
     pub filename_mode: FilenameMode,
     pub flags: LineStyleFlags,
     pub path_display: PathDisplay,
+    /// Maximum columns per line (`-M`); lines exceeding this are omitted or previewed.
+    pub max_columns: Option<u64>,
+    /// Show a preview of truncated lines instead of omitting them entirely.
+    pub max_columns_preview: bool,
 }
 
 impl SearchLineStyle {
@@ -215,6 +242,8 @@ impl Default for SearchLineStyle {
             filename_mode: FilenameMode::Auto,
             flags: LineStyleFlags::empty(),
             path_display: PathDisplay::default(),
+            max_columns: None,
+            max_columns_preview: false,
         }
     }
 }
