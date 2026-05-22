@@ -183,6 +183,7 @@ const fn output_std() -> SearchOutput {
             filename_mode: FilenameMode::Auto,
             heading: false,
             line_number: false,
+            column: false,
             path_display: PathDisplay::Relative,
         },
         records: SearchRecordStyle {
@@ -201,6 +202,7 @@ const fn output_quiet(mode: SearchMode) -> SearchOutput {
             filename_mode: FilenameMode::Auto,
             heading: false,
             line_number: false,
+            column: false,
             path_display: PathDisplay::Relative,
         },
         records: SearchRecordStyle {

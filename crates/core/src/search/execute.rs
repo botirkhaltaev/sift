@@ -1020,10 +1020,17 @@ impl Sink for StandardSink<'_> {
             return Ok(true);
         }
 
+        let show_column = self.output.lines.column;
+
         if matches!(self.output.mode, SearchMode::OnlyMatching) {
             let line_number = mat.line_number();
             let line = mat.bytes();
             let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
+                let col = if show_column {
+                    Some(m.start() + 1)
+                } else {
+                    None
+                };
                 let _ = write_standard_prefix(
                     self.bytes,
                     self.output,
@@ -1031,6 +1038,7 @@ impl Sink for StandardSink<'_> {
                     line_number,
                     self.show_line_numbers,
                     false,
+                    col,
                 );
                 let _ = self.bytes.write_all(&line[m.start()..m.end()]);
                 let _ = self.bytes.write_all(b"\n");
@@ -1039,6 +1047,18 @@ impl Sink for StandardSink<'_> {
             return Ok(true);
         }
 
+        let col = if show_column {
+            let line = mat.bytes();
+            let mut first_col = None;
+            let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
+                first_col = Some(m.start() + 1);
+                false
+            });
+            first_col
+        } else {
+            None
+        };
+
         write_standard_prefix(
             self.bytes,
             self.output,
@@ -1046,6 +1066,7 @@ impl Sink for StandardSink<'_> {
             mat.line_number(),
             self.show_line_numbers,
             false,
+            col,
         )?;
         self.bytes.write_all(mat.bytes())?;
         if !mat.bytes().ends_with(b"\n") {
@@ -1068,6 +1089,7 @@ impl Sink for StandardSink<'_> {
             ctx.line_number(),
             self.show_line_numbers,
             true,
+            None,
         )?;
         self.bytes.write_all(ctx.bytes())?;
         if !ctx.bytes().ends_with(b"\n") {
@@ -1450,6 +1472,7 @@ fn write_standard_prefix(
     line_number: Option<u64>,
     show_line_numbers: bool,
     is_context_line: bool,
+    column: Option<usize>,
 ) -> io::Result<()> {
     let color = should_color(output.records);
     let print_filename = output.lines.filename_mode != FilenameMode::Never;
@@ -1470,6 +1493,15 @@ fn write_standard_prefix(
         }
         let sep = if is_context_line { '-' } else { ':' };
         write!(out, "{}{}", line_number.unwrap_or(0), sep)?;
+        if color {
+            out.extend_from_slice(ANSI_RESET);
+        }
+    }
+    if let Some(col) = column {
+        if color {
+            out.extend_from_slice(ANSI_LINE);
+        }
+        write!(out, "{col}:")?;
         if color {
             out.extend_from_slice(ANSI_RESET);
         }

@@ -140,6 +140,7 @@ pub struct SearchLineStyle {
     pub filename_mode: FilenameMode,
     pub heading: bool,
     pub line_number: bool,
+    pub column: bool,
     pub path_display: PathDisplay,
 }
 
@@ -149,6 +150,7 @@ impl Default for SearchLineStyle {
             filename_mode: FilenameMode::Auto,
             heading: false,
             line_number: false,
+            column: false,
             path_display: PathDisplay::default(),
         }
     }

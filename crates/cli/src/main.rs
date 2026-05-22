@@ -12,6 +12,7 @@ use sift_core::{
 };
 
 #[derive(Parser)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -32,6 +33,8 @@ struct Cli {
     out3: OutputFlagsC,
     #[command(flatten)]
     out4: OutputFlagsD,
+    #[command(flatten)]
+    out5: OutputFlagsE,
     #[command(flatten)]
     glob_flags: GlobFlags,
     #[command(flatten)]
@@ -166,6 +169,8 @@ struct RegexFlagsB {
 struct OutputFlagsA {
     #[arg(short = 'n', long = "line-number")]
     line_number: bool,
+    #[arg(short = 'N', long = "no-line-number")]
+    no_line_number: bool,
 }
 
 #[derive(Args)]
@@ -182,6 +187,16 @@ struct OutputFlagsD {
     heading: bool,
     #[arg(long = "no-heading")]
     no_heading: bool,
+}
+
+#[derive(Args)]
+struct OutputFlagsE {
+    #[arg(long = "column")]
+    column: bool,
+    #[arg(long = "vimgrep")]
+    vimgrep: bool,
+    #[arg(short = 'p', long = "pretty")]
+    pretty: bool,
 }
 
 fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
@@ -441,6 +456,36 @@ fn resolve_heading_from_args(args: &[String]) -> bool {
                 last_idx = i;
                 result = value;
             }
+        }
+    }
+    result
+}
+
+fn resolve_line_number_from_args(args: &[String]) -> Option<bool> {
+    let mut last_idx = 0usize;
+    let mut result = None;
+    for (i, arg) in args.iter().enumerate() {
+        let bytes = arg.as_bytes();
+        let value = if bytes.len() == 2 && bytes[0] == b'-' {
+            match bytes.get(1) {
+                Some(&b'n') => Some(true),
+                Some(&b'N') => Some(false),
+                _ => None,
+            }
+        } else if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
+            match &bytes[2..] {
+                b"line-number" => Some(true),
+                b"no-line-number" => Some(false),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(value) = value
+            && i > last_idx
+        {
+            last_idx = i;
+            result = Some(value);
         }
     }
     result
@@ -979,6 +1024,8 @@ struct SearchLineResolveCtx {
     heading: bool,
     with_filename: Option<bool>,
     is_path_mode: bool,
+    column: bool,
+    line_number: Option<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -1068,6 +1115,11 @@ fn run_search_with_index(
         corpus_is_single_file,
     );
     let path_display = effective_path_display(&cli.search_scope.paths);
+    let line_number = resolve_effective_line_number(
+        cli.out1.line_number,
+        out.lines.line_number,
+        out.output_format,
+    );
     let output = search_output(
         out.output_format,
         out.mode.effective_mode,
@@ -1075,8 +1127,8 @@ fn run_search_with_index(
         SearchLineStyle {
             filename_mode,
             heading: out.lines.heading,
-            line_number: cli.out1.line_number
-                || matches!(out.output_format, SearchOutputFormat::Json),
+            line_number,
+            column: out.lines.column,
             path_display,
         },
         SearchRecordStyle {
@@ -1097,6 +1149,21 @@ fn run_search_with_index(
         .map_err(Into::into)
 }
 
+/// Resolve effective `line_number` from `-n`/`-N`/`--pretty`/`--vimgrep` + JSON override.
+const fn resolve_effective_line_number(
+    clap_line_number: bool,
+    line_number_override: Option<bool>,
+    output_format: SearchOutputFormat,
+) -> bool {
+    if matches!(output_format, SearchOutputFormat::Json) {
+        return true;
+    }
+    match line_number_override {
+        Some(val) => val,
+        None => clap_line_number,
+    }
+}
+
 fn run_search_walk(
     cli: &Cli,
     query: &CompiledSearch,
@@ -1110,6 +1177,11 @@ fn run_search_walk(
     let filename_mode =
         effective_filename_mode(out.lines.with_filename, out.lines.is_path_mode, false);
     let path_display = effective_path_display(&cli.search_scope.paths);
+    let line_number = resolve_effective_line_number(
+        cli.out1.line_number,
+        out.lines.line_number,
+        out.output_format,
+    );
     let output = search_output(
         out.output_format,
         out.mode.effective_mode,
@@ -1117,8 +1189,8 @@ fn run_search_walk(
         SearchLineStyle {
             filename_mode,
             heading: out.lines.heading,
-            line_number: cli.out1.line_number
-                || matches!(out.output_format, SearchOutputFormat::Json),
+            line_number,
+            column: out.lines.column,
             path_display,
         },
         SearchRecordStyle {
@@ -1139,13 +1211,27 @@ fn run_search_walk(
         .map_err(Into::into)
 }
 
-fn run_search(cli: &Cli) -> anyhow::Result<bool> {
-    let patterns = resolve_patterns(
-        &cli.patterns.regexp,
-        cli.patterns.pattern_file.as_deref(),
-        cli.patterns.pattern.as_deref(),
-    )?;
+#[allow(clippy::struct_excessive_bools)]
+struct ResolvedArgs {
+    glob_case_insensitive: bool,
+    hidden: bool,
+    ignore_sources: IgnoreSources,
+    require_git: bool,
+    before_context: usize,
+    after_context: usize,
+    null_data: bool,
+    color: ColorChoice,
+    heading: bool,
+    with_filename: Option<bool>,
+    line_number_override: Option<bool>,
+    mode: SearchMode,
+    only_matching: bool,
+    quiet: bool,
+    use_json: bool,
+    print_stats: bool,
+}
 
+fn resolve_argv(cli: &Cli) -> ResolvedArgs {
     let args: Vec<String> = std::env::args().collect();
     let invert_match = resolve_invert_match_from_args(&args);
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
@@ -1155,8 +1241,52 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     let color = resolve_color_from_args(&args);
     let heading = resolve_heading_from_args(&args);
     let with_filename = resolve_with_filename_from_args(&args);
-
+    let line_number_override = resolve_line_number_from_args(&args);
     let (mode, only_matching, quiet) = resolve_output_mode(&args, invert_match);
+    let use_json = resolve_json_from_args(&args);
+    let print_stats = resolve_stats_from_args(&args) || use_json;
+
+    let pretty = cli.out5.pretty;
+    let vimgrep = cli.out5.vimgrep;
+
+    let line_number_override = if pretty || vimgrep {
+        Some(true)
+    } else {
+        line_number_override
+    };
+
+    ResolvedArgs {
+        glob_case_insensitive,
+        hidden,
+        ignore_sources,
+        require_git,
+        before_context,
+        after_context,
+        null_data,
+        color,
+        heading,
+        with_filename,
+        line_number_override,
+        mode,
+        only_matching,
+        quiet,
+        use_json,
+        print_stats,
+    }
+}
+
+fn run_search(cli: &Cli) -> anyhow::Result<bool> {
+    let patterns = resolve_patterns(
+        &cli.patterns.regexp,
+        cli.patterns.pattern_file.as_deref(),
+        cli.patterns.pattern.as_deref(),
+    )?;
+
+    let ra = resolve_argv(cli);
+
+    let vimgrep = cli.out5.vimgrep;
+    let pretty = cli.out5.pretty;
+    let column = cli.out5.column || vimgrep;
 
     let mut opts = cli.search_flags.to_options();
     opts.max_results = cli.paths.max_count;
@@ -1169,24 +1299,23 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
     if cli.regex2.line_regexp {
         opts.flags |= SearchMatchFlags::LINE_REGEXP;
     }
-    if only_matching {
+    if ra.only_matching {
         opts.flags |= SearchMatchFlags::ONLY_MATCHING;
     }
-    opts.before_context = before_context;
-    opts.after_context = after_context;
-    if only_matching {
+    opts.before_context = ra.before_context;
+    opts.after_context = ra.after_context;
+    if ra.only_matching {
         opts.before_context = 0;
         opts.after_context = 0;
     }
 
-    let effective_mode = if only_matching {
+    let effective_mode = if ra.only_matching {
         SearchMode::OnlyMatching
     } else {
-        mode
+        ra.mode
     };
 
-    let use_json = resolve_json_from_args(&args);
-    if use_json {
+    if ra.use_json {
         match effective_mode {
             SearchMode::Count
             | SearchMode::CountMatches
@@ -1199,7 +1328,7 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
             SearchMode::Standard | SearchMode::OnlyMatching => {}
         }
     }
-    let print_stats = resolve_stats_from_args(&args) || use_json;
+    let print_stats = ra.print_stats;
 
     let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
     let cwd = std::env::current_dir()?;
@@ -1209,28 +1338,40 @@ fn run_search(cli: &Cli) -> anyhow::Result<bool> {
         SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
     );
 
+    let effective_heading = ra.heading || pretty;
+    let effective_color = if pretty && ra.color == ColorChoice::Auto {
+        ColorChoice::Always
+    } else {
+        ra.color
+    };
+
     let out = SearchOutputCtx {
         mode: SearchModeCtx {
             effective_mode,
-            quiet,
+            quiet: ra.quiet,
         },
         lines: SearchLineResolveCtx {
-            heading,
-            with_filename,
+            heading: effective_heading,
+            with_filename: ra.with_filename,
             is_path_mode,
+            column,
+            line_number: ra.line_number_override,
         },
-        format: SearchFormatCtx { null_data, color },
-        output_format: if use_json {
+        format: SearchFormatCtx {
+            null_data: ra.null_data,
+            color: effective_color,
+        },
+        output_format: if ra.use_json {
             SearchOutputFormat::Json
         } else {
             SearchOutputFormat::Text
         },
     };
     let filter = SearchFilterCtx {
-        hidden,
-        ignore_sources,
-        require_git,
-        glob_case_insensitive,
+        hidden: ra.hidden,
+        ignore_sources: ra.ignore_sources,
+        require_git: ra.require_git,
+        glob_case_insensitive: ra.glob_case_insensitive,
     };
 
     match Index::open(&cli.paths.sift_dir) {
