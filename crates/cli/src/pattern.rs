@@ -393,3 +393,300 @@ impl Cli {
         opts
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(ToString::to_string).collect()
+    }
+
+    // ── resolve_case_mode_from_args ──
+
+    #[test]
+    fn case_mode_default_sensitive() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "pat"])),
+            CaseMode::Sensitive
+        );
+    }
+
+    #[test]
+    fn case_mode_ignore_case_short() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "-i", "pat"])),
+            CaseMode::Insensitive
+        );
+    }
+
+    #[test]
+    fn case_mode_case_sensitive_short() {
+        // -s is --case-sensitive, but resolves via short check
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "-s", "pat"])),
+            CaseMode::Sensitive
+        );
+    }
+
+    #[test]
+    fn case_mode_smart_case_short() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "-S", "pat"])),
+            CaseMode::Smart
+        );
+    }
+
+    #[test]
+    fn case_mode_ignore_case_long() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "--ignore-case", "pat"])),
+            CaseMode::Insensitive
+        );
+    }
+
+    #[test]
+    fn case_mode_case_sensitive_long() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "--case-sensitive", "pat"])),
+            CaseMode::Sensitive
+        );
+    }
+
+    #[test]
+    fn case_mode_smart_case_long() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "--smart-case", "pat"])),
+            CaseMode::Smart
+        );
+    }
+
+    #[test]
+    fn case_mode_last_wins_ignore_then_sensitive() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "-i", "-s", "pat"])),
+            CaseMode::Sensitive
+        );
+    }
+
+    #[test]
+    fn case_mode_last_wins_smart_then_ignore() {
+        assert_eq!(
+            resolve_case_mode_from_args(&args(&["sift", "-S", "-i", "pat"])),
+            CaseMode::Insensitive
+        );
+    }
+
+    // ── resolve_invert_match_from_args ──
+
+    #[test]
+    fn invert_match_no_flag() {
+        assert!(!resolve_invert_match_from_args(&args(&["sift", "pat"])));
+    }
+
+    #[test]
+    fn invert_match_short() {
+        assert!(resolve_invert_match_from_args(&args(&[
+            "sift", "-v", "pat"
+        ])));
+    }
+
+    #[test]
+    fn invert_match_long() {
+        assert!(resolve_invert_match_from_args(&args(&[
+            "sift",
+            "--invert-match",
+            "pat"
+        ])));
+    }
+
+    #[test]
+    fn invert_match_dash_dash_terminates() {
+        assert!(!resolve_invert_match_from_args(&args(&[
+            "sift", "--", "-v", "pat"
+        ])));
+    }
+
+    #[test]
+    fn invert_match_flag_before_dash_dash() {
+        assert!(resolve_invert_match_from_args(&args(&[
+            "sift", "-v", "--", "pat"
+        ])));
+    }
+
+    // ── resolve_output_mode ──
+
+    #[test]
+    fn output_mode_default() {
+        let (mode, only_matching, quiet) = resolve_output_mode(&args(&["sift", "pat"]), false);
+        assert_eq!(mode, SearchMode::Standard);
+        assert!(!only_matching);
+        assert!(!quiet);
+    }
+
+    #[test]
+    fn output_mode_count() {
+        let (mode, only_matching, quiet) =
+            resolve_output_mode(&args(&["sift", "-c", "pat"]), false);
+        assert_eq!(mode, SearchMode::Count);
+        assert!(!only_matching);
+        assert!(!quiet);
+    }
+
+    #[test]
+    fn output_mode_count_matches() {
+        let (mode, only_matching, quiet) =
+            resolve_output_mode(&args(&["sift", "--count-matches", "pat"]), false);
+        assert_eq!(mode, SearchMode::CountMatches);
+        assert!(!only_matching);
+        assert!(!quiet);
+    }
+
+    #[test]
+    fn output_mode_files_with_matches() {
+        let (mode, only_matching, quiet) =
+            resolve_output_mode(&args(&["sift", "-l", "pat"]), false);
+        assert_eq!(mode, SearchMode::FilesWithMatches);
+        assert!(!only_matching);
+        assert!(!quiet);
+    }
+
+    #[test]
+    fn output_mode_files_without_match() {
+        let (mode, only_matching, quiet) =
+            resolve_output_mode(&args(&["sift", "--files-without-match", "pat"]), false);
+        assert_eq!(mode, SearchMode::FilesWithoutMatch);
+        assert!(!only_matching);
+        assert!(!quiet);
+    }
+
+    #[test]
+    fn output_mode_only_matching() {
+        let (mode, only_matching, quiet) =
+            resolve_output_mode(&args(&["sift", "-o", "pat"]), false);
+        assert_eq!(mode, SearchMode::Standard);
+        assert!(only_matching);
+        assert!(!quiet);
+    }
+
+    #[test]
+    fn output_mode_quiet() {
+        let (mode, only_matching, quiet) =
+            resolve_output_mode(&args(&["sift", "-q", "pat"]), false);
+        assert_eq!(mode, SearchMode::Standard);
+        assert!(!only_matching);
+        assert!(quiet);
+    }
+
+    #[test]
+    fn output_mode_count_and_only_matching_becomes_count_matches() {
+        let (mode, only_matching, _quiet) =
+            resolve_output_mode(&args(&["sift", "-c", "-o", "pat"]), false);
+        assert_eq!(mode, SearchMode::CountMatches);
+        assert!(!only_matching);
+    }
+
+    #[test]
+    fn output_mode_last_wins() {
+        let (mode, _, _) = resolve_output_mode(&args(&["sift", "-c", "-l", "pat"]), false);
+        assert_eq!(mode, SearchMode::FilesWithMatches);
+    }
+
+    #[test]
+    fn output_mode_invert_match_downgrades_only_matching_to_count_matches() {
+        let (mode, only_matching, _) = resolve_output_mode(&args(&["sift", "-o", "pat"]), true);
+        // invert_match + only_matching = CountMatches (saw_only_matching persists)
+        assert_eq!(mode, SearchMode::CountMatches);
+        assert!(!only_matching);
+    }
+
+    #[test]
+    fn output_mode_invert_match_with_only_matching_and_count() {
+        let (mode, only_matching, _) =
+            resolve_output_mode(&args(&["sift", "-c", "-o", "pat"]), true);
+        assert_eq!(mode, SearchMode::CountMatches);
+        assert!(!only_matching);
+    }
+
+    #[test]
+    fn output_mode_only_matching_flag_after_count() {
+        // -c -o: only_matching after count → CountMatches (saw_only_matching true)
+        let (mode, only_matching, _) =
+            resolve_output_mode(&args(&["sift", "-c", "-o", "pat"]), false);
+        assert_eq!(mode, SearchMode::CountMatches);
+        assert!(!only_matching);
+    }
+
+    // ── resolve_patterns ──
+
+    #[test]
+    fn resolve_patterns_empty_error() {
+        let err = resolve_patterns(&[], None, None).unwrap_err();
+        assert!(err.to_string().contains("no pattern"));
+    }
+
+    #[test]
+    fn resolve_patterns_regexp() {
+        let patterns = resolve_patterns(&["foo".into(), "bar".into()], None, None).unwrap();
+        assert_eq!(patterns, vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn resolve_patterns_positional() {
+        let patterns = resolve_patterns(&[], None, Some("baz")).unwrap();
+        assert_eq!(patterns, vec!["baz"]);
+    }
+
+    #[test]
+    fn resolve_patterns_regexp_and_positional() {
+        let patterns = resolve_patterns(&["foo".into()], None, Some("bar")).unwrap();
+        assert_eq!(patterns, vec!["foo", "bar"]);
+    }
+
+    // ── SearchFlags ──
+
+    #[test]
+    fn search_flags_to_options_default() {
+        let sf = SearchFlags {
+            case_mode: CaseMode::Sensitive,
+            fixed_strings: false,
+        };
+        let opts = sf.to_options();
+        assert!(matches!(opts.case_mode, CaseMode::Sensitive));
+        assert!(!opts.flags.contains(SearchMatchFlags::FIXED_STRINGS));
+    }
+
+    #[test]
+    fn search_flags_to_options_fixed_strings() {
+        let sf = SearchFlags {
+            case_mode: CaseMode::Insensitive,
+            fixed_strings: true,
+        };
+        let opts = sf.to_options();
+        assert!(opts.flags.contains(SearchMatchFlags::FIXED_STRINGS));
+    }
+
+    // ── Cli::resolve_binary_mode ──
+
+    #[test]
+    fn binary_mode_default_quit() {
+        let cli = crate::cli::Cli::try_parse_from(["sift", "pat"]).unwrap();
+        assert!(matches!(cli.resolve_binary_mode(), BinaryMode::Quit));
+    }
+
+    #[test]
+    fn binary_mode_text() {
+        let cli = crate::cli::Cli::try_parse_from(["sift", "-a", "pat"]).unwrap();
+        assert!(matches!(cli.resolve_binary_mode(), BinaryMode::AsText));
+    }
+
+    #[test]
+    fn binary_mode_binary() {
+        let cli = crate::cli::Cli::try_parse_from(["sift", "--binary", "pat"]).unwrap();
+        assert!(matches!(
+            cli.resolve_binary_mode(),
+            BinaryMode::SearchBinary
+        ));
+    }
+}
