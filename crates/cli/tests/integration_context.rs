@@ -2,62 +2,42 @@
 
 mod common;
 
-use std::ffi::OsString;
-use std::fs;
-
-use common::{
-    BuildIndexOptions, assert_index_and_walk_output, assert_success, command, fresh_dir,
-    normalized_stdout,
-};
+use common::{TestProject, assert_success, normalize_stdout};
 
 #[test]
 fn context_c_shows_surrounding_lines() {
-    let root = fresh_dir("integration-context-c");
-    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\n").unwrap();
-    let sift_dir = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &sift_dir, std::path::Path::new("."));
-
-    let mut cmd = command(Some(&root));
-    cmd.arg("--sift-dir").arg(&sift_dir);
-    cmd.args(["-C", "1", "match", "t.txt"]);
-    let output = cmd.output().unwrap();
-    assert_success(&output);
-
-    let expected = "t.txt-1-alpha\nt.txt:2:beta match\nt.txt-3-gamma\n";
-    assert_eq!(normalized_stdout(&output), expected);
+    let p = TestProject::new("context-c");
+    p.write("t.txt", "alpha\nbeta match\ngamma\n");
+    p.build_index();
+    let out = p.index_output(["-C", "1", "match", "t.txt"]);
+    assert_success(&out);
+    assert_eq!(
+        normalize_stdout(&out),
+        "t.txt-1-alpha\nt.txt:2:beta match\nt.txt-3-gamma\n"
+    );
 }
 
 #[test]
 fn context_a_shows_lines_after_match() {
-    let root = fresh_dir("integration-context-a");
-    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\ndelta\n").unwrap();
-    let sift_dir = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &sift_dir, std::path::Path::new("."));
-
-    let mut cmd = command(Some(&root));
-    cmd.arg("--sift-dir").arg(&sift_dir);
-    cmd.args(["-A", "2", "match", "t.txt"]);
-    let output = cmd.output().unwrap();
-    assert_success(&output);
-
-    let expected = "t.txt:2:beta match\nt.txt-3-gamma\nt.txt-4-delta\n";
-    assert_eq!(normalized_stdout(&output), expected);
+    let p = TestProject::new("context-a");
+    p.write("t.txt", "alpha\nbeta match\ngamma\ndelta\n");
+    p.build_index();
+    let out = p.index_output(["-A", "2", "match", "t.txt"]);
+    assert_success(&out);
+    assert_eq!(
+        normalize_stdout(&out),
+        "t.txt:2:beta match\nt.txt-3-gamma\nt.txt-4-delta\n"
+    );
 }
 
 #[test]
 fn context_b_shows_lines_before_match() {
-    let root = fresh_dir("integration-context-b");
-    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\n").unwrap();
-    let sift_dir = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &sift_dir, std::path::Path::new("."));
-
-    let mut cmd = command(Some(&root));
-    cmd.arg("--sift-dir").arg(&sift_dir);
-    cmd.args(["-B", "2", "match", "t.txt"]);
-    let output = cmd.output().unwrap();
-    assert_success(&output);
-
-    let stdout = normalized_stdout(&output);
+    let p = TestProject::new("context-b");
+    p.write("t.txt", "alpha\nbeta match\ngamma\n");
+    p.build_index();
+    let out = p.index_output(["-B", "2", "match", "t.txt"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(
         lines.len(),
@@ -78,22 +58,15 @@ fn context_b_shows_lines_before_match() {
 
 #[test]
 fn context_break_separates_match_groups() {
-    let root = fresh_dir("integration-context-break");
-    fs::write(
-        root.join("t.txt"),
+    let p = TestProject::new("context-break");
+    p.write(
+        "t.txt",
         "line1 match\nline2 not\nline3 not\nline4 not\nline5 match\nline6 not\nline7 not\nline8 match\n",
-    )
-    .unwrap();
-    let sift_dir = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &sift_dir, std::path::Path::new("."));
-
-    let mut cmd = command(Some(&root));
-    cmd.arg("--sift-dir").arg(&sift_dir);
-    cmd.args(["-B", "1", "-A", "1", "match", "t.txt"]);
-    let output = cmd.output().unwrap();
-    assert_success(&output);
-
-    let stdout = normalized_stdout(&output);
+    );
+    p.build_index();
+    let out = p.index_output(["-B", "1", "-A", "1", "match", "t.txt"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(
         lines.len() >= 7,
@@ -104,18 +77,12 @@ fn context_break_separates_match_groups() {
 
 #[test]
 fn context_c_with_filename_uses_hyphen_separator() {
-    let root = fresh_dir("integration-context-filename");
-    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\n").unwrap();
-    let sift_dir = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &sift_dir, std::path::Path::new("."));
-
-    let mut cmd = command(Some(&root));
-    cmd.arg("--sift-dir").arg(&sift_dir);
-    cmd.args(["-n", "-C", "1", "match", "t.txt"]);
-    let output = cmd.output().unwrap();
-    assert_success(&output);
-
-    let stdout = normalized_stdout(&output);
+    let p = TestProject::new("context-filename");
+    p.write("t.txt", "alpha\nbeta match\ngamma\n");
+    p.build_index();
+    let out = p.index_output(["-n", "-C", "1", "match", "t.txt"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 3);
     assert!(
@@ -139,210 +106,177 @@ fn context_c_with_filename_uses_hyphen_separator() {
 
 #[test]
 fn custom_context_separator_index_and_walk() {
-    let root = fresh_dir("ctx-sep-custom");
-    fs::write(
-        root.join("t.txt"),
-        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
-    )
-    .unwrap();
-
-    let args: Vec<OsString> = [
-        "-n",
-        "-C",
-        "1",
-        "--context-separator",
-        "===",
-        "match",
+    let p = TestProject::new("ctx-sep-custom");
+    p.write(
         "t.txt",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\n===\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &[
+            "-n",
+            "-C",
+            "1",
+            "--context-separator",
+            "===",
+            "match",
+            "t.txt",
+        ],
+        expected,
+    );
 }
 
 #[test]
 fn no_context_separator_suppresses_break_line() {
-    let root = fresh_dir("ctx-sep-none");
-    fs::write(
-        root.join("t.txt"),
+    let p = TestProject::new("ctx-sep-none");
+    p.write(
+        "t.txt",
         "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
-    )
-    .unwrap();
-
-    let args: Vec<OsString> = ["-n", "-C", "1", "--no-context-separator", "match", "t.txt"]
-        .iter()
-        .map(OsString::from)
-        .collect();
-
+    );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &["-n", "-C", "1", "--no-context-separator", "match", "t.txt"],
+        expected,
+    );
 }
 
 #[test]
 fn context_separator_empty_string_prints_blank_line() {
-    let root = fresh_dir("ctx-sep-empty");
-    fs::write(
-        root.join("t.txt"),
+    let p = TestProject::new("ctx-sep-empty");
+    p.write(
+        "t.txt",
         "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
-    )
-    .unwrap();
-
-    let args: Vec<OsString> = ["-n", "-C", "1", "--context-separator", "", "match", "t.txt"]
-        .iter()
-        .map(OsString::from)
-        .collect();
-
+    );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\n\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &["-n", "-C", "1", "--context-separator", "", "match", "t.txt"],
+        expected,
+    );
 }
 
 #[test]
 fn context_separator_with_escape_sequences() {
-    let root = fresh_dir("ctx-sep-escape");
-    fs::write(
-        root.join("t.txt"),
-        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
-    )
-    .unwrap();
-
-    let args: Vec<OsString> = [
-        "-n",
-        "-C",
-        "1",
-        "--context-separator",
-        "---\\n---",
-        "match",
+    let p = TestProject::new("ctx-sep-escape");
+    p.write(
         "t.txt",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\n---\n---\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &[
+            "-n",
+            "-C",
+            "1",
+            "--context-separator",
+            "---\\n---",
+            "match",
+            "t.txt",
+        ],
+        expected,
+    );
 }
 
 // ─── --field-match-separator ─────────────────────────────────────────────────
 
 #[test]
 fn field_match_separator_index_and_walk() {
-    let root = fresh_dir("field-match-sep");
-    fs::write(root.join("t.txt"), "hello world\n").unwrap();
-
-    let args: Vec<OsString> = ["-n", "--field-match-separator", "=", "hello", "t.txt"]
-        .iter()
-        .map(OsString::from)
-        .collect();
-
+    let p = TestProject::new("field-match-sep");
+    p.write("t.txt", "hello world\n");
     let expected = "t.txt=1=hello world\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &["-n", "--field-match-separator", "=", "hello", "t.txt"],
+        expected,
+    );
 }
 
 // ─── --field-context-separator ───────────────────────────────────────────────
 
 #[test]
 fn field_context_separator_index_and_walk() {
-    let root = fresh_dir("field-ctx-sep");
-    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\n").unwrap();
-
-    let args: Vec<OsString> = [
-        "-n",
-        "-C",
-        "1",
-        "--field-context-separator",
-        "~",
-        "match",
-        "t.txt",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-
+    let p = TestProject::new("field-ctx-sep");
+    p.write("t.txt", "alpha\nbeta match\ngamma\n");
     let expected = "t.txt~1~alpha\nt.txt:2:beta match\nt.txt~3~gamma\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &[
+            "-n",
+            "-C",
+            "1",
+            "--field-context-separator",
+            "~",
+            "match",
+            "t.txt",
+        ],
+        expected,
+    );
 }
 
 #[test]
 fn field_match_and_context_separator_combined() {
-    let root = fresh_dir("field-both-sep");
-    fs::write(root.join("t.txt"), "alpha\nbeta match\ngamma\n").unwrap();
-
-    let args: Vec<OsString> = [
-        "-n",
-        "-C",
-        "1",
-        "--field-match-separator",
-        "|",
-        "--field-context-separator",
-        "~",
-        "match",
-        "t.txt",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-
+    let p = TestProject::new("field-both-sep");
+    p.write("t.txt", "alpha\nbeta match\ngamma\n");
     let expected = "t.txt~1~alpha\nt.txt|2|beta match\nt.txt~3~gamma\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &[
+            "-n",
+            "-C",
+            "1",
+            "--field-match-separator",
+            "|",
+            "--field-context-separator",
+            "~",
+            "match",
+            "t.txt",
+        ],
+        expected,
+    );
 }
 
 #[test]
 fn all_separator_flags_combined() {
-    let root = fresh_dir("all-sep-combined");
-    fs::write(
-        root.join("t.txt"),
-        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\ngamma\n",
-    )
-    .unwrap();
-
-    let args: Vec<OsString> = [
-        "-n",
-        "-C",
-        "1",
-        "--context-separator",
-        "***",
-        "--field-match-separator",
-        "|",
-        "--field-context-separator",
-        "~",
-        "match",
+    let p = TestProject::new("all-sep-combined");
+    p.write(
         "t.txt",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\ngamma\n",
+    );
     let expected =
         "t.txt|1|m1 match\nt.txt~2~filler\n***\nt.txt~5~filler\nt.txt|6|m2 match\nt.txt~7~gamma\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &[
+            "-n",
+            "-C",
+            "1",
+            "--context-separator",
+            "***",
+            "--field-match-separator",
+            "|",
+            "--field-context-separator",
+            "~",
+            "match",
+            "t.txt",
+        ],
+        expected,
+    );
 }
 
 #[test]
 fn no_context_separator_overrides_context_separator() {
-    let root = fresh_dir("ctx-sep-override");
-    fs::write(
-        root.join("t.txt"),
-        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
-    )
-    .unwrap();
-
-    let args: Vec<OsString> = [
-        "-n",
-        "-C",
-        "1",
-        "--context-separator",
-        "===",
-        "--no-context-separator",
-        "match",
+    let p = TestProject::new("ctx-sep-override");
+    p.write(
         "t.txt",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-
+        "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
+    );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    assert_index_and_walk_output(&root, &args, expected);
+    p.assert_index_walk_same(
+        &[
+            "-n",
+            "-C",
+            "1",
+            "--context-separator",
+            "===",
+            "--no-context-separator",
+            "match",
+            "t.txt",
+        ],
+        expected,
+    );
 }

@@ -1,36 +1,30 @@
 mod common;
 
-use std::fs;
+use std::ffi::OsString;
 use std::process::Command;
 
-use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout, rel_match};
+use common::{TestProject, assert_success, normalize_stdout, rel_match};
 
 // ─── existing ignore tests ───────────────────────────────────────────────────
 
 #[test]
 fn gitignore_excludes_when_git_present() {
-    let root = fresh_dir("ignore-with-git");
-    fs::write(root.join(".gitignore"), "*.log\n").unwrap();
-    fs::write(root.join("keep.txt"), "needle\n").unwrap();
-    fs::write(root.join("skip.log"), "needle\n").unwrap();
+    let p = TestProject::new("ignore-with-git");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "needle\n");
+    p.write("skip.log", "needle\n");
     let status = Command::new("git")
         .args(["init"])
-        .current_dir(&root)
+        .current_dir(p.root())
         .status()
         .expect("git binary for ignore test");
     assert!(status.success(), "git init failed");
 
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(None, &idx, &root);
+    p.build_index_at(p.root());
 
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("needle")
-        .output()
-        .unwrap();
+    let out = p.index_output(["needle"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains(&rel_match("keep.txt", "needle")),
         "expected keep.txt: {stdout}"
@@ -43,47 +37,34 @@ fn gitignore_excludes_when_git_present() {
 
 #[test]
 fn no_require_git_loads_gitignore_without_dot_git() {
-    let root = fresh_dir("ignore-no-git-repo");
-    fs::write(root.join(".gitignore"), "*.log\n").unwrap();
-    fs::write(root.join("keep.txt"), "needle\n").unwrap();
-    fs::write(root.join("skip.log"), "needle\n").unwrap();
-    assert!(!root.join(".git").exists());
+    let p = TestProject::new("ignore-no-git-repo");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "needle\n");
+    p.write("skip.log", "needle\n");
+    assert!(!p.root().join(".git").exists());
 
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(None, &idx, &root);
+    p.build_index_at(p.root());
 
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--no-require-git")
-        .arg("needle")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--no-require-git", "needle"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains(&rel_match("keep.txt", "needle")));
     assert!(!stdout.contains("skip.log"), "unexpected: {stdout}");
 }
 
 #[test]
 fn require_git_skips_gitignore_when_no_git_dir() {
-    let root = fresh_dir("ignore-require-git-no-repo");
-    fs::write(root.join(".gitignore"), "*.log\n").unwrap();
-    fs::write(root.join("keep.txt"), "needle\n").unwrap();
-    fs::write(root.join("skip.log"), "needle\n").unwrap();
-    assert!(!root.join(".git").exists());
+    let p = TestProject::new("ignore-require-git-no-repo");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "needle\n");
+    p.write("skip.log", "needle\n");
+    assert!(!p.root().join(".git").exists());
 
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(None, &idx, &root);
+    p.build_index_at(p.root());
 
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("needle")
-        .output()
-        .unwrap();
+    let out = p.index_output(["needle"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains(&rel_match("keep.txt", "needle")));
     assert!(
         stdout.contains(&rel_match("skip.log", "needle")),
@@ -93,29 +74,22 @@ fn require_git_skips_gitignore_when_no_git_dir() {
 
 #[test]
 fn no_ignore_disables_gitignore() {
-    let root = fresh_dir("ignore-no-ignore-flag");
-    fs::write(root.join(".gitignore"), "*.log\n").unwrap();
-    fs::write(root.join("keep.txt"), "needle\n").unwrap();
-    fs::write(root.join("skip.log"), "needle\n").unwrap();
+    let p = TestProject::new("ignore-no-ignore-flag");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "needle\n");
+    p.write("skip.log", "needle\n");
     let status = Command::new("git")
         .args(["init"])
-        .current_dir(&root)
+        .current_dir(p.root())
         .status()
         .expect("git");
     assert!(status.success());
 
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(None, &idx, &root);
+    p.build_index_at(p.root());
 
-    let out = command(None)
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--no-ignore")
-        .arg("needle")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--no-ignore", "needle"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains(&rel_match("keep.txt", "needle")));
     assert!(
         stdout.contains(&rel_match("skip.log", "needle")),
@@ -127,37 +101,38 @@ fn no_ignore_disables_gitignore() {
 
 #[test]
 fn no_ignore_parent_walk() {
-    let parent = fresh_dir("no-ignore-parent-walk");
-    fs::write(parent.join(".gitignore"), "*.log\n").unwrap();
-    let child = parent.join("project");
-    fs::create_dir_all(&child).unwrap();
-    fs::create_dir_all(child.join(".git")).unwrap();
-    fs::write(child.join("data.log"), "findme in log\n").unwrap();
-    fs::write(child.join("data.txt"), "findme in txt\n").unwrap();
-    let missing_idx = fresh_dir("no-ignore-parent-walk-noidx").join(".sift");
+    let p = TestProject::new("no-ignore-parent-walk");
+    p.write(".gitignore", "*.log\n");
+    p.mkdir("project/.git");
+    p.write("project/data.log", "findme in log\n");
+    p.write("project/data.txt", "findme in txt\n");
+    let missing = p.root().join(".sift-missing");
 
     // Without --no-ignore-parent: parent .gitignore applies, data.log excluded
-    let out = command(Some(&child))
+    let out = p
+        .sift()
+        .current_dir(p.root().join("project"))
         .arg("--sift-dir")
-        .arg(&missing_idx)
+        .arg(&missing)
         .arg("findme")
         .output()
         .unwrap();
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("data.txt"), "should find txt");
 
     // With --no-ignore-parent: parent .gitignore NOT applied, data.log found
-    let missing_idx2 = fresh_dir("no-ignore-parent-walk2-noidx").join(".sift");
-    let out = command(Some(&child))
+    let out = p
+        .sift()
+        .current_dir(p.root().join("project"))
         .arg("--sift-dir")
-        .arg(&missing_idx2)
+        .arg(&missing)
         .arg("--no-ignore-parent")
         .arg("findme")
         .output()
         .unwrap();
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("data.txt"), "should find txt");
     assert!(
         stdout.contains("data.log"),
@@ -169,36 +144,23 @@ fn no_ignore_parent_walk() {
 
 #[test]
 fn no_ignore_exclude_walk() {
-    let root = fresh_dir("no-ignore-exclude-walk");
-    fs::create_dir_all(root.join(".git/info")).unwrap();
-    fs::write(root.join(".git/info/exclude"), "*.bak\n").unwrap();
-    fs::write(root.join("file.bak"), "findme in bak\n").unwrap();
-    fs::write(root.join("file.txt"), "findme in txt\n").unwrap();
-    let missing_idx = fresh_dir("no-ignore-exclude-walk-noidx").join(".sift");
+    let p = TestProject::new("no-ignore-exclude-walk");
+    p.mkdir(".git/info");
+    p.write(".git/info/exclude", "*.bak\n");
+    p.write("file.bak", "findme in bak\n");
+    p.write("file.txt", "findme in txt\n");
 
     // With exclude: .bak is ignored
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("file.txt"), "should find txt");
     assert!(!stdout.contains("file.bak"), "exclude should hide .bak");
 
     // With --no-ignore-exclude: .bak is found
-    let missing_idx2 = fresh_dir("no-ignore-exclude-walk2-noidx").join(".sift");
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx2)
-        .arg("--no-ignore-exclude")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["--no-ignore-exclude", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("file.txt"), "should find txt");
     assert!(
         stdout.contains("file.bak"),
@@ -208,23 +170,16 @@ fn no_ignore_exclude_walk() {
 
 #[test]
 fn no_ignore_exclude_index() {
-    let root = fresh_dir("no-ignore-exclude-index");
-    fs::create_dir_all(root.join(".git/info")).unwrap();
-    fs::write(root.join(".git/info/exclude"), "*.bak\n").unwrap();
-    fs::write(root.join("file.bak"), "findme in bak\n").unwrap();
-    fs::write(root.join("file.txt"), "findme in txt\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("no-ignore-exclude-index");
+    p.mkdir(".git/info");
+    p.write(".git/info/exclude", "*.bak\n");
+    p.write("file.bak", "findme in bak\n");
+    p.write("file.txt", "findme in txt\n");
+    p.build_index();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--no-ignore-exclude")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--no-ignore-exclude", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("file.txt"), "should find txt");
     assert!(
         stdout.contains("file.bak"),
@@ -236,23 +191,19 @@ fn no_ignore_exclude_index() {
 
 #[test]
 fn ignore_file_walk() {
-    let root = fresh_dir("ignore-file-walk");
-    fs::write(root.join("secret.txt"), "findme secret\n").unwrap();
-    fs::write(root.join("public.txt"), "findme public\n").unwrap();
-    let custom_ignore = root.join("custom.ignore");
-    fs::write(&custom_ignore, "secret.txt\n").unwrap();
-    let missing_idx = fresh_dir("ignore-file-walk-noidx").join(".sift");
+    let p = TestProject::new("ignore-file-walk");
+    p.write("secret.txt", "findme secret\n");
+    p.write("public.txt", "findme public\n");
+    p.write("custom.ignore", "secret.txt\n");
+    let ignore_arg: OsString = p.root().join("custom.ignore").into();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--ignore-file")
-        .arg(&custom_ignore)
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(vec![
+        OsString::from("--ignore-file"),
+        ignore_arg,
+        OsString::from("findme"),
+    ]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("public.txt"), "should find public");
     assert!(
         !stdout.contains("secret.txt"),
@@ -262,24 +213,20 @@ fn ignore_file_walk() {
 
 #[test]
 fn ignore_file_index() {
-    let root = fresh_dir("ignore-file-index");
-    fs::write(root.join("secret.txt"), "findme secret\n").unwrap();
-    fs::write(root.join("public.txt"), "findme public\n").unwrap();
-    let custom_ignore = root.join("custom.ignore");
-    fs::write(&custom_ignore, "secret.txt\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("ignore-file-index");
+    p.write("secret.txt", "findme secret\n");
+    p.write("public.txt", "findme public\n");
+    p.write("custom.ignore", "secret.txt\n");
+    p.build_index();
+    let ignore_arg: OsString = p.root().join("custom.ignore").into();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--ignore-file")
-        .arg(&custom_ignore)
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.index_output(vec![
+        OsString::from("--ignore-file"),
+        ignore_arg,
+        OsString::from("findme"),
+    ]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("public.txt"), "should find public");
     assert!(
         !stdout.contains("secret.txt"),
@@ -289,24 +236,20 @@ fn ignore_file_index() {
 
 #[test]
 fn no_ignore_files_overrides_ignore_file() {
-    let root = fresh_dir("no-ignore-files-walk");
-    fs::write(root.join("secret.txt"), "findme secret\n").unwrap();
-    fs::write(root.join("public.txt"), "findme public\n").unwrap();
-    let custom_ignore = root.join("custom.ignore");
-    fs::write(&custom_ignore, "secret.txt\n").unwrap();
-    let missing_idx = fresh_dir("no-ignore-files-walk-noidx").join(".sift");
+    let p = TestProject::new("no-ignore-files-walk");
+    p.write("secret.txt", "findme secret\n");
+    p.write("public.txt", "findme public\n");
+    p.write("custom.ignore", "secret.txt\n");
+    let ignore_arg: OsString = p.root().join("custom.ignore").into();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--no-ignore-files")
-        .arg("--ignore-file")
-        .arg(&custom_ignore)
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(vec![
+        OsString::from("--no-ignore-files"),
+        OsString::from("--ignore-file"),
+        ignore_arg,
+        OsString::from("findme"),
+    ]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("public.txt"), "should find public");
     assert!(
         stdout.contains("secret.txt"),
@@ -316,41 +259,29 @@ fn no_ignore_files_overrides_ignore_file() {
 
 #[test]
 fn ignore_file_consistent_index_and_walk() {
-    let root = fresh_dir("ignore-file-consistent");
-    fs::write(root.join("a.txt"), "findme alpha\n").unwrap();
-    fs::write(root.join("b.txt"), "findme beta\n").unwrap();
-    let custom_ignore = root.join("custom.ignore");
-    fs::write(&custom_ignore, "b.txt\n").unwrap();
+    let p = TestProject::new("ignore-file-consistent");
+    p.write("a.txt", "findme alpha\n");
+    p.write("b.txt", "findme beta\n");
+    p.write("custom.ignore", "b.txt\n");
+    p.build_index();
+    let ignore_arg: OsString = p.root().join("custom.ignore").into();
+    let args = vec![
+        OsString::from("--ignore-file"),
+        ignore_arg,
+        OsString::from("findme"),
+    ];
 
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
-    let missing_idx = fresh_dir("ignore-file-consistent-noidx").join(".sift");
-
-    let index_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--ignore-file")
-        .arg(&custom_ignore)
-        .arg("findme")
-        .output()
-        .unwrap();
+    let index_out = p.index_output(args.clone());
     assert_success(&index_out);
 
-    let walk_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--ignore-file")
-        .arg(&custom_ignore)
-        .arg("findme")
-        .output()
-        .unwrap();
+    let walk_out = p.walk_output(args);
     assert_success(&walk_out);
 
-    let mut index_lines: Vec<String> = normalized_stdout(&index_out)
+    let mut index_lines: Vec<String> = normalize_stdout(&index_out)
         .lines()
         .map(str::to_string)
         .collect();
-    let mut walk_lines: Vec<String> = normalized_stdout(&walk_out)
+    let mut walk_lines: Vec<String> = normalize_stdout(&walk_out)
         .lines()
         .map(str::to_string)
         .collect();
@@ -366,17 +297,10 @@ fn ignore_file_consistent_index_and_walk() {
 
 #[test]
 fn no_messages_suppresses_error_output() {
-    let root = fresh_dir("no-messages");
-    fs::write(root.join("file.txt"), "hello\n").unwrap();
-    let missing_idx = fresh_dir("no-messages-noidx").join(".sift");
+    let p = TestProject::new("no-messages");
+    p.write("file.txt", "hello\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--no-messages")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["--no-messages", "hello"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("error: unexpected argument"),
@@ -388,19 +312,12 @@ fn no_messages_suppresses_error_output() {
 
 #[test]
 fn no_ignore_messages_accepted() {
-    let root = fresh_dir("no-ignore-messages");
-    fs::write(root.join("file.txt"), "hello\n").unwrap();
-    let missing_idx = fresh_dir("no-ignore-messages-noidx").join(".sift");
+    let p = TestProject::new("no-ignore-messages");
+    p.write("file.txt", "hello\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--no-ignore-messages")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["--no-ignore-messages", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("hello"), "should find match");
 }
 
@@ -408,19 +325,12 @@ fn no_ignore_messages_accepted() {
 
 #[test]
 fn no_ignore_global_accepted() {
-    let root = fresh_dir("no-ignore-global");
-    fs::write(root.join("file.txt"), "hello\n").unwrap();
-    let missing_idx = fresh_dir("no-ignore-global-noidx").join(".sift");
+    let p = TestProject::new("no-ignore-global");
+    p.write("file.txt", "hello\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--no-ignore-global")
-        .arg("hello")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["--no-ignore-global", "hello"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("hello"), "should find match");
 }
 
@@ -428,25 +338,25 @@ fn no_ignore_global_accepted() {
 
 #[test]
 fn ignore_parent_toggle_last_wins() {
-    let parent = fresh_dir("ignore-parent-toggle");
-    fs::write(parent.join(".gitignore"), "*.log\n").unwrap();
-    let child = parent.join("project");
-    fs::create_dir_all(&child).unwrap();
-    fs::create_dir_all(child.join(".git")).unwrap();
-    fs::write(child.join("data.log"), "findme in log\n").unwrap();
-    fs::write(child.join("data.txt"), "findme in txt\n").unwrap();
-    let missing_idx = fresh_dir("ignore-parent-toggle-noidx").join(".sift");
+    let p = TestProject::new("ignore-parent-toggle");
+    p.write(".gitignore", "*.log\n");
+    p.mkdir("project/.git");
+    p.write("project/data.log", "findme in log\n");
+    p.write("project/data.txt", "findme in txt\n");
+    let missing = p.root().join(".sift-missing");
 
-    let out = command(Some(&child))
+    let out = p
+        .sift()
+        .current_dir(p.root().join("project"))
         .arg("--sift-dir")
-        .arg(&missing_idx)
+        .arg(&missing)
         .arg("--no-ignore-parent")
         .arg("--ignore-parent")
         .arg("findme")
         .output()
         .unwrap();
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(stdout.contains("data.txt"), "should find txt");
     assert!(
         !stdout.contains("data.log"),

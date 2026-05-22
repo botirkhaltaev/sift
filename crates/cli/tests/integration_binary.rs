@@ -1,31 +1,18 @@
 mod common;
 
-use std::fs;
-
-use common::{BuildIndexOptions, assert_success, command, fresh_dir, normalized_stdout};
-
-fn make_binary_file(root: &std::path::Path, name: &str, content: &[u8]) {
-    fs::write(root.join(name), content).unwrap();
-}
+use common::{TestProject, assert_stdout_contains, assert_success, normalize_stdout};
 
 // ─── default (quit on NUL) ───────────────────────────────────────────────────
 
 #[test]
 fn default_skips_binary_file_walk() {
-    let root = fresh_dir("binary-default-walk");
-    // A file with NUL byte before the match
-    make_binary_file(&root, "binary.txt", b"abc\x00match_here\n");
-    fs::write(root.join("text.txt"), "match_here\n").unwrap();
-    let missing_idx = fresh_dir("binary-default-walk-noidx").join(".sift");
+    let p = TestProject::new("binary-default-walk");
+    p.write("binary.txt", b"abc\x00match_here\n");
+    p.write("text.txt", "match_here\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("match_here")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["match_here"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
+    let stdout = normalize_stdout(&out);
     assert!(
         stdout.contains("text.txt"),
         "should find match in text file"
@@ -38,199 +25,106 @@ fn default_skips_binary_file_walk() {
 
 #[test]
 fn default_skips_binary_file_index() {
-    let root = fresh_dir("binary-default-index");
-    make_binary_file(&root, "binary.txt", b"abc\x00match_here\n");
-    fs::write(root.join("text.txt"), "match_here\n").unwrap();
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("binary-default-index");
+    p.write("binary.txt", b"abc\x00match_here\n");
+    p.write("text.txt", "match_here\n");
+    p.build_index();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("match_here")
-        .output()
-        .unwrap();
+    let out = p.index_output(["match_here"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("text.txt"),
-        "should find match in text file"
-    );
+    assert_stdout_contains(&out, "text.txt");
 }
 
 // ─── -a / --text ─────────────────────────────────────────────────────────────
 
 #[test]
 fn text_flag_searches_binary_walk() {
-    let root = fresh_dir("text-flag-walk");
-    // Put match before NUL so it's detectable
-    make_binary_file(&root, "binary.txt", b"findme\n\x00other\n");
-    let missing_idx = fresh_dir("text-flag-walk-noidx").join(".sift");
+    let p = TestProject::new("text-flag-walk");
+    p.write("binary.txt", b"findme\n\x00other\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("-a")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["-a", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("binary.txt") && stdout.contains("findme"),
-        "with -a, should find match in binary file"
-    );
+    assert_stdout_contains(&out, "binary.txt");
+    assert_stdout_contains(&out, "findme");
 }
 
 #[test]
 fn text_flag_searches_binary_index() {
-    let root = fresh_dir("text-flag-index");
-    make_binary_file(&root, "binary.txt", b"findme\n\x00other\n");
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("text-flag-index");
+    p.write("binary.txt", b"findme\n\x00other\n");
+    p.build_index();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--text")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--text", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("binary.txt") && stdout.contains("findme"),
-        "with --text, should find match in binary file"
-    );
+    assert_stdout_contains(&out, "binary.txt");
+    assert_stdout_contains(&out, "findme");
 }
 
 #[test]
 fn text_flag_finds_match_after_nul_walk() {
-    let root = fresh_dir("text-after-nul-walk");
-    // NUL before the match — without -a, search would quit before finding it
-    make_binary_file(&root, "binary.txt", b"\x00findme\n");
-    let missing_idx = fresh_dir("text-after-nul-walk-noidx").join(".sift");
+    let p = TestProject::new("text-after-nul-walk");
+    p.write("binary.txt", b"\x00findme\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("-a")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["-a", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("findme"),
-        "with -a, should find match after NUL byte"
-    );
+    assert_stdout_contains(&out, "findme");
 }
 
 // ─── --binary ────────────────────────────────────────────────────────────────
 
 #[test]
 fn binary_flag_continues_after_nul_walk() {
-    let root = fresh_dir("binary-flag-walk");
-    // Match before NUL, NUL in the middle
-    make_binary_file(&root, "mixed.txt", b"findme\nmore\x00stuff\n");
-    let missing_idx = fresh_dir("binary-flag-walk-noidx").join(".sift");
+    let p = TestProject::new("binary-flag-walk");
+    p.write("mixed.txt", b"findme\nmore\x00stuff\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--binary")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["--binary", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("findme"),
-        "with --binary, should find match in file with NUL bytes"
-    );
+    assert_stdout_contains(&out, "findme");
 }
 
 #[test]
 fn binary_flag_continues_after_nul_index() {
-    let root = fresh_dir("binary-flag-index");
-    make_binary_file(&root, "mixed.txt", b"findme\nmore\x00stuff\n");
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
+    let p = TestProject::new("binary-flag-index");
+    p.write("mixed.txt", b"findme\nmore\x00stuff\n");
+    p.build_index();
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("--binary")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.index_output(["--binary", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("findme"),
-        "with --binary, should find match in file with NUL bytes"
-    );
+    assert_stdout_contains(&out, "findme");
 }
 
 // ─── text overrides binary ───────────────────────────────────────────────────
 
 #[test]
 fn text_overrides_binary() {
-    let root = fresh_dir("text-overrides-binary");
-    make_binary_file(&root, "binary.txt", b"\x00findme\n");
-    let missing_idx = fresh_dir("text-overrides-binary-noidx").join(".sift");
+    let p = TestProject::new("text-overrides-binary");
+    p.write("binary.txt", b"\x00findme\n");
 
-    let out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("--binary")
-        .arg("-a")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let out = p.walk_output(["--binary", "-a", "findme"]);
     assert_success(&out);
-    let stdout = normalized_stdout(&out);
-    assert!(
-        stdout.contains("findme"),
-        "-a should override --binary and find match after NUL"
-    );
+    assert_stdout_contains(&out, "findme");
 }
 
 // ─── consistency: index vs walk ──────────────────────────────────────────────
 
 #[test]
 fn text_mode_consistent_index_and_walk() {
-    let root = fresh_dir("text-consistent");
-    make_binary_file(&root, "binary.txt", b"findme\n\x00other\n");
-    fs::write(root.join("text.txt"), "findme\n").unwrap();
+    let p = TestProject::new("text-consistent");
+    p.write("binary.txt", b"findme\n\x00other\n");
+    p.write("text.txt", "findme\n");
+    p.build_index();
 
-    let idx = root.join(".sift");
-    BuildIndexOptions::default().run(Some(&root), &idx, std::path::Path::new("."));
-    let missing_idx = fresh_dir("text-consistent-noidx").join(".sift");
-
-    let index_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&idx)
-        .arg("-a")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let index_out = p.index_output(["-a", "findme"]);
     assert_success(&index_out);
 
-    let walk_out = command(Some(&root))
-        .arg("--sift-dir")
-        .arg(&missing_idx)
-        .arg("-a")
-        .arg("findme")
-        .output()
-        .unwrap();
+    let walk_out = p.walk_output(["-a", "findme"]);
     assert_success(&walk_out);
 
-    let mut index_lines: Vec<String> = normalized_stdout(&index_out)
+    let mut index_lines: Vec<_> = normalize_stdout(&index_out)
         .lines()
         .map(str::to_string)
         .collect();
-    let mut walk_lines: Vec<String> = normalized_stdout(&walk_out)
+    let mut walk_lines: Vec<_> = normalize_stdout(&walk_out)
         .lines()
         .map(str::to_string)
         .collect();
