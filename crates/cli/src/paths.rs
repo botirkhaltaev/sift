@@ -120,18 +120,38 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn path_display_absolute_when_absolute() {
+    fn path_display_absolute_when_absolute_unix() {
         assert_eq!(
             effective_path_display(&[PathBuf::from("/home/user")]),
             PathDisplay::Absolute
         );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn path_display_absolute_when_first_is_absolute() {
+    fn path_display_absolute_when_absolute_windows() {
+        assert_eq!(
+            effective_path_display(&[PathBuf::from("C:\\Users")]),
+            PathDisplay::Absolute
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_display_absolute_when_first_is_absolute_unix() {
         assert_eq!(
             effective_path_display(&[PathBuf::from("/root"), PathBuf::from("sub")]),
+            PathDisplay::Absolute
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn path_display_absolute_when_first_is_absolute_windows() {
+        assert_eq!(
+            effective_path_display(&[PathBuf::from("D:\\projects"), PathBuf::from("sub")]),
             PathDisplay::Absolute
         );
     }
