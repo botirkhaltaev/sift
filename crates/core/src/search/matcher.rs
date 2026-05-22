@@ -2,7 +2,7 @@ use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
-use super::{CaseMode, CompiledSearch};
+use super::{BinaryMode, CaseMode, CompiledSearch};
 
 impl CompiledSearch {
     /// # Errors
@@ -27,7 +27,14 @@ impl CompiledSearch {
             builder.whole_line(true);
         }
         builder.line_terminator(Some(b'\n'));
-        builder.ban_byte(Some(b'\x00'));
+        match self.opts.binary_mode {
+            BinaryMode::AsText => {
+                builder.ban_byte(None);
+            }
+            _ => {
+                builder.ban_byte(Some(b'\x00'));
+            }
+        }
         builder
             .build_many(&self.patterns)
             .map_err(|e| crate::Error::RegexBuild(e.to_string()))
@@ -47,8 +54,13 @@ impl CompiledSearch {
         };
         let line_number = line_number || before_context > 0 || after_context > 0;
         let mut builder = SearcherBuilder::new();
+        let binary_detection = match self.opts.binary_mode {
+            BinaryMode::Quit => BinaryDetection::quit(b'\x00'),
+            BinaryMode::SearchBinary => BinaryDetection::convert(b'\x00'),
+            BinaryMode::AsText => BinaryDetection::none(),
+        };
         builder
-            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .binary_detection(binary_detection)
             .line_terminator(LineTerminator::byte(b'\n'))
             .invert_match(self.opts.invert_match())
             .line_number(line_number)
