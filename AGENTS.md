@@ -1,21 +1,12 @@
-# sift — agent notes
+# AGENTS.md
 
-Short orientation for tools and contributors. Product direction and phased roadmap live in **`plan.md`** when that file exists.
+Guidelines for AI agents working on the sift codebase.
 
-## Layout
+## Project Overview
 
-| Path | Role |
-|------|------|
-| `crates/core` | `sift-core` — index build, `Index`, `CompiledSearch`, search pipeline |
-| `crates/cli` | `sift-cli` — `sift` binary (clap), thin wrapper over core |
-| `fuzz/` | `cargo-fuzz` (excluded from workspace) — `fuzz/README.md` |
-| `scripts/` | `bench.sh`, `profile.sh`, `fuzz.sh` |
-| `skills/` | Optional agent skills — `skills/README.md` |
-| `crates/core/benches/README.md` | Criterion + profiling |
+Sift is an indexed regex search engine for codebases, written in Rust. It builds a trigram index on disk and uses it to narrow candidate files before running the full regex engine — achieving up to 60× speedup over ripgrep on indexed queries.
 
-## CI-equivalent checks
-
-Same as `.github/workflows/ci.yml` (Ubuntu, macOS; stable Rust):
+## Build & Test
 
 ```bash
 cargo fmt --all -- --check
@@ -23,21 +14,31 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-**Mandatory precommit procedure**: Run all three CI-equivalent commands above **before pushing**. Fix any failures locally, then push.
+Run all three before pushing. CI enforces the same checks on Linux, macOS, and Windows.
 
-Bench / `sift-profile`: package + features in `crates/core/benches/README.md` and `crates/core/README.md`. Fuzz is manual: `./scripts/fuzz.sh`.
+## Layout
 
-## Conventions
+| Path | Role |
+|------|------|
+| `crates/core/` | `sift-core` — trigram index, query planner, search engine |
+| `crates/cli/` | `sift-cli` — `sift` binary (clap CLI over core) |
+| `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
+| `benchsuite/` | Comparative `rg` vs `sift` benchmarks |
+| `scripts/` | `bench.sh`, `profile.sh`, `fuzz.sh`, `install.sh` |
+| `skills/` | Agent skills (`skills.sh` / `npx skills`) |
+| `docs/` | Performance snapshots, compatibility matrix |
 
-- No `unsafe`. Workspace clippy is strict; CI uses `-D warnings`.
+## Key Conventions
+
+- **No `unsafe`** except in `storage/mmap.rs` (documented safety invariant).
+- **Strict clippy:** workspace uses `pedantic + nursery + cargo` warnings; CI uses `-D warnings`.
+- Prefer fixing lints over `#[allow(clippy::…)]`.
 - Small, focused changes; follow existing patterns in the crate you touch.
-- Do not commit `target/`, `.cursor/`, local `.sift/` (see `.gitignore`).
-- Prefer fixing lints over `#[allow(clippy::…)]` unless there is a rare, documented reason.
-- Larger roadmap slices: **one branch per slice**, PR, merge, then start the next slice from an updated default branch — details in `plan.md` when present.
+- Do not commit `target/`, `.cursor/`, local `.sift/` directories.
 
-### Branch names
+## Branch Names
 
-Use **short, descriptive kebab-case** names so history and open PRs stay readable. Prefer a **type prefix** when it fits:
+Use short, descriptive kebab-case with a type prefix:
 
 | Prefix | Use for |
 |--------|---------|
@@ -46,11 +47,13 @@ Use **short, descriptive kebab-case** names so history and open PRs stay readabl
 | `docs/` | Documentation only |
 | `chore/` | Tooling, CI, refactors with no user-visible change |
 
-**Good:** `feat/stats-elapsed`, `fix/ignore-git-without-repo`, `docs/rg-compat-matrix`  
-**Avoid:** opaque labels like `phase-4` or `wip` with no topic — they force readers to open the PR to learn what changed.
+## Core API Entry Points
 
-Rename a local branch before push: `git branch -m old-name new-name`, then `git push -u origin new-name` (and delete the old remote branch if it was already pushed).
+`IndexBuilder::build` → `Index::open` → `CompiledSearch::new` → `run_index` / `search_index`. See `crates/core/README.md`.
 
-## Core API (entry points)
+## Do NOT
 
-`IndexBuilder::build`, `Index::open`, `CompiledSearch::new`, then indexed `run_index` or walk-based search as in `crates/core/README.md`.
+- Skip CI checks (`fmt`, `clippy`, `test`) before pushing.
+- Add dependencies without justification.
+- Commit secrets, `.env` files, or editor-specific directories.
+- Use `#[allow]` attributes without a documented reason.

@@ -1,29 +1,36 @@
-# Fuzz (`sift-core`)
+# Fuzz
 
-LibFuzzer targets for **`sift-core`** only (not the CLI): `CompiledSearch::search_index`, `compile_search_pattern`, and related paths.
+LibFuzzer targets for `sift-core` — exercises `CompiledSearch`, `search_index`, and `compile_search_pattern`.
 
-**Toolchain:** sanitizers need nightly. From the **repo root**, use the wrapper so `fuzz/rust-toolchain.toml` applies:
+## Setup
 
 ```bash
-./scripts/fuzz.sh build search_usage
-./scripts/fuzz.sh run search_usage -- -max_total_time=30
+cargo install cargo-fuzz   # one-time
 ```
 
-Or `cd fuzz && cargo fuzz run search_usage -- …`. From root without the script:  
-`cargo +nightly fuzz run search_usage --manifest-path fuzz/Cargo.toml -- …`
+Requires **nightly** Rust (sanitizers). The `fuzz/rust-toolchain.toml` file handles this automatically.
 
-Install once: `cargo install cargo-fuzz`.
+## Usage
+
+```bash
+# From repo root (recommended — uses fuzz/rust-toolchain.toml)
+./scripts/fuzz.sh build search_usage
+./scripts/fuzz.sh run search_usage -- -max_total_time=30
+
+# Quick smoke test
+./scripts/fuzz.sh quick
+
+# Or directly
+cd fuzz && cargo fuzz run search_usage -- -max_total_time=30
+```
 
 ## Targets
 
-| Target | What it does |
-|--------|----------------|
-| `search_usage` | One tiny index per process (`OnceLock`); fuzzes pattern bytes + `SearchOptions`, runs `CompiledSearch::new` → `search_index`, and `compile_search_pattern`. |
-| `compile_only` | Fuzzes `compile_search_pattern` only (no filesystem). |
-
-Quick smoke: `./scripts/fuzz.sh quick` or `./scripts/fuzz.sh quick compile_only`.  
-List targets: `cd fuzz && cargo fuzz list`.
+| Target | Description |
+|--------|-------------|
+| `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `SearchOptions` → `CompiledSearch::new` → `search_index` |
+| `compile_only` | Fuzzes `compile_search_pattern` only (no filesystem) |
 
 ## Layout
 
-`fuzz/` is **excluded** from the root workspace (`Cargo.toml`) so it stays a normal `cargo-fuzz` package. See **`AGENTS.md`** here for agent-oriented notes.
+`fuzz/` is **excluded** from the root workspace so it stays a standard `cargo-fuzz` package. See `AGENTS.md` for contributor guidelines.
