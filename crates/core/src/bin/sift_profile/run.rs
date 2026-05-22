@@ -57,7 +57,7 @@ pub fn run_scenario(index: &Index, scenario: &Scenario, loop_cfg: &Loop, search_
     }
 
     let t_plan = Instant::now();
-    let query = CompiledSearch::new(&scenario.patterns, scenario.opts).unwrap();
+    let query = CompiledSearch::new(&scenario.patterns, scenario.opts.clone()).unwrap();
     let plan_us = t_plan.elapsed().as_micros();
 
     let plan_kind = match &query.plan {

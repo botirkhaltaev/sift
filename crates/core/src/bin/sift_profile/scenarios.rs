@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use sift_core::{
     CaseMode, ColorChoice, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    PathDisplay, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
-    SearchOutput, SearchRecordStyle, VisibilityConfig,
+    LineStyleFlags, PathDisplay, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode,
+    SearchOptions, SearchOutput, SearchRecordStyle, VisibilityConfig,
 };
 
 #[derive(Clone, Debug)]
@@ -56,15 +56,15 @@ const fn make_output(mode: SearchMode, emission: sift_core::OutputEmission) -> S
         emission,
         lines: SearchLineStyle {
             filename_mode: FilenameMode::Auto,
-            heading: false,
-            line_number: false,
-            column: false,
+            flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
         },
         records: SearchRecordStyle {
             null_data: false,
             color: ColorChoice::Never,
         },
+        passthru: false,
+        include_zero: false,
     }
 }
 

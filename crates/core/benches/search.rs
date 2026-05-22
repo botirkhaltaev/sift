@@ -40,7 +40,7 @@ use std::hint::black_box;
 
 use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
-    IgnoreSources, Index, IndexBuilder, OutputEmission, PathDisplay, SearchFilter,
+    IgnoreSources, Index, IndexBuilder, LineStyleFlags, OutputEmission, PathDisplay, SearchFilter,
     SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
     SearchOutputFormat, SearchRecordStyle, SearchSeparators, VisibilityConfig,
 };
@@ -178,15 +178,15 @@ const fn output_std() -> SearchOutput {
         emission: OutputEmission::Normal,
         lines: SearchLineStyle {
             filename_mode: FilenameMode::Auto,
-            heading: false,
-            line_number: false,
-            column: false,
+            flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
         },
         records: SearchRecordStyle {
             null_data: false,
             color: ColorChoice::Never,
         },
+        passthru: false,
+        include_zero: false,
     }
 }
 
@@ -197,15 +197,15 @@ const fn output_quiet(mode: SearchMode) -> SearchOutput {
         emission: OutputEmission::Quiet,
         lines: SearchLineStyle {
             filename_mode: FilenameMode::Auto,
-            heading: false,
-            line_number: false,
-            column: false,
+            flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
         },
         records: SearchRecordStyle {
             null_data: false,
             color: ColorChoice::Never,
         },
+        passthru: false,
+        include_zero: false,
     }
 }
 

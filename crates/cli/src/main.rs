@@ -6,10 +6,10 @@ use std::process::ExitCode;
 use clap::{Arg, ArgAction, Args, Command, FromArgMatches, Parser, Subcommand, value_parser};
 use sift_core::{
     BinaryMode, CaseMode, ColorChoice, CompiledSearch, Error as SiftError, FilenameMode,
-    GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, OutputEmission,
-    PathDisplay, SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode,
-    SearchOptions, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators,
-    SearchStats, TypeDef, VisibilityConfig,
+    GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, Index, IndexBuilder, LineStyleFlags,
+    OutputEmission, PathDisplay, SearchFilter, SearchFilterConfig, SearchLineStyle,
+    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
+    SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig,
 };
 
 #[derive(Parser)]
@@ -76,6 +76,10 @@ struct Cli {
     filter_decl: FilterDecl,
     #[command(flatten)]
     binary_decl: BinaryDecl,
+    #[command(flatten)]
+    replace_decl: ReplaceDecl,
+    #[command(flatten)]
+    extra_output: ExtraOutputDecl,
 }
 
 #[derive(Args)]
@@ -299,6 +303,24 @@ struct ColumnDecl {
     vimgrep: bool,
     #[arg(short = 'p', long = "pretty")]
     pretty: bool,
+}
+
+#[derive(Args)]
+struct ReplaceDecl {
+    #[arg(short = 'r', long = "replace", value_name = "REPLACEMENT")]
+    replace: Option<String>,
+    #[arg(long = "trim")]
+    trim: bool,
+    #[arg(long = "passthru", visible_alias = "passthrough")]
+    passthru: bool,
+}
+
+#[derive(Args)]
+struct ExtraOutputDecl {
+    #[arg(long = "include-zero")]
+    include_zero: bool,
+    #[arg(short = 'b', long = "byte-offset")]
+    byte_offset: bool,
 }
 
 fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
@@ -1143,6 +1165,7 @@ const fn search_output(
     quiet: bool,
     lines: SearchLineStyle,
     records: SearchRecordStyle,
+    include_zero: bool,
 ) -> SearchOutput {
     SearchOutput {
         format,
@@ -1154,7 +1177,29 @@ const fn search_output(
         },
         lines,
         records,
+        passthru: false,
+        include_zero,
     }
+}
+
+fn build_line_style_flags(out: &SearchOutputCtx, line_number: bool) -> LineStyleFlags {
+    let mut f = LineStyleFlags::empty();
+    if out.lines.heading {
+        f |= LineStyleFlags::HEADING;
+    }
+    if line_number {
+        f |= LineStyleFlags::LINE_NUMBER;
+    }
+    if out.lines.column {
+        f |= LineStyleFlags::COLUMN;
+    }
+    if out.byte_offset {
+        f |= LineStyleFlags::BYTE_OFFSET;
+    }
+    if out.trim {
+        f |= LineStyleFlags::TRIM;
+    }
+    f
 }
 
 const fn effective_filename_mode(
@@ -1204,6 +1249,7 @@ struct SearchFormatCtx {
 
 /// Resolved output mode and line/format flags (from argv + clap) shared by index and walk search.
 #[derive(Clone)]
+#[allow(clippy::struct_excessive_bools)]
 struct SearchOutputCtx {
     mode: SearchModeCtx,
     lines: SearchLineResolveCtx,
@@ -1211,6 +1257,9 @@ struct SearchOutputCtx {
     output_format: SearchOutputFormat,
     separators: SearchSeparators,
     print_stats: bool,
+    byte_offset: bool,
+    trim: bool,
+    include_zero: bool,
 }
 
 /// Resolved visibility, ignore sources, and glob case (from argv order + clap) for [`SearchFilterConfig`].
@@ -1564,11 +1613,20 @@ impl Cli {
         }
         if only_matching {
             opts.flags |= SearchMatchFlags::ONLY_MATCHING;
-        } else {
-            opts.before_context = before_context;
-            opts.after_context = after_context;
+        }
+        opts.replace.clone_from(&self.replace_decl.replace);
+        opts.before_context = before_context;
+        opts.after_context = after_context;
+        if self.replace_decl.passthru {
+            opts.before_context = usize::MAX;
+            opts.after_context = usize::MAX;
+        }
+        if only_matching {
+            opts.before_context = 0;
+            opts.after_context = 0;
         }
         opts.binary_mode = self.resolve_binary_mode();
+        let _ = args;
         opts
     }
 
@@ -1626,6 +1684,9 @@ impl Cli {
             },
             separators: self.resolve_separators(),
             print_stats,
+            byte_offset: self.extra_output.byte_offset,
+            trim: self.replace_decl.trim,
+            include_zero: self.extra_output.include_zero,
         };
         let filter = SearchFilterCtx {
             hidden: ignore_res.hidden,
@@ -1659,21 +1720,21 @@ impl Cli {
             out.lines.line_number,
             out.output_format,
         );
+        let line_flags = build_line_style_flags(out, line_number);
         let output = search_output(
             out.output_format,
             out.mode.effective_mode,
             out.mode.quiet,
             SearchLineStyle {
                 filename_mode,
-                heading: out.lines.heading,
-                line_number,
-                column: out.lines.column,
+                flags: line_flags,
                 path_display,
             },
             SearchRecordStyle {
                 null_data: out.format.null_data,
                 color: out.format.color,
             },
+            out.include_zero,
         );
         let filter_config = self.build_filter_config(filter, prefixes, exclude_paths)?;
         let search_filter = SearchFilter::new(&filter_config, &index.root)?;
@@ -1711,21 +1772,21 @@ impl Cli {
             out.lines.line_number,
             out.output_format,
         );
+        let line_flags = build_line_style_flags(out, line_number);
         let output = search_output(
             out.output_format,
             out.mode.effective_mode,
             out.mode.quiet,
             SearchLineStyle {
                 filename_mode,
-                heading: out.lines.heading,
-                line_number,
-                column: out.lines.column,
+                flags: line_flags,
                 path_display,
             },
             SearchRecordStyle {
                 null_data: out.format.null_data,
                 color: out.format.color,
             },
+            out.include_zero,
         );
         let filter_config = self.build_filter_config(filter, prefixes, exclude_paths)?;
         let search_filter = SearchFilter::new(&filter_config, filter_root)?;
