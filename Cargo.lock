@@ -794,6 +794,7 @@ name = "sift-cli"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "bitflags",
  "clap",
  "ignore",
  "sift-core",

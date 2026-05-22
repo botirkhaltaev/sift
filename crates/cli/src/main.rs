@@ -47,6 +47,18 @@ struct Cli {
     #[command(flatten)]
     ignore_git: IgnoreGitDecl,
     #[command(flatten)]
+    ignore_global: IgnoreGlobalDecl,
+    #[command(flatten)]
+    ignore_exclude: IgnoreExcludeDecl,
+    #[command(flatten)]
+    ignore_parent: IgnoreParentDecl,
+    #[command(flatten)]
+    messages_decl: MessagesDecl,
+    #[command(flatten)]
+    ignore_messages_decl: IgnoreMessagesDecl,
+    #[command(flatten)]
+    ignore_files: IgnoreFilesDecl,
+    #[command(flatten)]
     unrestricted: UnrestrictedDecl,
     #[command(flatten)]
     context_decl: ContextDecl,
@@ -149,6 +161,57 @@ struct IgnoreGitDecl {
     _no_require_git: bool,
     #[arg(long = "require-git", action = ArgAction::SetTrue)]
     _require_git: bool,
+}
+
+#[derive(Args)]
+struct IgnoreGlobalDecl {
+    #[arg(long = "no-ignore-global", action = ArgAction::SetTrue)]
+    _no_ignore_global: bool,
+    #[arg(long = "ignore-global", action = ArgAction::SetTrue)]
+    _ignore_global: bool,
+}
+
+#[derive(Args)]
+struct IgnoreExcludeDecl {
+    #[arg(long = "no-ignore-exclude", action = ArgAction::SetTrue)]
+    _no_ignore_exclude: bool,
+    #[arg(long = "ignore-exclude", action = ArgAction::SetTrue)]
+    _ignore_exclude: bool,
+}
+
+#[derive(Args)]
+struct IgnoreParentDecl {
+    #[arg(long = "no-ignore-parent", action = ArgAction::SetTrue)]
+    _no_ignore_parent: bool,
+    #[arg(long = "ignore-parent", action = ArgAction::SetTrue)]
+    _ignore_parent: bool,
+}
+
+#[derive(Args)]
+struct MessagesDecl {
+    /// Suppress all error messages related to opening and reading files.
+    #[arg(long = "no-messages", action = ArgAction::SetTrue)]
+    _no_messages: bool,
+    #[arg(long = "messages", action = ArgAction::SetTrue)]
+    _messages: bool,
+}
+
+#[derive(Args)]
+struct IgnoreMessagesDecl {
+    /// Suppress error messages related to parsing ignore files.
+    #[arg(long = "no-ignore-messages", action = ArgAction::SetTrue)]
+    _no_ignore_messages: bool,
+    #[arg(long = "ignore-messages", action = ArgAction::SetTrue)]
+    _ignore_messages: bool,
+}
+
+#[derive(Args)]
+struct IgnoreFilesDecl {
+    /// Ignore any --ignore-file flags (even ones that come after).
+    #[arg(long = "no-ignore-files", action = ArgAction::SetTrue)]
+    _no_ignore_files: bool,
+    #[arg(long = "ignore-files", action = ArgAction::SetTrue)]
+    _ignore_files: bool,
 }
 
 #[derive(Args)]
@@ -258,16 +321,36 @@ fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
     result
 }
 
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    struct MessageFlags: u8 {
+        const NO_MESSAGES        = 1 << 0;
+        const NO_IGNORE_MESSAGES = 1 << 1;
+        const NO_IGNORE_FILES    = 1 << 2;
+    }
+}
+
+/// Resolved visibility / ignore state from argv.
+struct IgnoreResolution {
+    hidden: bool,
+    sources: IgnoreSources,
+    require_git: bool,
+    msg_flags: MessageFlags,
+}
+
 /// Hidden files, ignore rules, and `require_git` — processed in argv order (ripgrep-style).
-fn resolve_visibility_and_ignore(args: &[String]) -> (bool, IgnoreSources, bool) {
+fn resolve_visibility_and_ignore(args: &[String]) -> IgnoreResolution {
     const DEFAULT_SOURCES: IgnoreSources = IgnoreSources::DOT
         .union(IgnoreSources::VCS)
-        .union(IgnoreSources::EXCLUDE);
+        .union(IgnoreSources::EXCLUDE)
+        .union(IgnoreSources::GLOBAL)
+        .union(IgnoreSources::PARENT);
 
     let mut sources = DEFAULT_SOURCES;
     let mut require_git = true;
     let mut hidden = false;
     let mut u_count: u8 = 0;
+    let mut msg_flags = MessageFlags::empty();
 
     for arg in args {
         if arg == "--unrestricted" {
@@ -302,15 +385,32 @@ fn resolve_visibility_and_ignore(args: &[String]) -> (bool, IgnoreSources, bool)
             "--ignore-vcs" => sources.insert(IgnoreSources::VCS),
             "--no-ignore-dot" => sources.remove(IgnoreSources::DOT),
             "--ignore-dot" => sources.insert(IgnoreSources::DOT),
+            "--no-ignore-global" => sources.remove(IgnoreSources::GLOBAL),
+            "--ignore-global" => sources.insert(IgnoreSources::GLOBAL),
+            "--no-ignore-exclude" => sources.remove(IgnoreSources::EXCLUDE),
+            "--ignore-exclude" => sources.insert(IgnoreSources::EXCLUDE),
+            "--no-ignore-parent" => sources.remove(IgnoreSources::PARENT),
+            "--ignore-parent" => sources.insert(IgnoreSources::PARENT),
             "--no-require-git" => require_git = false,
             "--require-git" => require_git = true,
             "--hidden" | "-." => hidden = true,
             "--no-hidden" => hidden = false,
+            "--no-messages" => msg_flags.insert(MessageFlags::NO_MESSAGES),
+            "--messages" => msg_flags.remove(MessageFlags::NO_MESSAGES),
+            "--no-ignore-messages" => msg_flags.insert(MessageFlags::NO_IGNORE_MESSAGES),
+            "--ignore-messages" => msg_flags.remove(MessageFlags::NO_IGNORE_MESSAGES),
+            "--no-ignore-files" => msg_flags.insert(MessageFlags::NO_IGNORE_FILES),
+            "--ignore-files" => msg_flags.remove(MessageFlags::NO_IGNORE_FILES),
             _ => {}
         }
     }
 
-    (hidden, sources, require_git)
+    IgnoreResolution {
+        hidden,
+        sources,
+        require_git,
+        msg_flags,
+    }
 }
 
 fn parse_usize_token(s: &str) -> Option<usize> {
@@ -1114,6 +1214,7 @@ struct SearchFilterCtx {
     ignore_sources: IgnoreSources,
     require_git: bool,
     glob_case_insensitive: bool,
+    msg_flags: MessageFlags,
 }
 
 impl SearchFilterCtx {
@@ -1235,6 +1336,12 @@ fn build_search_filter_config(
 
     let type_definitions = resolve_type_defs(&cli.filter_decl);
 
+    let custom_files = if filter.msg_flags.contains(MessageFlags::NO_IGNORE_FILES) {
+        Vec::new()
+    } else {
+        cli.filter_decl.ignore_file.clone()
+    };
+
     Ok(SearchFilterConfig {
         scopes,
         exclude_paths,
@@ -1246,7 +1353,7 @@ fn build_search_filter_config(
             hidden: filter.hidden_mode(),
             ignore: IgnoreConfig {
                 sources: filter.ignore_sources,
-                custom_files: cli.filter_decl.ignore_file.clone(),
+                custom_files,
                 require_git: filter.require_git,
             },
         },
@@ -1409,7 +1516,11 @@ impl Cli {
                 hidden: filter.hidden_mode(),
                 ignore: IgnoreConfig {
                     sources: filter.ignore_sources,
-                    custom_files: self.filter_decl.ignore_file.clone(),
+                    custom_files: if filter.msg_flags.contains(MessageFlags::NO_IGNORE_FILES) {
+                        Vec::new()
+                    } else {
+                        self.filter_decl.ignore_file.clone()
+                    },
                     require_git: filter.require_git,
                 },
             },
@@ -1463,7 +1574,7 @@ impl Cli {
         line_number_override: Option<bool>,
     ) -> (SearchOutputCtx, SearchFilterCtx) {
         let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
-        let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(args);
+        let ignore_res = resolve_visibility_and_ignore(args);
         let null_data = resolve_null_from_args(args);
         let color = resolve_color_from_args(args);
         let heading = resolve_heading_from_args(args);
@@ -1511,10 +1622,11 @@ impl Cli {
             print_stats,
         };
         let filter = SearchFilterCtx {
-            hidden,
-            ignore_sources,
-            require_git,
+            hidden: ignore_res.hidden,
+            ignore_sources: ignore_res.sources,
+            require_git: ignore_res.require_git,
             glob_case_insensitive,
+            msg_flags: ignore_res.msg_flags,
         };
         (out, filter)
     }
@@ -1703,14 +1815,15 @@ fn run_type_list(cli: &Cli) {
 fn run_files_mode(cli: &Cli) -> anyhow::Result<bool> {
     let args: Vec<String> = std::env::args().collect();
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
-    let (hidden, ignore_sources, require_git) = resolve_visibility_and_ignore(&args);
+    let ignore_res = resolve_visibility_and_ignore(&args);
     let null_data = resolve_null_from_args(&args);
 
     let filter_ctx = SearchFilterCtx {
-        hidden,
-        ignore_sources,
-        require_git,
+        hidden: ignore_res.hidden,
+        ignore_sources: ignore_res.sources,
+        require_git: ignore_res.require_git,
         glob_case_insensitive,
+        msg_flags: ignore_res.msg_flags,
     };
 
     let cwd = std::env::current_dir()?;
@@ -1785,6 +1898,11 @@ fn main() -> ExitCode {
         };
     }
 
+    let args: Vec<String> = std::env::args().collect();
+    let no_messages = resolve_visibility_and_ignore(&args)
+        .msg_flags
+        .contains(MessageFlags::NO_MESSAGES);
+
     match cli.run_search() {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
@@ -1794,7 +1912,9 @@ fn main() -> ExitCode {
             {
                 return ExitCode::SUCCESS;
             }
-            eprintln!("sift: {e}");
+            if !no_messages {
+                eprintln!("sift: {e}");
+            }
             ExitCode::from(2)
         }
     }

@@ -17,6 +17,7 @@ bitflags::bitflags! {
         const VCS     = 1 << 1;
         const GLOBAL  = 1 << 2;
         const EXCLUDE = 1 << 3;
+        const PARENT  = 1 << 4;
     }
 }
 
@@ -196,6 +197,46 @@ impl SearchFilter {
         })
     }
 
+    /// Resolve the global git ignore file path (like ripgrep's `core.excludesFile`).
+    fn global_gitignore_path() -> Option<PathBuf> {
+        // Try `core.excludesFile` via `git config`; fall back to default location.
+        if let Ok(out) = std::process::Command::new("git")
+            .args(["config", "--global", "core.excludesFile"])
+            .output()
+        {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !path.is_empty() {
+                let expanded = if path.starts_with('~') {
+                    std::env::var("HOME").map_or_else(
+                        |_| PathBuf::from(&path),
+                        |home| PathBuf::from(path.replacen('~', &home, 1)),
+                    )
+                } else {
+                    PathBuf::from(&path)
+                };
+                if expanded.is_file() {
+                    return Some(expanded);
+                }
+            }
+        }
+        // Default: $XDG_CONFIG_HOME/git/ignore or $HOME/.config/git/ignore
+        let config_dir = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| PathBuf::from(h).join(".config"))
+            });
+        if let Some(dir) = config_dir {
+            let path = dir.join("git/ignore");
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        None
+    }
+
     fn build_gitignore_matcher(
         root: &Path,
         ignore_config: &IgnoreConfig,
@@ -205,6 +246,33 @@ impl SearchFilter {
         }
 
         let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
+
+        // Global git ignore (core.excludesFile / ~/.config/git/ignore).
+        if ignore_config.sources.contains(IgnoreSources::GLOBAL)
+            && let Some(global_path) = Self::global_gitignore_path()
+        {
+            let _ = builder.add(&global_path);
+        }
+
+        // Parent directory ignore files (walk up from root).
+        if ignore_config.sources.contains(IgnoreSources::PARENT) {
+            let mut dir = root.parent();
+            while let Some(parent) = dir {
+                if ignore_config.sources.contains(IgnoreSources::VCS) {
+                    let gitignore = parent.join(".gitignore");
+                    if gitignore.is_file() {
+                        let _ = builder.add(&gitignore);
+                    }
+                }
+                if ignore_config.sources.contains(IgnoreSources::DOT) {
+                    let ignore = parent.join(".ignore");
+                    if ignore.is_file() {
+                        let _ = builder.add(&ignore);
+                    }
+                }
+                dir = parent.parent();
+            }
+        }
 
         if ignore_config.sources.contains(IgnoreSources::DOT) {
             let _ = builder.add(root.join(".ignore"));
