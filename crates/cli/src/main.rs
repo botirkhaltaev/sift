@@ -126,10 +126,10 @@ struct ThreadingDecl {
     /// Number of threads to use for searching.
     #[arg(short = 'j', long = "threads", value_name = "NUM")]
     threads: Option<usize>,
-    /// Force line-buffered output.
+    /// Accepted for ripgrep compatibility; sift always line-buffers.
     #[arg(long = "line-buffered")]
     line_buffered: bool,
-    /// Force block-buffered output.
+    /// Accepted for ripgrep compatibility; no behavioral effect in sift.
     #[arg(long = "block-buffered")]
     block_buffered: bool,
     /// Override the path separator in output.
@@ -143,10 +143,10 @@ struct WalkerDecl {
     /// Do not cross filesystem boundaries.
     #[arg(long = "one-file-system")]
     one_file_system: bool,
-    /// Use memory-mapped I/O when searching (advisory).
+    /// Accepted for ripgrep compatibility; sift does not use mmap.
     #[arg(long = "mmap")]
     mmap: bool,
-    /// Never use memory-mapped I/O (advisory).
+    /// Accepted for ripgrep compatibility; sift does not use mmap.
     #[arg(long = "no-mmap")]
     no_mmap: bool,
 }
