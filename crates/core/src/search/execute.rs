@@ -1160,89 +1160,16 @@ impl Sink for StandardSink<'_> {
             return Ok(true);
         }
 
-        let show_column = self.output.lines.flags.contains(LineStyleFlags::COLUMN);
-
         if matches!(self.output.mode, SearchMode::OnlyMatching) {
-            let line_number = mat.line_number();
-            let line = mat.bytes();
-            let byte_offset = mat.absolute_byte_offset();
-            let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
-                let col = if show_column {
-                    Some(m.start() + 1)
-                } else {
-                    None
-                };
-                let matched_slice = &line[m.start()..m.end()];
-                let text = if let Some(rep) = self.replace {
-                    apply_replace(self.matcher, matched_slice, rep)
-                } else {
-                    String::from_utf8_lossy(matched_slice).into_owned()
-                };
-                let _ = write_standard_prefix(
-                    self.bytes,
-                    self.output,
-                    self.display_path.as_str(),
-                    line_number,
-                    self.show_line_numbers,
-                    &PrefixCtx {
-                        is_context_line: false,
-                        column: col,
-                        separators: self.separators,
-                    },
-                    if self.output.lines.byte_offset() {
-                        Some(byte_offset)
-                    } else {
-                        None
-                    },
-                );
-                let _ = self.bytes.write_all(text.as_bytes());
-                let _ = self.bytes.write_all(b"\n");
-                true
-            });
-            return Ok(true);
+            return Ok(self.handle_only_matching(mat));
         }
 
         let line_bytes = mat.bytes();
-        let max_cols = self.output.lines.max_columns;
-        let preview = self.output.lines.max_columns_preview;
-        match check_max_columns(line_bytes, max_cols, preview) {
-            ColumnAction::Omit => return Ok(true),
-            ColumnAction::Preview => {
-                write_standard_prefix(
-                    self.bytes,
-                    self.output,
-                    self.display_path.as_str(),
-                    mat.line_number(),
-                    self.show_line_numbers,
-                    &PrefixCtx {
-                        is_context_line: false,
-                        column: None,
-                        separators: self.separators,
-                    },
-                    if self.output.lines.byte_offset() {
-                        Some(mat.absolute_byte_offset())
-                    } else {
-                        None
-                    },
-                )?;
-                let truncated = truncate_line(line_bytes, max_cols.unwrap_or(0));
-                self.bytes.write_all(&truncated)?;
-                return Ok(true);
-            }
-            ColumnAction::Normal => {}
+        if self.handle_max_columns(line_bytes, mat)? {
+            return Ok(true);
         }
 
-        let col = if show_column {
-            let line = mat.bytes();
-            let mut first_col = None;
-            let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
-                first_col = Some(m.start() + 1);
-                false
-            });
-            first_col
-        } else {
-            None
-        };
+        let col = self.compute_first_column(mat);
         write_standard_prefix(
             self.bytes,
             self.output,
@@ -1260,27 +1187,7 @@ impl Sink for StandardSink<'_> {
                 None
             },
         )?;
-        let line_bytes = mat.bytes();
-        if let Some(rep) = self.replace {
-            let text = apply_replace(self.matcher, line_bytes, rep);
-            self.bytes.write_all(text.as_bytes())?;
-            if !text.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
-            }
-        } else if self.trim {
-            let trimmed = String::from_utf8_lossy(line_bytes);
-            let trimmed = trimmed.trim_start();
-            self.bytes.write_all(trimmed.as_bytes())?;
-            if !trimmed.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
-            }
-        } else {
-            self.bytes.write_all(line_bytes)?;
-            if !line_bytes.ends_with(b"\n") {
-                self.bytes.write_all(b"\n")?;
-            }
-        }
-        Ok(true)
+        self.write_line_content(mat.bytes())
     }
 
     fn context(&mut self, _: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, Self::Error> {
@@ -1363,6 +1270,121 @@ impl Sink for StandardSink<'_> {
         if let Some(ref sep) = self.separators.context_separator {
             self.bytes.write_all(sep)?;
             self.bytes.write_all(b"\n")?;
+        }
+        Ok(true)
+    }
+}
+
+impl StandardSink<'_> {
+    fn handle_only_matching(&mut self, mat: &SinkMatch<'_>) -> bool {
+        let show_column = self.output.lines.flags.contains(LineStyleFlags::COLUMN);
+        let line_number = mat.line_number();
+        let line = mat.bytes();
+        let byte_offset = mat.absolute_byte_offset();
+        let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
+            let col = if show_column {
+                Some(m.start() + 1)
+            } else {
+                None
+            };
+            let matched_slice = &line[m.start()..m.end()];
+            let text = if let Some(rep) = self.replace {
+                apply_replace(self.matcher, matched_slice, rep)
+            } else {
+                String::from_utf8_lossy(matched_slice).into_owned()
+            };
+            let _ = write_standard_prefix(
+                self.bytes,
+                self.output,
+                self.display_path.as_str(),
+                line_number,
+                self.show_line_numbers,
+                &PrefixCtx {
+                    is_context_line: false,
+                    column: col,
+                    separators: self.separators,
+                },
+                if self.output.lines.byte_offset() {
+                    Some(byte_offset)
+                } else {
+                    None
+                },
+            );
+            let _ = self.bytes.write_all(text.as_bytes());
+            let _ = self.bytes.write_all(b"\n");
+            true
+        });
+        true
+    }
+
+    fn handle_max_columns(
+        &mut self,
+        line_bytes: &[u8],
+        mat: &SinkMatch<'_>,
+    ) -> Result<bool, io::Error> {
+        let max_cols = self.output.lines.max_columns;
+        let preview = self.output.lines.max_columns_preview;
+        match check_max_columns(line_bytes, max_cols, preview) {
+            ColumnAction::Omit => return Ok(true),
+            ColumnAction::Preview => {
+                write_standard_prefix(
+                    self.bytes,
+                    self.output,
+                    self.display_path.as_str(),
+                    mat.line_number(),
+                    self.show_line_numbers,
+                    &PrefixCtx {
+                        is_context_line: false,
+                        column: None,
+                        separators: self.separators,
+                    },
+                    if self.output.lines.byte_offset() {
+                        Some(mat.absolute_byte_offset())
+                    } else {
+                        None
+                    },
+                )?;
+                let truncated = truncate_line(line_bytes, max_cols.unwrap_or(0));
+                self.bytes.write_all(&truncated)?;
+                return Ok(true);
+            }
+            ColumnAction::Normal => {}
+        }
+        Ok(false)
+    }
+
+    fn compute_first_column(&self, mat: &SinkMatch<'_>) -> Option<usize> {
+        if !self.output.lines.flags.contains(LineStyleFlags::COLUMN) {
+            return None;
+        }
+        let line = mat.bytes();
+        let mut first_col = None;
+        let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
+            first_col = Some(m.start() + 1);
+            false
+        });
+        first_col
+    }
+
+    fn write_line_content(&mut self, line_bytes: &[u8]) -> Result<bool, io::Error> {
+        if let Some(rep) = self.replace {
+            let text = apply_replace(self.matcher, line_bytes, rep);
+            self.bytes.write_all(text.as_bytes())?;
+            if !text.ends_with('\n') {
+                self.bytes.write_all(b"\n")?;
+            }
+        } else if self.trim {
+            let trimmed = String::from_utf8_lossy(line_bytes);
+            let trimmed = trimmed.trim_start();
+            self.bytes.write_all(trimmed.as_bytes())?;
+            if !trimmed.ends_with('\n') {
+                self.bytes.write_all(b"\n")?;
+            }
+        } else {
+            self.bytes.write_all(line_bytes)?;
+            if !line_bytes.ends_with(b"\n") {
+                self.bytes.write_all(b"\n")?;
+            }
         }
         Ok(true)
     }
