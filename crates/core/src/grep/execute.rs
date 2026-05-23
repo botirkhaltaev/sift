@@ -11,8 +11,8 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
-use crate::Index;
-use crate::planner::TrigramPlan;
+use crate::index::{FileId, TrigramIndex};
+use crate::query::CandidatePlan;
 
 use super::{
     CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, LineStyleFlags, OutputEmission,
@@ -167,25 +167,14 @@ impl CompiledSearch {
     /// Returns raw candidate file IDs from index (trigram or full scan).
     /// Does NOT apply `SearchFilter` - filtering happens in `prepare_candidates`.
     #[must_use]
-    pub fn candidate_file_ids(&self, index: &Index, exhaustive: bool) -> Vec<usize> {
+    pub fn candidate_file_ids(&self, index: &TrigramIndex, exhaustive: bool) -> Vec<FileId> {
         let n = index.file_count();
         if exhaustive {
-            let mut v = Vec::with_capacity(n);
-            v.extend(0..n);
-            return v;
+            return (0..n).map(FileId::new).collect();
         }
         match &self.plan {
-            TrigramPlan::FullScan => {
-                let mut v = Vec::with_capacity(n);
-                v.extend(0..n);
-                v
-            }
-            TrigramPlan::Narrow { arms } => {
-                let raw = index.candidate_file_ids(arms.as_slice());
-                let mut v = Vec::with_capacity(raw.len());
-                v.extend(raw.into_iter().map(|id| id as usize));
-                v
-            }
+            CandidatePlan::FullScan => (0..n).map(FileId::new).collect(),
+            CandidatePlan::Trigram(plan) => index.candidate_ids_for_trigram_plan(plan),
         }
     }
 
@@ -196,7 +185,7 @@ impl CompiledSearch {
     /// Returns an error if the matcher cannot be built or stdout cannot be written.
     pub fn run_index(
         &self,
-        index: &Index,
+        index: &TrigramIndex,
         filter: &SearchFilter,
         output: SearchOutput,
         separators: &SearchSeparators,
@@ -211,7 +200,7 @@ impl CompiledSearch {
     /// Same as [`Self::run_index`].
     pub fn run_index_with_stats(
         &self,
-        index: &Index,
+        index: &TrigramIndex,
         filter: &SearchFilter,
         output: SearchOutput,
         separators: &SearchSeparators,
@@ -222,7 +211,7 @@ impl CompiledSearch {
 
     fn run_index_impl(
         &self,
-        index: &Index,
+        index: &TrigramIndex,
         filter: &SearchFilter,
         output: SearchOutput,
         separators: &SearchSeparators,
@@ -332,7 +321,7 @@ impl CompiledSearch {
     /// Search by walking the filesystem under `filter_root` (no trigram index).
     ///
     /// Candidate paths are discovered the same way as index build: all files under scoped paths,
-    /// then [`SearchFilter`] is applied. Ignores [`TrigramPlan`] narrowing (full file list).
+    /// then [`SearchFilter`] is applied. Ignores [`CandidatePlan`] narrowing (full file list).
     ///
     /// # Errors
     ///
@@ -479,8 +468,8 @@ impl CompiledSearch {
     /// Prepare `CandidateInfo` with parallel filter + path prep.
     #[must_use]
     pub fn prepare_candidates(
-        index: &Index,
-        ids: &[usize],
+        index: &TrigramIndex,
+        ids: &[FileId],
         filter: &SearchFilter,
         threshold: usize,
     ) -> Vec<CandidateInfo> {
@@ -836,7 +825,7 @@ impl CompiledSearch {
     // Test-only helpers
 
     #[cfg(test)]
-    pub(crate) fn collect_index_matches(&self, index: &Index) -> crate::Result<Vec<Match>> {
+    pub(crate) fn collect_index_matches(&self, index: &TrigramIndex) -> crate::Result<Vec<Match>> {
         let config = SearchFilterConfig {
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
@@ -879,9 +868,9 @@ impl CompiledSearch {
     #[cfg(test)]
     fn collect_index_candidates(
         &self,
-        index: &Index,
+        index: &TrigramIndex,
         filter: &SearchFilter,
-        candidate_ids: &[usize],
+        candidate_ids: &[FileId],
     ) -> crate::Result<Vec<Match>> {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
@@ -1931,7 +1920,7 @@ fn prepare_walk_candidates(
                     String::new()
                 };
                 let info = CandidateInfo {
-                    id,
+                    id: FileId::new(id),
                     rel_path,
                     rel_str,
                     abs_path: abs_path.clone(),
@@ -1942,7 +1931,7 @@ fn prepare_walk_candidates(
             .into_iter()
             .enumerate()
             .map(|(i, mut c)| {
-                c.id = i;
+                c.id = FileId::new(i);
                 c
             })
             .collect()
@@ -1959,14 +1948,14 @@ fn prepare_walk_candidates(
                 String::new()
             };
             let info = CandidateInfo {
-                id,
+                id: FileId::new(id),
                 rel_path,
                 rel_str,
                 abs_path: abs_path.clone(),
             };
             if filter.is_candidate_info(&info) {
                 let mut c = info;
-                c.id = out.len();
+                c.id = FileId::new(out.len());
                 out.push(c);
             }
         }

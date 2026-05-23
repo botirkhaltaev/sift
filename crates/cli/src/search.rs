@@ -2,8 +2,8 @@ use std::path::Path;
 
 use sift_core::Error as SiftError;
 use sift_core::{
-    CompiledSearch, Index, SearchFilter, SearchLineStyle, SearchMode, SearchRecordStyle,
-    SearchStats,
+    CompiledSearch, SearchFilter, SearchLineStyle, SearchMode, SearchRecordStyle, SearchStats,
+    TrigramIndex,
 };
 
 use crate::cli::Cli;
@@ -53,16 +53,17 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
 
     let cwd = std::env::current_dir()?;
 
-    let (filter_root, scopes, exclude_paths) = if let Ok(index) = Index::open(&cli.paths.sift_dir) {
-        let prefixes = corpus_path_prefixes(&index.root, &cwd, &cli.search_scope.paths)?;
-        let excludes = excluded_search_paths(&index.root, &cli.paths.sift_dir);
-        (index.root, prefixes, excludes)
-    } else {
-        let root = cwd.canonicalize()?;
-        let prefixes = walk_path_prefixes(&root, &cli.search_scope.paths)?;
-        let excludes = excluded_search_paths(&root, &cli.paths.sift_dir);
-        (root, prefixes, excludes)
-    };
+    let (filter_root, scopes, exclude_paths) =
+        if let Ok(index) = TrigramIndex::open(&cli.paths.sift_dir) {
+            let prefixes = corpus_path_prefixes(&index.root, &cwd, &cli.search_scope.paths)?;
+            let excludes = excluded_search_paths(&index.root, &cli.paths.sift_dir);
+            (index.root, prefixes, excludes)
+        } else {
+            let root = cwd.canonicalize()?;
+            let prefixes = walk_path_prefixes(&root, &cli.search_scope.paths)?;
+            let excludes = excluded_search_paths(&root, &cli.paths.sift_dir);
+            (root, prefixes, excludes)
+        };
 
     let filter_config = build_search_filter_config(cli, filter_ctx, scopes, exclude_paths)?;
     let search_filter = SearchFilter::new(&filter_config, &filter_root)?;
@@ -90,7 +91,7 @@ impl Cli {
     pub fn run_search_with_index(
         &self,
         query: &CompiledSearch,
-        index: &Index,
+        index: &TrigramIndex,
         cwd: &Path,
         out: &crate::output::SearchOutputCtx,
         filter: crate::filter::SearchFilterCtx,
@@ -262,7 +263,7 @@ impl Cli {
         let (out, filter) =
             self.build_output_and_filter(args, effective_mode, quiet, line_number_override);
 
-        match Index::open(&self.paths.sift_dir) {
+        match TrigramIndex::open(&self.paths.sift_dir) {
             Ok(index) => self.run_search_with_index(&query, &index, &cwd, &out, filter),
             Err(
                 SiftError::MissingMeta(_)

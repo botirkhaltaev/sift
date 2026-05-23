@@ -6,14 +6,15 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use crate::storage::format::{POSTINGS_MAGIC, write_magic};
-use crate::storage::mmap::open_mmap;
+use crate::index::trigram::storage::format::{POSTINGS_MAGIC, write_magic};
+use crate::index::trigram::storage::mmap::open_mmap;
 
 /// Write postings blob to `out_path`.
 ///
 /// # Errors
 ///
 /// Propagates IO errors from writing `out_path`.
+#[allow(dead_code)]
 pub fn write_postings(out_path: &Path, payload: &[u8]) -> std::io::Result<()> {
     let f = File::create(out_path)?;
     let mut w = BufWriter::new(f);
@@ -31,6 +32,7 @@ pub fn write_postings(out_path: &Path, payload: &[u8]) -> std::io::Result<()> {
 #[derive(Debug)]
 pub struct MappedPostings {
     backing: Backing,
+    #[allow(dead_code)]
     payload_len: usize,
 }
 
@@ -108,6 +110,7 @@ impl MappedPostings {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn as_bytes(&self) -> &[u8] {
         let payload_start = POSTINGS_MAGIC.len() + 4;
         &self.bytes()[payload_start..payload_start + self.payload_len]

@@ -7,10 +7,11 @@ use ignore::WalkBuilder;
 use memmap2::Mmap;
 use rayon::prelude::*;
 
-use crate::index::{CorpusKind, trigram::extract_unique_trigrams_utf8_lossy};
-use crate::search::parallel_candidate_threshold;
-use crate::storage::lexicon::LexiconEntry;
-use crate::storage::mmap::open_mmap;
+use crate::grep::parallel_candidate_threshold;
+use crate::index::CorpusKind;
+use crate::index::trigram::storage::lexicon::LexiconEntry;
+use crate::index::trigram::storage::mmap::open_mmap;
+use crate::query::trigram::extract_unique_trigrams_utf8_lossy;
 
 pub struct IndexTables {
     pub files: Vec<PathBuf>,
@@ -169,4 +170,106 @@ pub fn build_index_tables(
             postings: posting_bytes,
         },
     ))
+}
+
+fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
+    file_paths.iter().map(|p| root.join(p)).collect()
+}
+
+pub struct TrigramIndexBuilder<'a> {
+    root: &'a Path,
+    dir: Option<PathBuf>,
+    follow_links: bool,
+}
+
+impl<'a> TrigramIndexBuilder<'a> {
+    #[must_use]
+    pub const fn new(root: &'a Path) -> Self {
+        Self {
+            root,
+            dir: None,
+            follow_links: false,
+        }
+    }
+
+    #[must_use]
+    pub fn with_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.dir = Some(dir.into());
+        self
+    }
+
+    #[must_use]
+    pub const fn with_follow_links(mut self, follow_links: bool) -> Self {
+        self.follow_links = follow_links;
+        self
+    }
+
+    fn excluded_build_paths(&self, root: &Path) -> crate::Result<Vec<PathBuf>> {
+        let Some(dir) = self.dir.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let abs = if dir.is_absolute() {
+            dir.clone()
+        } else {
+            std::env::current_dir()?.join(dir)
+        };
+        let abs = abs.canonicalize().unwrap_or(abs);
+        if abs.starts_with(root) {
+            Ok(vec![
+                abs.strip_prefix(root)
+                    .expect("prefix checked")
+                    .to_path_buf(),
+            ])
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Walk `root`, extract trigrams, and return an in-memory [`TrigramIndex`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates IO errors from walking, reading files, or writing persistence files
+    /// (if `with_dir` was called).
+    pub fn build(self) -> crate::Result<crate::index::TrigramIndex> {
+        let canonical = self.root.canonicalize()?;
+        let (root, build_root) = if canonical.is_file() {
+            let parent = canonical.parent().ok_or_else(|| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "single-file corpus must have a parent directory",
+                ))
+            })?;
+            (parent.to_path_buf(), canonical)
+        } else {
+            (canonical.clone(), canonical)
+        };
+        let exclude_paths = self.excluded_build_paths(&root)?;
+        let (corpus_kind, tables) =
+            build_index_tables(&build_root, self.follow_links, &exclude_paths)?;
+
+        let files = crate::index::trigram::file_table::MappedFilesView::from_paths(&tables.files);
+        let lexicon =
+            crate::index::trigram::storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
+        let postings =
+            crate::index::trigram::storage::postings::MappedPostings::from_bytes(&tables.postings);
+
+        let abs_paths = compute_abs_paths(&root, &tables.files);
+        let mut index = crate::index::TrigramIndex {
+            root,
+            corpus_kind,
+            files,
+            file_paths: tables.files,
+            abs_paths,
+            lexicon,
+            postings,
+            index_dir: None,
+        };
+
+        if let Some(dir) = self.dir {
+            index.index_dir = Some(dir.clone());
+            index.save_to_dir(&dir)?;
+        }
+        Ok(index)
+    }
 }

@@ -3,7 +3,7 @@
 use regex_automata::meta::Regex;
 use regex_syntax::escape;
 
-use crate::search::{CaseMode, SearchMatchFlags, SearchOptions};
+use crate::grep::{CaseMode, SearchMatchFlags, SearchOptions};
 
 pub fn pattern_branch(p: &str, opts: &SearchOptions) -> String {
     let mut s = if opts.fixed_strings() {
@@ -72,7 +72,7 @@ pub fn compile_pattern(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::{CaseMode, SearchMatchFlags, SearchOptions};
+    use crate::grep::{CaseMode, SearchMatchFlags, SearchOptions};
 
     fn opts(flags: SearchMatchFlags, case_mode: CaseMode) -> SearchOptions {
         SearchOptions {

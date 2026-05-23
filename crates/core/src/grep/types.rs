@@ -6,7 +6,7 @@ use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use once_cell::sync::OnceCell;
 
-use crate::planner::TrigramPlan;
+use crate::query::{CandidatePlan, QueryPlanner, QuerySpec};
 
 type SearcherCacheEntry = ((bool, Option<usize>, usize, usize), Searcher);
 
@@ -366,7 +366,7 @@ pub struct SearchStats {
 pub struct CompiledSearch {
     pub patterns: Vec<String>,
     pub opts: SearchOptions,
-    pub plan: TrigramPlan,
+    pub plan: CandidatePlan,
     /// Lazily filled by [`Self::run_index`] via [`Self::build_matcher`]; repeated searches reuse one matcher.
     pub matcher: OnceCell<RegexMatcher>,
     /// Last [`Searcher`] built for `(line_number, max_matches, before_context, after_context)`; reused when the key matches.
@@ -383,7 +383,15 @@ impl CompiledSearch {
         if patterns.is_empty() {
             return Err(crate::Error::EmptyPatterns);
         }
-        let plan = TrigramPlan::for_patterns(patterns, &opts);
+        let spec = QuerySpec {
+            patterns,
+            fixed_strings: opts.fixed_strings(),
+            case_insensitive: opts.case_insensitive(),
+            word_regexp: opts.word_regexp(),
+            line_regexp: opts.line_regexp(),
+            invert_match: opts.invert_match(),
+        };
+        let plan = QueryPlanner::plan(&spec);
         Ok(Self {
             patterns: patterns.to_vec(),
             opts,

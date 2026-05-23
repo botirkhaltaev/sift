@@ -9,6 +9,7 @@ pub const POSTINGS_MAGIC: [u8; 8] = *b"SIFTPST1";
 /// # Errors
 ///
 /// Propagates IO errors from `w`.
+#[allow(dead_code)]
 pub fn write_magic<W: Write>(w: &mut W, magic: [u8; 8]) -> std::io::Result<()> {
     w.write_all(&magic)
 }

@@ -2,18 +2,12 @@
 //!
 //! **Walking:** [`WalkBuilder`] from the [`ignore`] crate.
 
+mod grep;
 mod index;
-mod planner;
-mod search;
-pub mod storage;
+mod query;
 mod verify;
 
-pub use index::{CorpusKind, Index, IndexBuilder, QueryPlan};
-pub use storage::{lexicon, postings};
-pub use verify::{compile_pattern, compile_search_pattern};
-
-pub use planner::TrigramPlan;
-pub use search::{
+pub use grep::{
     BinaryMode, CandidateInfo, CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig,
     HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, Match, OutputEmission, PathDisplay,
     SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
@@ -23,7 +17,12 @@ pub use search::{
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::trigram::extract_trigrams;
+pub use index::trigram::{TrigramIndex, TrigramIndexBuilder};
+pub use index::{CandidateSource, CorpusKind, FileId, Index, QueryPlanOutput};
+
+pub use query::{CandidatePlan, QueryPlanner, QuerySpec};
+
+pub use verify::{compile_pattern, compile_search_pattern};
 
 use std::path::PathBuf;
 
@@ -96,9 +95,12 @@ mod tests {
         fs::write(tmp.join("src/lib.rs"), "fn hello() {\n  let x = 1;\n}\n").unwrap();
 
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&tmp).with_dir(&idx).build().unwrap();
+        let _ = TrigramIndexBuilder::new(&tmp)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
 
-        let index = Index::open(&idx).unwrap();
+        let index = TrigramIndex::open(&idx).unwrap();
         assert!(index.file_count() > 0);
         let pat = vec![r"let\s+x".to_string()];
         let q = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
@@ -113,7 +115,10 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("sift-missing-meta-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
-        assert!(matches!(Index::open(&tmp), Err(Error::MissingMeta(_))));
+        assert!(matches!(
+            TrigramIndex::open(&tmp),
+            Err(Error::MissingMeta(_))
+        ));
     }
 
     #[test]
@@ -131,7 +136,10 @@ mod tests {
             serde_json::to_string_pretty(&meta).unwrap(),
         )
         .unwrap();
-        assert!(matches!(Index::open(&tmp), Err(Error::MissingComponent(_))));
+        assert!(matches!(
+            TrigramIndex::open(&tmp),
+            Err(Error::MissingComponent(_))
+        ));
     }
 
     #[test]
@@ -140,7 +148,10 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join(META_FILENAME), "").unwrap();
-        assert!(matches!(Index::open(&tmp), Err(Error::InvalidMeta(_))));
+        assert!(matches!(
+            TrigramIndex::open(&tmp),
+            Err(Error::InvalidMeta(_))
+        ));
     }
 
     #[test]
@@ -150,8 +161,11 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("a.txt"), "alpha beta\ngamma delta\n").unwrap();
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&tmp).with_dir(&idx).build().unwrap();
-        let index = Index::open(&idx).unwrap();
+        let _ = TrigramIndexBuilder::new(&tmp)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
+        let index = TrigramIndex::open(&idx).unwrap();
         let plan = index.explain("foo.*");
         assert_eq!(plan.pattern, "foo.*");
         assert_eq!(plan.mode, "indexed_candidates");
@@ -165,8 +179,11 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("a.txt"), "alpha beta\ngamma delta\n").unwrap();
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&tmp).with_dir(&idx).build().unwrap();
-        let index = Index::open(&idx).unwrap();
+        let _ = TrigramIndexBuilder::new(&tmp)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
+        let index = TrigramIndex::open(&idx).unwrap();
         let plan = index.explain(r"\w{5}\s+\w{5}");
         assert_eq!(plan.pattern, r"\w{5}\s+\w{5}");
         assert_eq!(plan.mode, "full_scan");
@@ -182,8 +199,11 @@ mod tests {
         fs::write(tmp.join("b/y.txt"), "gamma delta\n").unwrap();
 
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&tmp).with_dir(&idx).build().unwrap();
-        let index = Index::open(&idx).unwrap();
+        let _ = TrigramIndexBuilder::new(&tmp)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
+        let index = TrigramIndex::open(&idx).unwrap();
 
         let pat = vec!["beta".to_string()];
         let opts = SearchOptions::default();
@@ -198,13 +218,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("sift-parallel-fs-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("d")).unwrap();
-
-        let min_parallel = crate::search::parallel_candidate_threshold();
-        let n_files = if min_parallel == usize::MAX {
-            3
-        } else {
-            min_parallel.clamp(2, 64)
-        };
+        let n_files = 8;
         for i in 0..n_files {
             fs::write(
                 tmp.join("d").join(format!("f{i}.txt")),
@@ -213,8 +227,11 @@ mod tests {
             .unwrap();
         }
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&tmp).with_dir(&idx).build().unwrap();
-        let index = Index::open(&idx).unwrap();
+        let _ = TrigramIndexBuilder::new(&tmp)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
+        let index = TrigramIndex::open(&idx).unwrap();
         assert_eq!(index.file_count(), n_files);
 
         let pat = vec!["needle".to_string()];
@@ -236,8 +253,11 @@ mod tests {
         fs::write(tmp.join("ignored/hidden.txt"), "beta skip\n").unwrap();
 
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&tmp).with_dir(&idx).build().unwrap();
-        let index = Index::open(&idx).unwrap();
+        let _ = TrigramIndexBuilder::new(&tmp)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
+        let index = TrigramIndex::open(&idx).unwrap();
 
         let pat = vec![".*".to_string()];
         let opts = SearchOptions::default();
@@ -258,17 +278,26 @@ mod tests {
         fs::write(&file, "alpha\nbeta needle\n").unwrap();
 
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&file).with_dir(&idx).build().unwrap();
-        let index = Index::open(&idx).unwrap();
+        let _ = TrigramIndexBuilder::new(&file)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
+        let index = TrigramIndex::open(&idx).unwrap();
 
         let expected_root = file.canonicalize().unwrap().parent().unwrap().to_path_buf();
         assert_eq!(
             normalized_path(&index.root),
             normalized_path(&expected_root)
         );
-        assert!(matches!(index.corpus_kind, index::CorpusKind::File { .. }));
+        assert!(matches!(
+            index.corpus_kind,
+            crate::index::CorpusKind::File { .. }
+        ));
         assert_eq!(index.file_count(), 1);
-        assert_eq!(index.file_path(0).unwrap(), std::path::Path::new("one.txt"));
+        assert_eq!(
+            index.file_path(FileId::new(0)).unwrap(),
+            std::path::Path::new("one.txt")
+        );
 
         let pat = vec!["needle".to_string()];
         let q = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
@@ -291,7 +320,10 @@ mod tests {
         fs::write(&file, "alpha\n").unwrap();
 
         let idx = tmp.join(".sift");
-        let _ = IndexBuilder::new(&file).with_dir(&idx).build().unwrap();
+        let _ = TrigramIndexBuilder::new(&file)
+            .with_dir(&idx)
+            .build()
+            .unwrap();
         let meta = fs::read_to_string(idx.join(META_FILENAME)).unwrap();
 
         assert!(

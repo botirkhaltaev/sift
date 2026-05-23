@@ -40,9 +40,9 @@ use std::hint::black_box;
 
 use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
-    IgnoreSources, Index, IndexBuilder, LineStyleFlags, OutputEmission, PathDisplay, SearchFilter,
-    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, SearchSeparators, VisibilityConfig,
+    IgnoreSources, LineStyleFlags, OutputEmission, PathDisplay, SearchFilter, SearchFilterConfig,
+    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
+    SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder, VisibilityConfig,
 };
 
 fn make_parity_corpus(root: &Path) {
@@ -117,33 +117,42 @@ fn make_many_files_corpus(root: &Path, n: usize) {
     }
 }
 
-fn open_parity_index() -> (tempfile::TempDir, Index) {
+fn open_parity_index() -> (tempfile::TempDir, TrigramIndex) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     make_parity_corpus(&corpus);
     let idx = tmp.path().join(".sift");
-    IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-    let index = Index::open(&idx).unwrap();
+    TrigramIndexBuilder::new(&corpus)
+        .with_dir(&idx)
+        .build()
+        .unwrap();
+    let index = TrigramIndex::open(&idx).unwrap();
     (tmp, index)
 }
 
-fn open_filter_index() -> (tempfile::TempDir, Index) {
+fn open_filter_index() -> (tempfile::TempDir, TrigramIndex) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     make_filter_corpus(&corpus);
     let idx = tmp.path().join(".sift");
-    IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-    let index = Index::open(&idx).unwrap();
+    TrigramIndexBuilder::new(&corpus)
+        .with_dir(&idx)
+        .build()
+        .unwrap();
+    let index = TrigramIndex::open(&idx).unwrap();
     (tmp, index)
 }
 
-fn open_large_index() -> (tempfile::TempDir, Index) {
+fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     materialize_large_corpus(&corpus, 8_000, 100, 256);
     let idx = tmp.path().join(".sift");
-    IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-    let index = Index::open(&idx).unwrap();
+    TrigramIndexBuilder::new(&corpus)
+        .with_dir(&idx)
+        .build()
+        .unwrap();
+    let index = TrigramIndex::open(&idx).unwrap();
     (tmp, index)
 }
 
@@ -229,7 +238,10 @@ fn bench_build_index(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             make_many_files_corpus(&corpus, 32);
             let idx = tmp.path().join(".sift");
-            IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
+            TrigramIndexBuilder::new(&corpus)
+                .with_dir(&idx)
+                .build()
+                .unwrap();
         });
     });
     g.bench_function("8k_files_large", |b| {
@@ -238,7 +250,10 @@ fn bench_build_index(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             materialize_large_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
-            IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
+            TrigramIndexBuilder::new(&corpus)
+                .with_dir(&idx)
+                .build()
+                .unwrap();
         });
     });
     g.finish();
@@ -301,8 +316,11 @@ fn bench_literal_narrow_corpus_scale(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             materialize_large_corpus(&corpus, files, 100, 256);
             let idx = tmp.path().join(".sift");
-            IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-            let index = Index::open(&idx).unwrap();
+            TrigramIndexBuilder::new(&corpus)
+                .with_dir(&idx)
+                .build()
+                .unwrap();
+            let index = TrigramIndex::open(&idx).unwrap();
             (tmp, index)
         };
         let pat = vec!["beta".to_string()];

@@ -6,8 +6,8 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use crate::storage::format::{LEXICON_MAGIC, write_magic};
-use crate::storage::mmap::open_mmap;
+use crate::index::trigram::storage::format::{LEXICON_MAGIC, write_magic};
+use crate::index::trigram::storage::mmap::open_mmap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexiconEntry {
@@ -21,6 +21,7 @@ pub struct LexiconEntry {
 /// # Errors
 ///
 /// Propagates IO errors from writing `out_path`.
+#[allow(dead_code)]
 pub fn write_lexicon(out_path: &Path, entries: &[LexiconEntry]) -> std::io::Result<()> {
     let f = File::create(out_path)?;
     let mut w = BufWriter::new(f);

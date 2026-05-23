@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use ignore::gitignore::Gitignore;
 use ignore::overrides::{Override, OverrideBuilder};
 
+use crate::index::FileId;
+
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub struct IgnoreSources: u8 {
@@ -83,12 +85,12 @@ pub struct SearchFilterConfig {
 #[derive(Debug, Clone)]
 pub struct CandidateInfo {
     /// File ID from the index.
-    pub id: usize,
+    pub id: FileId,
     /// Relative path as stored in the index.
     pub rel_path: PathBuf,
     /// Normalized relative path string (forward slashes, for gitignore/glob). Empty when neither applies.
     pub rel_str: String,
-    /// Absolute path on disk (same as [`Index::file_abs_path`](crate::Index::file_abs_path)).
+    /// Absolute path on disk (same as [`TrigramIndex::file_abs_path`](crate::index::TrigramIndex::file_abs_path)).
     pub abs_path: PathBuf,
 }
 
