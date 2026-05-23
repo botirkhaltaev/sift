@@ -268,3 +268,106 @@ impl<'a> TrigramIndexBuilder<'a> {
         Ok(index)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn actual_path_joins_root_for_directory_corpus() {
+        let root = Path::new("/corpus");
+        let display = Path::new("sub/file.txt");
+        let result = actual_path(root, false, display);
+        assert_eq!(result, PathBuf::from("/corpus/sub/file.txt"));
+    }
+
+    #[test]
+    fn actual_path_returns_root_for_single_file_corpus() {
+        let root = Path::new("/corpus/single.txt");
+        let display = Path::new("single.txt");
+        let result = actual_path(root, true, display);
+        assert_eq!(result, PathBuf::from("/corpus/single.txt"));
+    }
+
+    #[test]
+    fn build_index_tables_sorts_file_paths_deterministically() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::write(tmp.path().join("z.txt"), "hello\n").expect("write z");
+        fs::write(tmp.path().join("a.txt"), "world\n").expect("write a");
+        fs::write(tmp.path().join("m.txt"), "test\n").expect("write m");
+
+        let (_, tables) = build_index_tables(tmp.path(), false, &[]).expect("build tables");
+        let expected = vec![
+            PathBuf::from("a.txt"),
+            PathBuf::from("m.txt"),
+            PathBuf::from("z.txt"),
+        ];
+        assert_eq!(tables.files, expected);
+    }
+
+    #[test]
+    fn build_index_tables_single_file_corpus_one_relative_name() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let file = tmp.path().join("only.txt");
+        fs::write(&file, "content\n").expect("write file");
+
+        let (is_single, tables) = build_index_tables(&file, false, &[]).expect("build tables");
+        assert!(is_single);
+        assert_eq!(tables.files, vec![PathBuf::from("only.txt")]);
+        assert_eq!(tables.files.len(), 1);
+    }
+
+    #[test]
+    fn build_index_tables_exclude_paths_prevents_indexing() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
+        let excluded_dir = tmp.path().join("excluded");
+        fs::create_dir_all(&excluded_dir).expect("create excluded dir");
+        fs::write(excluded_dir.join("skip.txt"), "world\n").expect("write skip");
+
+        let (_, tables) = build_index_tables(tmp.path(), false, &[PathBuf::from("excluded")])
+            .expect("build tables");
+        assert_eq!(tables.files.len(), 1);
+        assert_eq!(tables.files[0], PathBuf::from("keep.txt"));
+    }
+
+    #[test]
+    fn build_index_tables_duplicate_trigrams_deduplicated_in_postings() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::write(tmp.path().join("a.txt"), "ababab\n").expect("write file");
+        fs::write(tmp.path().join("b.txt"), "ababab\n").expect("write file");
+
+        let (_, tables) = build_index_tables(tmp.path(), false, &[]).expect("build tables");
+        assert_eq!(tables.files.len(), 2);
+        let file_id_0: u32 = 0;
+        let file_id_1: u32 = 1;
+        let occurrences_0 = tables
+            .postings
+            .chunks_exact(4)
+            .filter(|chunk| {
+                let bytes: [u8; 4] = (*chunk).try_into().unwrap();
+                u32::from_le_bytes(bytes) == file_id_0
+            })
+            .count();
+        let occurrences_1 = tables
+            .postings
+            .chunks_exact(4)
+            .filter(|chunk| {
+                let bytes: [u8; 4] = (*chunk).try_into().unwrap();
+                u32::from_le_bytes(bytes) == file_id_1
+            })
+            .count();
+        let unique_trigrams = 3;
+        assert_eq!(
+            occurrences_0, unique_trigrams,
+            "file 0 ID should appear once per unique trigram"
+        );
+        assert_eq!(
+            occurrences_1, unique_trigrams,
+            "file 1 ID should appear once per unique trigram"
+        );
+    }
+}

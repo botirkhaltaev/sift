@@ -6,13 +6,13 @@ Indexed grep-style search engine. Build a trigram index on disk, then run regex 
 
 | Module | Description |
 |--------|-------------|
-| [`query/`](src/query/) | Query description, planning, and candidate plans |
-| [`index/`](src/index/) | Generic index traits (`Index`, `CandidateSource`) and concrete implementations |
+| [`query/`](src/query/) | Query description (`QuerySpec`), planning (`QueryPlanner`) |
+| [`query/trigram.rs`](src/query/trigram.rs) | Raw trigram extraction utilities |
+| [`index/`](src/index/) | `SearchIndex` trait, `Indexes` registry, shared types (`FileId`, `IndexId`, `IndexMeta`) |
 | [`index/trigram/`](src/index/trigram/) | Trigram index: build, load, search, and persistence |
-| [`grep/`](src/grep/) | `CompiledSearch`, parallel file scanning, filtering, and output formatting |
-| [`verify.rs`](src/verify.rs) | Pattern shaping (`-F`/`-w`/`-x`) and regex compilation |
+| [`index/trigram/storage/`](src/index/trigram/storage/) | Binary persistence format (lexicon, postings, file tables) |
+| [`grep/`](src/grep/) | `CompiledSearch`, pattern compilation, parallel file scanning, filtering, output formatting |
 | [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
-| [`bin/sift_profile/`](src/bin/sift_profile/) | `sift-profile` binary for hot-loop benchmarking (feature-gated) |
 
 ## API
 
@@ -39,6 +39,8 @@ let hits = search.collect_index_matches(&index)?;
 | `profile` | Enables `sift-profile` binary and `tempfile` dependency |
 
 ## Testing
+
+Unit tests are co-located with implementation files in `#[cfg(test)] mod tests` blocks. Integration tests live in `tests/`.
 
 ```bash
 cargo test -p sift-core

@@ -88,3 +88,77 @@ impl MappedPostings {
         self.bytes()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    #[test]
+    fn from_bytes_stores_payload_after_header() {
+        let payload = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let postings = MappedPostings::from_bytes(&payload);
+        let slice = postings.slice(0, payload.len());
+        assert_eq!(slice, payload.as_slice());
+    }
+
+    #[test]
+    fn slice_returns_requested_range() {
+        let payload: Vec<u8> = (0..16).collect();
+        let postings = MappedPostings::from_bytes(&payload);
+        let slice = postings.slice(4, 8);
+        assert_eq!(slice, &payload[4..12]);
+    }
+
+    #[test]
+    fn slice_returns_empty_for_out_of_range() {
+        let payload = vec![1, 2, 3, 4];
+        let postings = MappedPostings::from_bytes(&payload);
+        let slice = postings.slice(100, 10);
+        assert!(slice.is_empty());
+    }
+
+    #[test]
+    fn backing_slice_starts_with_postings_magic() {
+        let postings = MappedPostings::from_bytes(&[0, 0, 0, 0]);
+        let slice = postings.backing_slice();
+        assert_eq!(&slice[..POSTINGS_MAGIC.len()], POSTINGS_MAGIC);
+    }
+
+    #[test]
+    fn open_rejects_bad_magic() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("postings.bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        file.write_all(b"BADMAGIC").expect("write bad magic");
+        file.write_all(&0u32.to_le_bytes()).expect("write length");
+
+        let result = MappedPostings::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_declared_payload_longer_than_file() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("postings.bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        file.write_all(&POSTINGS_MAGIC).expect("write magic");
+        file.write_all(&100u32.to_le_bytes())
+            .expect("write length 100");
+        file.write_all(&[0u8; 4]).expect("write only 4 bytes");
+
+        let result = MappedPostings::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_truncated_magic() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("postings.bin");
+        std::fs::write(&path, b"SHORT").expect("write short file");
+
+        let result = MappedPostings::open(&path);
+        assert!(result.is_err());
+    }
+}

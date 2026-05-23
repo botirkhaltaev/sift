@@ -393,3 +393,105 @@ impl CompiledSearch {
         &self.patterns
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn case_mode_insensitive_returns_true() {
+        assert!(CaseMode::Insensitive.is_case_insensitive());
+    }
+
+    #[test]
+    fn case_mode_sensitive_returns_false() {
+        assert!(!CaseMode::Sensitive.is_case_insensitive());
+    }
+
+    #[test]
+    fn case_mode_smart_returns_false() {
+        assert!(!CaseMode::Smart.is_case_insensitive());
+    }
+
+    #[test]
+    fn search_options_defaults() {
+        let opts = SearchOptions::default();
+        assert!(!opts.case_insensitive());
+        assert!(!opts.invert_match());
+        assert!(!opts.fixed_strings());
+        assert!(!opts.word_regexp());
+        assert!(!opts.line_regexp());
+        assert!(!opts.only_matching());
+        assert!(!opts.multiline());
+        assert!(!opts.multiline_dotall());
+        assert!(!opts.crlf());
+        assert!(!opts.precludes_trigram_index());
+        assert_eq!(opts.max_results, None);
+        assert_eq!(opts.before_context, 0);
+        assert_eq!(opts.after_context, 0);
+        assert_eq!(opts.binary_mode, BinaryMode::Quit);
+        assert!(opts.unicode);
+    }
+
+    #[test]
+    fn search_options_precludes_trigram_index_only_for_invert_match() {
+        let mut opts = SearchOptions::default();
+        assert!(!opts.precludes_trigram_index());
+
+        opts.flags |= SearchMatchFlags::INVERT_MATCH;
+        assert!(opts.precludes_trigram_index());
+    }
+
+    #[test]
+    fn search_line_style_defaults() {
+        let style = SearchLineStyle::default();
+        assert!(!style.heading());
+        assert!(!style.line_number());
+        assert!(!style.byte_offset());
+        assert!(!style.trim());
+    }
+
+    #[test]
+    fn search_record_style_defaults() {
+        let style = SearchRecordStyle::default();
+        assert!(!style.null_data);
+        assert_eq!(style.color, ColorChoice::Auto);
+        assert!(style.path_separator.is_none());
+    }
+
+    #[test]
+    fn search_output_defaults() {
+        let output = SearchOutput::default();
+        assert_eq!(output.format, SearchOutputFormat::Text);
+        assert_eq!(output.mode, SearchMode::Standard);
+        assert_eq!(output.emission, OutputEmission::Normal);
+        assert!(!output.passthru);
+        assert!(!output.include_zero);
+    }
+
+    #[test]
+    fn search_separators_defaults() {
+        let sep = SearchSeparators::default();
+        assert_eq!(sep.context_separator, Some(b"--".to_vec()));
+        assert_eq!(sep.field_match_separator, b":".to_vec());
+        assert_eq!(sep.field_context_separator, b"-".to_vec());
+    }
+
+    #[test]
+    fn compiled_search_new_rejects_empty_patterns() {
+        let result = CompiledSearch::new(&[], SearchOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compiled_search_new_stores_patterns_and_options() {
+        let patterns = vec!["foo".to_string(), "bar".to_string()];
+        let opts = SearchOptions {
+            case_mode: CaseMode::Insensitive,
+            ..SearchOptions::default()
+        };
+        let search = CompiledSearch::new(&patterns, opts).expect("create search");
+        assert_eq!(search.patterns(), &patterns);
+        assert!(search.opts.case_insensitive());
+    }
+}

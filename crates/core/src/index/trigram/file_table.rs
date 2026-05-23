@@ -49,8 +49,8 @@ impl MappedFilesView {
 
     pub fn from_paths(paths: &[PathBuf]) -> Self {
         let count = paths.len();
-        let offset_table_start = FILES_MAGIC.len() + 4 + count * 4;
-        let blob_start = offset_table_start;
+        let offset_table_start = FILES_MAGIC.len() + 4;
+        let blob_start = offset_table_start + count * 4;
 
         let mut offsets = Vec::<u32>::with_capacity(count);
         let mut blob = Vec::<u8>::new();
@@ -65,7 +65,7 @@ impl MappedFilesView {
             blob.extend_from_slice(bytes);
         }
 
-        let mut file_bytes = Vec::with_capacity(offset_table_start + blob.len());
+        let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
         file_bytes.extend_from_slice(&FILES_MAGIC);
         file_bytes.extend_from_slice(&u32::try_from(count).unwrap().to_le_bytes());
         for off in &offsets {
@@ -169,5 +169,100 @@ impl MappedFilesView {
 
     pub fn backing_slice(&self) -> &[u8] {
         self.bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn from_paths_round_trips_through_to_path_bufs() {
+        let paths = vec![
+            PathBuf::from("a.txt"),
+            PathBuf::from("sub/b.txt"),
+            PathBuf::from("sub/deep/c.txt"),
+        ];
+        let table = MappedFilesView::from_paths(&paths);
+        let round_tripped = table.to_path_bufs().expect("decode paths");
+        assert_eq!(round_tripped, paths);
+    }
+
+    #[test]
+    fn empty_path_list_round_trips() {
+        let table = MappedFilesView::from_paths(&[]);
+        assert_eq!(table.len(), 0);
+        let round_tripped = table.to_path_bufs().expect("decode paths");
+        assert!(round_tripped.is_empty());
+    }
+
+    #[test]
+    fn len_returns_count() {
+        let paths = vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")];
+        let table = MappedFilesView::from_paths(&paths);
+        assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn backing_slice_starts_with_file_magic() {
+        use crate::index::trigram::storage::format::FILES_MAGIC;
+        let table = MappedFilesView::from_paths(&[PathBuf::from("a.txt")]);
+        let slice = table.backing_slice();
+        assert_eq!(&slice[..FILES_MAGIC.len()], FILES_MAGIC);
+    }
+
+    #[test]
+    fn open_rejects_bad_magic() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("files.bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        file.write_all(b"BADMAGIC").expect("write bad magic");
+        file.write_all(&0u32.to_le_bytes()).expect("write count");
+
+        let result = MappedFilesView::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_truncated_offset_table() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("files.bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        file.write_all(b"SIFTFIL2").expect("write magic");
+        file.write_all(&1u32.to_le_bytes()).expect("write count 1");
+        file.write_all(&[0u8; 2])
+            .expect("write only 2 of 4 offset bytes");
+
+        let result = MappedFilesView::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_path_length_extending_past_end() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("files.bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        file.write_all(b"SIFTFIL2").expect("write magic");
+        file.write_all(&1u32.to_le_bytes()).expect("write count 1");
+        file.write_all(&16u32.to_le_bytes())
+            .expect("write offset pointing past end");
+        file.write_all(&100u32.to_le_bytes())
+            .expect("write path_len 100 but no data");
+
+        let result = MappedFilesView::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_truncated_magic() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("files.bin");
+        std::fs::write(&path, b"SHORT").expect("write short file");
+
+        let result = MappedFilesView::open(&path);
+        assert!(result.is_err());
     }
 }

@@ -2178,3 +2178,161 @@ impl grep_searcher::Sink for CollectSink {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod execute_helper_tests {
+    use super::*;
+
+    #[test]
+    fn should_color_never_returns_false() {
+        let records = SearchRecordStyle::default();
+        let records_never = SearchRecordStyle {
+            color: ColorChoice::Never,
+            ..records
+        };
+        assert!(!should_color(records_never));
+    }
+
+    #[test]
+    fn should_color_always_returns_true() {
+        let records = SearchRecordStyle::default();
+        let records_always = SearchRecordStyle {
+            color: ColorChoice::Always,
+            ..records
+        };
+        assert!(should_color(records_always));
+    }
+
+    #[test]
+    fn display_path_returns_relative_by_default() {
+        let candidate = CandidateInfo {
+            rel_path: PathBuf::from("src/lib.rs"),
+            rel_str: "src/lib.rs".to_string(),
+            abs_path: PathBuf::from("/root/src/lib.rs"),
+        };
+        let display = display_path_for_candidate(&candidate, PathDisplay::Relative, None);
+        assert_eq!(display, "src/lib.rs");
+    }
+
+    #[test]
+    fn display_path_returns_absolute_when_requested() {
+        let candidate = CandidateInfo {
+            rel_path: PathBuf::from("src/lib.rs"),
+            rel_str: "src/lib.rs".to_string(),
+            abs_path: PathBuf::from("/root/src/lib.rs"),
+        };
+        let display = display_path_for_candidate(&candidate, PathDisplay::Absolute, None);
+        assert_eq!(display, "/root/src/lib.rs");
+    }
+
+    #[test]
+    fn display_path_applies_custom_separator() {
+        let candidate = CandidateInfo {
+            rel_path: PathBuf::from("src/lib.rs"),
+            rel_str: "src/lib.rs".to_string(),
+            abs_path: PathBuf::from("/root/src/lib.rs"),
+        };
+        let display = display_path_for_candidate(&candidate, PathDisplay::Relative, Some(b'/'));
+        assert_eq!(display, "src/lib.rs");
+    }
+
+    #[test]
+    fn write_line_terminator_writes_newline() {
+        let mut out = Vec::new();
+        write_line_terminator(&mut out, false);
+        assert_eq!(out, b"\n");
+    }
+
+    #[test]
+    fn write_line_terminator_writes_nul() {
+        let mut out = Vec::new();
+        write_line_terminator(&mut out, true);
+        assert_eq!(out, b"\0");
+    }
+
+    #[test]
+    fn check_max_columns_returns_normal_when_within_limit() {
+        let action = check_max_columns(b"short line\n", Some(100), false);
+        assert!(matches!(action, ColumnAction::Normal));
+    }
+
+    #[test]
+    fn check_max_columns_returns_omit_when_over_limit_no_preview() {
+        let action = check_max_columns(b"this is a very long line\n", Some(5), false);
+        assert!(matches!(action, ColumnAction::Omit));
+    }
+
+    #[test]
+    fn check_max_columns_returns_preview_when_over_limit_with_preview() {
+        let action = check_max_columns(b"this is a very long line\n", Some(5), true);
+        assert!(matches!(action, ColumnAction::Preview));
+    }
+
+    #[test]
+    fn check_max_columns_returns_normal_when_no_limit_set() {
+        let action = check_max_columns(b"any length\n", None, false);
+        assert!(matches!(action, ColumnAction::Normal));
+    }
+
+    #[test]
+    fn truncate_line_trims_line_ending_and_appends_omission() {
+        let result = truncate_line(b"this is a very long line\n", 10);
+        assert!(result.ends_with(b" [... omitted end ...]\n"));
+        let content = String::from_utf8_lossy(&result);
+        assert!(content.starts_with("this is a "));
+    }
+
+    #[test]
+    fn truncate_line_handles_line_without_ending() {
+        let result = truncate_line(b"short", 3);
+        assert!(result.ends_with(b" [... omitted end ...]\n"));
+    }
+
+    #[test]
+    fn sum_candidate_file_bytes_sums_existing_files() {
+        let tmp = tempfile::TempDir::new().expect("create temp dir");
+        let path1 = tmp.path().join("a.txt");
+        let path2 = tmp.path().join("b.txt");
+        std::fs::write(&path1, "hello").expect("write a");
+        std::fs::write(&path2, "world!!").expect("write b");
+
+        let candidates = vec![
+            CandidateInfo {
+                rel_path: PathBuf::from("a.txt"),
+                rel_str: "a.txt".to_string(),
+                abs_path: path1,
+            },
+            CandidateInfo {
+                rel_path: PathBuf::from("b.txt"),
+                rel_str: "b.txt".to_string(),
+                abs_path: path2,
+            },
+        ];
+        let total = sum_candidate_file_bytes(&candidates);
+        assert_eq!(total, 12);
+    }
+
+    #[test]
+    fn sum_candidate_file_bytes_treats_missing_files_as_zero() {
+        let candidates = vec![CandidateInfo {
+            rel_path: PathBuf::from("nonexistent.txt"),
+            rel_str: "nonexistent.txt".to_string(),
+            abs_path: PathBuf::from("/nonexistent.txt"),
+        }];
+        let total = sum_candidate_file_bytes(&candidates);
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn null_writer_returns_buf_len() {
+        let mut w = NullWriter;
+        let n = w.write(b"hello").expect("write");
+        assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn null_writer_flush_returns_ok() {
+        let mut w = NullWriter;
+        w.flush().expect("flush");
+    }
+}
