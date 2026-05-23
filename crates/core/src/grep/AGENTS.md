@@ -1,8 +1,6 @@
-# AGENTS.md — search/
+# grep/
 
-## Responsibility
-
-Search execution: pattern compilation, file scanning, filtering, output formatting, and parallelism.
+Grep-style search execution: pattern compilation, file scanning, filtering, output formatting, and parallelism.
 
 ## Key Types
 
@@ -24,3 +22,4 @@ Search execution: pattern compilation, file scanning, filtering, output formatti
 - Apply filtering logic at index build time.
 - Break deterministic output ordering.
 - Bypass the matcher/searcher cache in `CompiledSearch`.
+- Import from `crate::index::trigram` — use `crate::index::Index` and `crate::index::CandidateSource` traits only.

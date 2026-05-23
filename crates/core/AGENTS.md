@@ -2,27 +2,30 @@
 
 ## Responsibility
 
-Core search engine: trigram index construction, query planning, pattern compilation, and parallel file scanning.
+Core search engine: query planning, trigram index, grep-style execution, and parallel file scanning.
 
 ## Public API
 
-Re-exported from `lib.rs`: `Index`, `IndexBuilder`, `QueryPlan`, `CompiledSearch`, `SearchOptions`, `TrigramPlan`, `walk_file_paths`, storage helpers.
+Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `CompiledSearch`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `CandidatePlan`, `Index`, `CandidateSource`, `FileId`, `walk_file_paths`, storage helpers.
 
 ## Source Map
 
 | Module | Responsibility |
 |--------|----------------|
-| `index/` | `Index`, `IndexBuilder`, corpus walk, trigram extraction, persistence |
-| `index/builder.rs` | `build_index_tables` — in-memory trigram table construction |
-| `index/trigram.rs` | `extract_trigrams`, `extract_trigrams_from_bytes` |
-| `index/files.rs` | Read/write `files.bin` (file ID ↔ relative path) |
-| `planner.rs` | `TrigramPlan::for_patterns` — literal/alternation → narrow arms or full scan |
-| `search/execute.rs` | `run_index`, `search_index`, parallel scanning, output writing |
-| `search/filter.rs` | Glob, hidden-file, ignore-rule, and scope filtering |
-| `search/matcher.rs` | `grep_regex`/`grep_searcher` integration |
-| `search/types.rs` | `CompiledSearch`, `SearchOptions`, `SearchMatchFlags`, output types |
+| `query/` | Query description (`QuerySpec`), planning (`QueryPlanner`), candidate plans |
+| `query/trigram.rs` | Raw trigram extraction utilities |
+| `index/mod.rs` | `Index` trait, `CandidateSource<P>` trait, `FileId`, `CorpusKind`, `IndexMeta` |
+| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, trait impls |
+| `index/trigram/builder.rs` | `TrigramIndexBuilder` — corpus walk, trigram extraction, table construction |
+| `index/trigram/file_table.rs` | `MappedFilesView` — file ID → relative path mapping |
+| `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
+| `grep/mod.rs` | Module declarations and public re-exports |
+| `grep/types.rs` | `CompiledSearch`, `SearchOptions`, output types |
+| `grep/execute.rs` | `run_index`, `run_walk`, parallel scanning, output writing |
+| `grep/filter.rs` | Glob, hidden-file, ignore-rule, and scope filtering |
+| `grep/matcher.rs` | `grep_regex`/`grep_searcher` integration |
 | `verify.rs` | `pattern_branch`, `compile_search_pattern` — `-F`/`-w`/`-x` shaping |
-| `storage/` | Binary format for lexicon, postings, and file tables |
+| `bin/sift_profile/` | `sift-profile` — feature `profile` only |
 
 ## Invariants
 
@@ -41,5 +44,6 @@ Integration-style tests in `lib.rs` `mod tests`; unit tests co-located in module
 ## Do NOT
 
 - Break the public API without updating the CLI crate.
-- Add `unsafe` outside `storage/mmap.rs`.
+- Add `unsafe` outside `index/trigram/storage/mmap.rs`.
 - Use `#[allow(clippy::…)]` without a documented reason.
+- Have `grep/` import from `index::trigram` — use traits only.

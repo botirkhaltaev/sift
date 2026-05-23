@@ -20,7 +20,11 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 
 | Path | Role |
 |------|------|
-| `crates/core/` | `sift-core` — trigram index, query planner, search engine |
+| `crates/core/` | `sift-core` — query planning, trigram index, grep execution, search engine |
+| `crates/core/src/query/` | Query description, planning, candidate plans |
+| `crates/core/src/index/` | Generic index traits and concrete implementations |
+| `crates/core/src/index/trigram/` | Trigram index build, storage, and search |
+| `crates/core/src/grep/` | Grep-style matching, scanning, output, filtering |
 | `crates/cli/` | `sift-cli` — `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
 | `benchsuite/` | Comparative `rg` vs `sift` benchmarks |
@@ -30,7 +34,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 
 ## Key Conventions
 
-- **No `unsafe`** except in `storage/mmap.rs` (documented safety invariant).
+- **No `unsafe`** except in `index/trigram/storage/mmap.rs` (documented safety invariant).
 - **Strict clippy:** workspace uses `pedantic + nursery + cargo` warnings; CI uses `-D warnings`.
 - Fix lints at the root cause — `#[allow]` is **never** permitted.
 - Small, focused changes; follow existing patterns in the crate you touch.
@@ -49,7 +53,7 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`IndexBuilder::build` → `Index::open` → `CompiledSearch::new` → `run_index` / `search_index`. See `crates/core/README.md`.
+`TrigramIndexBuilder::build` → `TrigramIndex::open` → `CompiledSearch::new` → `run_index` / `search_index`. See `crates/core/README.md`.
 
 ## Do NOT
 
