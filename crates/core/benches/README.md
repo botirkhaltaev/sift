@@ -58,3 +58,4 @@ cargo bench -p sift-cli --bench cli -- --noplot
 
 Profile selected hot paths with `samply`, Instruments, or `sample <pid>` on macOS.
 See Criterion HTML reports in `target/criterion/` for statistical breakdowns.
+See [`PROFILING.md`](PROFILING.md) for detailed profiling findings and optimization opportunities.
