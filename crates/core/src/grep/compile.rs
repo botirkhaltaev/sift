@@ -185,6 +185,7 @@ pub fn compile_pattern(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SearchMatchFlags, SearchOptions};
 
     #[test]
     fn alternation_matches_either_pattern() {
@@ -275,5 +276,80 @@ mod tests {
     #[test]
     fn invalid_regex_returns_err() {
         assert!(PatternCompiler::new().compile(&["("]).is_err());
+    }
+
+    #[test]
+    fn shape_fixed_strings_escapes_metacharacters() {
+        let compiler = PatternCompiler::new().fixed_strings(true);
+        assert_eq!(compiler.shape("a.c"), r"a\.c");
+        assert_eq!(compiler.shape("foo*bar"), r"foo\*bar");
+    }
+
+    #[test]
+    fn shape_word_regexp_wraps_in_word_boundary() {
+        let compiler = PatternCompiler::new().word_regexp(true);
+        let shaped = compiler.shape("cat");
+        assert!(shaped.contains(r"\b"));
+    }
+
+    #[test]
+    fn shape_line_regexp_wraps_with_anchors() {
+        let compiler = PatternCompiler::new().line_regexp(true);
+        let shaped = compiler.shape("yes");
+        assert!(shaped.starts_with("^(?:"));
+        assert!(shaped.ends_with(")$"));
+    }
+
+    #[test]
+    fn shape_line_regexp_takes_precedence_over_word_regexp() {
+        let compiler = PatternCompiler::new().line_regexp(true).word_regexp(true);
+        let shaped = compiler.shape("yes");
+        assert!(shaped.starts_with("^(?:"));
+        assert!(!shaped.contains(r"\b"));
+    }
+
+    #[test]
+    fn pattern_branch_reflects_search_options() {
+        let mut opts = SearchOptions::default();
+        opts.flags |= SearchMatchFlags::FIXED_STRINGS;
+        let shaped = pattern_branch("a.c", &opts);
+        assert_eq!(shaped, r"a\.c");
+    }
+
+    #[test]
+    fn compile_search_pattern_rejects_invalid_regex() {
+        let opts = SearchOptions::default();
+        let result = compile_search_pattern(&["(".to_string()], &opts);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compile_search_pattern_case_insensitive() {
+        let opts = SearchOptions {
+            case_mode: crate::CaseMode::Insensitive,
+            ..SearchOptions::default()
+        };
+        let re = compile_search_pattern(&["hello".to_string()], &opts).expect("compile");
+        let mut cache = regex_automata::meta::Cache::new(&re);
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"HELLO"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn compile_one_rejects_invalid_pattern() {
+        let compiler = PatternCompiler::new();
+        assert!(compiler.compile_one("(").is_err());
+    }
+
+    #[test]
+    fn compile_single_pattern_returns_single_regex() {
+        let re = PatternCompiler::new().compile(&["hello"]).unwrap();
+        let mut cache = regex_automata::meta::Cache::new(&re);
+        assert!(
+            re.search_with(&mut cache, &regex_automata::Input::new(b"hello"))
+                .is_some()
+        );
     }
 }

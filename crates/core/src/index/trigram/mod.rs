@@ -8,7 +8,7 @@ use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
 use crate::index::{FileId, IndexMeta, SearchIndex};
-use crate::query::{Arm, CandidatePlan, QueryFlags, QueryPlanner, QuerySpec, TrigramCandidatePlan};
+use crate::query::{Arm, CandidatePlan, QueryPlanner, QuerySpec, TrigramCandidatePlan};
 
 pub use builder::TrigramIndexBuilder;
 
@@ -145,22 +145,6 @@ impl TrigramIndex {
     #[must_use]
     pub fn index_dir(&self) -> Option<&Path> {
         self.index_dir.as_deref()
-    }
-
-    #[must_use]
-    pub fn explain(&self, pattern: &str) -> crate::index::QueryPlanOutput {
-        let spec = QuerySpec {
-            patterns: &[pattern.to_string()],
-            flags: QueryFlags::empty(),
-        };
-        let mode = match QueryPlanner::plan(&spec) {
-            CandidatePlan::FullScan => "full_scan",
-            CandidatePlan::Trigram(_) => "indexed_candidates",
-        };
-        crate::index::QueryPlanOutput {
-            pattern: pattern.to_string(),
-            mode,
-        }
     }
 
     pub fn iter_files(&self) -> impl Iterator<Item = &Path> {
@@ -380,7 +364,11 @@ fn merge_sorted_runs(lists: Vec<Vec<u32>>) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{intersect_sorted_posting_byte_slices, merge_sorted_runs};
+    use super::{
+        compute_abs_paths, intersect_sorted_posting_byte_slices, merge_sorted_runs,
+        validate_file_paths,
+    };
+    use std::path::PathBuf;
 
     fn bytes(ids: &[u32]) -> Vec<u8> {
         ids.iter().flat_map(|id| id.to_le_bytes()).collect()
@@ -400,5 +388,88 @@ mod tests {
         let slices = vec![a.as_slice(), b.as_slice(), c.as_slice()];
         let ids = intersect_sorted_posting_byte_slices(&slices);
         assert_eq!(ids, vec![3, 7]);
+    }
+
+    #[test]
+    fn merge_sorted_runs_empty_input_returns_empty() {
+        let merged = merge_sorted_runs(vec![]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_sorted_runs_single_list_returns_as_is() {
+        let merged = merge_sorted_runs(vec![vec![1, 2, 3]]);
+        assert_eq!(merged, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn merge_sorted_runs_with_empty_lists_mixed_in() {
+        let merged = merge_sorted_runs(vec![vec![1, 3], vec![], vec![2, 3]]);
+        assert_eq!(merged, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn intersect_sorted_posting_byte_slices_empty_input_returns_empty() {
+        let ids = intersect_sorted_posting_byte_slices(&[]);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn intersect_sorted_posting_byte_slices_single_slice_returns_decoded_ids() {
+        let a = bytes(&[1, 3, 5]);
+        let ids = intersect_sorted_posting_byte_slices(&[a.as_slice()]);
+        assert_eq!(ids, vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn intersect_sorted_posting_byte_slices_non_multiple_of_four_returns_empty() {
+        let a = &[1, 2, 3];
+        let ids = intersect_sorted_posting_byte_slices(&[a]);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn intersect_sorted_posting_byte_slices_no_overlap_returns_empty() {
+        let a = bytes(&[1, 2, 3]);
+        let b = bytes(&[4, 5, 6]);
+        let ids = intersect_sorted_posting_byte_slices(&[a.as_slice(), b.as_slice()]);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn validate_file_paths_accepts_normal_relative_paths() {
+        let paths = vec![PathBuf::from("a.txt"), PathBuf::from("sub/b.txt")];
+        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_file_paths_rejects_absolute_paths() {
+        let paths = vec![PathBuf::from("/absolute/a.txt")];
+        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_file_paths_rejects_empty_paths() {
+        let paths = vec![PathBuf::from("")];
+        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_file_paths_rejects_parent_dir_paths() {
+        let paths = vec![PathBuf::from("../escape.txt")];
+        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compute_abs_paths_joins_root_with_relative_paths() {
+        let root = std::path::Path::new("/corpus");
+        let rel = vec![PathBuf::from("a.txt"), PathBuf::from("sub/b.txt")];
+        let abs = compute_abs_paths(root, &rel);
+        assert_eq!(abs[0], PathBuf::from("/corpus/a.txt"));
+        assert_eq!(abs[1], PathBuf::from("/corpus/sub/b.txt"));
     }
 }

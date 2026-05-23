@@ -151,6 +151,17 @@ pub trait SearchIndex: Sync + Send {
     fn file_abs_path(&self, id: FileId) -> Option<PathBuf>;
     fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<FileId>;
     fn is_single_file(&self) -> bool;
+    fn explain(&self, query: &crate::query::QuerySpec<'_>) -> QueryPlanOutput {
+        use crate::query::{CandidatePlan, QueryPlanner};
+        let mode = match QueryPlanner::plan(query) {
+            CandidatePlan::FullScan => "full_scan",
+            CandidatePlan::Trigram(_) => "indexed_candidates",
+        };
+        QueryPlanOutput {
+            pattern: query.patterns.to_vec().join("|"),
+            mode,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,11 +172,94 @@ pub struct IndexMeta {
 }
 
 impl IndexMeta {
+    /// # Errors
+    ///
+    /// Returns `InvalidMeta` if `root` is not an absolute path.
     pub fn validate(self, meta_path: &Path) -> Result<Self, TrigramIndexError> {
         if !self.root.is_absolute() {
             return Err(TrigramIndexError::InvalidMeta(meta_path.to_path_buf()));
         }
         Ok(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn file_id_new_and_get() {
+        let id = FileId::new(42);
+        assert_eq!(id.get(), 42);
+    }
+
+    #[test]
+    fn index_id_new_and_get() {
+        let id = IndexId::new(7);
+        assert_eq!(id.get(), 7);
+    }
+
+    #[test]
+    fn index_meta_validate_accepts_absolute_root() {
+        let meta = IndexMeta {
+            root: PathBuf::from("/absolute/path"),
+            is_single_file_corpus: false,
+        };
+        let result = meta.validate(Path::new("/fake/meta.json"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn index_meta_validate_rejects_relative_root() {
+        let meta = IndexMeta {
+            root: PathBuf::from("relative/path"),
+            is_single_file_corpus: true,
+        };
+        let result = meta.validate(Path::new("/fake/meta.json"));
+        assert!(matches!(result, Err(TrigramIndexError::InvalidMeta(_))));
+    }
+
+    #[test]
+    fn indexes_open_empty_when_no_index_kind_exists() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let sift_dir = tmp.path().join(".sift");
+        fs::create_dir_all(&sift_dir).expect("create sift dir");
+        let indexes = Indexes::open(&sift_dir).expect("open indexes");
+        assert!(indexes.is_empty());
+        assert!(indexes.root().as_os_str().is_empty());
+    }
+
+    #[test]
+    fn indexes_open_invalid_layout_when_trigram_is_file() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let sift_dir = tmp.path().join(".sift");
+        fs::create_dir_all(&sift_dir).expect("create sift dir");
+        let trigram_path = sift_dir.join("trigram");
+        fs::write(&trigram_path, "not a directory").expect("write file");
+
+        let result = Indexes::open(&sift_dir);
+        assert!(matches!(result, Err(IndexError::InvalidLayout { path }) if path == trigram_path));
+    }
+
+    #[test]
+    fn indexes_first_returns_none_when_empty() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let sift_dir = tmp.path().join(".sift");
+        fs::create_dir_all(&sift_dir).expect("create sift dir");
+        let indexes = Indexes::open(&sift_dir).expect("open indexes");
+        assert!(indexes.first().is_none());
+    }
+
+    #[test]
+    fn indexes_refs_returns_empty_vec_when_empty() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let sift_dir = tmp.path().join(".sift");
+        fs::create_dir_all(&sift_dir).expect("create sift dir");
+        let indexes = Indexes::open(&sift_dir).expect("open indexes");
+        assert!(indexes.refs().is_empty());
     }
 }
 

@@ -473,3 +473,244 @@ impl SearchFilter {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn make_filter(config: &SearchFilterConfig) -> SearchFilter {
+        SearchFilter::new(config, Path::new("/root")).expect("create filter")
+    }
+
+    #[test]
+    fn empty_config_includes_normal_visible_files() {
+        let config = SearchFilterConfig::default();
+        let filter = make_filter(&config);
+        assert!(filter.is_candidate(Path::new("src/lib.rs")));
+    }
+
+    #[test]
+    fn hidden_paths_rejected_by_default() {
+        let config = SearchFilterConfig::default();
+        let filter = make_filter(&config);
+        assert!(!filter.is_candidate(Path::new(".hidden/file.txt")));
+        assert!(!filter.is_candidate(Path::new("dir/.hidden")));
+    }
+
+    #[test]
+    fn hidden_paths_accepted_with_include_mode() {
+        let config = SearchFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(filter.is_candidate(Path::new(".hidden/file.txt")));
+    }
+
+    #[test]
+    fn empty_scopes_include_all_files() {
+        let config = SearchFilterConfig::default();
+        let filter = make_filter(&config);
+        assert!(filter.is_candidate(Path::new("any/path/file.txt")));
+    }
+
+    #[test]
+    fn specific_scopes_include_matching_prefixes_only() {
+        let config = SearchFilterConfig {
+            scopes: vec![PathBuf::from("src")],
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(filter.is_candidate(Path::new("src/lib.rs")));
+        assert!(!filter.is_candidate(Path::new("tests/test.rs")));
+    }
+
+    #[test]
+    fn exclude_paths_reject_matching_prefixes() {
+        let config = SearchFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            exclude_paths: vec![PathBuf::from("vendor")],
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(!filter.is_candidate(Path::new("vendor/pkg/file.rs")));
+        assert!(filter.is_candidate(Path::new("src/lib.rs")));
+    }
+
+    #[test]
+    fn candidate_info_and_path_candidate_agree() {
+        let config = SearchFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        let rel_path = Path::new("src/lib.rs");
+        let info = CandidateInfo {
+            rel_path: rel_path.to_path_buf(),
+            rel_str: "src/lib.rs".to_string(),
+            abs_path: PathBuf::from("/root/src/lib.rs"),
+        };
+        assert_eq!(
+            filter.is_candidate(rel_path),
+            filter.is_candidate_info(&info)
+        );
+    }
+
+    #[test]
+    fn glob_excludes_reject_excluded_paths() {
+        let config = SearchFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            glob: GlobConfig {
+                patterns: vec!["!*.log".to_string()],
+                case_insensitive: false,
+            },
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(!filter.is_candidate(Path::new("debug.log")));
+        assert!(filter.is_candidate(Path::new("src/lib.rs")));
+    }
+
+    #[test]
+    fn case_insensitive_glob_matching_works() {
+        let config = SearchFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            glob: GlobConfig {
+                patterns: vec!["!*.LOG".to_string()],
+                case_insensitive: true,
+            },
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(!filter.is_candidate(Path::new("debug.log")));
+        assert!(!filter.is_candidate(Path::new("debug.LOG")));
+    }
+
+    #[test]
+    fn type_include_accepts_matching_type_globs() {
+        let config = SearchFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            type_definitions: vec![TypeDef {
+                name: "rust".to_string(),
+                globs: vec!["*.rs".to_string()],
+            }],
+            type_include: vec!["rust".to_string()],
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(filter.is_candidate(Path::new("src/lib.rs")));
+        assert!(!filter.is_candidate(Path::new("src/lib.txt")));
+    }
+
+    #[test]
+    fn type_exclude_rejects_matching_type_globs() {
+        let config = SearchFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            type_definitions: vec![TypeDef {
+                name: "rust".to_string(),
+                globs: vec!["*.rs".to_string()],
+            }],
+            type_exclude: vec!["rust".to_string()],
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(!filter.is_candidate(Path::new("src/lib.rs")));
+        assert!(filter.is_candidate(Path::new("src/lib.txt")));
+    }
+
+    #[test]
+    fn unknown_type_returns_error() {
+        let config = SearchFilterConfig {
+            type_definitions: vec![],
+            type_include: vec!["unknown".to_string()],
+            ..SearchFilterConfig::default()
+        };
+        let result = SearchFilter::new(&config, Path::new("/root"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_glob_returns_error() {
+        let config = SearchFilterConfig {
+            glob: GlobConfig {
+                patterns: vec!["[invalid".to_string()],
+                case_insensitive: false,
+            },
+            ..SearchFilterConfig::default()
+        };
+        let result = SearchFilter::new(&config, Path::new("/root"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn filter_accessor_follow_links() {
+        let config = SearchFilterConfig {
+            follow_links: true,
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(filter.follow_links());
+    }
+
+    #[test]
+    fn filter_accessor_max_depth() {
+        let config = SearchFilterConfig {
+            max_depth: Some(5),
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert_eq!(filter.max_depth(), Some(5));
+    }
+
+    #[test]
+    fn filter_accessor_max_filesize() {
+        let config = SearchFilterConfig {
+            max_filesize: Some(1024),
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert_eq!(filter.max_filesize(), Some(1024));
+    }
+
+    #[test]
+    fn filter_accessor_one_file_system() {
+        let config = SearchFilterConfig {
+            one_file_system: true,
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert!(filter.one_file_system());
+    }
+
+    #[test]
+    fn filter_accessor_scopes() {
+        let config = SearchFilterConfig {
+            scopes: vec![PathBuf::from("src")],
+            ..SearchFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        assert_eq!(filter.scopes(), &[PathBuf::from("src")]);
+    }
+}

@@ -126,3 +126,120 @@ impl CompiledSearch {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SearchMatchFlags, SearchOptions};
+
+    fn make_search(patterns: &[&str], opts: SearchOptions) -> CompiledSearch {
+        let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
+        CompiledSearch::new(&patterns, opts).expect("compile search")
+    }
+
+    struct CollectStringSink {
+        hits: Vec<String>,
+    }
+
+    impl grep_searcher::Sink for CollectStringSink {
+        type Error = std::io::Error;
+
+        fn matched(
+            &mut self,
+            _: &grep_searcher::Searcher,
+            mat: &grep_searcher::SinkMatch<'_>,
+        ) -> Result<bool, Self::Error> {
+            self.hits
+                .push(String::from_utf8_lossy(mat.bytes()).into_owned());
+            Ok(true)
+        }
+    }
+
+    fn search_content(search: &CompiledSearch, content: &[u8]) -> Vec<String> {
+        let matcher = search.build_matcher().expect("build matcher");
+        let mut sink = CollectStringSink { hits: Vec::new() };
+        search.with_cached_searcher(true, None, |searcher| {
+            let _ = searcher.search_slice(&matcher, content, &mut sink);
+        });
+        sink.hits
+    }
+
+    #[test]
+    fn sensitive_mode_matches_exact_case_only() {
+        let opts = SearchOptions {
+            case_mode: CaseMode::Sensitive,
+            ..SearchOptions::default()
+        };
+        let search = make_search(&["Hello"], opts);
+        let hits = search_content(&search, b"Hello world\nhello world\nHELLO world\n");
+        assert_eq!(hits, vec!["Hello world\n"]);
+    }
+
+    #[test]
+    fn insensitive_mode_matches_case_variants() {
+        let opts = SearchOptions {
+            case_mode: CaseMode::Insensitive,
+            ..SearchOptions::default()
+        };
+        let search = make_search(&["hello"], opts);
+        let hits = search_content(&search, b"Hello world\nhello world\nHELLO world\n");
+        assert_eq!(hits.len(), 3);
+    }
+
+    #[test]
+    fn fixed_strings_treat_metacharacters_literally() {
+        let mut opts = SearchOptions::default();
+        opts.flags |= SearchMatchFlags::FIXED_STRINGS;
+        let search = make_search(&["a.c"], opts);
+        let hits = search_content(&search, b"a.c\nabc\naXc\n");
+        assert_eq!(hits, vec!["a.c\n"]);
+    }
+
+    #[test]
+    fn word_regexp_rejects_embedded_matches() {
+        let mut opts = SearchOptions::default();
+        opts.flags |= SearchMatchFlags::WORD_REGEXP;
+        let search = make_search(&["cat"], opts);
+        let hits = search_content(&search, b"a cat here\nconcatenate\n");
+        assert_eq!(hits, vec!["a cat here\n"]);
+    }
+
+    #[test]
+    fn line_regexp_rejects_partial_line_matches() {
+        let mut opts = SearchOptions::default();
+        opts.flags |= SearchMatchFlags::LINE_REGEXP;
+        let search = make_search(&["yes"], opts);
+        let hits = search_content(&search, b"yes\noh yes sir\n");
+        assert_eq!(hits, vec!["yes\n"]);
+    }
+
+    #[test]
+    fn invalid_regex_returns_search_error() {
+        let search = make_search(&["("], SearchOptions::default());
+        let result = search.build_matcher();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SearchError::RegexBuild(_)));
+    }
+
+    #[test]
+    fn binary_mode_as_text_builds_without_error() {
+        let opts = SearchOptions {
+            binary_mode: BinaryMode::AsText,
+            ..SearchOptions::default()
+        };
+        let search = make_search(&["hello"], opts);
+        let result = search.build_matcher();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn binary_mode_quit_builds_without_error() {
+        let opts = SearchOptions {
+            binary_mode: BinaryMode::Quit,
+            ..SearchOptions::default()
+        };
+        let search = make_search(&["hello"], opts);
+        let result = search.build_matcher();
+        assert!(result.is_ok());
+    }
+}

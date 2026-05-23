@@ -109,4 +109,43 @@ mod tests {
     fn overlapping_windows() {
         assert_eq!(extract_trigrams("abcd"), vec![*b"abc", *b"bcd"]);
     }
+
+    #[test]
+    fn extract_trigrams_from_bytes_exactly_three() {
+        assert_eq!(extract_trigrams_from_bytes(b"abc"), vec![*b"abc"]);
+    }
+
+    #[test]
+    fn extract_trigrams_from_bytes_overlapping() {
+        assert_eq!(extract_trigrams_from_bytes(b"abcd"), vec![*b"abc", *b"bcd"]);
+    }
+
+    #[test]
+    fn extract_trigrams_from_bytes_short_returns_empty() {
+        assert!(extract_trigrams_from_bytes(b"").is_empty());
+        assert!(extract_trigrams_from_bytes(b"ab").is_empty());
+    }
+
+    #[test]
+    fn extract_unique_trigrams_deduplicates() {
+        let tris = extract_unique_trigrams_from_bytes(b"ababa");
+        assert_eq!(tris.len(), 2);
+        assert!(tris.contains(b"aba"));
+        assert!(tris.contains(b"bab"));
+    }
+
+    #[test]
+    fn extract_unique_trigrams_from_bytes_short_returns_empty() {
+        assert!(extract_unique_trigrams_from_bytes(b"").is_empty());
+        assert!(extract_unique_trigrams_from_bytes(b"ab").is_empty());
+    }
+
+    #[test]
+    fn extract_unique_trigrams_utf8_lossy_matches_reference_invalid() {
+        let b = &[0xff, 0xfe, 0xfd][..];
+        let unique_lossy = extract_unique_trigrams_utf8_lossy(b);
+        let reference: HashSet<[u8; 3]> =
+            extract_unique_trigrams_from_bytes(String::from_utf8_lossy(b).as_ref().as_bytes());
+        assert_eq!(unique_lossy, reference);
+    }
 }

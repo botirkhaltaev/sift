@@ -53,6 +53,7 @@ pub trait SearchIndex: Sync + Send {
     fn file_abs_path(&self, id: FileId) -> Option<PathBuf>;
     fn candidates(&self, query: &QuerySpec<'_>) -> Vec<FileId>;
     fn is_single_file(&self) -> bool;
+    fn explain(&self, query: &QuerySpec<'_>) -> QueryPlanOutput;
 }
 ```
 
@@ -87,7 +88,7 @@ CompiledSearch::run_indexes(&[&dyn SearchIndex], ...)
 cargo test -p sift-core
 ```
 
-Integration-style tests in `lib.rs` `mod tests`; unit tests co-located in modules.
+Unit tests are co-located with implementation files in `#[cfg(test)] mod tests` blocks. Integration tests live in `crates/core/tests/`.
 
 ## Do NOT
 

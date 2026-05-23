@@ -215,3 +215,136 @@ impl Iterator for MappedLexiconIter<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    fn make_entry(tri: [u8; 3], offset: u64, len: u32) -> LexiconEntry {
+        LexiconEntry {
+            trigram: tri,
+            offset,
+            len,
+        }
+    }
+
+    #[test]
+    fn from_entries_sets_len() {
+        let entries = vec![make_entry(*b"abc", 0, 4), make_entry(*b"def", 4, 8)];
+        let lexicon = MappedLexicon::from_entries(&entries);
+        assert_eq!(lexicon.len(), 2);
+    }
+
+    #[test]
+    fn empty_lexicon_reports_is_empty() {
+        let lexicon = MappedLexicon::from_entries(&[]);
+        assert!(lexicon.is_empty());
+        assert_eq!(lexicon.len(), 0);
+    }
+
+    #[test]
+    fn get_finds_first_middle_and_last() {
+        let entries = vec![
+            make_entry(*b"aaa", 0, 4),
+            make_entry(*b"bbb", 4, 4),
+            make_entry(*b"ccc", 8, 4),
+        ];
+        let lexicon = MappedLexicon::from_entries(&entries);
+        assert!(lexicon.get(*b"aaa").is_some());
+        assert!(lexicon.get(*b"bbb").is_some());
+        assert!(lexicon.get(*b"ccc").is_some());
+    }
+
+    #[test]
+    fn get_returns_none_for_absent_trigram() {
+        let entries = vec![make_entry(*b"abc", 0, 4)];
+        let lexicon = MappedLexicon::from_entries(&entries);
+        assert!(lexicon.get(*b"xyz").is_none());
+    }
+
+    #[test]
+    fn get_returns_none_for_empty_lexicon() {
+        let lexicon = MappedLexicon::from_entries(&[]);
+        assert!(lexicon.get(*b"abc").is_none());
+    }
+
+    #[test]
+    fn iter_yields_entries_in_stored_order() {
+        let entries = vec![
+            make_entry(*b"aaa", 0, 4),
+            make_entry(*b"bbb", 4, 4),
+            make_entry(*b"ccc", 8, 4),
+        ];
+        let lexicon = MappedLexicon::from_entries(&entries);
+        let collected: Vec<_> = lexicon.iter().collect();
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].trigram, *b"aaa");
+        assert_eq!(collected[1].trigram, *b"bbb");
+        assert_eq!(collected[2].trigram, *b"ccc");
+    }
+
+    #[test]
+    fn into_iterator_for_ref_works() {
+        let entries = vec![make_entry(*b"abc", 0, 4)];
+        let lexicon = MappedLexicon::from_entries(&entries);
+        let collected: Vec<_> = (&lexicon).into_iter().collect();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].trigram, *b"abc");
+    }
+
+    #[test]
+    fn backing_slice_starts_with_lexicon_magic() {
+        let lexicon = MappedLexicon::from_entries(&[]);
+        let slice = lexicon.backing_slice();
+        assert_eq!(&slice[..LEXICON_MAGIC.len()], LEXICON_MAGIC);
+    }
+
+    #[test]
+    fn open_rejects_bad_magic() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("lexicon.bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        file.write_all(b"BADMAGIC").expect("write bad magic");
+        file.write_all(&0u32.to_le_bytes()).expect("write count");
+
+        let result = MappedLexicon::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_truncated_entry_data() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("lexicon.bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        file.write_all(&LEXICON_MAGIC).expect("write magic");
+        file.write_all(&1u32.to_le_bytes()).expect("write count 1");
+        file.write_all(&[0u8; 8]).expect("write only 8 of 15 bytes");
+
+        let result = MappedLexicon::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_truncated_magic() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("lexicon.bin");
+        std::fs::write(&path, b"SHORT").expect("write short file");
+
+        let result = MappedLexicon::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_returns_correct_offset_and_len() {
+        let entries = vec![make_entry(*b"aaa", 100, 12), make_entry(*b"bbb", 200, 8)];
+        let lexicon = MappedLexicon::from_entries(&entries);
+        let entry = lexicon.get(*b"aaa").expect("find aaa");
+        assert_eq!(entry.offset, 100);
+        assert_eq!(entry.len, 12);
+        let entry = lexicon.get(*b"bbb").expect("find bbb");
+        assert_eq!(entry.offset, 200);
+        assert_eq!(entry.len, 8);
+    }
+}
