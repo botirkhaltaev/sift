@@ -2,8 +2,8 @@ use std::path::Path;
 
 use sift_core::Error as SiftError;
 use sift_core::{
-    CompiledSearch, SearchFilter, SearchLineStyle, SearchMode, SearchRecordStyle, SearchStats,
-    TrigramIndex,
+    CompiledSearch, SearchFilter, SearchIndex, SearchLineStyle, SearchMode, SearchRecordStyle,
+    SearchStats, TrigramIndex,
 };
 
 use crate::cli::Cli;
@@ -55,9 +55,9 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
 
     let (filter_root, scopes, exclude_paths) =
         if let Ok(index) = TrigramIndex::open(&cli.paths.sift_dir) {
-            let prefixes = corpus_path_prefixes(&index.root, &cwd, &cli.search_scope.paths)?;
-            let excludes = excluded_search_paths(&index.root, &cli.paths.sift_dir);
-            (index.root, prefixes, excludes)
+            let prefixes = corpus_path_prefixes(index.root(), &cwd, &cli.search_scope.paths)?;
+            let excludes = excluded_search_paths(index.root(), &cli.paths.sift_dir);
+            (index.root().to_path_buf(), prefixes, excludes)
         } else {
             let root = cwd.canonicalize()?;
             let prefixes = walk_path_prefixes(&root, &cli.search_scope.paths)?;
@@ -96,9 +96,9 @@ impl Cli {
         out: &crate::output::SearchOutputCtx,
         filter: crate::filter::SearchFilterCtx,
     ) -> anyhow::Result<bool> {
-        let prefixes = corpus_path_prefixes(&index.root, cwd, &self.search_scope.paths)?;
-        let exclude_paths = excluded_search_paths(&index.root, &self.paths.sift_dir);
-        let corpus_is_single_file = matches!(index.corpus_kind, sift_core::CorpusKind::File { .. });
+        let prefixes = corpus_path_prefixes(index.root(), cwd, &self.search_scope.paths)?;
+        let exclude_paths = excluded_search_paths(index.root(), &self.paths.sift_dir);
+        let corpus_is_single_file = index.is_single_file();
         let filename_mode = effective_filename_mode(
             out.lines.with_filename,
             out.lines.is_path_mode,
@@ -130,11 +130,12 @@ impl Cli {
             out.include_zero,
         );
         let filter_config = self.build_filter_config(filter, prefixes, exclude_paths)?;
-        let search_filter = SearchFilter::new(&filter_config, &index.root)?;
+        let search_filter = SearchFilter::new(&filter_config, index.root())?;
+        let indexes: &[&dyn SearchIndex] = &[index];
         if out.print_stats {
             let mut stats = SearchStats::default();
-            let ok = query.run_index_with_stats(
-                index,
+            let ok = query.run_indexes_with_stats(
+                indexes,
                 &search_filter,
                 output,
                 &out.separators,
@@ -144,7 +145,7 @@ impl Cli {
             return Ok(ok);
         }
         query
-            .run_index(index, &search_filter, output, &out.separators)
+            .run_indexes(indexes, &search_filter, output, &out.separators)
             .map_err(Into::into)
     }
 

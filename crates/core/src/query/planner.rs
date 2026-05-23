@@ -2,28 +2,44 @@ use regex_syntax::ast::parse::Parser as AstParser;
 use regex_syntax::hir::literal::{ExtractKind, Extractor};
 use regex_syntax::hir::{self, Hir};
 
-use super::candidate_plan::{Arm, CandidatePlan, TrigramCandidatePlan};
 use super::spec::QuerySpec;
 use super::trigram::extract_trigrams_from_bytes;
 
 pub struct QueryPlanner;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidatePlan {
+    FullScan,
+    Trigram(TrigramCandidatePlan),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrigramCandidatePlan {
+    pub arms: Vec<Arm>,
+}
+
+pub type Arm = Vec<[u8; 3]>;
+
 impl QueryPlanner {
     #[must_use]
-    pub fn plan(spec: &QuerySpec<'_>) -> CandidatePlan {
-        if spec.invert_match {
+    pub fn should_use_indexes(spec: &QuerySpec<'_>) -> bool {
+        matches!(Self::plan(spec), CandidatePlan::Trigram(_))
+    }
+
+    pub(crate) fn plan(spec: &QuerySpec<'_>) -> CandidatePlan {
+        if spec.invert_match() {
             return CandidatePlan::FullScan;
         }
         let mut trigram_arms: Vec<Arm> = Vec::new();
         for p in spec.patterns {
-            let arms = if spec.fixed_strings {
-                fixed_string_literals(p.as_bytes(), spec.case_insensitive)
+            let arms = if spec.fixed_strings() {
+                fixed_string_literals(p.as_bytes(), spec.case_insensitive())
             } else {
                 match plan_pattern(
                     p.as_str(),
-                    spec.case_insensitive,
-                    spec.word_regexp,
-                    spec.line_regexp,
+                    spec.case_insensitive(),
+                    spec.word_regexp(),
+                    spec.line_regexp(),
                 ) {
                     Some(a) => a,
                     None => return CandidatePlan::FullScan,
@@ -166,6 +182,7 @@ fn plan_pattern(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::spec::QueryFlags;
 
     fn narrow(
         patterns: &[String],
@@ -173,15 +190,18 @@ mod tests {
         word_regexp: bool,
         line_regexp: bool,
     ) -> bool {
-        let spec = QuerySpec {
-            patterns,
-            fixed_strings: false,
-            case_insensitive,
-            word_regexp,
-            line_regexp,
-            invert_match: false,
-        };
-        matches!(QueryPlanner::plan(&spec), CandidatePlan::Trigram(_))
+        let mut flags = QueryFlags::empty();
+        if case_insensitive {
+            flags |= QueryFlags::CASE_INSENSITIVE;
+        }
+        if word_regexp {
+            flags |= QueryFlags::WORD_REGEXP;
+        }
+        if line_regexp {
+            flags |= QueryFlags::LINE_REGEXP;
+        }
+        let spec = QuerySpec { patterns, flags };
+        QueryPlanner::should_use_indexes(&spec)
     }
 
     fn full_scan(
@@ -190,15 +210,18 @@ mod tests {
         word_regexp: bool,
         line_regexp: bool,
     ) -> bool {
-        let spec = QuerySpec {
-            patterns,
-            fixed_strings: false,
-            case_insensitive,
-            word_regexp,
-            line_regexp,
-            invert_match: false,
-        };
-        matches!(QueryPlanner::plan(&spec), CandidatePlan::FullScan)
+        let mut flags = QueryFlags::empty();
+        if case_insensitive {
+            flags |= QueryFlags::CASE_INSENSITIVE;
+        }
+        if word_regexp {
+            flags |= QueryFlags::WORD_REGEXP;
+        }
+        if line_regexp {
+            flags |= QueryFlags::LINE_REGEXP;
+        }
+        let spec = QuerySpec { patterns, flags };
+        !QueryPlanner::should_use_indexes(&spec)
     }
 
     #[test]
@@ -260,15 +283,8 @@ mod tests {
     fn fixed_string_narrows() {
         let spec = QuerySpec {
             patterns: &["beta.gamma".to_string()],
-            fixed_strings: true,
-            case_insensitive: false,
-            word_regexp: false,
-            line_regexp: false,
-            invert_match: false,
+            flags: QueryFlags::FIXED_STRINGS,
         };
-        assert!(matches!(
-            QueryPlanner::plan(&spec),
-            CandidatePlan::Trigram(_)
-        ));
+        assert!(QueryPlanner::should_use_indexes(&spec));
     }
 }

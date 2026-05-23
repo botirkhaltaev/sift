@@ -8,7 +8,6 @@ use memmap2::Mmap;
 use rayon::prelude::*;
 
 use crate::grep::parallel_candidate_threshold;
-use crate::index::CorpusKind;
 use crate::index::trigram::storage::lexicon::LexiconEntry;
 use crate::index::trigram::storage::mmap::open_mmap;
 use crate::query::trigram::extract_unique_trigrams_utf8_lossy;
@@ -23,7 +22,7 @@ fn collect_paths(
     root: &Path,
     follow_links: bool,
     exclude_paths: &[PathBuf],
-) -> crate::Result<(CorpusKind, Vec<PathBuf>)> {
+) -> crate::Result<(bool, Vec<PathBuf>)> {
     if root.is_file() {
         let Some(name) = root.file_name() else {
             return Err(crate::Error::Io(std::io::Error::new(
@@ -32,12 +31,7 @@ fn collect_paths(
             )));
         };
         let entry = PathBuf::from(name);
-        return Ok((
-            CorpusKind::File {
-                entries: vec![entry.clone()],
-            },
-            vec![entry],
-        ));
+        return Ok((true, vec![entry]));
     }
 
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -66,7 +60,7 @@ fn collect_paths(
         }
         paths.push(display);
     }
-    Ok((CorpusKind::Directory, paths))
+    Ok((false, paths))
 }
 
 fn open_corpus_bytes(path: &Path) -> crate::Result<Mmap> {
@@ -82,10 +76,11 @@ fn unique_trigrams_for_file(path: &Path) -> crate::Result<Vec<[u8; 3]>> {
     Ok(tris)
 }
 
-fn actual_path(root: &Path, corpus_kind: &CorpusKind, display: &Path) -> PathBuf {
-    match corpus_kind {
-        CorpusKind::Directory => root.join(display),
-        CorpusKind::File { .. } => root.to_path_buf(),
+fn actual_path(root: &Path, is_single_file: bool, display: &Path) -> PathBuf {
+    if is_single_file {
+        root.to_path_buf()
+    } else {
+        root.join(display)
     }
 }
 
@@ -93,8 +88,8 @@ pub fn build_index_tables(
     root: &Path,
     follow_links: bool,
     exclude_paths: &[PathBuf],
-) -> crate::Result<(CorpusKind, IndexTables)> {
-    let (corpus_kind, mut paths) = collect_paths(root, follow_links, exclude_paths)?;
+) -> crate::Result<(bool, IndexTables)> {
+    let (is_single_file, mut paths) = collect_paths(root, follow_links, exclude_paths)?;
     paths.sort_unstable();
 
     let min_parallel = parallel_candidate_threshold();
@@ -102,7 +97,7 @@ pub fn build_index_tables(
         paths
             .par_iter()
             .map(|display| {
-                let path = actual_path(root, &corpus_kind, display);
+                let path = actual_path(root, is_single_file, display);
                 unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
             })
             .collect::<crate::Result<Vec<_>>>()?
@@ -110,7 +105,7 @@ pub fn build_index_tables(
         paths
             .iter()
             .map(|display| {
-                let path = actual_path(root, &corpus_kind, display);
+                let path = actual_path(root, is_single_file, display);
                 unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
             })
             .collect::<crate::Result<Vec<_>>>()?
@@ -163,7 +158,7 @@ pub fn build_index_tables(
     }
 
     Ok((
-        corpus_kind,
+        is_single_file,
         IndexTables {
             files: rel_paths,
             lexicon: lex_entries,
@@ -245,7 +240,7 @@ impl<'a> TrigramIndexBuilder<'a> {
             (canonical.clone(), canonical)
         };
         let exclude_paths = self.excluded_build_paths(&root)?;
-        let (corpus_kind, tables) =
+        let (is_single_file, tables) =
             build_index_tables(&build_root, self.follow_links, &exclude_paths)?;
 
         let files = crate::index::trigram::file_table::MappedFilesView::from_paths(&tables.files);
@@ -257,13 +252,13 @@ impl<'a> TrigramIndexBuilder<'a> {
         let abs_paths = compute_abs_paths(&root, &tables.files);
         let mut index = crate::index::TrigramIndex {
             root,
-            corpus_kind,
             files,
             file_paths: tables.files,
             abs_paths,
             lexicon,
             postings,
             index_dir: None,
+            was_single_file_corpus: is_single_file,
         };
 
         if let Some(dir) = self.dir {

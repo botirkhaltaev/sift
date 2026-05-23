@@ -18,9 +18,9 @@ pub use grep::{
 pub use ignore::{Walk, WalkBuilder};
 
 pub use index::trigram::{TrigramIndex, TrigramIndexBuilder};
-pub use index::{CandidateSource, CorpusKind, FileId, Index, QueryPlanOutput};
+pub use index::{FileId, IndexId, QueryPlanOutput, SearchIndex};
 
-pub use query::{CandidatePlan, QueryPlanner, QuerySpec};
+pub use query::{QueryFlags, QueryPlanner, QuerySpec};
 
 pub use verify::{compile_pattern, compile_search_pattern};
 
@@ -129,7 +129,7 @@ mod tests {
         let root_path = std::env::temp_dir().join("sift-test-root");
         let meta = crate::index::IndexMeta {
             root: root_path,
-            kind: crate::index::CorpusKind::Directory,
+            is_single_file_corpus: false,
         };
         fs::write(
             tmp.join(META_FILENAME),
@@ -286,13 +286,10 @@ mod tests {
 
         let expected_root = file.canonicalize().unwrap().parent().unwrap().to_path_buf();
         assert_eq!(
-            normalized_path(&index.root),
+            normalized_path(index.root()),
             normalized_path(&expected_root)
         );
-        assert!(matches!(
-            index.corpus_kind,
-            crate::index::CorpusKind::File { .. }
-        ));
+        assert!(index.is_single_file());
         assert_eq!(index.file_count(), 1);
         assert_eq!(
             index.file_path(FileId::new(0)).unwrap(),
@@ -326,11 +323,10 @@ mod tests {
             .unwrap();
         let meta = fs::read_to_string(idx.join(META_FILENAME)).unwrap();
 
+        assert!(meta.contains("\"root\""), "unexpected meta: {meta}");
         assert!(
-            meta.contains("\"kind\": \"file\""),
+            meta.contains("\"is_single_file_corpus\": true"),
             "unexpected meta: {meta}"
         );
-        assert!(meta.contains("\"entries\""), "unexpected meta: {meta}");
-        assert!(meta.contains("\"one.txt\""), "unexpected meta: {meta}");
     }
 }

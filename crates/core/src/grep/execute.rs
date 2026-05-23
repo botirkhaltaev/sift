@@ -11,8 +11,8 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
-use crate::index::{FileId, TrigramIndex};
-use crate::query::CandidatePlan;
+use crate::index::{FileId, IndexId, SearchIndex};
+use crate::query::{QueryFlags, QueryPlanner, QuerySpec};
 
 use super::{
     CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, LineStyleFlags, OutputEmission,
@@ -164,54 +164,66 @@ fn format_json_summary_line(wall: std::time::Duration, agg: &JsonStats) -> crate
 }
 
 impl CompiledSearch {
-    /// Returns raw candidate file IDs from index (trigram or full scan).
-    /// Does NOT apply `SearchFilter` - filtering happens in `prepare_candidates`.
-    #[must_use]
-    pub fn candidate_file_ids(&self, index: &TrigramIndex, exhaustive: bool) -> Vec<FileId> {
-        let n = index.file_count();
-        if exhaustive {
-            return (0..n).map(FileId::new).collect();
+    fn build_query_spec(&self) -> QuerySpec<'_> {
+        let mut flags = QueryFlags::empty();
+        if self.opts.fixed_strings() {
+            flags |= QueryFlags::FIXED_STRINGS;
         }
-        match &self.plan {
-            CandidatePlan::FullScan => (0..n).map(FileId::new).collect(),
-            CandidatePlan::Trigram(plan) => index.candidate_ids_for_trigram_plan(plan),
+        if self.opts.case_insensitive() {
+            flags |= QueryFlags::CASE_INSENSITIVE;
+        }
+        if self.opts.word_regexp() {
+            flags |= QueryFlags::WORD_REGEXP;
+        }
+        if self.opts.line_regexp() {
+            flags |= QueryFlags::LINE_REGEXP;
+        }
+        if self.opts.invert_match() {
+            flags |= QueryFlags::INVERT_MATCH;
+        }
+        QuerySpec {
+            patterns: &self.patterns,
+            flags,
         }
     }
 
-    /// Execute a search over an opened index and print results to stdout.
+    /// Execute a search over one or more indexes and print results to stdout.
+    ///
+    /// All indexes must share the same corpus root; scope paths, exclude paths,
+    /// and relative-path display are resolved against a single [`SearchFilter`].
     ///
     /// # Errors
     ///
     /// Returns an error if the matcher cannot be built or stdout cannot be written.
-    pub fn run_index(
+    pub fn run_indexes(
         &self,
-        index: &TrigramIndex,
+        indexes: &[&dyn SearchIndex],
         filter: &SearchFilter,
         output: SearchOutput,
         separators: &SearchSeparators,
     ) -> crate::Result<bool> {
-        self.run_index_impl(index, filter, output, separators, None)
+        self.run_indexes_impl(indexes, filter, output, separators, None)
     }
 
-    /// Like [`Self::run_index`], but fills `stats` with search counters (ripgrep-style `--stats`).
+    /// Like [`Self::run_indexes`], but fills `stats` with search counters.
     ///
     /// # Errors
     ///
-    /// Same as [`Self::run_index`].
-    pub fn run_index_with_stats(
+    /// Same as [`Self::run_indexes`].
+    pub fn run_indexes_with_stats(
         &self,
-        index: &TrigramIndex,
+        indexes: &[&dyn SearchIndex],
         filter: &SearchFilter,
         output: SearchOutput,
         separators: &SearchSeparators,
         stats: &mut SearchStats,
     ) -> crate::Result<bool> {
-        self.run_index_impl(index, filter, output, separators, Some(stats))
+        self.run_indexes_impl(indexes, filter, output, separators, Some(stats))
     }
 
-    fn run_index_impl(
+    fn run_indexes_impl(
         &self,
-        index: &TrigramIndex,
+        indexes: &[&dyn SearchIndex],
         filter: &SearchFilter,
         output: SearchOutput,
         separators: &SearchSeparators,
@@ -220,19 +232,26 @@ impl CompiledSearch {
         if self.opts.max_results == Some(0) {
             return Err(crate::Error::InvalidMaxCount);
         }
-
-        // Stage 1: Get raw candidate IDs from index (trigram or full scan)
-        let raw_ids = self.candidate_file_ids(index, Self::uses_exhaustive_candidates(output.mode));
-        if raw_ids.is_empty() {
+        if indexes.is_empty() {
             if let Some(s) = stats {
                 *s = SearchStats::default();
             }
             return Ok(false);
         }
 
-        // Stage 2+3: Parallel filter + prepare CandidateInfo (single filter pass)
+        let spec = self.build_query_spec();
+        let needs_all_files = matches!(
+            output.mode,
+            SearchMode::Count | SearchMode::FilesWithoutMatch
+        );
+        let use_indexes = !needs_all_files && QueryPlanner::should_use_indexes(&spec);
+
         let threshold = parallel_candidate_threshold();
-        let candidates = Self::prepare_candidates(index, &raw_ids, filter, threshold);
+        let candidates = if use_indexes {
+            Self::prepare_index_candidates(indexes, filter, threshold, &spec)
+        } else {
+            Self::prepare_all_files(indexes, filter, threshold, &spec)
+        };
         if candidates.is_empty() {
             if let Some(s) = stats {
                 *s = SearchStats::default();
@@ -240,7 +259,6 @@ impl CompiledSearch {
             return Ok(false);
         }
 
-        // Stage 4: Build matcher (once per `CompiledSearch`) and search
         let search_start = Instant::now();
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
@@ -316,6 +334,170 @@ impl CompiledSearch {
         }
 
         Ok(ok)
+    }
+
+    fn prepare_all_files(
+        indexes: &[&dyn SearchIndex],
+        filter: &SearchFilter,
+        threshold: usize,
+        _spec: &QuerySpec<'_>,
+    ) -> Vec<CandidateInfo> {
+        let need_rel = filter.needs_rel_str_for_matching();
+        let max_fs = filter.max_filesize();
+        let max_d = filter.max_depth();
+
+        let exceeds_depth = |rel: &Path| -> bool {
+            max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
+        };
+
+        let all_ids: Vec<(IndexId, FileId)> = indexes
+            .iter()
+            .enumerate()
+            .flat_map(|(i, idx)| {
+                let index_id = IndexId::new(i);
+                (0..idx.file_count()).map(move |fid| (index_id, FileId::new(fid)))
+            })
+            .collect();
+
+        if all_ids.len() >= threshold {
+            all_ids
+                .into_par_iter()
+                .filter_map(|(index_id, file_id)| {
+                    let idx = *indexes.get(index_id.get())?;
+                    let rel_path = idx.file_path(file_id)?.to_path_buf();
+                    if exceeds_depth(&rel_path) {
+                        return None;
+                    }
+                    let rel_str = if need_rel {
+                        rel_path.to_string_lossy().replace('\\', "/")
+                    } else {
+                        String::new()
+                    };
+                    let abs_path = idx.file_abs_path(file_id)?;
+                    if max_fs.is_some_and(|limit| {
+                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                    }) {
+                        return None;
+                    }
+                    let info = CandidateInfo {
+                        rel_path,
+                        rel_str,
+                        abs_path,
+                    };
+                    filter.is_candidate_info(&info).then_some(info)
+                })
+                .collect()
+        } else {
+            let mut out = Vec::with_capacity(all_ids.len());
+            out.extend(all_ids.into_iter().filter_map(|(index_id, file_id)| {
+                let idx = *indexes.get(index_id.get())?;
+                let rel_path = idx.file_path(file_id)?.to_path_buf();
+                if exceeds_depth(&rel_path) {
+                    return None;
+                }
+                let rel_str = if need_rel {
+                    rel_path.to_string_lossy().replace('\\', "/")
+                } else {
+                    String::new()
+                };
+                let abs_path = idx.file_abs_path(file_id)?;
+                if max_fs.is_some_and(|limit| {
+                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                }) {
+                    return None;
+                }
+                let info = CandidateInfo {
+                    rel_path,
+                    rel_str,
+                    abs_path,
+                };
+                filter.is_candidate_info(&info).then_some(info)
+            }));
+            out
+        }
+    }
+
+    fn prepare_index_candidates(
+        indexes: &[&dyn SearchIndex],
+        filter: &SearchFilter,
+        threshold: usize,
+        spec: &QuerySpec<'_>,
+    ) -> Vec<CandidateInfo> {
+        let need_rel = filter.needs_rel_str_for_matching();
+        let max_fs = filter.max_filesize();
+        let max_d = filter.max_depth();
+
+        let exceeds_depth = |rel: &Path| -> bool {
+            max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
+        };
+
+        let candidate_ids: Vec<(IndexId, FileId)> = indexes
+            .iter()
+            .enumerate()
+            .flat_map(|(i, idx)| {
+                let index_id = IndexId::new(i);
+                idx.candidates(spec)
+                    .into_iter()
+                    .map(move |fid| (index_id, fid))
+            })
+            .collect();
+
+        if candidate_ids.len() >= threshold {
+            candidate_ids
+                .into_par_iter()
+                .filter_map(|(index_id, file_id)| {
+                    let idx = *indexes.get(index_id.get())?;
+                    let rel_path = idx.file_path(file_id)?.to_path_buf();
+                    if exceeds_depth(&rel_path) {
+                        return None;
+                    }
+                    let rel_str = if need_rel {
+                        rel_path.to_string_lossy().replace('\\', "/")
+                    } else {
+                        String::new()
+                    };
+                    let abs_path = idx.file_abs_path(file_id)?;
+                    if max_fs.is_some_and(|limit| {
+                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                    }) {
+                        return None;
+                    }
+                    let info = CandidateInfo {
+                        rel_path,
+                        rel_str,
+                        abs_path,
+                    };
+                    filter.is_candidate_info(&info).then_some(info)
+                })
+                .collect()
+        } else {
+            let mut out = Vec::with_capacity(candidate_ids.len());
+            out.extend(candidate_ids.into_iter().filter_map(|(index_id, file_id)| {
+                let idx = *indexes.get(index_id.get())?;
+                let rel_path = idx.file_path(file_id)?.to_path_buf();
+                if exceeds_depth(&rel_path) {
+                    return None;
+                }
+                let rel_str = if need_rel {
+                    rel_path.to_string_lossy().replace('\\', "/")
+                } else {
+                    String::new()
+                };
+                let abs_path = idx.file_abs_path(file_id)?;
+                if max_fs.is_some_and(|limit| {
+                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                }) {
+                    return None;
+                }
+                let info = CandidateInfo {
+                    rel_path,
+                    rel_str,
+                    abs_path,
+                };
+                filter.is_candidate_info(&info).then_some(info)
+            }));
+            out
+        }
     }
 
     /// Search by walking the filesystem under `filter_root` (no trigram index).
@@ -463,80 +645,6 @@ impl CompiledSearch {
         }
 
         Ok(ok)
-    }
-
-    /// Prepare `CandidateInfo` with parallel filter + path prep.
-    #[must_use]
-    pub fn prepare_candidates(
-        index: &TrigramIndex,
-        ids: &[FileId],
-        filter: &SearchFilter,
-        threshold: usize,
-    ) -> Vec<CandidateInfo> {
-        let need_rel = filter.needs_rel_str_for_matching();
-        let max_fs = filter.max_filesize();
-        let max_d = filter.max_depth();
-        let cap = ids.len();
-
-        let exceeds_depth = |rel: &Path| -> bool {
-            max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
-        };
-
-        if ids.len() >= threshold {
-            ids.par_iter()
-                .filter_map(|&id| {
-                    let rel_path = index.file_path(id)?.to_path_buf();
-                    if exceeds_depth(&rel_path) {
-                        return None;
-                    }
-                    let rel_str = if need_rel {
-                        rel_path.to_string_lossy().replace('\\', "/")
-                    } else {
-                        String::new()
-                    };
-                    let abs_path = index.file_abs_path(id)?;
-                    if max_fs.is_some_and(|limit| {
-                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
-                    }) {
-                        return None;
-                    }
-                    let info = CandidateInfo {
-                        id,
-                        rel_path,
-                        rel_str,
-                        abs_path,
-                    };
-                    filter.is_candidate_info(&info).then_some(info)
-                })
-                .collect()
-        } else {
-            let mut out = Vec::with_capacity(cap);
-            out.extend(ids.iter().filter_map(|&id| {
-                let rel_path = index.file_path(id)?.to_path_buf();
-                if exceeds_depth(&rel_path) {
-                    return None;
-                }
-                let rel_str = if need_rel {
-                    rel_path.to_string_lossy().replace('\\', "/")
-                } else {
-                    String::new()
-                };
-                let abs_path = index.file_abs_path(id)?;
-                if max_fs.is_some_and(|limit| {
-                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
-                }) {
-                    return None;
-                }
-                let info = CandidateInfo {
-                    id,
-                    rel_path,
-                    rel_str,
-                    abs_path,
-                };
-                filter.is_candidate_info(&info).then_some(info)
-            }));
-            out
-        }
     }
 
     fn run_json_standard_with_info(
@@ -697,9 +805,6 @@ impl CompiledSearch {
         separators: &SearchSeparators,
         stats: StatsCollection<'_>,
     ) -> crate::Result<bool> {
-        let show_line_numbers = output.lines.line_number()
-            || self.opts.before_context > 0
-            || self.opts.after_context > 0;
         self.with_cached_searcher(
             output.lines.line_number(),
             self.opts.max_results,
@@ -722,11 +827,14 @@ impl CompiledSearch {
                     let mut sink = StandardSink::new(
                         matcher,
                         sink_output,
-                        show_line_numbers,
                         display,
                         &mut bytes,
                         separators,
                         self.opts.replace.as_deref(),
+                        SinkConfig {
+                            before_context: self.opts.before_context,
+                            after_context: self.opts.after_context,
+                        },
                     );
                     let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
                     if let Some(c) = stats.primary {
@@ -825,7 +933,10 @@ impl CompiledSearch {
     // Test-only helpers
 
     #[cfg(test)]
-    pub(crate) fn collect_index_matches(&self, index: &TrigramIndex) -> crate::Result<Vec<Match>> {
+    pub(crate) fn collect_index_matches(
+        &self,
+        index: &dyn SearchIndex,
+    ) -> crate::Result<Vec<Match>> {
         let config = SearchFilterConfig {
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
@@ -833,8 +944,9 @@ impl CompiledSearch {
             },
             ..SearchFilterConfig::default()
         };
-        let filter = SearchFilter::new(&config, &index.root)?;
-        let candidate_ids = self.candidate_file_ids(index, false);
+        let filter = SearchFilter::new(&config, index.root())?;
+        let spec = self.build_query_spec();
+        let candidate_ids = index.candidates(&spec);
         self.collect_index_candidates(index, &filter, &candidate_ids)
     }
 
@@ -868,7 +980,7 @@ impl CompiledSearch {
     #[cfg(test)]
     fn collect_index_candidates(
         &self,
-        index: &TrigramIndex,
+        index: &dyn SearchIndex,
         filter: &SearchFilter,
         candidate_ids: &[FileId],
     ) -> crate::Result<Vec<Match>> {
@@ -883,11 +995,11 @@ impl CompiledSearch {
                     continue;
                 }
                 let mut sink = CollectSink::new(
-                    index.root.join(candidate),
+                    index.root().join(candidate),
                     self.opts.only_matching(),
                     matcher.clone(),
                 );
-                let _ = searcher.search_path(matcher, index.root.join(candidate), &mut sink);
+                let _ = searcher.search_path(matcher, index.root().join(candidate), &mut sink);
                 out.extend(sink.into_matches());
             }
         });
@@ -946,17 +1058,15 @@ impl<'a> JsonWorker<'a> {
 }
 
 struct StandardWorker<'a> {
-    /// Shared across Rayon threads; [`Matcher`] is implemented for `&RegexMatcher`.
     matcher: &'a RegexMatcher,
     searcher: Searcher,
     output: SearchOutput,
     separators: &'a SearchSeparators,
-    /// `-C` / `-A` / `-B` imply line numbers in output (ripgrep-style).
-    show_line_numbers: bool,
     bytes: Vec<u8>,
     match_counter: Option<&'a AtomicUsize>,
     files_with_matches: Option<&'a AtomicUsize>,
     replace: Option<String>,
+    sink_config: SinkConfig,
 }
 
 impl<'a> StandardWorker<'a> {
@@ -968,9 +1078,6 @@ impl<'a> StandardWorker<'a> {
         match_counter: Option<&'a AtomicUsize>,
         files_with_matches: Option<&'a AtomicUsize>,
     ) -> Self {
-        let show_line_numbers = output.lines.line_number()
-            || search.opts.before_context > 0
-            || search.opts.after_context > 0;
         Self {
             searcher: search.build_searcher(
                 output.lines.line_number(),
@@ -980,11 +1087,14 @@ impl<'a> StandardWorker<'a> {
             matcher,
             output,
             separators,
-            show_line_numbers,
             bytes: Vec::new(),
             match_counter,
             files_with_matches,
             replace: search.opts.replace.clone(),
+            sink_config: SinkConfig {
+                before_context: search.opts.before_context,
+                after_context: search.opts.after_context,
+            },
         }
     }
 
@@ -1018,11 +1128,11 @@ impl<'a> StandardWorker<'a> {
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
-                self.show_line_numbers,
                 display,
                 &mut self.bytes,
                 self.separators,
                 self.replace.as_deref(),
+                self.sink_config,
             );
             let _ = self
                 .searcher
@@ -1099,6 +1209,12 @@ fn apply_replace(matcher: &RegexMatcher, line: &[u8], replacement: &str) -> Stri
     String::from_utf8_lossy(&dst).into_owned()
 }
 
+#[derive(Clone, Copy)]
+struct SinkConfig {
+    before_context: usize,
+    after_context: usize,
+}
+
 struct StandardSink<'a> {
     matcher: &'a RegexMatcher,
     output: SearchOutput,
@@ -1113,20 +1229,21 @@ struct StandardSink<'a> {
 }
 
 impl<'a> StandardSink<'a> {
-    #[allow(clippy::too_many_arguments)]
     const fn new(
         matcher: &'a RegexMatcher,
         output: SearchOutput,
-        show_line_numbers: bool,
         display_path: String,
         bytes: &'a mut Vec<u8>,
         separators: &'a SearchSeparators,
         replace: Option<&'a str>,
+        config: SinkConfig,
     ) -> Self {
         Self {
             matcher,
             output,
-            show_line_numbers,
+            show_line_numbers: output.lines.line_number()
+                || config.before_context > 0
+                || config.after_context > 0,
             display_path,
             bytes,
             separators,
@@ -1803,13 +1920,13 @@ fn write_standard_prefix(
     Ok(())
 }
 
-#[allow(clippy::match_same_arms)]
 const fn mode_is_success(mode: SearchMode, result: FileSummary) -> bool {
     match mode {
         SearchMode::Count | SearchMode::CountMatches => result.count > 0,
-        SearchMode::FilesWithMatches => result.matched,
+        SearchMode::FilesWithMatches | SearchMode::Standard | SearchMode::OnlyMatching => {
+            result.matched
+        }
         SearchMode::FilesWithoutMatch => !result.matched,
-        SearchMode::Standard | SearchMode::OnlyMatching => result.matched,
     }
 }
 
@@ -1908,8 +2025,7 @@ fn prepare_walk_candidates(
     if abs_paths.len() >= threshold {
         abs_paths
             .par_iter()
-            .enumerate()
-            .filter_map(|(id, abs_path)| {
+            .filter_map(|abs_path| {
                 let rel_path = abs_path
                     .strip_prefix(&filter_root)
                     .unwrap_or(abs_path.as_path())
@@ -1920,24 +2036,16 @@ fn prepare_walk_candidates(
                     String::new()
                 };
                 let info = CandidateInfo {
-                    id: FileId::new(id),
                     rel_path,
                     rel_str,
                     abs_path: abs_path.clone(),
                 };
                 filter.is_candidate_info(&info).then_some(info)
             })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .enumerate()
-            .map(|(i, mut c)| {
-                c.id = FileId::new(i);
-                c
-            })
             .collect()
     } else {
         let mut out = Vec::with_capacity(cap);
-        for (id, abs_path) in abs_paths.iter().enumerate() {
+        for abs_path in abs_paths {
             let rel_path = abs_path
                 .strip_prefix(&filter_root)
                 .unwrap_or(abs_path.as_path())
@@ -1948,15 +2056,12 @@ fn prepare_walk_candidates(
                 String::new()
             };
             let info = CandidateInfo {
-                id: FileId::new(id),
                 rel_path,
                 rel_str,
                 abs_path: abs_path.clone(),
             };
             if filter.is_candidate_info(&info) {
-                let mut c = info;
-                c.id = FileId::new(out.len());
-                out.push(c);
+                out.push(info);
             }
         }
         out

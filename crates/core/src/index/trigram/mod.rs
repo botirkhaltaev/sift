@@ -7,20 +7,21 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{CandidateSource, FileId, Index, IndexMeta};
+use crate::index::{FileId, IndexMeta, SearchIndex};
+use crate::query::{Arm, CandidatePlan, QueryFlags, QueryPlanner, QuerySpec, TrigramCandidatePlan};
 
 pub use builder::TrigramIndexBuilder;
 
 #[derive(Debug)]
 pub struct TrigramIndex {
-    pub root: PathBuf,
-    pub corpus_kind: crate::index::CorpusKind,
+    root: PathBuf,
     files: file_table::MappedFilesView,
     file_paths: Vec<PathBuf>,
     abs_paths: Vec<PathBuf>,
     lexicon: storage::lexicon::MappedLexicon,
     postings: storage::postings::MappedPostings,
     pub index_dir: Option<PathBuf>,
+    was_single_file_corpus: bool,
 }
 
 impl TrigramIndex {
@@ -56,7 +57,7 @@ impl TrigramIndex {
 
         let files = file_table::MappedFilesView::open(&paths[0]).map_err(crate::Error::Io)?;
         let file_paths = files.to_path_bufs().map_err(crate::Error::Io)?;
-        validate_file_paths(&meta.kind, &file_paths, &meta_path)?;
+        validate_file_paths(&file_paths, &meta_path)?;
         let abs_paths = compute_abs_paths(&meta.root, &file_paths);
         let lexicon = storage::lexicon::MappedLexicon::open(&paths[1]).map_err(crate::Error::Io)?;
         let postings =
@@ -64,13 +65,13 @@ impl TrigramIndex {
 
         Ok(Self {
             root: meta.root,
-            corpus_kind: meta.kind,
             files,
             file_paths,
             abs_paths,
             lexicon,
             postings,
             index_dir: Some(sift_dir),
+            was_single_file_corpus: meta.is_single_file_corpus,
         })
     }
 
@@ -82,7 +83,10 @@ impl TrigramIndex {
     pub fn save_to_dir(&self, dir: &Path) -> crate::Result<()> {
         std::fs::create_dir_all(dir)?;
         let meta_path = dir.join(crate::META_FILENAME);
-        let meta = IndexMeta::new(self.root.clone(), self.corpus_kind.clone());
+        let meta = IndexMeta {
+            root: self.root.clone(),
+            is_single_file_corpus: self.was_single_file_corpus,
+        };
         std::fs::write(
             &meta_path,
             serde_json::to_vec_pretty(&meta)
@@ -127,7 +131,26 @@ impl TrigramIndex {
     }
 
     #[must_use]
-    pub fn posting_bytes_slice(&self, tri: [u8; 3]) -> &[u8] {
+    pub fn explain(&self, pattern: &str) -> crate::index::QueryPlanOutput {
+        let spec = QuerySpec {
+            patterns: &[pattern.to_string()],
+            flags: QueryFlags::empty(),
+        };
+        let mode = match QueryPlanner::plan(&spec) {
+            CandidatePlan::FullScan => "full_scan",
+            CandidatePlan::Trigram(_) => "indexed_candidates",
+        };
+        crate::index::QueryPlanOutput {
+            pattern: pattern.to_string(),
+            mode,
+        }
+    }
+
+    pub fn iter_files(&self) -> impl Iterator<Item = &Path> {
+        self.file_paths.iter().map(PathBuf::as_path)
+    }
+
+    fn posting_bytes_slice(&self, tri: [u8; 3]) -> &[u8] {
         let Some(entry) = self.lexicon.get(tri) else {
             return &[];
         };
@@ -137,25 +160,7 @@ impl TrigramIndex {
         self.postings.slice(start, nbytes)
     }
 
-    /// Get sorted file IDs for a trigram. Materializes from mapped bytes.
-    ///
-    /// # Panics
-    ///
-    /// Panics if postings data for this trigram is corrupted.
-    #[must_use]
-    pub fn posting_list_for_trigram(&self, tri: [u8; 3]) -> Vec<u32> {
-        let slice = self.posting_bytes_slice(tri);
-        if !slice.len().is_multiple_of(4) {
-            return Vec::new();
-        }
-        slice
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
-            .collect()
-    }
-
-    #[must_use]
-    pub fn candidate_file_ids(&self, arms: &[crate::query::Arm]) -> Vec<u32> {
+    fn candidate_file_ids(&self, arms: &[Arm]) -> Vec<u32> {
         if arms.is_empty() {
             return Vec::new();
         }
@@ -171,7 +176,7 @@ impl TrigramIndex {
         merge_sorted_runs(id_lists)
     }
 
-    fn posting_ids_for_arm(&self, arm: &crate::query::Arm) -> Option<Vec<u32>> {
+    fn posting_ids_for_arm(&self, arm: &Arm) -> Option<Vec<u32>> {
         if arm.is_empty() {
             return None;
         }
@@ -188,39 +193,44 @@ impl TrigramIndex {
         if ids.is_empty() { None } else { Some(ids) }
     }
 
-    #[must_use]
-    pub fn candidate_ids_for_trigram_plan(
-        &self,
-        plan: &crate::query::TrigramCandidatePlan,
-    ) -> Vec<FileId> {
+    fn trigram_candidates(&self, plan: &TrigramCandidatePlan) -> Vec<FileId> {
         let raw = self.candidate_file_ids(&plan.arms);
         raw.into_iter()
             .filter_map(|id| usize::try_from(id).ok().map(FileId::new))
             .collect()
     }
 
-    #[must_use]
-    pub fn explain(&self, pattern: &str) -> crate::index::QueryPlanOutput {
-        let spec = crate::query::QuerySpec {
-            patterns: &[pattern.to_string()],
-            fixed_strings: false,
-            case_insensitive: false,
-            word_regexp: false,
-            line_regexp: false,
-            invert_match: false,
-        };
-        let mode = match crate::query::QueryPlanner::plan(&spec) {
-            crate::query::CandidatePlan::FullScan => "full_scan",
-            crate::query::CandidatePlan::Trigram(_) => "indexed_candidates",
-        };
-        crate::index::QueryPlanOutput {
-            pattern: pattern.to_string(),
-            mode,
+    fn all_file_ids(&self) -> Vec<FileId> {
+        (0..self.file_count()).map(FileId::new).collect()
+    }
+}
+
+impl SearchIndex for TrigramIndex {
+    fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    fn file_path(&self, id: FileId) -> Option<&Path> {
+        self.file_paths.get(id.get()).map(PathBuf::as_path)
+    }
+
+    fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
+        self.abs_paths.get(id.get()).cloned()
+    }
+
+    fn candidates(&self, query: &QuerySpec<'_>) -> Vec<FileId> {
+        match QueryPlanner::plan(query) {
+            CandidatePlan::FullScan => self.all_file_ids(),
+            CandidatePlan::Trigram(plan) => self.trigram_candidates(&plan),
         }
     }
 
-    pub fn iter_files(&self) -> impl Iterator<Item = &Path> {
-        self.file_paths.iter().map(PathBuf::as_path)
+    fn is_single_file(&self) -> bool {
+        self.was_single_file_corpus
     }
 }
 
@@ -228,24 +238,15 @@ fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
     file_paths.iter().map(|p| root.join(p)).collect()
 }
 
-fn validate_file_paths(
-    kind: &crate::index::CorpusKind,
-    file_paths: &[PathBuf],
-    meta_path: &Path,
-) -> crate::Result<()> {
-    match kind {
-        crate::index::CorpusKind::Directory => {
-            if file_paths
-                .iter()
-                .any(|path| path.as_os_str().is_empty() || path.is_absolute())
-            {
-                return Err(crate::Error::InvalidMeta(meta_path.to_path_buf()));
-            }
-        }
-        crate::index::CorpusKind::File { entries } => {
-            if file_paths != entries {
-                return Err(crate::Error::InvalidMeta(meta_path.to_path_buf()));
-            }
+fn validate_file_paths(file_paths: &[PathBuf], meta_path: &Path) -> crate::Result<()> {
+    for path in file_paths {
+        if path.as_os_str().is_empty()
+            || path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(crate::Error::InvalidMeta(meta_path.to_path_buf()));
         }
     }
     Ok(())
@@ -358,30 +359,6 @@ fn merge_sorted_runs(lists: Vec<Vec<u32>>) -> Vec<u32> {
         }
     }
     out
-}
-
-impl Index for TrigramIndex {
-    fn root(&self) -> &Path {
-        &self.root
-    }
-
-    fn file_count(&self) -> usize {
-        self.files.len()
-    }
-
-    fn file_path(&self, id: FileId) -> Option<&Path> {
-        self.file_path(id)
-    }
-
-    fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
-        self.file_abs_path(id)
-    }
-}
-
-impl CandidateSource<crate::query::TrigramCandidatePlan> for TrigramIndex {
-    fn candidate_ids(&self, plan: &crate::query::TrigramCandidatePlan) -> Vec<FileId> {
-        self.candidate_ids_for_trigram_plan(plan)
-    }
 }
 
 #[cfg(test)]

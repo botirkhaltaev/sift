@@ -6,8 +6,6 @@ use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use once_cell::sync::OnceCell;
 
-use crate::query::{CandidatePlan, QueryPlanner, QuerySpec};
-
 type SearcherCacheEntry = ((bool, Option<usize>, usize, usize), Searcher);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -366,10 +364,7 @@ pub struct SearchStats {
 pub struct CompiledSearch {
     pub patterns: Vec<String>,
     pub opts: SearchOptions,
-    pub plan: CandidatePlan,
-    /// Lazily filled by [`Self::run_index`] via [`Self::build_matcher`]; repeated searches reuse one matcher.
     pub matcher: OnceCell<RegexMatcher>,
-    /// Last [`Searcher`] built for `(line_number, max_matches, before_context, after_context)`; reused when the key matches.
     pub searcher_cache: Mutex<Option<SearcherCacheEntry>>,
 }
 
@@ -383,19 +378,9 @@ impl CompiledSearch {
         if patterns.is_empty() {
             return Err(crate::Error::EmptyPatterns);
         }
-        let spec = QuerySpec {
-            patterns,
-            fixed_strings: opts.fixed_strings(),
-            case_insensitive: opts.case_insensitive(),
-            word_regexp: opts.word_regexp(),
-            line_regexp: opts.line_regexp(),
-            invert_match: opts.invert_match(),
-        };
-        let plan = QueryPlanner::plan(&spec);
         Ok(Self {
             patterns: patterns.to_vec(),
             opts,
-            plan,
             matcher: OnceCell::new(),
             searcher_cache: Mutex::new(None),
         })
@@ -404,10 +389,5 @@ impl CompiledSearch {
     #[must_use]
     pub fn patterns(&self) -> &[String] {
         &self.patterns
-    }
-
-    #[must_use]
-    pub(crate) const fn uses_exhaustive_candidates(mode: SearchMode) -> bool {
-        matches!(mode, SearchMode::Count | SearchMode::FilesWithoutMatch)
     }
 }

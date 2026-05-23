@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 #[must_use]
-#[allow(dead_code)]
-pub fn extract_trigrams(text: &str) -> Vec<[u8; 3]> {
+#[cfg(test)]
+fn extract_trigrams(text: &str) -> Vec<[u8; 3]> {
     extract_trigrams_from_bytes(text.as_bytes())
 }
 
