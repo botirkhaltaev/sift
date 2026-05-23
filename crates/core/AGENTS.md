@@ -23,7 +23,6 @@ Re-exported from `lib.rs`: `Index`, `IndexBuilder`, `QueryPlan`, `CompiledSearch
 | `search/types.rs` | `CompiledSearch`, `SearchOptions`, `SearchMatchFlags`, output types |
 | `verify.rs` | `pattern_branch`, `compile_search_pattern` — `-F`/`-w`/`-x` shaping |
 | `storage/` | Binary format for lexicon, postings, and file tables |
-| `bin/sift_profile/` | `sift-profile` — feature `profile` only |
 
 ## Invariants
 

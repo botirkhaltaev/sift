@@ -12,7 +12,6 @@ Indexed grep-style search engine. Build a trigram index on disk, then run regex 
 | [`planner.rs`](src/planner.rs) | Regex → trigram plan: literal extraction, arm decomposition, or full-scan fallback |
 | [`verify.rs`](src/verify.rs) | Pattern shaping (`-F`/`-w`/`-x`) and regex compilation |
 | [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
-| [`bin/sift_profile/`](src/bin/sift_profile/) | `sift-profile` binary for hot-loop benchmarking (feature-gated) |
 
 ## API
 
@@ -31,12 +30,6 @@ let hits = search.collect_index_matches(&index)?;
 ```
 
 `CompiledSearch` compiles the regex once; repeated `search_index` / `run_index` calls reuse the compiled matcher and searcher cache.
-
-## Features
-
-| Feature | Effect |
-|---------|--------|
-| `profile` | Enables `sift-profile` binary and `tempfile` dependency |
 
 ## Testing
 
