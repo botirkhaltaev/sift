@@ -53,7 +53,19 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`TrigramIndexBuilder::build` → `TrigramIndex::open` → `CompiledSearch::new` → `run_index` / `search_index`. See `crates/core/README.md`.
+`TrigramIndexBuilder::build` → `Indexes::open` → `CompiledSearch::new` → `run_indexes` / `run_walk`. See `crates/core/README.md`.
+
+## Function Evolution
+
+Prefer evolving existing orchestration functions and domain types over adding
+parallel `*_with_*` functions or free-floating helpers.
+
+If behavior gains another input or mode, modify the original function body or
+introduce a domain object that owns the concept. Avoid overload-style variants
+such as `run_search_with_index`, `run_search_walk`, or `open_*` helper functions.
+
+Small local helpers are acceptable only when they remove duplication inside one
+function and do not become alternate execution paths.
 
 ## Do NOT
 

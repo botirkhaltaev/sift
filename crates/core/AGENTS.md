@@ -6,7 +6,7 @@ Core search engine: query planning, trigram index, grep-style execution, and par
 
 ## Public API
 
-Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `CompiledSearch`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `SearchIndex`, `FileId`, `IndexId`, `FileCandidate`, `walk_file_paths`, storage helpers.
+Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `CompiledSearch`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `SearchIndex`, `FileId`, `IndexId`, `walk_file_paths`, storage helpers.
 
 ## Source Map
 
@@ -14,7 +14,7 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `CompiledSearc
 |--------|----------------|
 | `query/` | Query description (`QuerySpec`), planning (`QueryPlanner`) |
 | `query/trigram.rs` | Raw trigram extraction utilities |
-| `index/mod.rs` | `SearchIndex` trait, shared types (`FileId`, `IndexId`, `FileCandidate`, `IndexMeta`) |
+| `index/mod.rs` | `Indexes` registry, `SearchIndex` trait, shared types (`FileId`, `IndexId`, `IndexMeta`) |
 | `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, `SearchIndex` impl |
 | `index/trigram/builder.rs` | `TrigramIndexBuilder` — corpus walk, trigram extraction, table construction |
 | `index/trigram/file_table.rs` | `MappedFilesView` — file ID → relative path mapping |
@@ -53,9 +53,9 @@ CompiledSearch::run_indexes(&[&dyn SearchIndex], ...)
 ```
 
 ### Key Types
+- `Indexes` — registry of opened indexes; owns initialization via `Indexes::open(sift_dir)`
 - `FileId` — type-safe file identifier within an index
 - `IndexId` — type-safe index identifier in a multi-index search
-- `FileCandidate` — resolved file with index_id, file_id, rel_path, abs_path
 - `CandidateInfo` — pre-filtered candidate with rel_path, rel_str, abs_path (used by grep)
 
 ## Invariants

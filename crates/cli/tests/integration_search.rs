@@ -201,7 +201,7 @@ fn partial_index_missing_component_falls_back_to_walk() {
     p.write("found.txt", "unique_marker_partial_index\n");
     p.build_index();
 
-    let postings = p.root().join(".sift/.index/postings.bin");
+    let postings = p.root().join(".sift/trigram/.index/postings.bin");
     fs::remove_file(&postings).unwrap();
 
     let out = p.index_output(["unique_marker_partial_index"]);
@@ -214,8 +214,8 @@ fn invalid_meta_falls_back_to_walk() {
     let p = TestProject::new("search-invalid-meta-walk");
     p.write("found.txt", "unique_marker_bad_meta\n");
 
-    fs::create_dir_all(p.root().join(".sift")).unwrap();
-    fs::write(p.root().join(".sift/sift.meta"), "not valid json\n").unwrap();
+    fs::create_dir_all(p.root().join(".sift/trigram")).unwrap();
+    fs::write(p.root().join(".sift/trigram/sift.meta"), "not valid json\n").unwrap();
 
     let out = p.index_output(["unique_marker_bad_meta"]);
     assert_success(&out);

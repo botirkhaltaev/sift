@@ -26,8 +26,9 @@ pub fn main_entry() -> ExitCode {
     }
 
     if let Some(Commands::Build { path }) = &cli.command {
+        let trigram_dir = cli.paths.sift_dir.join("trigram");
         return match TrigramIndexBuilder::new(path)
-            .with_dir(&cli.paths.sift_dir)
+            .with_dir(&trigram_dir)
             .with_follow_links(cli.paths.follow)
             .build()
         {
