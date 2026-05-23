@@ -21,7 +21,10 @@ pub fn corpus_path_prefixes(
     if requested.is_empty() {
         return Ok(vec![PathBuf::from("")]);
     }
-    let mut out = Vec::new();
+    let index_root = index_root
+        .canonicalize()
+        .unwrap_or_else(|_| index_root.to_path_buf());
+    let mut out = Vec::with_capacity(requested.len());
     for rel in requested {
         let abs = if rel.is_absolute() {
             rel.clone()
@@ -29,9 +32,6 @@ pub fn corpus_path_prefixes(
             cwd.join(rel)
         };
         let abs = abs.canonicalize().unwrap_or(abs);
-        let index_root = index_root
-            .canonicalize()
-            .unwrap_or_else(|_| index_root.to_path_buf());
         if !abs.starts_with(&index_root) {
             anyhow::bail!(
                 "path {} is not under indexed corpus root {}",
@@ -53,7 +53,7 @@ pub fn walk_path_prefixes(cwd: &Path, requested: &[PathBuf]) -> anyhow::Result<V
         return Ok(vec![PathBuf::from("")]);
     }
     let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(requested.len());
     for rel in requested {
         let abs = if rel.is_absolute() {
             rel.clone()

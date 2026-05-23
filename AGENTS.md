@@ -24,7 +24,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 | `crates/cli/` | `sift-cli` — `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
 | `benchsuite/` | Comparative `rg` vs `sift` benchmarks |
-| `scripts/` | `bench.sh`, `profile.sh`, `fuzz.sh`, `install.sh` |
+| `scripts/` | `bench.sh`, `fuzz.sh`, `install.sh` |
 | `skills/` | Agent skills (`skills.sh` / `npx skills`) |
 | `docs/` | Performance snapshots, compatibility matrix |
 

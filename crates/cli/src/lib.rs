@@ -46,8 +46,10 @@ pub fn main_entry() -> ExitCode {
         };
     }
 
+    let args: Vec<String> = std::env::args().collect();
+
     if cli.filter_decl.files {
-        return match run_files_mode(&cli) {
+        return match run_files_mode(&cli, &args) {
             Ok(true) => ExitCode::SUCCESS,
             Ok(false) => ExitCode::from(1),
             Err(e) => {
@@ -57,12 +59,11 @@ pub fn main_entry() -> ExitCode {
         };
     }
 
-    let args: Vec<String> = std::env::args().collect();
     let no_messages = resolve_visibility_and_ignore(&args)
         .msg_flags
         .contains(MessageFlags::NO_MESSAGES);
 
-    match cli.run_search() {
+    match cli.run_search(&args) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(e) => {

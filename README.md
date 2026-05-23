@@ -35,7 +35,7 @@ sift/
 │   └── cli/            # sift-cli — grep-like CLI over sift-core
 ├── fuzz/               # cargo-fuzz targets (standalone, nightly)
 ├── benchsuite/         # rg vs sift comparative benchmarks
-├── scripts/            # bench.sh, profile.sh, fuzz.sh, install.sh
+├── scripts/            # bench.sh, fuzz.sh, install.sh
 ├── skills/             # Agent skills (skills.sh / npx skills)
 └── docs/               # Performance snapshots and compatibility matrix
 ```

@@ -279,7 +279,15 @@ impl Cli {
 
         let glob_ci = filter.glob_case_insensitive || !self.filter_decl.iglob.is_empty();
 
-        let type_definitions = resolve_type_defs(&self.filter_decl);
+        let needs_type_defs = !self.filter_decl.type_include.is_empty()
+            || !self.filter_decl.type_exclude.is_empty()
+            || !self.filter_decl.type_add.is_empty()
+            || !self.filter_decl.type_clear.is_empty();
+        let type_definitions = if needs_type_defs {
+            resolve_type_defs(&self.filter_decl)
+        } else {
+            Vec::new()
+        };
 
         Ok(SearchFilterConfig {
             scopes,
@@ -332,7 +340,15 @@ pub fn build_search_filter_config(
 
     let glob_ci = filter.glob_case_insensitive || !cli.filter_decl.iglob.is_empty();
 
-    let type_definitions = resolve_type_defs(&cli.filter_decl);
+    let needs_type_defs = !cli.filter_decl.type_include.is_empty()
+        || !cli.filter_decl.type_exclude.is_empty()
+        || !cli.filter_decl.type_add.is_empty()
+        || !cli.filter_decl.type_clear.is_empty();
+    let type_definitions = if needs_type_defs {
+        resolve_type_defs(&cli.filter_decl)
+    } else {
+        Vec::new()
+    };
 
     let custom_files = if filter.msg_flags.contains(MessageFlags::NO_IGNORE_FILES) {
         Vec::new()

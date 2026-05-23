@@ -796,9 +796,11 @@ dependencies = [
  "anyhow",
  "bitflags",
  "clap",
+ "criterion",
  "ignore",
  "rayon",
  "sift-core",
+ "tempfile",
 ]
 
 [[package]]
