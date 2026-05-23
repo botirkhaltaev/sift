@@ -52,24 +52,18 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
 
     let cwd = std::env::current_dir()?;
 
-    let (filter_root, scopes, exclude_paths) =
-        if let Ok(indexes) = Indexes::open(&cli.paths.sift_dir) {
-            if indexes.is_empty() {
-                let root = cwd.canonicalize()?;
-                let prefixes = walk_path_prefixes(&root, &cli.search_scope.paths)?;
-                let excludes = excluded_search_paths(&root, &cli.paths.sift_dir);
-                (root, prefixes, excludes)
-            } else {
-                let prefixes = corpus_path_prefixes(indexes.root(), &cwd, &cli.search_scope.paths)?;
-                let excludes = excluded_search_paths(indexes.root(), &cli.paths.sift_dir);
-                (indexes.root().to_path_buf(), prefixes, excludes)
-            }
-        } else {
-            let root = cwd.canonicalize()?;
-            let prefixes = walk_path_prefixes(&root, &cli.search_scope.paths)?;
-            let excludes = excluded_search_paths(&root, &cli.paths.sift_dir);
-            (root, prefixes, excludes)
-        };
+    let indexes = Indexes::open(&cli.paths.sift_dir)?;
+
+    let (filter_root, scopes, exclude_paths) = if indexes.is_empty() {
+        let root = cwd.canonicalize()?;
+        let prefixes = walk_path_prefixes(&root, &cli.search_scope.paths)?;
+        let excludes = excluded_search_paths(&root, &cli.paths.sift_dir);
+        (root, prefixes, excludes)
+    } else {
+        let prefixes = corpus_path_prefixes(indexes.root(), &cwd, &cli.search_scope.paths)?;
+        let excludes = excluded_search_paths(indexes.root(), &cli.paths.sift_dir);
+        (indexes.root().to_path_buf(), prefixes, excludes)
+    };
 
     let filter_config = build_search_filter_config(cli, filter_ctx, scopes, exclude_paths)?;
     let search_filter = SearchFilter::new(&filter_config, &filter_root)?;
@@ -155,46 +149,36 @@ impl Cli {
         let (out, filter) =
             self.build_output_and_filter(args, effective_mode, quiet, line_number_override);
 
-        let indexes = Indexes::open(&self.paths.sift_dir)
-            .ok()
-            .filter(|idx| !idx.is_empty());
+        let indexes = Indexes::open(&self.paths.sift_dir)?;
 
-        let ctx = self.build_search_ctx(&cwd, indexes.as_ref())?;
-        let output = self.build_search_output(&out, &ctx);
-
-        indexes.map_or_else(
-            || self.execute_walk(&query, &ctx, &output, &out, filter),
-            |idx| {
-                let index_refs = idx.as_slice();
-                self.execute_indexed(&query, &index_refs, &ctx, &output, &out, filter)
-            },
-        )
-    }
-
-    fn build_search_ctx(
-        &self,
-        cwd: &std::path::Path,
-        indexes: Option<&Indexes>,
-    ) -> anyhow::Result<SearchCtx> {
-        if let Some(idx) = indexes {
-            let prefixes = corpus_path_prefixes(idx.root(), cwd, &self.search_scope.paths)?;
-            let exclude_paths = excluded_search_paths(idx.root(), &self.paths.sift_dir);
-            Ok(SearchCtx {
-                filter_root: idx.root().to_path_buf(),
-                prefixes,
-                exclude_paths,
-                corpus_is_single_file: idx.first().is_some_and(SearchIndex::is_single_file),
-            })
-        } else {
+        let ctx = if indexes.is_empty() {
             let root = cwd.canonicalize().map_err(|e| anyhow::anyhow!("{e}"))?;
             let prefixes = walk_path_prefixes(&root, &self.search_scope.paths)?;
             let exclude_paths = excluded_search_paths(&root, &self.paths.sift_dir);
-            Ok(SearchCtx {
+            SearchCtx {
                 filter_root: root,
                 prefixes,
                 exclude_paths,
                 corpus_is_single_file: false,
-            })
+            }
+        } else {
+            let prefixes = corpus_path_prefixes(indexes.root(), &cwd, &self.search_scope.paths)?;
+            let exclude_paths = excluded_search_paths(indexes.root(), &self.paths.sift_dir);
+            SearchCtx {
+                filter_root: indexes.root().to_path_buf(),
+                prefixes,
+                exclude_paths,
+                corpus_is_single_file: indexes.first().is_some_and(SearchIndex::is_single_file),
+            }
+        };
+
+        let output = self.build_search_output(&out, &ctx);
+
+        if indexes.is_empty() {
+            self.execute_walk(&query, &ctx, &output, &out, filter)
+        } else {
+            let index_refs = indexes.refs();
+            self.execute_indexed(&query, &index_refs, &ctx, &output, &out, filter)
         }
     }
 

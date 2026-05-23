@@ -6,7 +6,7 @@ Core search engine: query planning, trigram index, grep-style execution, and par
 
 ## Public API
 
-Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `CompiledSearch`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `SearchIndex`, `FileId`, `IndexId`, `walk_file_paths`, storage helpers.
+Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `CompiledSearch`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `SearchIndex`, `FileId`, `IndexId`, `walk_file_paths`, `PatternCompiler`, `SearchError`, storage helpers.
 
 ## Source Map
 
@@ -14,18 +14,33 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `Co
 |--------|----------------|
 | `query/` | Query description (`QuerySpec`), planning (`QueryPlanner`) |
 | `query/trigram.rs` | Raw trigram extraction utilities |
-| `index/mod.rs` | `Indexes` registry, `SearchIndex` trait, shared types (`FileId`, `IndexId`, `IndexMeta`) |
-| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, `SearchIndex` impl |
+| `index/mod.rs` | `Indexes` registry, `SearchIndex` trait, shared types (`FileId`, `IndexId`, `IndexMeta`), `IndexError` |
+| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, `SearchIndex` impl, `TrigramIndexError` |
 | `index/trigram/builder.rs` | `TrigramIndexBuilder` — corpus walk, trigram extraction, table construction |
 | `index/trigram/file_table.rs` | `MappedFilesView` — file ID → relative path mapping |
 | `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
 | `grep/mod.rs` | Module declarations and public re-exports |
+| `grep/error.rs` | `SearchError` — pattern compilation, execution, and output errors |
+| `grep/compile.rs` | `PatternCompiler` — composable regex builder; legacy free-fn wrappers for public API |
 | `grep/types.rs` | `CompiledSearch`, `SearchOptions`, output types |
 | `grep/execute.rs` | `run_indexes`, `run_walk`, parallel scanning, output writing |
 | `grep/filter.rs` | Glob, hidden-file, ignore-rule, and scope filtering |
 | `grep/matcher.rs` | `grep_regex`/`grep_searcher` integration |
-| `verify.rs` | `pattern_branch`, `compile_search_pattern` — `-F`/`-w`/`-x` shaping |
 | `bin/sift_profile/` | `sift-profile` — feature `profile` only |
+
+## Error Ownership
+
+Each module defines its own error type and `crate::Error` aggregates them via `#[from]`:
+
+| Module | Error Type | Aggregated As |
+|--------|-----------|---------------|
+| `index/` | `IndexError` | `Error::Index` |
+| `index/trigram/` | `TrigramIndexError` | `IndexError::Trigram` (manual `From` impl) |
+| `grep/` | `SearchError` | `Error::Search` |
+
+`crate::Error` is a thin umbrella: `Index`, `Search`, `Io`, `Ignore`, `Regex`. Do not add new variants to `crate::Error` — define them in the owning module's error type instead.
+
+Internal grep APIs (`filter.rs`, `matcher.rs`, `types.rs`) return `Result<_, SearchError>` directly. Functions that cross module boundaries or are called from the CLI use `crate::Result<T>` and rely on `From<SearchError>`.
 
 ## Architecture
 
@@ -57,6 +72,7 @@ CompiledSearch::run_indexes(&[&dyn SearchIndex], ...)
 - `FileId` — type-safe file identifier within an index
 - `IndexId` — type-safe index identifier in a multi-index search
 - `CandidateInfo` — pre-filtered candidate with rel_path, rel_str, abs_path (used by grep)
+- `PatternCompiler` — composable regex builder with bitflags; `shape()`, `compile()`, `compile_one()`
 
 ## Invariants
 
@@ -79,3 +95,4 @@ Integration-style tests in `lib.rs` `mod tests`; unit tests co-located in module
 - Add `unsafe` outside `index/trigram/storage/mmap.rs`.
 - Use `#[allow(clippy::…)]` without a documented reason.
 - Have `grep/` import from `index::trigram` — use `SearchIndex` trait only.
+- Add variants to `crate::Error` — define them in the owning module's error type.

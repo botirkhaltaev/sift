@@ -5,13 +5,33 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use trigram::TrigramIndex;
+pub use trigram::TrigramIndexError;
 
 const INDEX_KINDS: &[&str] = &["trigram"];
+
+/// Errors specific to the index registry layer.
+///
+/// These cover layout discovery, root validation, and wrapping of concrete
+/// index implementation errors.
+#[derive(Debug, thiserror::Error)]
+pub enum IndexError {
+    #[error("invalid index layout: {path}")]
+    InvalidLayout { path: PathBuf },
+
+    #[error(transparent)]
+    Trigram(#[from] TrigramIndexError),
+
+    #[error("IO error inspecting index path {path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
 
 /// Registry of opened indexes for a single `.sift` directory.
 ///
 /// Owns index initialization, validates that all indexes share one root,
-/// and exposes only what callers need through `is_empty()`, `root()`, and `as_refs()`.
+/// and exposes only what callers need through `is_empty()`, `root()`, and `refs()`.
 pub struct Indexes {
     inner: Vec<Box<dyn SearchIndex>>,
     root: PathBuf,
@@ -22,27 +42,39 @@ impl Indexes {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::MissingComponent`] if an index kind directory exists
-    /// but its trigram tables are incomplete, or [`crate::Error::InvalidMeta`]
-    /// if metadata is missing, malformed, or indexes have conflicting roots.
+    /// Returns [`IndexError::InvalidLayout`] if a known index-kind path exists
+    /// but is not a directory, [`IndexError::Trigram`] if a concrete trigram
+    /// index is malformed, or [`IndexError::Io`] for filesystem inspection
+    /// failures.
     ///
     /// Returns an empty registry if no index kind directory is found.
-    pub fn open(sift_dir: &Path) -> crate::Result<Self> {
+    pub fn open(sift_dir: &Path) -> Result<Self, IndexError> {
         let mut indexes: Vec<Box<dyn SearchIndex>> = Vec::new();
         let mut root: Option<PathBuf> = None;
 
         for kind in INDEX_KINDS {
             let kind_dir = sift_dir.join(kind);
-            if !kind_dir.is_dir() {
-                continue;
+            match std::fs::metadata(&kind_dir) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => {
+                    return Err(IndexError::InvalidLayout { path: kind_dir });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(e) => {
+                    return Err(IndexError::Io {
+                        path: kind_dir,
+                        source: e,
+                    });
+                }
             }
-            let index = TrigramIndex::open(&kind_dir)?;
+
+            let index = TrigramIndex::open(&kind_dir).map_err(IndexError::Trigram)?;
             let this_root = index.root().to_path_buf();
             if let Some(existing_root) = &root {
                 if *existing_root != this_root {
-                    return Err(crate::Error::InvalidMeta(
-                        kind_dir.join(crate::META_FILENAME),
-                    ));
+                    return Err(IndexError::InvalidLayout { path: kind_dir });
                 }
             } else {
                 root = Some(this_root);
@@ -68,9 +100,10 @@ impl Indexes {
 
     /// Returns a vector of trait object references for search execution.
     ///
-    /// The returned value borrows from `self` and becomes invalid when `self` is dropped.
+    /// Allocates a new `Vec` on each call. The returned value borrows from
+    /// `self` and becomes invalid when `self` is dropped.
     #[must_use]
-    pub fn as_slice(&self) -> Vec<&dyn SearchIndex> {
+    pub fn refs(&self) -> Vec<&dyn SearchIndex> {
         self.inner.iter().map(AsRef::as_ref).collect()
     }
 
@@ -128,9 +161,9 @@ pub struct IndexMeta {
 }
 
 impl IndexMeta {
-    pub fn validate(self, meta_path: &Path) -> crate::Result<Self> {
+    pub fn validate(self, meta_path: &Path) -> Result<Self, TrigramIndexError> {
         if !self.root.is_absolute() {
-            return Err(crate::Error::InvalidMeta(meta_path.to_path_buf()));
+            return Err(TrigramIndexError::InvalidMeta(meta_path.to_path_buf()));
         }
         Ok(self)
     }

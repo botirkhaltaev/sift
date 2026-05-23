@@ -17,7 +17,7 @@ use crate::query::{QueryFlags, QueryPlanner, QuerySpec};
 use super::{
     CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, LineStyleFlags, OutputEmission,
     PathDisplay, SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle,
-    SearchSeparators, SearchStats,
+    SearchSeparators, SearchStats, error::SearchError,
 };
 
 #[cfg(test)]
@@ -146,7 +146,10 @@ fn fill_json_search_stats(
     s.elapsed = elapsed;
 }
 
-fn format_json_summary_line(wall: std::time::Duration, agg: &JsonStats) -> crate::Result<String> {
+fn format_json_summary_line(
+    wall: std::time::Duration,
+    agg: &JsonStats,
+) -> Result<String, SearchError> {
     let stats_val = serde_json::to_value(agg)?;
     let wall_secs = f64::from(wall.subsec_nanos()).mul_add(1e-9, wall.as_secs_f64());
     let v = serde_json::json!({
@@ -230,7 +233,7 @@ impl CompiledSearch {
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         if self.opts.max_results == Some(0) {
-            return Err(crate::Error::InvalidMaxCount);
+            return Err(SearchError::InvalidMaxCount.into());
         }
         if indexes.is_empty() {
             if let Some(s) = stats {
@@ -274,7 +277,7 @@ impl CompiledSearch {
                         search_start,
                         stats,
                     ),
-                _ => Err(crate::Error::JsonOutputIncompatibleMode),
+                _ => Err(SearchError::JsonOutputIncompatibleMode.into()),
             };
         }
 
@@ -543,7 +546,7 @@ impl CompiledSearch {
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         if self.opts.max_results == Some(0) {
-            return Err(crate::Error::InvalidMaxCount);
+            return Err(SearchError::InvalidMaxCount.into());
         }
 
         let abs_paths = collect_abs_paths_for_scopes(
@@ -585,7 +588,7 @@ impl CompiledSearch {
                         search_start,
                         stats,
                     ),
-                _ => Err(crate::Error::JsonOutputIncompatibleMode),
+                _ => Err(SearchError::JsonOutputIncompatibleMode.into()),
             };
         }
 

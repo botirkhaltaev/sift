@@ -6,6 +6,8 @@ use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use once_cell::sync::OnceCell;
 
+use super::error::SearchError;
+
 type SearcherCacheEntry = ((bool, Option<usize>, usize, usize), Searcher);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -373,10 +375,10 @@ impl CompiledSearch {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::EmptyPatterns`] when no patterns are provided.
-    pub fn new(patterns: &[String], opts: SearchOptions) -> crate::Result<Self> {
+    /// Returns [`SearchError::EmptyPatterns`] when no patterns are provided.
+    pub fn new(patterns: &[String], opts: SearchOptions) -> Result<Self, SearchError> {
         if patterns.is_empty() {
-            return Err(crate::Error::EmptyPatterns);
+            return Err(SearchError::EmptyPatterns);
         }
         Ok(Self {
             patterns: patterns.to_vec(),

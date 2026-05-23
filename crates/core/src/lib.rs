@@ -5,26 +5,22 @@
 mod grep;
 mod index;
 mod query;
-mod verify;
 
 pub use grep::{
     BinaryMode, CandidateInfo, CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig,
     HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, Match, OutputEmission, PathDisplay,
-    SearchFilter, SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions,
-    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
-    VisibilityConfig, walk_file_paths,
+    PatternCompiler, SearchError, SearchFilter, SearchFilterConfig, SearchLineStyle,
+    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
+    SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig, compile_pattern,
+    compile_search_pattern, pattern_branch, walk_file_paths,
 };
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::trigram::{TrigramIndex, TrigramIndexBuilder};
-pub use index::{FileId, IndexId, Indexes, QueryPlanOutput, SearchIndex};
+pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
+pub use index::{FileId, IndexError, IndexId, Indexes, QueryPlanOutput, SearchIndex};
 
 pub use query::{QueryFlags, QueryPlanner, QuerySpec};
-
-pub use verify::{compile_pattern, compile_search_pattern};
-
-use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -35,8 +31,19 @@ pub const FILES_BIN: &str = "files.bin";
 pub const LEXICON_BIN: &str = "lexicon.bin";
 pub const POSTINGS_BIN: &str = "postings.bin";
 
+/// Top-level umbrella error for all core operations.
+///
+/// Concrete domain errors are defined in their respective modules
+/// and aggregated here. Prefer handling module-specific errors when
+/// calling module APIs directly.
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error(transparent)]
+    Index(#[from] IndexError),
+
+    #[error(transparent)]
+    Search(#[from] SearchError),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -45,30 +52,12 @@ pub enum Error {
 
     #[error("regex error: {0}")]
     Regex(#[from] Box<regex_automata::meta::BuildError>),
+}
 
-    #[error("regex build error: {0}")]
-    RegexBuild(String),
-
-    #[error("search patterns must not be empty")]
-    EmptyPatterns,
-
-    #[error("invalid max-count: 0 matches requested")]
-    InvalidMaxCount,
-
-    #[error("JSON output is only supported for standard search (not count or file-list modes)")]
-    JsonOutputIncompatibleMode,
-
-    #[error("JSON serialization error: {0}")]
-    JsonSerialize(#[from] serde_json::Error),
-
-    #[error("invalid index metadata: {0}")]
-    InvalidMeta(PathBuf),
-
-    #[error("index not initialized (missing {0})")]
-    MissingMeta(PathBuf),
-
-    #[error("index component missing: {0}")]
-    MissingComponent(PathBuf),
+impl From<crate::index::trigram::TrigramIndexError> for Error {
+    fn from(e: crate::index::trigram::TrigramIndexError) -> Self {
+        Self::Index(IndexError::Trigram(e))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -103,7 +92,7 @@ mod tests {
 
         let indexes = Indexes::open(&sift_dir).unwrap();
         assert!(!indexes.is_empty());
-        let index_slice = indexes.as_slice();
+        let index_slice = indexes.refs();
         let index = index_slice[0];
         assert!(index.file_count() > 0);
         let pat = vec![r"let\s+x".to_string()];
@@ -142,7 +131,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             Indexes::open(&tmp),
-            Err(Error::MissingComponent(_))
+            Err(IndexError::Trigram(TrigramIndexError::MissingComponent(_)))
         ));
     }
 
@@ -154,7 +143,10 @@ mod tests {
         let trigram_dir = tmp.join("trigram");
         fs::create_dir_all(&trigram_dir).unwrap();
         fs::write(trigram_dir.join(META_FILENAME), "").unwrap();
-        assert!(matches!(Indexes::open(&tmp), Err(Error::InvalidMeta(_))));
+        assert!(matches!(
+            Indexes::open(&tmp),
+            Err(IndexError::Trigram(TrigramIndexError::InvalidMeta(_)))
+        ));
     }
 
     #[test]
@@ -210,7 +202,7 @@ mod tests {
             .build()
             .unwrap();
         let indexes = Indexes::open(&sift_dir).unwrap();
-        let index_slice = indexes.as_slice();
+        let index_slice = indexes.refs();
         let index = index_slice[0];
 
         let pat = vec!["beta".to_string()];
@@ -241,7 +233,7 @@ mod tests {
             .build()
             .unwrap();
         let indexes = Indexes::open(&sift_dir).unwrap();
-        let index_slice = indexes.as_slice();
+        let index_slice = indexes.refs();
         let index = index_slice[0];
         assert_eq!(index.file_count(), n_files);
 
@@ -270,7 +262,7 @@ mod tests {
             .build()
             .unwrap();
         let indexes = Indexes::open(&sift_dir).unwrap();
-        let index_slice = indexes.as_slice();
+        let index_slice = indexes.refs();
         let index = index_slice[0];
 
         let pat = vec![".*".to_string()];
@@ -298,7 +290,7 @@ mod tests {
             .build()
             .unwrap();
         let indexes = Indexes::open(&sift_dir).unwrap();
-        let index_slice = indexes.as_slice();
+        let index_slice = indexes.refs();
         let index = index_slice[0];
 
         let expected_root = file.canonicalize().unwrap().parent().unwrap().to_path_buf();

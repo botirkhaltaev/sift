@@ -2,12 +2,13 @@ use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
+use super::error::SearchError;
 use super::{BinaryMode, CaseMode, CompiledSearch};
 
 impl CompiledSearch {
     /// # Errors
     /// Returns an error if pattern compilation fails.
-    pub fn build_matcher(&self) -> crate::Result<RegexMatcher> {
+    pub fn build_matcher(&self) -> Result<RegexMatcher, SearchError> {
         let mut builder = RegexMatcherBuilder::new();
         builder.multi_line(true);
         match self.opts.case_mode {
@@ -57,7 +58,7 @@ impl CompiledSearch {
         }
         builder
             .build_many(&self.patterns)
-            .map_err(|e| crate::Error::RegexBuild(e.to_string()))
+            .map_err(|e| SearchError::RegexBuild(e.to_string()))
     }
 
     /// `include_context`: standard search uses configured `-A`/`-B`/`-C`; summary/count modes pass `false`.

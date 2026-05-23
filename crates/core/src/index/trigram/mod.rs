@@ -12,6 +12,22 @@ use crate::query::{Arm, CandidatePlan, QueryFlags, QueryPlanner, QuerySpec, Trig
 
 pub use builder::TrigramIndexBuilder;
 
+/// Errors specific to opening or persisting a trigram index.
+#[derive(Debug, thiserror::Error)]
+pub enum TrigramIndexError {
+    #[error("index not initialized (missing {0})")]
+    MissingMeta(PathBuf),
+
+    #[error("invalid index metadata: {0}")]
+    InvalidMeta(PathBuf),
+
+    #[error("index component missing: {0}")]
+    MissingComponent(PathBuf),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 #[derive(Debug)]
 pub struct TrigramIndex {
     root: PathBuf,
@@ -29,20 +45,20 @@ impl TrigramIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::MissingMeta`] if `sift.meta` is absent,
-    /// [`crate::Error::InvalidMeta`] if metadata is empty or malformed,
-    /// [`crate::Error::MissingComponent`] if a trigram table file is missing,
-    /// or [`crate::Error::Io`] on read/mmap failure.
-    pub fn open(path: &Path) -> crate::Result<Self> {
+    /// Returns [`TrigramIndexError::MissingMeta`] if `sift.meta` is absent,
+    /// [`TrigramIndexError::InvalidMeta`] if metadata is empty or malformed,
+    /// [`TrigramIndexError::MissingComponent`] if a trigram table file is missing,
+    /// or [`TrigramIndexError::Io`] on read/mmap failure.
+    pub fn open(path: &Path) -> Result<Self, TrigramIndexError> {
         let sift_dir = path.to_path_buf();
         let index_dir = sift_dir.join(crate::INDEX_SUBDIR);
         let meta_path = sift_dir.join(crate::META_FILENAME);
         if !meta_path.is_file() {
-            return Err(crate::Error::MissingMeta(meta_path));
+            return Err(TrigramIndexError::MissingMeta(meta_path));
         }
         let raw = std::fs::read_to_string(&meta_path)?;
         let meta = serde_json::from_str::<IndexMeta>(&raw)
-            .map_err(|_| crate::Error::InvalidMeta(meta_path.clone()))?
+            .map_err(|_| TrigramIndexError::InvalidMeta(meta_path.clone()))?
             .validate(&meta_path)?;
         let paths = [
             index_dir.join(crate::FILES_BIN),
@@ -51,17 +67,18 @@ impl TrigramIndex {
         ];
         for p in &paths {
             if !p.is_file() {
-                return Err(crate::Error::MissingComponent(p.clone()));
+                return Err(TrigramIndexError::MissingComponent(p.clone()));
             }
         }
 
-        let files = file_table::MappedFilesView::open(&paths[0]).map_err(crate::Error::Io)?;
-        let file_paths = files.to_path_bufs().map_err(crate::Error::Io)?;
+        let files = file_table::MappedFilesView::open(&paths[0]).map_err(TrigramIndexError::Io)?;
+        let file_paths = files.to_path_bufs().map_err(TrigramIndexError::Io)?;
         validate_file_paths(&file_paths, &meta_path)?;
         let abs_paths = compute_abs_paths(&meta.root, &file_paths);
-        let lexicon = storage::lexicon::MappedLexicon::open(&paths[1]).map_err(crate::Error::Io)?;
+        let lexicon =
+            storage::lexicon::MappedLexicon::open(&paths[1]).map_err(TrigramIndexError::Io)?;
         let postings =
-            storage::postings::MappedPostings::open(&paths[2]).map_err(crate::Error::Io)?;
+            storage::postings::MappedPostings::open(&paths[2]).map_err(TrigramIndexError::Io)?;
 
         Ok(Self {
             root: meta.root,
@@ -80,7 +97,7 @@ impl TrigramIndex {
     /// # Errors
     ///
     /// Propagates IO errors from creating directories or writing files.
-    pub fn save_to_dir(&self, dir: &Path) -> crate::Result<()> {
+    pub fn save_to_dir(&self, dir: &Path) -> Result<(), TrigramIndexError> {
         std::fs::create_dir_all(dir)?;
         let meta_path = dir.join(crate::META_FILENAME);
         let meta = IndexMeta {
@@ -90,23 +107,23 @@ impl TrigramIndex {
         std::fs::write(
             &meta_path,
             serde_json::to_vec_pretty(&meta)
-                .map_err(|_| crate::Error::InvalidMeta(meta_path.clone()))?,
+                .map_err(|_| TrigramIndexError::InvalidMeta(meta_path.clone()))?,
         )?;
 
         let index_dir = dir.join(crate::INDEX_SUBDIR);
         std::fs::create_dir_all(&index_dir)?;
         std::fs::write(index_dir.join(crate::FILES_BIN), self.files.backing_slice())
-            .map_err(crate::Error::Io)?;
+            .map_err(TrigramIndexError::Io)?;
         std::fs::write(
             index_dir.join(crate::LEXICON_BIN),
             self.lexicon.backing_slice(),
         )
-        .map_err(crate::Error::Io)?;
+        .map_err(TrigramIndexError::Io)?;
         std::fs::write(
             index_dir.join(crate::POSTINGS_BIN),
             self.postings.backing_slice(),
         )
-        .map_err(crate::Error::Io)?;
+        .map_err(TrigramIndexError::Io)?;
         Ok(())
     }
 
@@ -238,7 +255,7 @@ fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
     file_paths.iter().map(|p| root.join(p)).collect()
 }
 
-fn validate_file_paths(file_paths: &[PathBuf], meta_path: &Path) -> crate::Result<()> {
+fn validate_file_paths(file_paths: &[PathBuf], meta_path: &Path) -> Result<(), TrigramIndexError> {
     for path in file_paths {
         if path.as_os_str().is_empty()
             || path.is_absolute()
@@ -246,7 +263,7 @@ fn validate_file_paths(file_paths: &[PathBuf], meta_path: &Path) -> crate::Resul
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
         {
-            return Err(crate::Error::InvalidMeta(meta_path.to_path_buf()));
+            return Err(TrigramIndexError::InvalidMeta(meta_path.to_path_buf()));
         }
     }
     Ok(())
