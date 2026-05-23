@@ -445,7 +445,8 @@ mod tests {
 
     #[test]
     fn validate_file_paths_rejects_absolute_paths() {
-        let paths = vec![PathBuf::from("/absolute/a.txt")];
+        let abs = std::env::current_dir().unwrap().join("a.txt");
+        let paths = vec![abs];
         let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
         assert!(result.is_err());
     }

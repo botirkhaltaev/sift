@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn index_meta_validate_accepts_absolute_root() {
         let meta = IndexMeta {
-            root: PathBuf::from("/absolute/path"),
+            root: std::path::Path::new("/").to_path_buf(),
             is_single_file_corpus: false,
         };
         let result = meta.validate(Path::new("/fake/meta.json"));
