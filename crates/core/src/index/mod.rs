@@ -207,7 +207,7 @@ mod tests {
         let abs = std::env::current_dir().unwrap();
         let meta = IndexMeta {
             root: abs,
-            is_single_file_corpus: false,
+            kind: IndexKind::Directory,
         };
         let result = meta.validate(Path::new("/fake/meta.json"));
         assert!(result.is_ok());
