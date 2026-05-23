@@ -44,7 +44,9 @@ Unit tests are co-located with implementation files in `#[cfg(test)] mod tests` 
 
 ```bash
 cargo test -p sift-core
-cargo bench -p sift-core --bench search
+cargo bench -p sift-core --bench query
+cargo bench -p sift-core --bench index
+cargo bench -p sift-core --bench grep
 ```
 
 See [`benches/README.md`](benches/README.md) for the full benchmark and profiling workflow.

@@ -90,6 +90,34 @@ cargo test -p sift-core
 
 Unit tests are co-located with implementation files in `#[cfg(test)] mod tests` blocks. Integration tests live in `crates/core/tests/`.
 
+## Benchmarking
+
+Benchmarks live in `benches/` and mirror the `src/` module layout:
+
+| File | Coverage |
+|------|----------|
+| `query.rs` | `QueryPlanner`, `PatternCompiler`, `CompiledSearch::new` |
+| `index.rs` | `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, `SearchIndex` trait, candidates, explain, save/reopen |
+| `grep.rs` | `run_indexes`, `run_walk`, `SearchFilter`, output modes |
+
+### Conventions
+
+- **Public API only.** No `bench-internals` feature, no `pub mod internals`, no direct benchmarking of private helpers.
+- **Storage is benchmarked indirectly** through `index.rs` build/open/save/reopen paths — storage is private to the index module.
+- **Benchmarks mirror implementation modules.** One bench file per domain (`query`, `index`, `grep`).
+- **Fixture placement:** build benches materialize corpus + build inside `b.iter`; search/open/candidate benches build fixtures outside `b.iter`.
+- **Shared fixtures** live in `benches/common/mod.rs`.
+
+### Running
+
+```bash
+cargo bench -p sift-core --bench query
+cargo bench -p sift-core --bench index
+cargo bench -p sift-core --bench grep
+```
+
+See [`benches/README.md`](benches/README.md) for the full benchmark and profiling workflow.
+
 ## Do NOT
 
 - Break the public API without updating the CLI crate.
@@ -97,3 +125,4 @@ Unit tests are co-located with implementation files in `#[cfg(test)] mod tests` 
 - Use `#[allow(clippy::…)]` without a documented reason.
 - Have `grep/` import from `index::trigram` — use `SearchIndex` trait only.
 - Add variants to `crate::Error` — define them in the owning module's error type.
+- Expose internal APIs for benchmarking purposes.
