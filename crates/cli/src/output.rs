@@ -88,25 +88,25 @@ pub struct ExtraOutputDecl {
 #[derive(Args)]
 pub struct NullColorDecl {
     #[arg(short = '0', long = "null", action = ArgAction::SetTrue)]
-    pub _null: bool,
+    pub null_flag: bool,
     #[arg(long = "color", value_name = "WHEN")]
-    pub _color: Option<String>,
+    pub color_flag: Option<String>,
 }
 
 /// Declares `--json` / `--no-json` for clap.
 #[derive(Args)]
 pub struct JsonDecl {
     #[arg(long = "json", action = ArgAction::SetTrue)]
-    pub _json: bool,
+    pub json_flag: bool,
     #[arg(long = "no-json", action = ArgAction::SetTrue)]
-    pub _no_json: bool,
+    pub no_json_flag: bool,
 }
 
 /// Declares `--stats` for clap.
 #[derive(Args)]
 pub struct StatsDecl {
     #[arg(long = "stats", action = ArgAction::SetTrue)]
-    pub _stats: bool,
+    pub stats_flag: bool,
 }
 
 // ── Context types for output configuration ──
@@ -151,10 +151,12 @@ pub struct SearchOutputCtx {
 
 // ── Argv-order resolvers ──
 
+#[must_use]
 pub fn parse_usize_token(s: &str) -> Option<usize> {
     s.parse().ok()
 }
 
+#[must_use]
 pub fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
     let mut last_idx = 0usize;
     let mut result = false;
@@ -181,6 +183,7 @@ pub fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
     result
 }
 
+#[must_use]
 pub fn parse_color_when(s: &str) -> ColorChoice {
     match s {
         "never" => ColorChoice::Never,
@@ -189,6 +192,7 @@ pub fn parse_color_when(s: &str) -> ColorChoice {
     }
 }
 
+#[must_use]
 pub fn resolve_null_from_args(args: &[String]) -> bool {
     let mut result = false;
     for arg in args {
@@ -200,6 +204,7 @@ pub fn resolve_null_from_args(args: &[String]) -> bool {
     result
 }
 
+#[must_use]
 pub fn resolve_color_from_args(args: &[String]) -> ColorChoice {
     let mut result = ColorChoice::Auto;
     let mut i = 0usize;
@@ -221,6 +226,7 @@ pub fn resolve_color_from_args(args: &[String]) -> ColorChoice {
     result
 }
 
+#[must_use]
 pub fn resolve_stats_from_args(args: &[String]) -> bool {
     let mut last_idx = 0usize;
     let mut result = false;
@@ -233,6 +239,7 @@ pub fn resolve_stats_from_args(args: &[String]) -> bool {
     result
 }
 
+#[must_use]
 pub fn resolve_json_from_args(args: &[String]) -> bool {
     let mut last_idx = 0usize;
     let mut result = false;
@@ -249,6 +256,7 @@ pub fn resolve_json_from_args(args: &[String]) -> bool {
     result
 }
 
+#[must_use]
 pub fn resolve_heading_from_args(args: &[String]) -> bool {
     let mut last_idx = 0usize;
     let mut result = false;
@@ -271,6 +279,7 @@ pub fn resolve_heading_from_args(args: &[String]) -> bool {
     result
 }
 
+#[must_use]
 pub fn resolve_line_number_from_args(args: &[String]) -> Option<bool> {
     let mut last_idx = 0usize;
     let mut result = None;
@@ -301,6 +310,7 @@ pub fn resolve_line_number_from_args(args: &[String]) -> Option<bool> {
     result
 }
 
+#[must_use]
 pub fn resolve_with_filename_from_args(args: &[String]) -> Option<bool> {
     let mut last_idx = 0usize;
     let mut result = None;
@@ -332,6 +342,7 @@ pub fn resolve_with_filename_from_args(args: &[String]) -> Option<bool> {
 }
 
 /// `-A` / `-B` / `-C` and long forms; argv order with later flags overriding (ripgrep-style).
+#[must_use]
 pub fn resolve_context_from_args(args: &[String]) -> (usize, usize) {
     let mut before = 0usize;
     let mut after = 0usize;
@@ -417,6 +428,7 @@ pub fn resolve_context_from_args(args: &[String]) -> (usize, usize) {
 
 // ── Output helpers ──
 
+#[must_use]
 pub const fn search_output(
     format: SearchOutputFormat,
     effective_mode: SearchMode,
@@ -440,6 +452,7 @@ pub const fn search_output(
     }
 }
 
+#[must_use]
 pub fn build_line_style_flags(out: &SearchOutputCtx, line_number: bool) -> LineStyleFlags {
     let mut f = LineStyleFlags::empty();
     if out.lines.heading {
@@ -460,6 +473,7 @@ pub fn build_line_style_flags(out: &SearchOutputCtx, line_number: bool) -> LineS
     f
 }
 
+#[must_use]
 pub const fn effective_filename_mode(
     with_filename: Option<bool>,
     is_path_mode: bool,
@@ -474,6 +488,7 @@ pub const fn effective_filename_mode(
     }
 }
 
+#[must_use]
 pub const fn resolve_effective_line_number(
     clap_line_number: bool,
     line_number_override: Option<bool>,
@@ -497,6 +512,7 @@ pub fn write_search_stats(stats: &SearchStats) {
     eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
 }
 
+#[must_use]
 pub fn unescape_separator(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut chars = s.chars();
@@ -524,6 +540,7 @@ pub fn unescape_separator(s: &str) -> Vec<u8> {
 // ── Cli method implementations ──
 
 impl Cli {
+    #[must_use]
     pub fn resolve_separators(&self) -> SearchSeparators {
         let context_separator = if self.separator_decl.suppress_context_sep {
             None
@@ -549,6 +566,7 @@ impl Cli {
         }
     }
 
+    #[must_use]
     pub fn build_output_and_filter(
         &self,
         args: &[String],

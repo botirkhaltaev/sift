@@ -1,11 +1,11 @@
-mod cli;
-mod engine;
-mod filter;
-mod ignore;
-mod output;
-mod paths;
-mod pattern;
-mod search;
+pub mod cli;
+pub mod engine;
+pub mod filter;
+pub mod ignore;
+pub mod output;
+pub mod paths;
+pub mod pattern;
+pub mod search;
 
 use std::process::ExitCode;
 

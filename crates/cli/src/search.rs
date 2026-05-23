@@ -28,6 +28,9 @@ pub fn run_type_list(cli: &Cli) {
     }
 }
 
+/// # Errors
+///
+/// Returns an error if I/O operations fail, paths are invalid, or filter config building fails.
 pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
     let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
     let ignore_res = resolve_visibility_and_ignore(args);
@@ -81,6 +84,9 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
 }
 
 impl Cli {
+    /// # Errors
+    ///
+    /// Returns an error if I/O operations fail, paths are invalid, or search execution fails.
     pub fn run_search_with_index(
         &self,
         query: &CompiledSearch,
@@ -141,6 +147,9 @@ impl Cli {
             .map_err(Into::into)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if I/O operations fail, paths are invalid, or search execution fails.
     pub fn run_search_walk(
         &self,
         query: &CompiledSearch,
@@ -196,6 +205,9 @@ impl Cli {
             .map_err(Into::into)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if no pattern is given, pattern file I/O fails, or search execution fails.
     pub fn run_search(&self, args: &[String]) -> anyhow::Result<bool> {
         let patterns = resolve_patterns(
             &self.patterns.regexp,

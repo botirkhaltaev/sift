@@ -32,7 +32,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 
 - **No `unsafe`** except in `storage/mmap.rs` (documented safety invariant).
 - **Strict clippy:** workspace uses `pedantic + nursery + cargo` warnings; CI uses `-D warnings`.
-- Prefer fixing lints over `#[allow(clippy::…)]`.
+- Fix lints at the root cause — `#[allow]` is **never** permitted.
 - Small, focused changes; follow existing patterns in the crate you touch.
 - Do not commit `target/`, `.cursor/`, local `.sift/` directories.
 
@@ -56,4 +56,4 @@ Use short, descriptive kebab-case with a type prefix:
 - Skip CI checks (`fmt`, `clippy`, `test`) before pushing.
 - Add dependencies without justification.
 - Commit secrets, `.env` files, or editor-specific directories.
-- Use `#[allow]` attributes without a documented reason.
+- Use `#[allow]` attributes.

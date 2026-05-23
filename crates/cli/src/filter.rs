@@ -47,6 +47,7 @@ pub struct SearchFilterCtx {
 }
 
 impl SearchFilterCtx {
+    #[must_use]
     pub const fn hidden_mode(self) -> HiddenMode {
         if self.hidden {
             HiddenMode::Include
@@ -125,6 +126,11 @@ impl Default for GlobFlags {
     }
 }
 
+/// Parses a size suffix like "10K" or "2MB" into bytes.
+///
+/// # Errors
+///
+/// Returns an error if the input is not a valid size string.
 pub fn parse_size_suffix(s: &str) -> anyhow::Result<u64> {
     let s = s.trim();
     let (num_part, suffix) = s.find(|c: char| c.is_ascii_alphabetic()).map_or_else(
@@ -144,6 +150,7 @@ pub fn parse_size_suffix(s: &str) -> anyhow::Result<u64> {
     Ok(base * multiplier)
 }
 
+#[must_use]
 pub fn builtin_type_defs() -> Vec<TypeDef> {
     [
         ("rust", &["*.rs"][..]),
@@ -211,6 +218,7 @@ pub fn builtin_type_defs() -> Vec<TypeDef> {
     .collect()
 }
 
+#[must_use]
 pub fn resolve_type_defs(decl: &FilterDecl) -> Vec<TypeDef> {
     let mut defs = builtin_type_defs();
 
@@ -259,6 +267,9 @@ pub fn resolve_type_defs(decl: &FilterDecl) -> Vec<TypeDef> {
 // ── Config builders ──
 
 impl Cli {
+    /// # Errors
+    ///
+    /// Returns an error if `max_filesize` parsing fails.
     pub fn build_filter_config(
         &self,
         filter: SearchFilterCtx,
@@ -320,6 +331,10 @@ impl Cli {
 }
 
 /// Free-function version used by `run_files_mode` (no self).
+///
+/// # Errors
+///
+/// Returns an error if `max_filesize` parsing fails.
 pub fn build_search_filter_config(
     cli: &Cli,
     filter: SearchFilterCtx,
