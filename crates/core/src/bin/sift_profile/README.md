@@ -6,19 +6,25 @@ Hot-loop profiling binary for `sift-core`. Built only with `--features profile`.
 
 ```bash
 # List available scenarios
-./scripts/profile.sh list
+cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- list
 
 # Run a scenario
-./scripts/profile.sh run literal_narrow
+cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
 
 # Search-only (cleaner for perf attribution)
-./scripts/profile.sh search-only no_literal
+cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- search-only no_literal
 
 # Flamegraph
-./scripts/profile.sh flamegraph literal_narrow
+cargo flamegraph --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
+
+# System profiler (macOS)
+sample $(cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow) 10000
+
+# /usr/bin/time (RSS + wall+sys+user)
+/usr/bin/time -l cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
 
 # Large corpus (8k files)
-SIFT_PROFILE_LARGE=1 ./scripts/profile.sh run literal_narrow
+SIFT_PROFILE_LARGE=1 cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
 ```
 
 ## Modules

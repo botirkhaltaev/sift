@@ -47,6 +47,7 @@ pub struct SearchFilterCtx {
 }
 
 impl SearchFilterCtx {
+    #[must_use]
     pub const fn hidden_mode(self) -> HiddenMode {
         if self.hidden {
             HiddenMode::Include
@@ -125,6 +126,11 @@ impl Default for GlobFlags {
     }
 }
 
+/// Parses a size suffix like "10K" or "2MB" into bytes.
+///
+/// # Errors
+///
+/// Returns an error if the input is not a valid size string.
 pub fn parse_size_suffix(s: &str) -> anyhow::Result<u64> {
     let s = s.trim();
     let (num_part, suffix) = s.find(|c: char| c.is_ascii_alphabetic()).map_or_else(
@@ -144,6 +150,7 @@ pub fn parse_size_suffix(s: &str) -> anyhow::Result<u64> {
     Ok(base * multiplier)
 }
 
+#[must_use]
 pub fn builtin_type_defs() -> Vec<TypeDef> {
     [
         ("rust", &["*.rs"][..]),
@@ -211,6 +218,7 @@ pub fn builtin_type_defs() -> Vec<TypeDef> {
     .collect()
 }
 
+#[must_use]
 pub fn resolve_type_defs(decl: &FilterDecl) -> Vec<TypeDef> {
     let mut defs = builtin_type_defs();
 
@@ -259,6 +267,9 @@ pub fn resolve_type_defs(decl: &FilterDecl) -> Vec<TypeDef> {
 // ── Config builders ──
 
 impl Cli {
+    /// # Errors
+    ///
+    /// Returns an error if `max_filesize` parsing fails.
     pub fn build_filter_config(
         &self,
         filter: SearchFilterCtx,
@@ -279,7 +290,15 @@ impl Cli {
 
         let glob_ci = filter.glob_case_insensitive || !self.filter_decl.iglob.is_empty();
 
-        let type_definitions = resolve_type_defs(&self.filter_decl);
+        let needs_type_defs = !self.filter_decl.type_include.is_empty()
+            || !self.filter_decl.type_exclude.is_empty()
+            || !self.filter_decl.type_add.is_empty()
+            || !self.filter_decl.type_clear.is_empty();
+        let type_definitions = if needs_type_defs {
+            resolve_type_defs(&self.filter_decl)
+        } else {
+            Vec::new()
+        };
 
         Ok(SearchFilterConfig {
             scopes,
@@ -312,6 +331,10 @@ impl Cli {
 }
 
 /// Free-function version used by `run_files_mode` (no self).
+///
+/// # Errors
+///
+/// Returns an error if `max_filesize` parsing fails.
 pub fn build_search_filter_config(
     cli: &Cli,
     filter: SearchFilterCtx,
@@ -332,7 +355,15 @@ pub fn build_search_filter_config(
 
     let glob_ci = filter.glob_case_insensitive || !cli.filter_decl.iglob.is_empty();
 
-    let type_definitions = resolve_type_defs(&cli.filter_decl);
+    let needs_type_defs = !cli.filter_decl.type_include.is_empty()
+        || !cli.filter_decl.type_exclude.is_empty()
+        || !cli.filter_decl.type_add.is_empty()
+        || !cli.filter_decl.type_clear.is_empty();
+    let type_definitions = if needs_type_defs {
+        resolve_type_defs(&cli.filter_decl)
+    } else {
+        Vec::new()
+    };
 
     let custom_files = if filter.msg_flags.contains(MessageFlags::NO_IGNORE_FILES) {
         Vec::new()

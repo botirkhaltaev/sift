@@ -28,11 +28,13 @@ pub fn run_type_list(cli: &Cli) {
     }
 }
 
-pub fn run_files_mode(cli: &Cli) -> anyhow::Result<bool> {
-    let args: Vec<String> = std::env::args().collect();
-    let glob_case_insensitive = resolve_glob_case_insensitive_from_args(&args);
-    let ignore_res = resolve_visibility_and_ignore(&args);
-    let null_data = resolve_null_from_args(&args);
+/// # Errors
+///
+/// Returns an error if I/O operations fail, paths are invalid, or filter config building fails.
+pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
+    let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
+    let ignore_res = resolve_visibility_and_ignore(args);
+    let null_data = resolve_null_from_args(args);
 
     let filter_ctx = crate::filter::SearchFilterCtx {
         hidden: ignore_res.hidden,
@@ -82,6 +84,9 @@ pub fn run_files_mode(cli: &Cli) -> anyhow::Result<bool> {
 }
 
 impl Cli {
+    /// # Errors
+    ///
+    /// Returns an error if I/O operations fail, paths are invalid, or search execution fails.
     pub fn run_search_with_index(
         &self,
         query: &CompiledSearch,
@@ -142,6 +147,9 @@ impl Cli {
             .map_err(Into::into)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if I/O operations fail, paths are invalid, or search execution fails.
     pub fn run_search_walk(
         &self,
         query: &CompiledSearch,
@@ -197,17 +205,19 @@ impl Cli {
             .map_err(Into::into)
     }
 
-    pub fn run_search(&self) -> anyhow::Result<bool> {
+    /// # Errors
+    ///
+    /// Returns an error if no pattern is given, pattern file I/O fails, or search execution fails.
+    pub fn run_search(&self, args: &[String]) -> anyhow::Result<bool> {
         let patterns = resolve_patterns(
             &self.patterns.regexp,
             self.patterns.pattern_file.as_deref(),
             self.patterns.pattern.as_deref(),
         )?;
 
-        let args: Vec<String> = std::env::args().collect();
-        let invert_match = resolve_invert_match_from_args(&args);
-        let (mode, only_matching, quiet) = resolve_output_mode(&args, invert_match);
-        let use_json = resolve_json_from_args(&args);
+        let invert_match = resolve_invert_match_from_args(args);
+        let (mode, only_matching, quiet) = resolve_output_mode(args, invert_match);
+        let use_json = resolve_json_from_args(args);
 
         let pretty = self.column_decl.pretty;
         let vimgrep = self.column_decl.vimgrep;
@@ -215,7 +225,7 @@ impl Cli {
         let line_number_override = if pretty || vimgrep {
             Some(true)
         } else {
-            resolve_line_number_from_args(&args)
+            resolve_line_number_from_args(args)
         };
 
         let effective_mode = if only_matching {
@@ -245,12 +255,12 @@ impl Cli {
                 .ok();
         }
 
-        let opts = self.build_search_opts(&args, only_matching);
+        let opts = self.build_search_opts(args, only_matching);
         let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
         let cwd = std::env::current_dir()?;
 
         let (out, filter) =
-            self.build_output_and_filter(&args, effective_mode, quiet, line_number_override);
+            self.build_output_and_filter(args, effective_mode, quiet, line_number_override);
 
         match Index::open(&self.paths.sift_dir) {
             Ok(index) => self.run_search_with_index(&query, &index, &cwd, &out, filter),

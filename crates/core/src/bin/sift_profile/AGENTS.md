@@ -15,10 +15,10 @@ Hot-loop profiling binary for `sift-core`. Produces `profile\tkey\tvalue` TSV li
 
 ## Conventions
 
-- Always use `./scripts/profile.sh` from the repo root for consistent environment.
+- Run directly: `cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- <subcommand>`.
 - `SIFT_PROFILE_*` environment variables control corpus size, iteration count, and features.
 
 ## Do NOT
 
 - Enable the `profile` feature in production builds.
-- Change TSV output format without updating `scripts/profile.sh`.
+- Change TSV output format without updating benchmarks or the profile binary.

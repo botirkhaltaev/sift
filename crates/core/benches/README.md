@@ -1,26 +1,33 @@
 # Benchmarks
 
-Criterion benchmark suite for `sift-core` and the `sift-profile` hot-loop profiling binary.
+Criterion benchmark suite for `sift-core` and `sift-cli`, plus the `sift-profile` hot-loop profiling binary.
 
 ## Running
 
 ```bash
-# Criterion (statistical)
+# Criterion (statistical) — core
 cargo bench -p sift-core --bench search
 ./scripts/bench.sh
+
+# Criterion (statistical) — cli
+cargo bench -p sift-cli --bench cli
+./scripts/bench.sh cli
 
 # Save / compare baselines
 ./scripts/bench.sh -- --save-baseline main
 ./scripts/bench.sh -- --baseline main
 
 # sift-profile (TSV output)
-./scripts/profile.sh list
-./scripts/profile.sh run literal_narrow
-./scripts/profile.sh search-only no_literal
-./scripts/profile.sh flamegraph literal_narrow
+cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- list
+cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
+cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- search-only no_literal
+
+# System profiling (macOS sample, flamegraph)
+sample sift-profile 10000 -maybeFile -F runtime 2>/dev/null | xcrun symbolicate
+cargo flamegraph --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
 
 # Large corpus
-SIFT_PROFILE_LARGE=1 ./scripts/profile.sh run literal_narrow
+SIFT_PROFILE_LARGE=1 cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
 ```
 
 ## Scenario Matrix
@@ -77,14 +84,17 @@ SIFT_PROFILE_LARGE=1 ./scripts/profile.sh run literal_narrow
 
 ## System Profiling
 
-For CPU/call-stack analysis beyond timings:
+For CPU/call-stack analysis beyond Criterion timings, use macOS built-in tools:
 
 ```bash
-# Flamegraph (recommended)
-./scripts/system-profile.sh literal_narrow
+# macOS sample (stacks every 1ms)
+sample sift-profile 10000 -maybeFile 2>/dev/null | xcrun symbolicate
 
-# Linux perf
-./scripts/system-profile.sh --perf no_literal
+# Flamegraph (requires cargo-flamegraph)
+cargo flamegraph --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
+
+# Time + RSS
+/usr/bin/time -l cargo run --profile profiling -p sift-core --features profile --bin sift-profile -- run literal_narrow
 ```
 
 Open the generated `flamegraph.svg` — wide boxes indicate hot stacks. Compare `search-only` vs full `run` to isolate `run_index` vs planning.

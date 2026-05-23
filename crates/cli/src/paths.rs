@@ -13,6 +13,15 @@ pub struct PathArgs {
     pub follow: bool,
 }
 
+/// Resolves requested search paths against an indexed corpus root.
+///
+/// # Errors
+///
+/// Returns an error if any requested path is not under the index root.
+///
+/// # Panics
+///
+/// Panics if a path is under the index root but stripping the prefix fails.
 pub fn corpus_path_prefixes(
     index_root: &Path,
     cwd: &Path,
@@ -21,7 +30,10 @@ pub fn corpus_path_prefixes(
     if requested.is_empty() {
         return Ok(vec![PathBuf::from("")]);
     }
-    let mut out = Vec::new();
+    let index_root = index_root
+        .canonicalize()
+        .unwrap_or_else(|_| index_root.to_path_buf());
+    let mut out = Vec::with_capacity(requested.len());
     for rel in requested {
         let abs = if rel.is_absolute() {
             rel.clone()
@@ -29,9 +41,6 @@ pub fn corpus_path_prefixes(
             cwd.join(rel)
         };
         let abs = abs.canonicalize().unwrap_or(abs);
-        let index_root = index_root
-            .canonicalize()
-            .unwrap_or_else(|_| index_root.to_path_buf());
         if !abs.starts_with(&index_root) {
             anyhow::bail!(
                 "path {} is not under indexed corpus root {}",
@@ -48,12 +57,21 @@ pub fn corpus_path_prefixes(
     Ok(out)
 }
 
+/// Resolves requested search paths against the current directory.
+///
+/// # Errors
+///
+/// Returns an error if any requested path is not under the current directory.
+///
+/// # Panics
+///
+/// Panics if a path is under the current directory but stripping the prefix fails.
 pub fn walk_path_prefixes(cwd: &Path, requested: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     if requested.is_empty() {
         return Ok(vec![PathBuf::from("")]);
     }
     let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(requested.len());
     for rel in requested {
         let abs = if rel.is_absolute() {
             rel.clone()
@@ -73,6 +91,11 @@ pub fn walk_path_prefixes(cwd: &Path, requested: &[PathBuf]) -> anyhow::Result<V
     Ok(out)
 }
 
+/// # Panics
+///
+/// Panics if the sift directory path is under the search root but stripping
+/// the prefix fails.
+#[must_use]
 pub fn excluded_search_paths(search_root: &Path, sift_dir: &Path) -> Vec<PathBuf> {
     let abs = if sift_dir.is_absolute() {
         sift_dir.to_path_buf()
@@ -94,6 +117,7 @@ pub fn excluded_search_paths(search_root: &Path, sift_dir: &Path) -> Vec<PathBuf
     }
 }
 
+#[must_use]
 pub fn effective_path_display(scopes: &[PathBuf]) -> PathDisplay {
     for scope in scopes {
         if scope.is_absolute() {

@@ -19,6 +19,7 @@ pub struct IgnoreResolution {
 }
 
 /// Hidden files, ignore rules, and `require_git` — processed in argv order (ripgrep-style).
+#[must_use]
 pub fn resolve_visibility_and_ignore(args: &[String]) -> IgnoreResolution {
     const DEFAULT_SOURCES: IgnoreSources = IgnoreSources::DOT
         .union(IgnoreSources::VCS)
@@ -99,98 +100,98 @@ pub fn resolve_visibility_and_ignore(args: &[String]) -> IgnoreResolution {
 #[derive(Args)]
 pub struct IgnoreNoDecl {
     #[arg(long = "no-ignore", action = ArgAction::SetTrue)]
-    pub _no_ignore: bool,
+    pub no_ignore: bool,
     #[arg(long = "ignore", action = ArgAction::SetTrue)]
-    pub _ignore: bool,
+    pub ignore_flag: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreVcsDecl {
     #[arg(long = "no-ignore-vcs", action = ArgAction::SetTrue)]
-    pub _no_ignore_vcs: bool,
+    pub no_ignore_vcs: bool,
     #[arg(long = "ignore-vcs", action = ArgAction::SetTrue)]
-    pub _ignore_vcs: bool,
+    pub ignore_vcs: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreDotDecl {
     #[arg(long = "no-ignore-dot", action = ArgAction::SetTrue)]
-    pub _no_ignore_dot: bool,
+    pub no_ignore_dot: bool,
     #[arg(long = "ignore-dot", action = ArgAction::SetTrue)]
-    pub _ignore_dot: bool,
+    pub ignore_dot: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreGitDecl {
     #[arg(long = "no-require-git", action = ArgAction::SetTrue)]
-    pub _no_require_git: bool,
+    pub no_require_git: bool,
     #[arg(long = "require-git", action = ArgAction::SetTrue)]
-    pub _require_git: bool,
+    pub require_git: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreGlobalDecl {
     #[arg(long = "no-ignore-global", action = ArgAction::SetTrue)]
-    pub _no_ignore_global: bool,
+    pub no_ignore_global: bool,
     #[arg(long = "ignore-global", action = ArgAction::SetTrue)]
-    pub _ignore_global: bool,
+    pub ignore_global: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreExcludeDecl {
     #[arg(long = "no-ignore-exclude", action = ArgAction::SetTrue)]
-    pub _no_ignore_exclude: bool,
+    pub no_ignore_exclude: bool,
     #[arg(long = "ignore-exclude", action = ArgAction::SetTrue)]
-    pub _ignore_exclude: bool,
+    pub ignore_exclude: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreParentDecl {
     #[arg(long = "no-ignore-parent", action = ArgAction::SetTrue)]
-    pub _no_ignore_parent: bool,
+    pub no_ignore_parent: bool,
     #[arg(long = "ignore-parent", action = ArgAction::SetTrue)]
-    pub _ignore_parent: bool,
+    pub ignore_parent: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreFilesDecl {
     #[arg(long = "no-ignore-files", action = ArgAction::SetTrue)]
-    pub _no_ignore_files: bool,
+    pub no_ignore_files: bool,
     #[arg(long = "ignore-files", action = ArgAction::SetTrue)]
-    pub _ignore_files: bool,
+    pub ignore_files: bool,
 }
 
 #[derive(Args)]
 pub struct MessagesDecl {
     #[arg(long = "no-messages", action = ArgAction::SetTrue)]
-    pub _no_messages: bool,
+    pub no_messages: bool,
     #[arg(long = "messages", action = ArgAction::SetTrue)]
-    pub _messages: bool,
+    pub messages: bool,
 }
 
 #[derive(Args)]
 pub struct IgnoreMessagesDecl {
     #[arg(long = "no-ignore-messages", action = ArgAction::SetTrue)]
-    pub _no_ignore_messages: bool,
+    pub no_ignore_messages: bool,
     #[arg(long = "ignore-messages", action = ArgAction::SetTrue)]
-    pub _ignore_messages: bool,
+    pub ignore_messages: bool,
 }
 
 #[derive(Args)]
 pub struct UnrestrictedDecl {
     #[arg(short = 'u', long = "unrestricted", action = ArgAction::Count)]
-    pub _unrestricted: u8,
+    pub unrestricted: u8,
 }
 
 /// Declares `-A`/`-B`/`-C` for clap; effective values use [`resolve_context_from_args`].
 #[derive(Args)]
 pub struct ContextDecl {
     #[arg(short = 'A', long = "after-context", value_name = "NUM", action = ArgAction::Append)]
-    pub _after: Vec<usize>,
+    pub after: Vec<usize>,
     #[arg(short = 'B', long = "before-context", value_name = "NUM", action = ArgAction::Append)]
-    pub _before: Vec<usize>,
+    pub before: Vec<usize>,
     #[arg(short = 'C', long = "context", value_name = "NUM", action = ArgAction::Append)]
-    pub _context: Vec<usize>,
+    pub context: Vec<usize>,
 }
 
 #[cfg(test)]

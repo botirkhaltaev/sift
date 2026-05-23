@@ -162,6 +162,7 @@ impl FromArgMatches for SearchFlags {
 
 // ── Argv-order resolvers ──
 
+#[must_use]
 pub fn resolve_case_mode_from_args(args: &[String]) -> CaseMode {
     let mut last_idx = 0usize;
     let mut result = CaseMode::Sensitive;
@@ -210,6 +211,7 @@ pub fn resolve_case_mode_from_args(args: &[String]) -> CaseMode {
     result
 }
 
+#[must_use]
 pub fn resolve_invert_match_from_args(args: &[String]) -> bool {
     for arg in args {
         if arg == "--" {
@@ -228,6 +230,7 @@ pub fn resolve_invert_match_from_args(args: &[String]) -> bool {
     false
 }
 
+#[must_use]
 pub fn resolve_output_mode(args: &[String], invert_match: bool) -> (SearchMode, bool, bool) {
     let mut last_idx = 0usize;
     let mut mode = SearchMode::Standard;
@@ -298,6 +301,11 @@ pub fn resolve_output_mode(args: &[String], invert_match: bool) -> (SearchMode, 
     (mode, only_matching, quiet)
 }
 
+/// Resolves patterns from `-e`/`-f`/positional arguments.
+///
+/// # Errors
+///
+/// Returns an error if no pattern is provided or if a pattern file cannot be read.
 pub fn resolve_patterns(
     regexp: &[String],
     pattern_file: Option<&Path>,
@@ -328,6 +336,7 @@ pub fn resolve_patterns(
 // ── Cli method implementations ──
 
 impl Cli {
+    #[must_use]
     pub const fn resolve_binary_mode(&self) -> BinaryMode {
         if self.binary_decl.text {
             BinaryMode::AsText
@@ -338,6 +347,7 @@ impl Cli {
         }
     }
 
+    #[must_use]
     pub fn build_search_opts(&self, args: &[String], only_matching: bool) -> SearchOptions {
         let (before_context, after_context) = resolve_context_from_args(args);
         let mut opts = self.search_flags.to_options();

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
+autobenches = false
 
 [lints]
 workspace = true
@@ -27,3 +28,12 @@ clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 rayon = "1"
 sift-core = { path = "../core" }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+tempfile = "3"
+
+[[bench]]
+name = "cli"
+path = "benches/entry.rs"
+harness = false
