@@ -1,6 +1,4 @@
-# AGENTS.md — storage/
-
-## Responsibility
+# index/trigram/storage/
 
 Binary persistence format for the trigram index. Read/write `files.bin`, `lexicon.bin`, and `postings.bin` with zero-copy memory-mapped access.
 

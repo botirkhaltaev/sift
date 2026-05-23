@@ -1,32 +1,37 @@
 # index/
 
-Trigram index construction and in-memory index handle.
+Generic index traits and concrete index implementations.
 
 ## Modules
 
-| File | Description |
-|------|-------------|
-| [`mod.rs`](mod.rs) | `Index` struct (memory-mapped tables), `IndexBuilder`, `IndexMeta`, `QueryPlan`, posting-list intersection |
-| [`builder.rs`](builder.rs) | `build_index_tables` — corpus walk, parallel trigram extraction, in-memory table construction |
-| [`trigram.rs`](trigram.rs) | `extract_trigrams`, `extract_trigrams_from_bytes` — overlapping 3-byte window extraction |
-| [`files.rs`](files.rs) | `MappedFilesView` — read/write `files.bin` (file ID → relative path, O(1) lookup) |
+| Module | Description |
+|--------|-------------|
+| [`mod.rs`](mod.rs) | `Index` trait, `CandidateSource<P>` trait, `FileId`, `CorpusKind`, `IndexMeta` |
+| [`trigram/`](trigram/) | Trigram index: build, load, search, and persistence |
 
-## Key Types
+## API
 
-- **`Index`** — zero-copy handle over memory-mapped `files.bin`, `lexicon.bin`, `postings.bin`. Opening is cheap (just mmap, no deserialization).
-- **`IndexBuilder`** — fluent API: `.with_dir()`, `.follow_links()`, `.exclude()`, then `.build()` to persist.
-- **`QueryPlan`** — explains whether a pattern uses indexed narrowing or full scan.
-- **`CorpusKind`** — `Directory` (tree walk) or `File` (single-file index).
+```rust
+use sift_core::{Index, CandidateSource, FileId, TrigramIndex, TrigramIndexBuilder};
 
-## File Format
+// Build
+let index = TrigramIndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?;
 
+// Open
+let index = TrigramIndex::open(&index_dir)?;
+
+// Use via trait
+let count: usize = index.file_count();
+let path = index.file_path(FileId::new(0));
 ```
-files.bin:    SIFTFIL2 | count(4) | offsets[count](4*count) | path_len(4) path_bytes(n)...
-lexicon.bin:  SIFTLEX1 | count(4) | [trigram(3) offset(8) len(4)]...
-postings.bin: SIFTPST1 | len(4)   | u32 LE file-ids...
+
+## Future Index Kinds
+
+```text
+index/
+  trigram/     — current trigram-based index
+  symbol/      — future symbol table index
+  suffix/      — future suffix array index
 ```
 
-## Invariants
-
-- File paths are sorted lexicographically (stable file IDs across builds).
-- Parallel extraction uses the same Rayon gating heuristic as parallel search.
+Each kind implements `Index` and its own `CandidateSource<SpecificPlan>`.

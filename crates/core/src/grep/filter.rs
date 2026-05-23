@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::grep::error::SearchError;
+
 use ignore::gitignore::Gitignore;
 use ignore::overrides::{Override, OverrideBuilder};
 
@@ -82,13 +84,11 @@ pub struct SearchFilterConfig {
 /// Pre-computed candidate for efficient batch filtering and search.
 #[derive(Debug, Clone)]
 pub struct CandidateInfo {
-    /// File ID from the index.
-    pub id: usize,
     /// Relative path as stored in the index.
     pub rel_path: PathBuf,
     /// Normalized relative path string (forward slashes, for gitignore/glob). Empty when neither applies.
     pub rel_str: String,
-    /// Absolute path on disk (same as [`Index::file_abs_path`](crate::Index::file_abs_path)).
+    /// Absolute path on disk.
     pub abs_path: PathBuf,
 }
 
@@ -155,8 +155,7 @@ impl SearchFilter {
     /// # Errors
     ///
     /// Returns an error if glob patterns are invalid.
-    #[allow(clippy::missing_panics_doc)]
-    pub fn new(config: &SearchFilterConfig, index_root: &Path) -> crate::Result<Self> {
+    pub fn new(config: &SearchFilterConfig, index_root: &Path) -> Result<Self, SearchError> {
         let scopes = if config.scopes.is_empty() {
             vec![PathBuf::from("")]
         } else {
@@ -175,13 +174,13 @@ impl SearchFilter {
             }
             for g in &config.glob.patterns {
                 builder.add(g).map_err(|e| {
-                    crate::Error::RegexBuild(format!("invalid glob pattern '{g}': {e}"))
+                    SearchError::RegexBuild(format!("invalid glob pattern '{g}': {e}"))
                 })?;
             }
             Some(
                 builder
                     .build()
-                    .map_err(|e| crate::Error::RegexBuild(e.to_string()))?,
+                    .map_err(|e| SearchError::RegexBuild(e.to_string()))?,
             )
         };
 
@@ -250,7 +249,7 @@ impl SearchFilter {
     fn build_gitignore_matcher(
         root: &Path,
         ignore_config: &IgnoreConfig,
-    ) -> crate::Result<Option<Gitignore>> {
+    ) -> Result<Option<Gitignore>, SearchError> {
         if ignore_config.sources.is_empty() && ignore_config.custom_files.is_empty() {
             return Ok(None);
         }
@@ -310,7 +309,7 @@ impl SearchFilter {
             let _ = builder.add(&path);
         }
 
-        let matcher = builder.build().map_err(crate::Error::Ignore)?;
+        let matcher = builder.build().map_err(SearchError::Ignore)?;
         Ok(Some(matcher))
     }
 
@@ -319,7 +318,7 @@ impl SearchFilter {
         defs: &[TypeDef],
         include: &[String],
         exclude: &[String],
-    ) -> crate::Result<Option<Override>> {
+    ) -> Result<Option<Override>, SearchError> {
         if include.is_empty() && exclude.is_empty() {
             return Ok(None);
         }
@@ -327,34 +326,34 @@ impl SearchFilter {
         for name in include {
             let patterns = Self::globs_for_type(defs, name)?;
             for g in patterns {
-                builder.add(&g).map_err(|e| {
-                    crate::Error::RegexBuild(format!("type glob for '{name}': {e}"))
-                })?;
+                builder
+                    .add(&g)
+                    .map_err(|e| SearchError::RegexBuild(format!("type glob for '{name}': {e}")))?;
             }
         }
         for name in exclude {
             let patterns = Self::globs_for_type(defs, name)?;
             for g in patterns {
                 let negated = format!("!{g}");
-                builder.add(&negated).map_err(|e| {
-                    crate::Error::RegexBuild(format!("type glob for '{name}': {e}"))
-                })?;
+                builder
+                    .add(&negated)
+                    .map_err(|e| SearchError::RegexBuild(format!("type glob for '{name}': {e}")))?;
             }
         }
         Ok(Some(
             builder
                 .build()
-                .map_err(|e| crate::Error::RegexBuild(e.to_string()))?,
+                .map_err(|e| SearchError::RegexBuild(e.to_string()))?,
         ))
     }
 
-    fn globs_for_type(defs: &[TypeDef], name: &str) -> crate::Result<Vec<String>> {
+    fn globs_for_type(defs: &[TypeDef], name: &str) -> Result<Vec<String>, SearchError> {
         for def in defs {
             if def.name == name {
                 return Ok(def.globs.clone());
             }
         }
-        Err(crate::Error::RegexBuild(format!(
+        Err(SearchError::RegexBuild(format!(
             "unknown file type: '{name}'"
         )))
     }

@@ -40,9 +40,10 @@ use std::hint::black_box;
 
 use sift_core::{
     CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
-    IgnoreSources, Index, IndexBuilder, LineStyleFlags, OutputEmission, PathDisplay, SearchFilter,
-    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, SearchSeparators, VisibilityConfig,
+    IgnoreSources, LineStyleFlags, OutputEmission, PathDisplay, SearchFilter, SearchFilterConfig,
+    SearchIndex, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
+    SearchOutputFormat, SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder,
+    VisibilityConfig,
 };
 
 fn make_parity_corpus(root: &Path) {
@@ -117,33 +118,42 @@ fn make_many_files_corpus(root: &Path, n: usize) {
     }
 }
 
-fn open_parity_index() -> (tempfile::TempDir, Index) {
+fn open_parity_index() -> (tempfile::TempDir, TrigramIndex) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     make_parity_corpus(&corpus);
     let idx = tmp.path().join(".sift");
-    IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-    let index = Index::open(&idx).unwrap();
+    TrigramIndexBuilder::new(&corpus)
+        .with_dir(&idx)
+        .build()
+        .unwrap();
+    let index = TrigramIndex::open(&idx).unwrap();
     (tmp, index)
 }
 
-fn open_filter_index() -> (tempfile::TempDir, Index) {
+fn open_filter_index() -> (tempfile::TempDir, TrigramIndex) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     make_filter_corpus(&corpus);
     let idx = tmp.path().join(".sift");
-    IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-    let index = Index::open(&idx).unwrap();
+    TrigramIndexBuilder::new(&corpus)
+        .with_dir(&idx)
+        .build()
+        .unwrap();
+    let index = TrigramIndex::open(&idx).unwrap();
     (tmp, index)
 }
 
-fn open_large_index() -> (tempfile::TempDir, Index) {
+fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     materialize_large_corpus(&corpus, 8_000, 100, 256);
     let idx = tmp.path().join(".sift");
-    IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-    let index = Index::open(&idx).unwrap();
+    TrigramIndexBuilder::new(&corpus)
+        .with_dir(&idx)
+        .build()
+        .unwrap();
+    let index = TrigramIndex::open(&idx).unwrap();
     (tmp, index)
 }
 
@@ -229,7 +239,10 @@ fn bench_build_index(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             make_many_files_corpus(&corpus, 32);
             let idx = tmp.path().join(".sift");
-            IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
+            TrigramIndexBuilder::new(&corpus)
+                .with_dir(&idx)
+                .build()
+                .unwrap();
         });
     });
     g.bench_function("8k_files_large", |b| {
@@ -238,7 +251,10 @@ fn bench_build_index(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             materialize_large_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
-            IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
+            TrigramIndexBuilder::new(&corpus)
+                .with_dir(&idx)
+                .build()
+                .unwrap();
         });
     });
     g.finish();
@@ -250,14 +266,14 @@ fn bench_literal_narrow(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_literal_narrow");
     g.bench_function("beta_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -273,14 +289,14 @@ fn bench_literal_narrow_large(c: &mut Criterion) {
     let (_tmp, index) = open_large_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_literal_narrow_large");
     g.bench_function("beta_8k_files", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -301,19 +317,22 @@ fn bench_literal_narrow_corpus_scale(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             materialize_large_corpus(&corpus, files, 100, 256);
             let idx = tmp.path().join(".sift");
-            IndexBuilder::new(&corpus).with_dir(&idx).build().unwrap();
-            let index = Index::open(&idx).unwrap();
+            TrigramIndexBuilder::new(&corpus)
+                .with_dir(&idx)
+                .build()
+                .unwrap();
+            let index = TrigramIndex::open(&idx).unwrap();
             (tmp, index)
         };
         let pat = vec!["beta".to_string()];
         let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-        let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+        let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
         g.bench_function(format!("beta_files_{files}"), |b| {
             b.iter(|| {
                 black_box(
                     query
-                        .run_index(
-                            black_box(&index),
+                        .run_indexes(
+                            &[black_box(&index)],
                             &filter,
                             output_quiet(SearchMode::Standard),
                             &default_seps(),
@@ -339,14 +358,14 @@ fn bench_word_literal(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_word_literal");
     g.bench_function("beta_word_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -371,14 +390,14 @@ fn bench_line_literal(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_line_literal");
     g.bench_function("beta_line_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -403,14 +422,14 @@ fn bench_fixed_string(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_fixed_string");
     g.bench_function("beta_gamma_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -435,14 +454,14 @@ fn bench_casei_literal(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_casei_literal");
     g.bench_function("beta_casei_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -467,14 +486,14 @@ fn bench_smart_case_lower(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_smart_case_lower");
     g.bench_function("beta_smart_lower_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -499,14 +518,14 @@ fn bench_smart_case_upper(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_smart_case_upper");
     g.bench_function("Beta_smart_upper_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -522,14 +541,14 @@ fn bench_required_literal(c: &mut Criterion) {
     let (_tmp, index) = open_large_index();
     let pat = vec!["[A-Z]+_RESUME".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_required_literal");
     g.bench_function("RESUME_8k_files", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -545,14 +564,14 @@ fn bench_unicode_class(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec![r"\p{Greek}".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_unicode_class");
     g.bench_function("greek_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -568,14 +587,14 @@ fn bench_no_literal(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec![r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_no_literal");
     g.bench_function("word_boundary_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -591,14 +610,14 @@ fn bench_alternation(c: &mut Criterion) {
     let (_tmp, index) = open_large_index();
     let pat = vec!["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_alternation");
     g.bench_function("err_codes_8k_files", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -623,14 +642,14 @@ fn bench_alternation_casei(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_alternation_casei");
     g.bench_function("err_codes_ci_8k_files", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -709,14 +728,14 @@ fn bench_glob_include(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&glob_include_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&glob_include_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_glob_include");
     g.bench_function("beta_filter_corpus", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -732,14 +751,14 @@ fn bench_glob_exclude(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&glob_exclude_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&glob_exclude_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_glob_exclude");
     g.bench_function("beta_filter_corpus", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -755,14 +774,14 @@ fn bench_glob_casei(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&glob_casei_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&glob_casei_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_glob_casei");
     g.bench_function("beta_filter_corpus", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -778,14 +797,14 @@ fn bench_hidden_default(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_hidden_default");
     g.bench_function("beta_filter_corpus", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -801,14 +820,14 @@ fn bench_hidden_include(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&hidden_include_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&hidden_include_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_hidden_include");
     g.bench_function("beta_filter_corpus", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -824,14 +843,14 @@ fn bench_ignore_default(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_ignore_default");
     g.bench_function("beta_filter_corpus", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -847,14 +866,14 @@ fn bench_ignore_custom(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&ignore_custom_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&ignore_custom_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_ignore_custom");
     g.bench_function("beta_filter_corpus", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(
-                        black_box(&index),
+                    .run_indexes(
+                        &[black_box(&index)],
                         &filter,
                         output_quiet(SearchMode::Standard),
                         &default_seps(),
@@ -870,7 +889,7 @@ fn bench_scoped_search(c: &mut Criterion) {
     let (_tmp, index) = open_filter_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&scoped_filter("subdir"), &index.root).unwrap();
+    let filter = SearchFilter::new(&scoped_filter("subdir"), index.root()).unwrap();
     let output = SearchOutput {
         mode: SearchMode::FilesWithMatches,
         emission: OutputEmission::Normal,
@@ -881,7 +900,7 @@ fn bench_scoped_search(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .run_indexes(&[black_box(&index)], &filter, output, &default_seps())
                     .unwrap(),
             );
         });
@@ -895,7 +914,7 @@ fn bench_only_matching(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let output = SearchOutput {
         mode: SearchMode::OnlyMatching,
         emission: OutputEmission::Normal,
@@ -906,7 +925,7 @@ fn bench_only_matching(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .run_indexes(&[black_box(&index)], &filter, output, &default_seps())
                     .unwrap(),
             );
         });
@@ -918,7 +937,7 @@ fn bench_count(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let output = SearchOutput {
         mode: SearchMode::Count,
         emission: OutputEmission::Normal,
@@ -929,7 +948,7 @@ fn bench_count(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .run_indexes(&[black_box(&index)], &filter, output, &default_seps())
                     .unwrap(),
             );
         });
@@ -941,7 +960,7 @@ fn bench_count_matches(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let output = SearchOutput {
         mode: SearchMode::CountMatches,
         emission: OutputEmission::Normal,
@@ -952,7 +971,7 @@ fn bench_count_matches(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .run_indexes(&[black_box(&index)], &filter, output, &default_seps())
                     .unwrap(),
             );
         });
@@ -964,7 +983,7 @@ fn bench_files_with_matches(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let output = SearchOutput {
         mode: SearchMode::FilesWithMatches,
         emission: OutputEmission::Normal,
@@ -975,7 +994,7 @@ fn bench_files_with_matches(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .run_indexes(&[black_box(&index)], &filter, output, &default_seps())
                     .unwrap(),
             );
         });
@@ -987,7 +1006,7 @@ fn bench_files_without_match(c: &mut Criterion) {
     let (_tmp, index) = open_parity_index();
     let pat = vec!["beta".to_string()];
     let query = CompiledSearch::new(&pat, SearchOptions::default()).unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let output = SearchOutput {
         mode: SearchMode::FilesWithoutMatch,
         emission: OutputEmission::Normal,
@@ -998,7 +1017,7 @@ fn bench_files_without_match(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output, &default_seps())
+                    .run_indexes(&[black_box(&index)], &filter, output, &default_seps())
                     .unwrap(),
             );
         });
@@ -1019,13 +1038,13 @@ fn bench_max_count_1(c: &mut Criterion) {
         },
     )
     .unwrap();
-    let filter = SearchFilter::new(&default_filter(), &index.root).unwrap();
+    let filter = SearchFilter::new(&default_filter(), index.root()).unwrap();
     let mut g = c.benchmark_group("search_max_count_1");
     g.bench_function("beta_parity", |b| {
         b.iter(|| {
             black_box(
                 query
-                    .run_index(black_box(&index), &filter, output_std(), &default_seps())
+                    .run_indexes(&[black_box(&index)], &filter, output_std(), &default_seps())
                     .unwrap(),
             );
         });

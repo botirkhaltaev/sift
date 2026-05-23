@@ -1,42 +1,17 @@
 //! Sorted trigram → postings slice descriptor.
 
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use memmap2::Mmap;
 
-use crate::storage::format::{LEXICON_MAGIC, write_magic};
-use crate::storage::mmap::open_mmap;
+use crate::index::trigram::storage::format::LEXICON_MAGIC;
+use crate::index::trigram::storage::mmap::open_mmap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexiconEntry {
     pub trigram: [u8; 3],
     pub offset: u64,
     pub len: u32,
-}
-
-/// Write sorted `entries` to `out_path`.
-///
-/// # Errors
-///
-/// Propagates IO errors from writing `out_path`.
-pub fn write_lexicon(out_path: &Path, entries: &[LexiconEntry]) -> std::io::Result<()> {
-    let f = File::create(out_path)?;
-    let mut w = BufWriter::new(f);
-    write_magic(&mut w, LEXICON_MAGIC)?;
-    let n: u32 = entries
-        .len()
-        .try_into()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "lexicon too large"))?;
-    w.write_all(&n.to_le_bytes())?;
-    for e in entries {
-        w.write_all(&e.trigram)?;
-        w.write_all(&e.offset.to_le_bytes())?;
-        w.write_all(&e.len.to_le_bytes())?;
-    }
-    w.flush()?;
-    Ok(())
 }
 
 /// Memory-mapped lexicon view with owning storage.

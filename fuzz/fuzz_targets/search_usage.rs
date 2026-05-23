@@ -2,22 +2,22 @@
 
 use libfuzzer_sys::fuzz_target;
 use sift_core::{
-    build_index, compile_search_pattern, CompiledSearch, Index, SearchMatchFlags, SearchOptions,
+    compile_search_pattern, CompiledSearch, SearchIndex, SearchMatchFlags, SearchOptions,
+    TrigramIndex, TrigramIndexBuilder,
 };
 use std::fs;
 use std::sync::OnceLock;
 
 const MAX_PATTERN_LEN: usize = 512;
 
-/// Build corpus + index once per process; per-iteration temp IO was the bottleneck.
 struct IndexHolder {
     _tmp: tempfile::TempDir,
-    index: Index,
+    index: TrigramIndex,
 }
 
 static INDEX: OnceLock<IndexHolder> = OnceLock::new();
 
-fn indexed() -> &'static Index {
+fn indexed() -> &'static TrigramIndex {
     &INDEX
         .get_or_init(|| {
             let tmp = tempfile::tempdir().expect("tempdir");
@@ -26,8 +26,11 @@ fn indexed() -> &'static Index {
             fs::write(corpus.join("a.txt"), b"hello world\nfoo bar\n").expect("a.txt");
             fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
             let index_dir = tmp.path().join(".sift");
-            build_index(&corpus, &index_dir).expect("build_index");
-            let index = Index::open(&index_dir).expect("open");
+            TrigramIndexBuilder::new(&corpus)
+                .with_dir(&index_dir)
+                .build()
+                .expect("build_index");
+            let index = TrigramIndex::open(&index_dir).expect("open");
             IndexHolder { _tmp: tmp, index }
         })
         .index
@@ -61,37 +64,38 @@ fuzz_target!(|data: &[u8]| {
     let opts = opts_from_bytes(data);
     let index = indexed();
 
-    // Single pattern (positional PATTERN path).
+    let indexes: &[&dyn SearchIndex] = &[index];
+
     let pat1 = lossy_pattern(&data[2..]);
     if let Ok(q) = CompiledSearch::new(&[pat1], opts) {
-        let _ = q.run_index(
-            index,
-            &[],
+        let _ = q.run_indexes(
+            indexes,
+            &sift_core::SearchFilter::new(&sift_core::SearchFilterConfig::default(), index.root()).unwrap(),
             sift_core::SearchOutput {
                 emission: sift_core::OutputEmission::Quiet,
                 ..sift_core::SearchOutput::default()
             },
+            &sift_core::SearchSeparators::default(),
         );
     }
 
-    // Two -e patterns (OR branches) when we have enough input.
     if data.len() > 4 {
         let mid = 2 + (data.len() - 2) / 2;
         let p_a = lossy_pattern(&data[2..mid]);
         let p_b = lossy_pattern(&data[mid..]);
         if let Ok(q) = CompiledSearch::new(&[p_a, p_b], opts) {
-            let _ = q.run_index(
-                index,
-                &[],
+            let _ = q.run_indexes(
+                indexes,
+                &sift_core::SearchFilter::new(&sift_core::SearchFilterConfig::default(), index.root()).unwrap(),
                 sift_core::SearchOutput {
                     emission: sift_core::OutputEmission::Quiet,
                     ..sift_core::SearchOutput::default()
                 },
+                &sift_core::SearchSeparators::default(),
             );
         }
     }
 
-    // compile_search_pattern in isolation (same flags as search).
     let p = lossy_pattern(&data[2..]);
     let _ = compile_search_pattern(&[p], &opts);
     if data.len() > 4 {

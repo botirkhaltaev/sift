@@ -1,18 +1,11 @@
-//! Overlapping byte trigrams.
-
 use std::collections::HashSet;
 
-/// Extract overlapping 3-byte windows from `text`, handling invalid UTF-8 with lossy replacement.
-///
-/// Valid UTF-8 takes a fast path (no replacement string allocated). Invalid sequences fall back to
-/// [`String::from_utf8_lossy`] semantics, matching what [`extract_trigrams_utf8_lossy`] would do on the
-/// raw bytes — but in a single pass without an intermediate `String`.
 #[must_use]
-pub fn extract_trigrams(text: &str) -> Vec<[u8; 3]> {
+#[cfg(test)]
+fn extract_trigrams(text: &str) -> Vec<[u8; 3]> {
     extract_trigrams_from_bytes(text.as_bytes())
 }
 
-/// Core: sliding 3-byte windows over raw bytes.
 #[must_use]
 pub fn extract_trigrams_from_bytes(b: &[u8]) -> Vec<[u8; 3]> {
     if b.len() < 3 {
@@ -38,7 +31,6 @@ pub fn extract_unique_trigrams_from_bytes(b: &[u8]) -> HashSet<[u8; 3]> {
     out
 }
 
-/// Extract trigrams from raw bytes, falling back to lossy UTF-8 for invalid sequences.
 #[must_use]
 #[cfg(test)]
 pub fn extract_trigrams_utf8_lossy(bytes: &[u8]) -> Vec<[u8; 3]> {

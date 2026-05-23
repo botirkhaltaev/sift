@@ -10,7 +10,7 @@ pub mod search;
 use std::process::ExitCode;
 
 use clap::Parser;
-use sift_core::IndexBuilder;
+use sift_core::TrigramIndexBuilder;
 
 use cli::{Cli, Commands};
 use ignore::{MessageFlags, resolve_visibility_and_ignore};
@@ -26,8 +26,9 @@ pub fn main_entry() -> ExitCode {
     }
 
     if let Some(Commands::Build { path }) = &cli.command {
-        return match IndexBuilder::new(path)
-            .with_dir(&cli.paths.sift_dir)
+        let trigram_dir = cli.paths.sift_dir.join("trigram");
+        return match TrigramIndexBuilder::new(path)
+            .with_dir(&trigram_dir)
             .with_follow_links(cli.paths.follow)
             .build()
         {

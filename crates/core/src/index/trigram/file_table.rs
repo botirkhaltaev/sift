@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
-use crate::storage::format::FILES_MAGIC;
-use crate::storage::mmap::open_mmap;
+use crate::index::trigram::storage::format::FILES_MAGIC;
+use crate::index::trigram::storage::mmap::open_mmap;
 
 #[derive(Debug)]
 pub struct MappedFilesView {

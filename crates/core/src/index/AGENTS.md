@@ -2,22 +2,27 @@
 
 ## Responsibility
 
-Trigram index construction and in-memory index handle. Walks the corpus, extracts trigrams, writes persistence files, and provides zero-copy access for queries.
+Generic index trait (`SearchIndex`), shared types (`FileId`, `IndexId`, `FileCandidate`, `IndexMeta`), and concrete index implementations.
 
 ## Key Types
 
-- `Index` — memory-mapped handle over the three index files.
-- `IndexBuilder` — fluent builder for corpus indexing.
-- `MappedFilesView` — O(1) file ID → path lookup.
-- `IndexMeta` — serialized metadata (`sift.meta` JSON).
+- `SearchIndex` — trait for any indexed corpus (file access, candidate lookup, single-file detection).
+- `FileId` — type-safe file identifier within an index.
+- `IndexId` — type-safe index identifier in a multi-index search.
+- `FileCandidate` — resolved file with index_id, file_id, rel_path, abs_path.
+- `IndexMeta` — serialized metadata (`sift.meta` JSON) with root path and single-file corpus flag.
+- `TrigramIndex` — concrete trigram index implementation (in `trigram/`).
+- `TrigramIndexBuilder` — fluent builder for trigram corpus indexing.
 
 ## Conventions
 
-- File paths are always relative to the corpus root.
-- Trigram extraction is parallelized via Rayon when file count exceeds the threshold.
-- `build_index_tables` returns in-memory tables; persistence is done by the caller (`IndexBuilder`).
+- Traits are simple and composable; no trigram-specific details leak through.
+- `SearchIndex` exposes file/root access and candidate retrieval; each implementation decides how to narrow.
+- `grep/` only talks to `SearchIndex` trait, never to concrete index internals.
+- Future index kinds (symbol, suffix, etc.) are siblings of `trigram/`.
 
 ## Do NOT
 
-- Change the file-path sort order (breaks stable file IDs).
-- Add new persistence files without updating `Index::open` and the storage format docs.
+- Add trigram-specific logic outside `trigram/`.
+- Make traits depend on `grep/` or `query/` internals.
+- Change trait signatures without updating all implementations.
