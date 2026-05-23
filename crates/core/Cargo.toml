@@ -12,11 +12,6 @@ categories.workspace = true
 [lints]
 workspace = true
 
-[features]
-default = []
-# Enables the `sift-profile` binary (tempfile for temp corpora).
-profile = ["dep:tempfile", "dep:clap"]
-
 [dependencies]
 bitflags = "2"
 bstr = "1"
@@ -36,17 +31,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 termcolor = "1"
 thiserror = "2"
-tempfile = { version = "3", optional = true }
-clap = { version = "4", features = ["derive"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
 tempfile = "3"
-
-[[bin]]
-name = "sift-profile"
-path = "src/bin/sift_profile/main.rs"
-required-features = ["profile"]
 
 [[bench]]
 name = "search"

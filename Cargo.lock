@@ -809,7 +809,6 @@ version = "0.1.2"
 dependencies = [
  "bitflags",
  "bstr",
- "clap",
  "criterion",
  "grep-cli",
  "grep-matcher",
