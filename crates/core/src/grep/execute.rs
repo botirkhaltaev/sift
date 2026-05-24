@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -11,14 +11,22 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
-use crate::index::{FileId, IndexId, SearchIndex};
-use crate::query::{QueryFlags, QueryPlanner, QuerySpec};
+use crate::index::{Indexes, SearchCandidate};
+use crate::parallel::{ParallelWorkload, parallel_threshold};
+use crate::query::{QueryFlags, QuerySpec};
+
+#[cfg(test)]
+use crate::index::SearchIndex;
 
 use super::{
-    CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, LineStyleFlags, OutputEmission,
-    PathDisplay, SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle,
-    SearchSeparators, SearchStats, error::SearchError,
+    CandidateInfo, CandidateSet, ColorChoice, ColumnLimit, ColumnOverflow, CompiledSearch,
+    FilenameMode, LineStyleFlags, LinkTraversal, OutputEmission, PathDisplay, RecordTerminator,
+    SearchExecution, SearchFilter, SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle,
+    SearchSeparators, SearchStats, WalkOptions, ZeroCountMode, error::SearchError,
 };
+
+#[cfg(test)]
+use super::MatchEmissionMode;
 
 #[cfg(test)]
 use super::{HiddenMode, IgnoreConfig, Match, SearchFilterConfig, VisibilityConfig};
@@ -55,11 +63,10 @@ fn display_path_for_candidate(
 }
 
 #[inline]
-fn write_line_terminator(out: &mut Vec<u8>, null_data: bool) {
-    if null_data {
-        out.push(0);
-    } else {
-        out.push(b'\n');
+fn write_line_terminator(out: &mut Vec<u8>, terminator: RecordTerminator) {
+    match terminator {
+        RecordTerminator::Nul => out.push(0),
+        RecordTerminator::Newline => out.push(b'\n'),
     }
 }
 
@@ -72,17 +79,16 @@ enum ColumnAction {
     Preview,
 }
 
-fn check_max_columns(line: &[u8], max_columns: Option<u64>, preview: bool) -> ColumnAction {
-    let Some(limit) = max_columns else {
+fn check_max_columns(line: &[u8], columns: Option<ColumnLimit>) -> ColumnAction {
+    let Some(limit) = columns else {
         return ColumnAction::Normal;
     };
     let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
     let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
-    if trimmed.len() as u64 > limit {
-        if preview {
-            ColumnAction::Preview
-        } else {
-            ColumnAction::Omit
+    if trimmed.len() as u64 > limit.max {
+        match limit.overflow {
+            ColumnOverflow::Preview => ColumnAction::Preview,
+            ColumnOverflow::Omit => ColumnAction::Omit,
         }
     } else {
         ColumnAction::Normal
@@ -200,64 +206,34 @@ impl CompiledSearch {
     /// Returns an error if the matcher cannot be built or stdout cannot be written.
     pub fn run_indexes(
         &self,
-        indexes: &[&dyn SearchIndex],
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
+        indexes: &Indexes,
+        mut exec: SearchExecution<'_>,
     ) -> crate::Result<bool> {
-        self.run_indexes_impl(indexes, filter, output, separators, None)
-    }
-
-    /// Like [`Self::run_indexes`], but fills `stats` with search counters.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`Self::run_indexes`].
-    pub fn run_indexes_with_stats(
-        &self,
-        indexes: &[&dyn SearchIndex],
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-        stats: &mut SearchStats,
-    ) -> crate::Result<bool> {
-        self.run_indexes_impl(indexes, filter, output, separators, Some(stats))
-    }
-
-    fn run_indexes_impl(
-        &self,
-        indexes: &[&dyn SearchIndex],
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-        stats: Option<&mut SearchStats>,
-    ) -> crate::Result<bool> {
+        let filter = exec.filter;
         if self.opts.max_results == Some(0) {
             return Err(SearchError::InvalidMaxCount.into());
         }
         if indexes.is_empty() {
-            if let Some(s) = stats {
-                *s = SearchStats::default();
+            if let Some(s) = exec.stats.as_mut() {
+                **s = SearchStats::default();
             }
             return Ok(false);
         }
 
         let spec = self.build_query_spec();
-        let needs_all_files = matches!(
-            output.mode,
-            SearchMode::Count | SearchMode::FilesWithoutMatch
-        );
-        let use_indexes = !needs_all_files && QueryPlanner::should_use_indexes(&spec);
 
-        let threshold = parallel_candidate_threshold();
-        let candidates = if use_indexes {
-            Self::prepare_index_candidates(indexes, filter, threshold, &spec)
-        } else {
-            Self::prepare_all_files(indexes, filter, threshold, &spec)
+        let threshold = parallel_threshold(ParallelWorkload::CandidateScan);
+        let candidates = match exec.output.candidate_set() {
+            CandidateSet::AllIndexedFiles => {
+                Self::prepare_candidates(indexes.resolve_all_files(), filter, threshold)
+            }
+            CandidateSet::IndexedCandidates => {
+                Self::prepare_candidates(indexes.resolve_candidates(&spec), filter, threshold)
+            }
         };
         if candidates.is_empty() {
-            if let Some(s) = stats {
-                *s = SearchStats::default();
+            if let Some(s) = exec.stats.as_mut() {
+                **s = SearchStats::default();
             }
             return Ok(false);
         }
@@ -266,84 +242,28 @@ impl CompiledSearch {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
-        if matches!(output.format, SearchOutputFormat::Json) {
-            return match output.mode {
+        if matches!(exec.output.format, SearchOutputFormat::Json) {
+            return match exec.output.mode {
                 SearchMode::Standard | SearchMode::OnlyMatching => self
                     .run_json_standard_with_info(
                         &candidates,
                         matcher,
-                        output,
+                        exec.output,
                         parallel,
                         search_start,
-                        stats,
+                        exec.stats,
                     ),
                 _ => Err(SearchError::JsonOutputIncompatibleMode.into()),
             };
         }
 
-        let match_counter = AtomicUsize::new(0);
-        let counter_ref = stats.is_some().then_some(&match_counter);
-        let files_with_matches = AtomicUsize::new(0);
-        let files_with_ref = stats.is_some().then_some(&files_with_matches);
-        let summary_counter = AtomicUsize::new(0);
-        let summary_ref = stats.is_some().then_some(&summary_counter);
-        let bytes_printed = AtomicU64::new(0);
-        let printed_ref = stats.is_some().then_some(&bytes_printed);
-
-        let ok = match output.mode {
-            SearchMode::Standard | SearchMode::OnlyMatching => self.run_standard_with_info(
-                &candidates,
-                matcher,
-                output,
-                separators,
-                parallel,
-                StatsCollection {
-                    primary: counter_ref,
-                    files_with_matches: files_with_ref,
-                    bytes_printed: printed_ref,
-                },
-            )?,
-            SearchMode::Count
-            | SearchMode::CountMatches
-            | SearchMode::FilesWithMatches
-            | SearchMode::FilesWithoutMatch => self.run_summary_with_info(
-                &candidates,
-                matcher,
-                output,
-                parallel,
-                StatsCollection {
-                    primary: summary_ref,
-                    files_with_matches: files_with_ref,
-                    bytes_printed: printed_ref,
-                },
-            )?,
-        };
-
-        if let Some(s) = stats {
-            s.matches = match output.mode {
-                SearchMode::Standard | SearchMode::OnlyMatching => {
-                    match_counter.load(Ordering::Relaxed)
-                }
-                SearchMode::Count
-                | SearchMode::CountMatches
-                | SearchMode::FilesWithMatches
-                | SearchMode::FilesWithoutMatch => summary_counter.load(Ordering::Relaxed),
-            };
-            s.files_with_matches = files_with_matches.load(Ordering::Relaxed);
-            s.files_searched = candidates.len();
-            s.bytes_printed = bytes_printed.load(Ordering::Relaxed);
-            s.bytes_searched = sum_candidate_file_bytes(&candidates);
-            s.elapsed = search_start.elapsed();
-        }
-
-        Ok(ok)
+        self.run_candidate_search(&candidates, matcher, exec, parallel, search_start)
     }
 
-    fn prepare_all_files(
-        indexes: &[&dyn SearchIndex],
+    fn prepare_candidates(
+        candidates: Vec<SearchCandidate>,
         filter: &SearchFilter,
         threshold: usize,
-        _spec: &QuerySpec<'_>,
     ) -> Vec<CandidateInfo> {
         let need_rel = filter.needs_rel_str_for_matching();
         let max_fs = filter.max_filesize();
@@ -353,149 +273,51 @@ impl CompiledSearch {
             max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
         };
 
-        let all_ids: Vec<(IndexId, FileId)> = indexes
-            .iter()
-            .enumerate()
-            .flat_map(|(i, idx)| {
-                let index_id = IndexId::new(i);
-                (0..idx.file_count()).map(move |fid| (index_id, FileId::new(fid)))
-            })
-            .collect();
-
-        if all_ids.len() >= threshold {
-            all_ids
+        if candidates.len() >= threshold {
+            candidates
                 .into_par_iter()
-                .filter_map(|(index_id, file_id)| {
-                    let idx = *indexes.get(index_id.get())?;
-                    let rel_path = idx.file_path(file_id)?.to_path_buf();
-                    if exceeds_depth(&rel_path) {
+                .filter_map(|candidate| {
+                    if exceeds_depth(&candidate.rel_path) {
                         return None;
                     }
                     let rel_str = if need_rel {
-                        rel_path.to_string_lossy().replace('\\', "/")
+                        candidate.rel_path.to_string_lossy().replace('\\', "/")
                     } else {
                         String::new()
                     };
-                    let abs_path = idx.file_abs_path(file_id)?;
                     if max_fs.is_some_and(|limit| {
-                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                        std::fs::metadata(&candidate.abs_path).is_ok_and(|m| m.len() > limit)
                     }) {
                         return None;
                     }
                     let info = CandidateInfo {
-                        rel_path,
+                        rel_path: candidate.rel_path,
                         rel_str,
-                        abs_path,
+                        abs_path: candidate.abs_path,
                     };
                     filter.is_candidate_info(&info).then_some(info)
                 })
                 .collect()
         } else {
-            let mut out = Vec::with_capacity(all_ids.len());
-            out.extend(all_ids.into_iter().filter_map(|(index_id, file_id)| {
-                let idx = *indexes.get(index_id.get())?;
-                let rel_path = idx.file_path(file_id)?.to_path_buf();
-                if exceeds_depth(&rel_path) {
+            let mut out = Vec::with_capacity(candidates.len());
+            out.extend(candidates.into_iter().filter_map(|candidate| {
+                if exceeds_depth(&candidate.rel_path) {
                     return None;
                 }
                 let rel_str = if need_rel {
-                    rel_path.to_string_lossy().replace('\\', "/")
+                    candidate.rel_path.to_string_lossy().replace('\\', "/")
                 } else {
                     String::new()
                 };
-                let abs_path = idx.file_abs_path(file_id)?;
                 if max_fs.is_some_and(|limit| {
-                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                    std::fs::metadata(&candidate.abs_path).is_ok_and(|m| m.len() > limit)
                 }) {
                     return None;
                 }
                 let info = CandidateInfo {
-                    rel_path,
+                    rel_path: candidate.rel_path,
                     rel_str,
-                    abs_path,
-                };
-                filter.is_candidate_info(&info).then_some(info)
-            }));
-            out
-        }
-    }
-
-    fn prepare_index_candidates(
-        indexes: &[&dyn SearchIndex],
-        filter: &SearchFilter,
-        threshold: usize,
-        spec: &QuerySpec<'_>,
-    ) -> Vec<CandidateInfo> {
-        let need_rel = filter.needs_rel_str_for_matching();
-        let max_fs = filter.max_filesize();
-        let max_d = filter.max_depth();
-
-        let exceeds_depth = |rel: &Path| -> bool {
-            max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
-        };
-
-        let candidate_ids: Vec<(IndexId, FileId)> = indexes
-            .iter()
-            .enumerate()
-            .flat_map(|(i, idx)| {
-                let index_id = IndexId::new(i);
-                idx.candidates(spec)
-                    .into_iter()
-                    .map(move |fid| (index_id, fid))
-            })
-            .collect();
-
-        if candidate_ids.len() >= threshold {
-            candidate_ids
-                .into_par_iter()
-                .filter_map(|(index_id, file_id)| {
-                    let idx = *indexes.get(index_id.get())?;
-                    let rel_path = idx.file_path(file_id)?.to_path_buf();
-                    if exceeds_depth(&rel_path) {
-                        return None;
-                    }
-                    let rel_str = if need_rel {
-                        rel_path.to_string_lossy().replace('\\', "/")
-                    } else {
-                        String::new()
-                    };
-                    let abs_path = idx.file_abs_path(file_id)?;
-                    if max_fs.is_some_and(|limit| {
-                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
-                    }) {
-                        return None;
-                    }
-                    let info = CandidateInfo {
-                        rel_path,
-                        rel_str,
-                        abs_path,
-                    };
-                    filter.is_candidate_info(&info).then_some(info)
-                })
-                .collect()
-        } else {
-            let mut out = Vec::with_capacity(candidate_ids.len());
-            out.extend(candidate_ids.into_iter().filter_map(|(index_id, file_id)| {
-                let idx = *indexes.get(index_id.get())?;
-                let rel_path = idx.file_path(file_id)?.to_path_buf();
-                if exceeds_depth(&rel_path) {
-                    return None;
-                }
-                let rel_str = if need_rel {
-                    rel_path.to_string_lossy().replace('\\', "/")
-                } else {
-                    String::new()
-                };
-                let abs_path = idx.file_abs_path(file_id)?;
-                if max_fs.is_some_and(|limit| {
-                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
-                }) {
-                    return None;
-                }
-                let info = CandidateInfo {
-                    rel_path,
-                    rel_str,
-                    abs_path,
+                    abs_path: candidate.abs_path,
                 };
                 filter.is_candidate_info(&info).then_some(info)
             }));
@@ -511,64 +333,24 @@ impl CompiledSearch {
     /// # Errors
     ///
     /// Returns an error if the matcher cannot be built or stdout cannot be written.
-    pub fn run_walk(
-        &self,
-        filter_root: &Path,
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-    ) -> crate::Result<bool> {
-        self.run_walk_impl(filter_root, filter, output, separators, None)
-    }
-
-    /// Like [`Self::run_walk`], but fills `stats` with search counters.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`Self::run_walk`].
-    pub fn run_walk_with_stats(
-        &self,
-        filter_root: &Path,
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-        stats: &mut SearchStats,
-    ) -> crate::Result<bool> {
-        self.run_walk_impl(filter_root, filter, output, separators, Some(stats))
-    }
-
-    fn run_walk_impl(
-        &self,
-        filter_root: &Path,
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-        stats: Option<&mut SearchStats>,
-    ) -> crate::Result<bool> {
+    pub fn run_walk(&self, mut exec: SearchExecution<'_>) -> crate::Result<bool> {
         if self.opts.max_results == Some(0) {
             return Err(SearchError::InvalidMaxCount.into());
         }
 
-        let abs_paths = collect_abs_paths_for_scopes(
-            filter_root,
-            filter.scopes(),
-            filter.follow_links(),
-            filter.one_file_system(),
-            filter.max_depth(),
-            filter.max_filesize(),
-        )?;
+        let abs_paths = collect_abs_paths_for_scopes(exec.filter)?;
         if abs_paths.is_empty() {
-            if let Some(s) = stats {
-                *s = SearchStats::default();
+            if let Some(s) = exec.stats.as_mut() {
+                **s = SearchStats::default();
             }
             return Ok(false);
         }
 
-        let threshold = parallel_candidate_threshold();
-        let candidates = prepare_walk_candidates(filter_root, &abs_paths, filter, threshold);
+        let threshold = parallel_threshold(ParallelWorkload::CandidateScan);
+        let candidates = prepare_walk_candidates(&abs_paths, exec.filter, threshold);
         if candidates.is_empty() {
-            if let Some(s) = stats {
-                *s = SearchStats::default();
+            if let Some(s) = exec.stats.as_mut() {
+                **s = SearchStats::default();
             }
             return Ok(false);
         }
@@ -577,21 +359,38 @@ impl CompiledSearch {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let parallel = candidates.len() >= threshold;
 
-        if matches!(output.format, SearchOutputFormat::Json) {
-            return match output.mode {
+        if matches!(exec.output.format, SearchOutputFormat::Json) {
+            return match exec.output.mode {
                 SearchMode::Standard | SearchMode::OnlyMatching => self
                     .run_json_standard_with_info(
                         &candidates,
                         matcher,
-                        output,
+                        exec.output,
                         parallel,
                         search_start,
-                        stats,
+                        exec.stats,
                     ),
                 _ => Err(SearchError::JsonOutputIncompatibleMode.into()),
             };
         }
 
+        self.run_candidate_search(&candidates, matcher, exec, parallel, search_start)
+    }
+
+    fn run_candidate_search(
+        &self,
+        candidates: &[CandidateInfo],
+        matcher: &RegexMatcher,
+        exec: SearchExecution<'_>,
+        parallel: bool,
+        search_start: Instant,
+    ) -> crate::Result<bool> {
+        let SearchExecution {
+            output,
+            separators,
+            stats,
+            ..
+        } = exec;
         let match_counter = AtomicUsize::new(0);
         let counter_ref = stats.is_some().then_some(&match_counter);
         let files_with_matches = AtomicUsize::new(0);
@@ -603,7 +402,7 @@ impl CompiledSearch {
 
         let ok = match output.mode {
             SearchMode::Standard | SearchMode::OnlyMatching => self.run_standard_with_info(
-                &candidates,
+                candidates,
                 matcher,
                 output,
                 separators,
@@ -618,7 +417,7 @@ impl CompiledSearch {
             | SearchMode::CountMatches
             | SearchMode::FilesWithMatches
             | SearchMode::FilesWithoutMatch => self.run_summary_with_info(
-                &candidates,
+                candidates,
                 matcher,
                 output,
                 parallel,
@@ -643,7 +442,7 @@ impl CompiledSearch {
             s.files_with_matches = files_with_matches.load(Ordering::Relaxed);
             s.files_searched = candidates.len();
             s.bytes_printed = bytes_printed.load(Ordering::Relaxed);
-            s.bytes_searched = sum_candidate_file_bytes(&candidates);
+            s.bytes_searched = sum_candidate_file_bytes(candidates);
             s.elapsed = search_start.elapsed();
         }
 
@@ -865,7 +664,7 @@ impl CompiledSearch {
                         if should_color(output.records) {
                             out.extend_from_slice(ANSI_RESET);
                         }
-                        write_line_terminator(&mut out, output.records.null_data);
+                        write_line_terminator(&mut out, output.records.terminator);
                     }
                     out.extend(bytes);
                     if output.emission == OutputEmission::Quiet && any_match {
@@ -949,8 +748,8 @@ impl CompiledSearch {
         };
         let filter = SearchFilter::new(&config, index.root())?;
         let spec = self.build_query_spec();
-        let candidate_ids = index.candidates(&spec);
-        self.collect_index_candidates(index, &filter, &candidate_ids)
+        let candidates = index.candidates(&spec);
+        self.collect_index_candidate_paths(&filter, &candidates)
     }
 
     #[cfg(test)]
@@ -981,28 +780,28 @@ impl CompiledSearch {
     }
 
     #[cfg(test)]
-    fn collect_index_candidates(
+    fn collect_index_candidate_paths(
         &self,
-        index: &dyn SearchIndex,
         filter: &SearchFilter,
-        candidate_ids: &[FileId],
+        candidates: &[SearchCandidate],
     ) -> crate::Result<Vec<Match>> {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
         self.with_cached_searcher(true, None, |searcher| {
-            for &id in candidate_ids {
-                let Some(candidate) = index.file_path(id) else {
-                    continue;
-                };
-                if !filter.is_candidate(candidate) {
+            for candidate in candidates {
+                if !filter.is_candidate(&candidate.rel_path) {
                     continue;
                 }
                 let mut sink = CollectSink::new(
-                    index.root().join(candidate),
-                    self.opts.only_matching(),
+                    candidate.abs_path.clone(),
+                    if self.opts.only_matching() {
+                        MatchEmissionMode::OnlyMatching
+                    } else {
+                        MatchEmissionMode::Lines
+                    },
                     matcher.clone(),
                 );
-                let _ = searcher.search_path(matcher, index.root().join(candidate), &mut sink);
+                let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
                 out.extend(sink.into_matches());
             }
         });
@@ -1017,7 +816,11 @@ impl CompiledSearch {
             for candidate in candidates {
                 let mut sink = CollectSink::new(
                     candidate.clone(),
-                    self.opts.only_matching(),
+                    if self.opts.only_matching() {
+                        MatchEmissionMode::OnlyMatching
+                    } else {
+                        MatchEmissionMode::Lines
+                    },
                     matcher.clone(),
                 );
                 let _ = searcher.search_path(matcher, candidate, &mut sink);
@@ -1178,7 +981,7 @@ impl<'a> StandardWorker<'a> {
                     if should_color(self.output.records) {
                         out.extend_from_slice(ANSI_RESET);
                     }
-                    write_line_terminator(&mut out, self.output.records.null_data);
+                    write_line_terminator(&mut out, self.output.records.terminator);
                     out.extend(std::mem::take(&mut self.bytes));
                     out
                 } else {
@@ -1307,11 +1110,11 @@ impl Sink for StandardSink<'_> {
             return Ok(true);
         }
         let ctx_bytes = ctx.bytes();
-        let max_cols = self.output.lines.max_columns;
-        let preview = self.output.lines.max_columns_preview;
-        match check_max_columns(ctx_bytes, max_cols, preview) {
+        let columns = self.output.lines.columns;
+        match check_max_columns(ctx_bytes, columns) {
             ColumnAction::Omit => return Ok(true),
             ColumnAction::Preview => {
+                let limit = columns.map_or(0, |c| c.max);
                 write_standard_prefix(
                     self.bytes,
                     self.output,
@@ -1329,7 +1132,7 @@ impl Sink for StandardSink<'_> {
                         None
                     },
                 )?;
-                let truncated = truncate_line(ctx_bytes, max_cols.unwrap_or(0));
+                let truncated = truncate_line(ctx_bytes, limit);
                 self.bytes.write_all(&truncated)?;
                 return Ok(true);
             }
@@ -1431,11 +1234,11 @@ impl StandardSink<'_> {
         line_bytes: &[u8],
         mat: &SinkMatch<'_>,
     ) -> Result<bool, io::Error> {
-        let max_cols = self.output.lines.max_columns;
-        let preview = self.output.lines.max_columns_preview;
-        match check_max_columns(line_bytes, max_cols, preview) {
+        let columns = self.output.lines.columns;
+        match check_max_columns(line_bytes, columns) {
             ColumnAction::Omit => return Ok(true),
             ColumnAction::Preview => {
+                let limit = columns.map_or(0, |c| c.max);
                 write_standard_prefix(
                     self.bytes,
                     self.output,
@@ -1453,7 +1256,7 @@ impl StandardSink<'_> {
                         None
                     },
                 )?;
-                let truncated = truncate_line(line_bytes, max_cols.unwrap_or(0));
+                let truncated = truncate_line(line_bytes, limit);
                 self.bytes.write_all(&truncated)?;
                 return Ok(true);
             }
@@ -1809,7 +1612,7 @@ fn write_summary_record(
     }
     match output.mode {
         SearchMode::Count | SearchMode::CountMatches => {
-            if result.count == 0 && !output.include_zero {
+            if result.count == 0 && matches!(output.include_zero, ZeroCountMode::Omit) {
                 return Ok(());
             }
             let print_filename = output.lines.filename_mode != FilenameMode::Never;
@@ -1836,7 +1639,7 @@ fn write_summary_record(
                 if should_color(output.records) {
                     out.extend_from_slice(ANSI_RESET);
                 }
-                write_line_terminator(out, output.records.null_data);
+                write_line_terminator(out, output.records.terminator);
             }
             Ok(())
         }
@@ -1851,7 +1654,7 @@ fn write_summary_record(
             if should_color(output.records) {
                 out.extend_from_slice(ANSI_RESET);
             }
-            write_line_terminator(out, output.records.null_data);
+            write_line_terminator(out, output.records.terminator);
             Ok(())
         }
         SearchMode::Standard | SearchMode::OnlyMatching => unreachable!(),
@@ -1933,18 +1736,12 @@ const fn mode_is_success(mode: SearchMode, result: FileSummary) -> bool {
     }
 }
 
-fn walk_directory_files(
-    root: &Path,
-    follow_links: bool,
-    one_file_system: bool,
-    max_depth: Option<usize>,
-    max_filesize: Option<u64>,
-) -> crate::Result<Vec<PathBuf>> {
+fn walk_directory_files(root: &Path, filter: &SearchFilter) -> crate::Result<Vec<PathBuf>> {
     let root = root.canonicalize()?;
     let mut builder = ignore::WalkBuilder::new(&root);
     builder
-        .follow_links(follow_links)
-        .same_file_system(one_file_system)
+        .follow_links(filter.follow_links())
+        .same_file_system(filter.one_file_system())
         .hidden(false)
         .parents(false)
         .ignore(false)
@@ -1952,7 +1749,7 @@ fn walk_directory_files(
         .git_ignore(false)
         .git_exclude(false)
         .require_git(false);
-    if let Some(d) = max_depth {
+    if let Some(d) = filter.max_depth() {
         // User-facing semantics: 0 = root files only, 1 = root + one subdir level.
         // WalkBuilder counts depth from the root dir entry (depth 0), so files at
         // the root are depth 1. Shift by +1 to match ripgrep's convention.
@@ -1964,7 +1761,7 @@ fn walk_directory_files(
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
-        if let Some(limit) = max_filesize {
+        if let Some(limit) = filter.max_filesize() {
             let skip = entry.metadata().is_ok_and(|m| m.len() > limit);
             if skip {
                 continue;
@@ -1975,18 +1772,11 @@ fn walk_directory_files(
     Ok(out)
 }
 
-/// Collect absolute file paths for each scope under `filter_root` (same walk policy as index build).
-fn collect_abs_paths_for_scopes(
-    filter_root: &Path,
-    scopes: &[PathBuf],
-    follow_links: bool,
-    one_file_system: bool,
-    max_depth: Option<usize>,
-    max_filesize: Option<u64>,
-) -> crate::Result<Vec<PathBuf>> {
-    let filter_root = filter_root.canonicalize()?;
+/// Collect absolute file paths for each scope under the filter root (same walk policy as index build).
+fn collect_abs_paths_for_scopes(filter: &SearchFilter) -> crate::Result<Vec<PathBuf>> {
+    let filter_root = filter.root().canonicalize()?;
     let mut out = Vec::new();
-    for scope in scopes {
+    for scope in filter.scopes() {
         let path = if scope.as_os_str().is_empty() {
             filter_root.clone()
         } else {
@@ -1999,13 +1789,7 @@ fn collect_abs_paths_for_scopes(
         if path.is_file() {
             out.push(path);
         } else if path.is_dir() {
-            out.extend(walk_directory_files(
-                &path,
-                follow_links,
-                one_file_system,
-                max_depth,
-                max_filesize,
-            )?);
+            out.extend(walk_directory_files(&path, filter)?);
         }
     }
     out.sort();
@@ -2014,14 +1798,14 @@ fn collect_abs_paths_for_scopes(
 }
 
 fn prepare_walk_candidates(
-    filter_root: &Path,
     abs_paths: &[PathBuf],
     filter: &SearchFilter,
     threshold: usize,
 ) -> Vec<CandidateInfo> {
-    let filter_root = filter_root
+    let filter_root = filter
+        .root()
         .canonicalize()
-        .unwrap_or_else(|_| filter_root.to_path_buf());
+        .unwrap_or_else(|_| filter.root().to_path_buf());
     let cap = abs_paths.len();
     let need_rel = filter.needs_rel_str_for_matching();
 
@@ -2074,68 +1858,52 @@ fn prepare_walk_candidates(
 /// # Errors
 ///
 /// Returns an error when canonicalizing `root` or while walking the tree.
-pub fn walk_file_paths(root: &Path, follow_links: bool) -> crate::Result<HashSet<PathBuf>> {
+pub fn discover_files(root: &Path, options: WalkOptions) -> crate::Result<HashSet<PathBuf>> {
     let root = root.canonicalize()?;
     let mut set = HashSet::new();
-    let walker = ignore::WalkBuilder::new(&root)
-        .follow_links(follow_links)
-        .build();
+    let follow = matches!(options.links, LinkTraversal::Follow);
+    let mut builder = ignore::WalkBuilder::new(&root);
+    builder.follow_links(follow);
+    if let Some(depth) = options.max_depth {
+        // User-facing semantics: 0 = root files only, 1 = root + one subdir level.
+        // WalkBuilder counts depth from the root dir entry (depth 0), so files at
+        // the root are depth 1. Shift by +1 to match ripgrep's convention.
+        builder.max_depth(Some(depth + 1));
+    }
+    builder.same_file_system(options.one_file_system);
+    let walker = builder.build();
     for entry in walker {
         let entry = entry.map_err(crate::Error::Ignore)?;
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
         let path = entry.path();
+        if options
+            .max_filesize
+            .is_some_and(|limit| std::fs::metadata(path).is_ok_and(|m| m.len() > limit))
+        {
+            continue;
+        }
         let display = path.strip_prefix(&root).unwrap_or(path).to_path_buf();
         set.insert(display);
     }
     Ok(set)
 }
 
-static PARALLEL_CANDIDATE_THRESHOLD: OnceLock<usize> = OnceLock::new();
-
-/// Minimum candidate file count before `run_index` uses Rayon for filtering and search.
-///
-/// Value is `8 * effective_threads`, where `effective_threads` is
-/// `min(RAYON_NUM_THREADS, available_parallelism)` when `RAYON_NUM_THREADS` is set and valid,
-/// else `available_parallelism`. If there is only one effective thread, returns [`usize::MAX`]
-/// so the sequential path is always used.
-///
-/// The result is computed **once per process** on first call (including `RAYON_NUM_THREADS` read).
-/// Changing the env var after that has no effect until restart.
-#[must_use]
-pub fn parallel_candidate_threshold() -> usize {
-    *PARALLEL_CANDIDATE_THRESHOLD.get_or_init(|| {
-        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-        let rayon_threads = std::env::var("RAYON_NUM_THREADS")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok());
-        let effective = rayon_threads
-            .filter(|&n| n > 0)
-            .map_or(cpus, |rt| rt.min(cpus))
-            .max(1);
-        if effective <= 1 {
-            usize::MAX
-        } else {
-            effective.saturating_mul(8)
-        }
-    })
-}
-
 #[cfg(test)]
 struct CollectSink {
     path: PathBuf,
-    only_matching: bool,
+    emission: MatchEmissionMode,
     matcher: RegexMatcher,
     matches: Vec<Match>,
 }
 
 #[cfg(test)]
 impl CollectSink {
-    fn new(path: PathBuf, only_matching: bool, matcher: RegexMatcher) -> Self {
+    fn new(path: PathBuf, emission: MatchEmissionMode, matcher: RegexMatcher) -> Self {
         Self {
             path,
-            only_matching,
+            emission,
             matcher,
             matches: Vec::new(),
         }
@@ -2157,7 +1925,7 @@ impl grep_searcher::Sink for CollectSink {
     ) -> Result<bool, Self::Error> {
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
-        if self.only_matching {
+        if matches!(self.emission, MatchEmissionMode::OnlyMatching) {
             let _ = self
                 .matcher
                 .find_iter(line_bytes, |m: grep_matcher::Match| {
@@ -2239,38 +2007,56 @@ mod execute_helper_tests {
     #[test]
     fn write_line_terminator_writes_newline() {
         let mut out = Vec::new();
-        write_line_terminator(&mut out, false);
+        write_line_terminator(&mut out, RecordTerminator::Newline);
         assert_eq!(out, b"\n");
     }
 
     #[test]
     fn write_line_terminator_writes_nul() {
         let mut out = Vec::new();
-        write_line_terminator(&mut out, true);
+        write_line_terminator(&mut out, RecordTerminator::Nul);
         assert_eq!(out, b"\0");
     }
 
     #[test]
     fn check_max_columns_returns_normal_when_within_limit() {
-        let action = check_max_columns(b"short line\n", Some(100), false);
+        let action = check_max_columns(
+            b"short line\n",
+            Some(ColumnLimit {
+                max: 100,
+                overflow: ColumnOverflow::Omit,
+            }),
+        );
         assert!(matches!(action, ColumnAction::Normal));
     }
 
     #[test]
     fn check_max_columns_returns_omit_when_over_limit_no_preview() {
-        let action = check_max_columns(b"this is a very long line\n", Some(5), false);
+        let action = check_max_columns(
+            b"this is a very long line\n",
+            Some(ColumnLimit {
+                max: 5,
+                overflow: ColumnOverflow::Omit,
+            }),
+        );
         assert!(matches!(action, ColumnAction::Omit));
     }
 
     #[test]
     fn check_max_columns_returns_preview_when_over_limit_with_preview() {
-        let action = check_max_columns(b"this is a very long line\n", Some(5), true);
+        let action = check_max_columns(
+            b"this is a very long line\n",
+            Some(ColumnLimit {
+                max: 5,
+                overflow: ColumnOverflow::Preview,
+            }),
+        );
         assert!(matches!(action, ColumnAction::Preview));
     }
 
     #[test]
     fn check_max_columns_returns_normal_when_no_limit_set() {
-        let action = check_max_columns(b"any length\n", None, false);
+        let action = check_max_columns(b"any length\n", None);
         assert!(matches!(action, ColumnAction::Normal));
     }
 

@@ -94,6 +94,7 @@ pub struct CandidateInfo {
 
 #[derive(Debug)]
 pub struct SearchFilter {
+    root: PathBuf,
     scopes: Vec<PathBuf>,
     exclude_paths: Vec<PathBuf>,
     hidden: HiddenMode,
@@ -113,6 +114,12 @@ impl SearchFilter {
             let bytes = component.as_os_str().as_encoded_bytes();
             bytes.starts_with(b".") && bytes.len() > 1
         })
+    }
+
+    /// The root directory for filtering (scopes and ignore rules are relative to this).
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// Path scopes (relative to the search root) limiting which files are considered.
@@ -192,6 +199,7 @@ impl SearchFilter {
         )?;
 
         Ok(Self {
+            root: index_root.to_path_buf(),
             scopes,
             exclude_paths: config.exclude_paths.clone(),
             hidden: config.visibility.hidden,

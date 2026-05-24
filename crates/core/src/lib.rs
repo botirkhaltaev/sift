@@ -4,23 +4,28 @@
 
 mod grep;
 mod index;
-mod query;
+pub(crate) mod parallel;
+pub(crate) mod query;
 
 pub use grep::{
-    BinaryMode, CandidateInfo, CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, Match, OutputEmission, PathDisplay,
-    PatternCompiler, SearchError, SearchFilter, SearchFilterConfig, SearchLineStyle,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
-    SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig, compile_pattern,
-    compile_search_pattern, pattern_branch, walk_file_paths,
+    BinaryMode, CandidateInfo, CandidateSet, CaseMode, ColorChoice, ColumnLimit, ColumnOverflow,
+    CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
+    PathDisplay, PatternCompiler, RecordTerminator, SearchError, SearchExecution, SearchFilter,
+    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
+    SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
+    VisibilityConfig, WalkOptions, ZeroCountMode, discover_files,
 };
 
 pub use ignore::{Walk, WalkBuilder};
 
 pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
-pub use index::{FileId, IndexError, IndexId, IndexMeta, Indexes, QueryPlanOutput, SearchIndex};
+pub use index::{
+    CorpusKind, FileId, IndexError, IndexId, IndexMeta, Indexes, PlanMode, QueryPlanOutput,
+    SearchCandidate, SearchIndex,
+};
 
-pub use query::{QueryFlags, QueryPlanner, QuerySpec};
+pub use query::{QueryFlags, QuerySpec};
 
 use thiserror::Error;
 
@@ -32,10 +37,6 @@ pub const LEXICON_BIN: &str = "lexicon.bin";
 pub const POSTINGS_BIN: &str = "postings.bin";
 
 /// Top-level umbrella error for all core operations.
-///
-/// Concrete domain errors are defined in their respective modules
-/// and aggregated here. Prefer handling module-specific errors when
-/// calling module APIs directly.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -86,7 +87,10 @@ mod tests {
             .expect("write test file");
 
         let index = build_index_in_tmp(&tmp, &corpus);
-        assert!(index.file_count() > 0);
+        assert!(
+            index.file_path(FileId::new(0)).is_some(),
+            "should have indexed files"
+        );
 
         let pat = vec![r"let\s+x".to_string()];
         let q = CompiledSearch::new(&pat, SearchOptions::default()).expect("compile search");
@@ -130,7 +134,12 @@ mod tests {
         }
 
         let index = build_index_in_tmp(&tmp, &corpus);
-        assert_eq!(index.file_count(), n_files);
+        for i in 0..n_files {
+            assert!(
+                index.file_path(FileId::new(i)).is_some(),
+                "file {i} should be indexed"
+            );
+        }
 
         let pat = vec!["needle".to_string()];
         let q = CompiledSearch::new(&pat, SearchOptions::default()).expect("compile search");

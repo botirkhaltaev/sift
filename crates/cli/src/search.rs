@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
 use sift_core::{
-    CompiledSearch, Indexes, SearchFilter, SearchIndex, SearchLineStyle, SearchMode,
-    SearchRecordStyle, SearchStats,
+    ColumnLimit, ColumnOverflow, CompiledSearch, CorpusKind, Indexes, RecordTerminator,
+    SearchFilter, SearchLineStyle, SearchMode, SearchRecordStyle, SearchStats,
 };
 
 use crate::cli::Cli;
 use crate::filter::{SearchFilterCtx, build_search_filter_config, resolve_type_defs};
 use crate::ignore::resolve_visibility_and_ignore;
 use crate::output::{
-    SearchOutputCtx, build_line_style_flags, effective_filename_mode,
+    FilenameContext, SearchOutputCtx, build_line_style_flags, effective_filename_mode,
     resolve_effective_line_number, resolve_glob_case_insensitive_from_args, resolve_json_from_args,
     resolve_line_number_from_args, resolve_null_from_args, search_output, write_search_stats,
 };
@@ -65,18 +65,64 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
         (indexes.root().to_path_buf(), prefixes, excludes)
     };
 
-    let filter_config = build_search_filter_config(cli, filter_ctx, scopes, exclude_paths)?;
+    let filter_config = build_search_filter_config(cli, filter_ctx, scopes.clone(), exclude_paths)?;
     let search_filter = SearchFilter::new(&filter_config, &filter_root)?;
 
-    let paths = sift_core::walk_file_paths(&filter_root, search_filter.follow_links())?;
-    let mut sorted_paths: Vec<_> = paths
-        .into_iter()
-        .filter(|p| search_filter.is_candidate(p))
-        .collect();
-    sorted_paths.sort();
+    let walk_opts = sift_core::WalkOptions {
+        links: if search_filter.follow_links() {
+            sift_core::LinkTraversal::Follow
+        } else {
+            sift_core::LinkTraversal::DoNotFollow
+        },
+        max_depth: search_filter.max_depth(),
+        max_filesize: search_filter.max_filesize(),
+        one_file_system: search_filter.one_file_system(),
+    };
+
+    let effective_scopes = if scopes.is_empty() {
+        vec![PathBuf::from("")]
+    } else {
+        scopes
+    };
+
+    let mut all_paths: Vec<_> = Vec::new();
+    for scope in &effective_scopes {
+        let scope_path = if scope.as_os_str().is_empty() {
+            filter_root.clone()
+        } else {
+            filter_root.join(scope)
+        };
+        if !scope_path.exists() {
+            continue;
+        }
+        let scope_path = scope_path.canonicalize().unwrap_or(scope_path);
+        if scope_path.is_file() {
+            let rel = scope_path
+                .strip_prefix(&filter_root)
+                .unwrap_or(&scope_path)
+                .to_path_buf();
+            if search_filter.is_candidate(&rel) {
+                all_paths.push(rel);
+            }
+        } else if scope_path.is_dir() {
+            let discovered = sift_core::discover_files(&scope_path, walk_opts)?;
+            for rel_in_scope in discovered {
+                let full_rel = if scope.as_os_str().is_empty() {
+                    rel_in_scope
+                } else {
+                    scope.join(rel_in_scope)
+                };
+                if search_filter.is_candidate(&full_rel) {
+                    all_paths.push(full_rel);
+                }
+            }
+        }
+    }
+    all_paths.sort();
+    all_paths.dedup();
     let sep = if null_data { '\0' } else { '\n' };
     let mut any = false;
-    for p in &sorted_paths {
+    for p in &all_paths {
         any = true;
         let display = filter_root.join(p);
         print!("{}{sep}", display.display());
@@ -88,7 +134,6 @@ struct SearchCtx {
     filter_root: PathBuf,
     prefixes: Vec<PathBuf>,
     exclude_paths: Vec<PathBuf>,
-    corpus_is_single_file: bool,
 }
 
 impl Cli {
@@ -159,7 +204,6 @@ impl Cli {
                 filter_root: root,
                 prefixes,
                 exclude_paths,
-                corpus_is_single_file: false,
             }
         } else {
             let prefixes = corpus_path_prefixes(indexes.root(), &cwd, &self.search_scope.paths)?;
@@ -168,24 +212,30 @@ impl Cli {
                 filter_root: indexes.root().to_path_buf(),
                 prefixes,
                 exclude_paths,
-                corpus_is_single_file: indexes.first().is_some_and(SearchIndex::is_single_file),
             }
         };
 
-        let output = self.build_search_output(&out, &ctx);
+        let filename_ctx = if out.lines.is_path_mode {
+            FilenameContext::PathMode
+        } else {
+            match indexes.corpus_kind() {
+                Some(CorpusKind::SingleFile) => FilenameContext::SingleFileCorpus,
+                _ => FilenameContext::DirectoryCorpus,
+            }
+        };
+        let output = self.build_search_output(&out, filename_ctx);
 
         if indexes.is_empty() {
             self.execute_walk(&query, &ctx, &output, &out, filter)
         } else {
-            let index_refs = indexes.refs();
-            self.execute_indexed(&query, &index_refs, &ctx, &output, &out, filter)
+            self.execute_indexed(&query, &indexes, &ctx, &output, &out, filter)
         }
     }
 
     fn build_search_output(
         &self,
         out: &SearchOutputCtx,
-        ctx: &SearchCtx,
+        filename_ctx: FilenameContext,
     ) -> sift_core::SearchOutput {
         let path_display = effective_path_display(&self.search_scope.paths);
         let line_number = resolve_effective_line_number(
@@ -199,18 +249,24 @@ impl Cli {
             out.mode.effective_mode,
             out.mode.quiet,
             SearchLineStyle {
-                filename_mode: effective_filename_mode(
-                    out.lines.with_filename,
-                    out.lines.is_path_mode,
-                    ctx.corpus_is_single_file,
-                ),
+                filename_mode: effective_filename_mode(out.lines.with_filename, filename_ctx),
                 flags: line_flags,
                 path_display,
-                max_columns: out.max_columns,
-                max_columns_preview: out.max_columns_preview,
+                columns: out.max_columns.map(|max| ColumnLimit {
+                    max,
+                    overflow: if out.max_columns_preview {
+                        ColumnOverflow::Preview
+                    } else {
+                        ColumnOverflow::Omit
+                    },
+                }),
             },
             SearchRecordStyle {
-                null_data: out.format.null_data,
+                terminator: if out.format.null_data {
+                    RecordTerminator::Nul
+                } else {
+                    RecordTerminator::Newline
+                },
                 color: out.format.color,
                 path_separator: out.path_separator,
             },
@@ -221,7 +277,7 @@ impl Cli {
     fn execute_indexed(
         &self,
         query: &CompiledSearch,
-        indexes: &[&dyn SearchIndex],
+        indexes: &Indexes,
         ctx: &SearchCtx,
         output: &sift_core::SearchOutput,
         out: &SearchOutputCtx,
@@ -230,21 +286,20 @@ impl Cli {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
         let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        if out.print_stats {
-            let mut stats = SearchStats::default();
-            let ok = query.run_indexes_with_stats(
-                indexes,
-                &search_filter,
-                *output,
-                &out.separators,
-                &mut stats,
-            )?;
-            write_search_stats(&stats);
-            return Ok(ok);
+        let mut stats = out.print_stats.then(SearchStats::default);
+        let ok = query.run_indexes(
+            indexes,
+            sift_core::SearchExecution {
+                filter: &search_filter,
+                output: *output,
+                separators: &out.separators,
+                stats: stats.as_mut(),
+            },
+        )?;
+        if let Some(s) = &stats {
+            write_search_stats(s);
         }
-        query
-            .run_indexes(indexes, &search_filter, *output, &out.separators)
-            .map_err(Into::into)
+        Ok(ok)
     }
 
     fn execute_walk(
@@ -258,20 +313,16 @@ impl Cli {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
         let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        if out.print_stats {
-            let mut stats = SearchStats::default();
-            let ok = query.run_walk_with_stats(
-                &ctx.filter_root,
-                &search_filter,
-                *output,
-                &out.separators,
-                &mut stats,
-            )?;
-            write_search_stats(&stats);
-            return Ok(ok);
+        let mut stats = out.print_stats.then(SearchStats::default);
+        let ok = query.run_walk(sift_core::SearchExecution {
+            filter: &search_filter,
+            output: *output,
+            separators: &out.separators,
+            stats: stats.as_mut(),
+        })?;
+        if let Some(s) = &stats {
+            write_search_stats(s);
         }
-        query
-            .run_walk(&ctx.filter_root, &search_filter, *output, &out.separators)
-            .map_err(Into::into)
+        Ok(ok)
     }
 }

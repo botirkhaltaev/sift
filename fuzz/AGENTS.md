@@ -7,7 +7,7 @@ Standalone package excluded from the root workspace (`Cargo.toml` `exclude = ["f
 ## Targets
 
 - **`search_usage`** — shared tiny index per process (`OnceLock`); fuzzes pattern strings + `SearchOptions` against `CompiledSearch` + `search_index`.
-- **`compile_only`** — fuzzes `compile_search_pattern` only (no filesystem).
+- **`compile_only`** — fuzzes `PatternCompiler` only (no filesystem).
 
 ## Scope
 

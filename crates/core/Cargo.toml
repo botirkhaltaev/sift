@@ -37,5 +37,13 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 tempfile = "3"
 
 [[bench]]
-name = "search"
+name = "query"
+harness = false
+
+[[bench]]
+name = "index"
+harness = false
+
+[[bench]]
+name = "grep"
 harness = false

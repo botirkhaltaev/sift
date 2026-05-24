@@ -7,10 +7,13 @@ use ignore::WalkBuilder;
 use memmap2::Mmap;
 use rayon::prelude::*;
 
-use crate::grep::parallel_candidate_threshold;
-use crate::index::trigram::storage::lexicon::LexiconEntry;
-use crate::index::trigram::storage::mmap::open_mmap;
-use crate::query::trigram::extract_unique_trigrams_utf8_lossy;
+use super::storage::lexicon::{LexiconEntry, MappedLexicon};
+use super::storage::mmap::open_mmap;
+use super::storage::postings::MappedPostings;
+use super::types::Trigram;
+
+use crate::index::CorpusKind;
+use crate::parallel::{ParallelWorkload, parallel_threshold};
 
 pub struct IndexTables {
     pub files: Vec<PathBuf>,
@@ -18,25 +21,18 @@ pub struct IndexTables {
     pub postings: Vec<u8>,
 }
 
-fn collect_paths(
-    root: &Path,
-    follow_links: bool,
-    exclude_paths: &[PathBuf],
-) -> crate::Result<(bool, Vec<PathBuf>)> {
-    if root.is_file() {
-        let Some(name) = root.file_name() else {
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "single-file corpus must have a file name",
-            )));
-        };
-        let entry = PathBuf::from(name);
-        return Ok((true, vec![entry]));
-    }
+/// Configuration for index building: walk policy and path filters.
+pub struct IndexBuildConfig<'a> {
+    pub root: &'a Path,
+    pub follow_links: bool,
+    pub exclude_paths: &'a [PathBuf],
+    pub include_paths: &'a [PathBuf],
+}
 
+fn collect_paths(config: &IndexBuildConfig<'_>) -> crate::Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = Vec::new();
-    let walker = WalkBuilder::new(root)
-        .follow_links(follow_links)
+    let walker = WalkBuilder::new(config.root)
+        .follow_links(config.follow_links)
         .hidden(false)
         .parents(false)
         .ignore(false)
@@ -51,68 +47,45 @@ fn collect_paths(
             continue;
         }
         let path = entry.path();
-        let display = path.strip_prefix(root).unwrap_or(path).to_path_buf();
-        if exclude_paths
+        let display = path.strip_prefix(config.root).unwrap_or(path).to_path_buf();
+        if config
+            .exclude_paths
             .iter()
             .any(|excluded| display.starts_with(excluded))
         {
             continue;
         }
+        if !config.include_paths.is_empty()
+            && !config
+                .include_paths
+                .iter()
+                .any(|included| display == *included || display.starts_with(included))
+        {
+            continue;
+        }
         paths.push(display);
     }
-    Ok((false, paths))
+    Ok(paths)
 }
 
 fn open_corpus_bytes(path: &Path) -> crate::Result<Mmap> {
     open_mmap(path).map_err(crate::Error::Io)
 }
 
-fn unique_trigrams_for_file(path: &Path) -> crate::Result<Vec<[u8; 3]>> {
+fn unique_trigrams_for_file(path: &Path) -> crate::Result<Vec<Trigram>> {
     let mmap = open_corpus_bytes(path)?;
-    let mut tris: Vec<[u8; 3]> = extract_unique_trigrams_utf8_lossy(mmap.as_ref())
-        .into_iter()
-        .collect();
-    tris.sort_unstable();
-    Ok(tris)
+    Ok(Trigram::unique_from_lossy_utf8(mmap.as_ref()))
 }
 
-fn actual_path(root: &Path, is_single_file: bool, display: &Path) -> PathBuf {
-    if is_single_file {
-        root.to_path_buf()
-    } else {
-        root.join(display)
-    }
-}
-
-pub fn build_index_tables(
-    root: &Path,
-    follow_links: bool,
-    exclude_paths: &[PathBuf],
-) -> crate::Result<(bool, IndexTables)> {
-    let (is_single_file, mut paths) = collect_paths(root, follow_links, exclude_paths)?;
+pub fn build_index_tables(config: &IndexBuildConfig<'_>) -> crate::Result<IndexTables> {
+    let mut paths = collect_paths(config)?;
     paths.sort_unstable();
 
-    let min_parallel = parallel_candidate_threshold();
-    let per_file: Vec<(PathBuf, Vec<[u8; 3]>)> = if paths.len() >= min_parallel {
-        paths
-            .par_iter()
-            .map(|display| {
-                let path = actual_path(root, is_single_file, display);
-                unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
-            })
-            .collect::<crate::Result<Vec<_>>>()?
-    } else {
-        paths
-            .iter()
-            .map(|display| {
-                let path = actual_path(root, is_single_file, display);
-                unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
-            })
-            .collect::<crate::Result<Vec<_>>>()?
-    };
+    let threshold = parallel_threshold(ParallelWorkload::IndexBuild);
+    let per_file = extract_trigrams_per_file(config.root, &paths, threshold)?;
     let rel_paths: Vec<PathBuf> = per_file.iter().map(|(p, _)| p.clone()).collect();
 
-    let mut map: BTreeMap<[u8; 3], Vec<u32>> = BTreeMap::new();
+    let mut map: BTreeMap<Trigram, Vec<u32>> = BTreeMap::new();
 
     for (id, (_rel, tris)) in per_file.iter().enumerate() {
         let id_u32: u32 = id.try_into().map_err(|_| {
@@ -124,11 +97,6 @@ pub fn build_index_tables(
         for tri in tris {
             map.entry(*tri).or_default().push(id_u32);
         }
-    }
-
-    for ids in map.values_mut() {
-        ids.sort_unstable();
-        ids.dedup();
     }
 
     let total_u32s: usize = map.values().map(Vec::len).sum();
@@ -151,20 +119,33 @@ pub fn build_index_tables(
             posting_bytes.extend_from_slice(&fid.to_le_bytes());
         }
         lex_entries.push(LexiconEntry {
-            trigram: tri,
+            trigram: tri.to_bytes(),
             offset,
             len,
         });
     }
 
-    Ok((
-        is_single_file,
-        IndexTables {
-            files: rel_paths,
-            lexicon: lex_entries,
-            postings: posting_bytes,
-        },
-    ))
+    Ok(IndexTables {
+        files: rel_paths,
+        lexicon: lex_entries,
+        postings: posting_bytes,
+    })
+}
+
+fn extract_trigrams_per_file(
+    root: &Path,
+    paths: &[PathBuf],
+    threshold: usize,
+) -> crate::Result<Vec<(PathBuf, Vec<Trigram>)>> {
+    let op = |display: &PathBuf| {
+        let path = root.join(display);
+        unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
+    };
+    if paths.len() >= threshold {
+        paths.par_iter().map(op).collect()
+    } else {
+        paths.iter().map(op).collect()
+    }
 }
 
 fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -226,39 +207,49 @@ impl<'a> TrigramIndexBuilder<'a> {
     ///
     /// Propagates IO errors from walking, reading files, or writing persistence files
     /// (if `with_dir` was called).
-    pub fn build(self) -> crate::Result<crate::index::TrigramIndex> {
+    pub fn build(self) -> crate::Result<super::TrigramIndex> {
         let canonical = self.root.canonicalize()?;
-        let (root, build_root) = if canonical.is_file() {
-            let parent = canonical.parent().ok_or_else(|| {
+
+        let (root, include_paths, kind) = if canonical.is_file() {
+            let parent = canonical
+                .parent()
+                .ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "corpus root must have a parent directory",
+                    ))
+                })?
+                .to_path_buf();
+            let file_name = PathBuf::from(canonical.file_name().ok_or_else(|| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "single-file corpus must have a parent directory",
+                    "single-file corpus must have a file name",
                 ))
-            })?;
-            (parent.to_path_buf(), canonical)
+            })?);
+            (parent, vec![file_name], CorpusKind::SingleFile)
         } else {
-            (canonical.clone(), canonical)
+            (canonical, Vec::new(), CorpusKind::Directory)
         };
         let exclude_paths = self.excluded_build_paths(&root)?;
-        let (is_single_file, tables) =
-            build_index_tables(&build_root, self.follow_links, &exclude_paths)?;
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: &root,
+            follow_links: self.follow_links,
+            exclude_paths: &exclude_paths,
+            include_paths: &include_paths,
+        })?;
 
-        let files = crate::index::trigram::file_table::MappedFilesView::from_paths(&tables.files);
-        let lexicon =
-            crate::index::trigram::storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
-        let postings =
-            crate::index::trigram::storage::postings::MappedPostings::from_bytes(&tables.postings);
+        let lexicon = MappedLexicon::from_entries(&tables.lexicon);
+        let postings = MappedPostings::from_bytes(&tables.postings);
 
         let abs_paths = compute_abs_paths(&root, &tables.files);
-        let mut index = crate::index::TrigramIndex {
+        let mut index = super::TrigramIndex {
             root,
-            files,
             file_paths: tables.files,
             abs_paths,
             lexicon,
             postings,
             index_dir: None,
-            was_single_file_corpus: is_single_file,
+            corpus_kind: kind,
         };
 
         if let Some(dir) = self.dir {
@@ -277,47 +268,25 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn actual_path_joins_root_for_directory_corpus() {
-        let root = Path::new("/corpus");
-        let display = Path::new("sub/file.txt");
-        let result = actual_path(root, false, display);
-        assert_eq!(result, PathBuf::from("/corpus/sub/file.txt"));
-    }
-
-    #[test]
-    fn actual_path_returns_root_for_single_file_corpus() {
-        let root = Path::new("/corpus/single.txt");
-        let display = Path::new("single.txt");
-        let result = actual_path(root, true, display);
-        assert_eq!(result, PathBuf::from("/corpus/single.txt"));
-    }
-
-    #[test]
     fn build_index_tables_sorts_file_paths_deterministically() {
         let tmp = TempDir::new().expect("create temp dir");
         fs::write(tmp.path().join("z.txt"), "hello\n").expect("write z");
         fs::write(tmp.path().join("a.txt"), "world\n").expect("write a");
         fs::write(tmp.path().join("m.txt"), "test\n").expect("write m");
 
-        let (_, tables) = build_index_tables(tmp.path(), false, &[]).expect("build tables");
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+        })
+        .expect("build tables");
         let expected = vec![
             PathBuf::from("a.txt"),
             PathBuf::from("m.txt"),
             PathBuf::from("z.txt"),
         ];
         assert_eq!(tables.files, expected);
-    }
-
-    #[test]
-    fn build_index_tables_single_file_corpus_one_relative_name() {
-        let tmp = TempDir::new().expect("create temp dir");
-        let file = tmp.path().join("only.txt");
-        fs::write(&file, "content\n").expect("write file");
-
-        let (is_single, tables) = build_index_tables(&file, false, &[]).expect("build tables");
-        assert!(is_single);
-        assert_eq!(tables.files, vec![PathBuf::from("only.txt")]);
-        assert_eq!(tables.files.len(), 1);
     }
 
     #[test]
@@ -328,8 +297,13 @@ mod tests {
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::write(excluded_dir.join("skip.txt"), "world\n").expect("write skip");
 
-        let (_, tables) = build_index_tables(tmp.path(), false, &[PathBuf::from("excluded")])
-            .expect("build tables");
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[PathBuf::from("excluded")],
+            include_paths: &[],
+        })
+        .expect("build tables");
         assert_eq!(tables.files.len(), 1);
         assert_eq!(tables.files[0], PathBuf::from("keep.txt"));
     }
@@ -340,7 +314,13 @@ mod tests {
         fs::write(tmp.path().join("a.txt"), "ababab\n").expect("write file");
         fs::write(tmp.path().join("b.txt"), "ababab\n").expect("write file");
 
-        let (_, tables) = build_index_tables(tmp.path(), false, &[]).expect("build tables");
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+        })
+        .expect("build tables");
         assert_eq!(tables.files.len(), 2);
         let file_id_0: u32 = 0;
         let file_id_1: u32 = 1;
@@ -368,6 +348,62 @@ mod tests {
         assert_eq!(
             occurrences_1, unique_trigrams,
             "file 1 ID should appear once per unique trigram"
+        );
+    }
+
+    #[test]
+    fn unique_trigrams_for_file_returns_sorted_deduped_keys() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "ababab\n").expect("write file");
+
+        let tris = unique_trigrams_for_file(&file).expect("extract trigrams");
+        assert_eq!(tris.len(), 3);
+        for i in 0..tris.len() - 1 {
+            assert!(tris[i] <= tris[i + 1]);
+        }
+        let mut prev = None;
+        for tri in &tris {
+            if let Some(p) = prev {
+                assert_ne!(*tri, p);
+            }
+            prev = Some(*tri);
+        }
+    }
+
+    #[test]
+    fn build_index_tables_include_paths_filters_to_single_file() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
+        fs::write(tmp.path().join("skip.txt"), "world\n").expect("write skip");
+
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[PathBuf::from("keep.txt")],
+        })
+        .expect("build tables");
+        assert_eq!(tables.files.len(), 1);
+        assert_eq!(tables.files[0], PathBuf::from("keep.txt"));
+    }
+
+    #[test]
+    fn build_single_file_corpus_ignores_siblings() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let file = tmp.path().join("only.txt");
+        fs::write(&file, "needle\n").expect("write file");
+        fs::write(tmp.path().join("other.txt"), "haystack\n").expect("write other");
+
+        let index = TrigramIndexBuilder::new(&file)
+            .build()
+            .expect("build index");
+        assert_eq!(index.corpus_kind(), CorpusKind::SingleFile);
+        assert_eq!(index.file_paths.len(), 1);
+        assert_eq!(
+            index.file_paths[0],
+            PathBuf::from("only.txt"),
+            "should only index the specified file, not siblings"
         );
     }
 }

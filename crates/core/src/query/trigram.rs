@@ -1,151 +1,281 @@
-use std::collections::HashSet;
+use regex_syntax::ast::parse::Parser as AstParser;
+use regex_syntax::hir::literal::{ExtractKind, Extractor};
+use regex_syntax::hir::{self, Hir};
 
-#[must_use]
-#[cfg(test)]
-fn extract_trigrams(text: &str) -> Vec<[u8; 3]> {
-    extract_trigrams_from_bytes(text.as_bytes())
+use super::QuerySpec;
+
+/// One OR branch: every literal here must appear in a candidate file.
+pub type LiteralArm = Vec<u8>;
+
+/// Trigram-specific candidate narrowing plan.
+/// Stores extracted literals; the index converts them to trigrams.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrigramCandidatePlan {
+    pub arms: Vec<LiteralArm>,
 }
 
-#[must_use]
-pub fn extract_trigrams_from_bytes(b: &[u8]) -> Vec<[u8; 3]> {
-    if b.len() < 3 {
-        return Vec::new();
+pub struct TrigramCandidates;
+
+impl TrigramCandidates {
+    /// Attempt to build a trigram candidate plan from a query.
+    /// Returns `None` if the query requires a full scan.
+    #[must_use]
+    pub fn build(spec: &QuerySpec<'_>) -> Option<TrigramCandidatePlan> {
+        if spec.invert_match() {
+            return None;
+        }
+        let mut literal_arms: Vec<LiteralArm> = Vec::new();
+        for p in spec.patterns {
+            let arms = if spec.fixed_strings() {
+                fixed_string_literals(p.as_bytes(), spec.case_insensitive())
+            } else {
+                plan_pattern(
+                    p.as_str(),
+                    spec.case_insensitive(),
+                    spec.word_regexp(),
+                    spec.line_regexp(),
+                )?
+            };
+            for lit in arms {
+                if lit.len() < 3 {
+                    return None;
+                }
+                literal_arms.push(lit);
+            }
+        }
+        if literal_arms.is_empty() {
+            return None;
+        }
+        Some(TrigramCandidatePlan { arms: literal_arms })
     }
-    let mut out = Vec::with_capacity(b.len() - 2);
-    for i in 0..=b.len() - 3 {
-        out.push([b[i], b[i + 1], b[i + 2]]);
+}
+
+fn build_configured_hir(pattern: &str, case_insensitive: bool) -> Option<Hir> {
+    let ast = AstParser::new().parse(pattern).ok()?;
+    let mut builder = regex_syntax::hir::translate::TranslatorBuilder::new();
+    builder.unicode(true);
+    if case_insensitive {
+        builder.case_insensitive(true);
+    }
+    let mut translator = builder.build();
+    let hir = translator.translate(pattern, &ast).ok()?;
+    Some(hir)
+}
+
+fn wrap_word(hir: Hir, unicode: bool) -> Hir {
+    let start_half = if unicode {
+        hir::Look::WordStartHalfUnicode
+    } else {
+        hir::Look::WordStartHalfAscii
+    };
+    let end_half = if unicode {
+        hir::Look::WordEndHalfUnicode
+    } else {
+        hir::Look::WordEndHalfAscii
+    };
+    Hir::concat(vec![Hir::look(start_half), hir, Hir::look(end_half)])
+}
+
+fn wrap_line(hir: Hir) -> Hir {
+    Hir::concat(vec![
+        Hir::look(hir::Look::StartLF),
+        hir,
+        Hir::look(hir::Look::EndLF),
+    ])
+}
+
+fn shape_hir(hir: Hir, word_regexp: bool, line_regexp: bool) -> Hir {
+    if line_regexp {
+        wrap_line(hir)
+    } else if word_regexp {
+        wrap_word(hir, true)
+    } else {
+        hir
+    }
+}
+
+fn extract_literals(hir: &Hir) -> Vec<Vec<u8>> {
+    let extractor_prefix = Extractor::new();
+    let extractor_suffix = {
+        let mut e = Extractor::new();
+        e.kind(ExtractKind::Suffix);
+        e
+    };
+
+    let seq_prefix = extractor_prefix.extract(hir);
+    let seq_suffix = extractor_suffix.extract(hir);
+
+    let lits_prefix = seq_prefix.literals();
+    let lits_suffix = seq_suffix.literals();
+
+    pick_better_lits(lits_prefix, lits_suffix)
+}
+
+fn pick_better_lits(
+    lits_a: Option<&[regex_syntax::hir::literal::Literal]>,
+    lits_b: Option<&[regex_syntax::hir::literal::Literal]>,
+) -> Vec<Vec<u8>> {
+    fn total_bytes(lits: Option<&[regex_syntax::hir::literal::Literal]>) -> usize {
+        lits.map_or(0, |l| l.iter().map(|lit| lit.as_bytes().len()).sum())
+    }
+
+    let a_count = lits_a.map_or(0, <[regex_syntax::hir::literal::Literal]>::len);
+    let b_count = lits_b.map_or(0, <[regex_syntax::hir::literal::Literal]>::len);
+    let a_has = a_count > 0;
+    let b_has = b_count > 0;
+
+    let lits = match (a_has, b_has) {
+        (true, false) => lits_a,
+        (false, true) => lits_b,
+        (false, false) => return Vec::new(),
+        (true, true) => {
+            let a_total = total_bytes(lits_a);
+            let b_total = total_bytes(lits_b);
+            if a_total >= b_total { lits_a } else { lits_b }
+        }
+    };
+
+    let lits = match lits {
+        Some(l) if !l.is_empty() => l,
+        _ => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    for lit in lits {
+        let bytes = lit.as_bytes();
+        if bytes.len() >= 3 {
+            out.push(bytes.to_vec());
+        }
     }
     out
 }
 
-#[must_use]
-pub fn extract_unique_trigrams_from_bytes(b: &[u8]) -> HashSet<[u8; 3]> {
-    let mut out = HashSet::new();
-    if b.len() < 3 {
-        return out;
+fn fixed_string_literals(lit: &[u8], case_insensitive: bool) -> Vec<Vec<u8>> {
+    if case_insensitive {
+        vec![lit.to_ascii_lowercase()]
+    } else {
+        vec![lit.to_vec()]
     }
-    out.reserve(b.len().min(1 << 16));
-    for i in 0..=b.len() - 3 {
-        out.insert([b[i], b[i + 1], b[i + 2]]);
-    }
-    out
 }
 
-#[must_use]
-#[cfg(test)]
-pub fn extract_trigrams_utf8_lossy(bytes: &[u8]) -> Vec<[u8; 3]> {
-    std::str::from_utf8(bytes).map_or_else(
-        |_| extract_trigrams(String::from_utf8_lossy(bytes).as_ref()),
-        extract_trigrams,
-    )
-}
-
-#[must_use]
-pub fn extract_unique_trigrams_utf8_lossy(bytes: &[u8]) -> HashSet<[u8; 3]> {
-    std::str::from_utf8(bytes).map_or_else(
-        |_| extract_unique_trigrams_from_bytes(String::from_utf8_lossy(bytes).as_ref().as_bytes()),
-        |text| extract_unique_trigrams_from_bytes(text.as_bytes()),
-    )
+fn plan_pattern(
+    pattern: &str,
+    case_insensitive: bool,
+    word_regexp: bool,
+    line_regexp: bool,
+) -> Option<Vec<Vec<u8>>> {
+    let hir = build_configured_hir(pattern, case_insensitive)?;
+    let shaped = shape_hir(hir, word_regexp, line_regexp);
+    let lits = extract_literals(&shaped);
+    if lits.is_empty() { None } else { Some(lits) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::QueryFlags;
 
-    fn reference_lossy(bytes: &[u8]) -> Vec<[u8; 3]> {
-        extract_trigrams(String::from_utf8_lossy(bytes).as_ref())
-    }
-
-    #[test]
-    fn utf8_lossy_matches_reference_valid_ascii() {
-        let b = b"hello world";
-        assert_eq!(extract_trigrams_utf8_lossy(b), reference_lossy(b));
-    }
-
-    #[test]
-    fn utf8_lossy_matches_reference_multibyte() {
-        let b = "café résumé 日本語".as_bytes();
-        assert_eq!(extract_trigrams_utf8_lossy(b), reference_lossy(b));
-    }
-
-    #[test]
-    fn utf8_lossy_matches_reference_invalid() {
-        for b in [
-            &[0xff, 0xfe, 0xfd][..],
-            b"ok\xff\xfe trail",
-            &[0x80][..],
-            b"a\xe0\x80\x80b",
-        ] {
-            assert_eq!(
-                extract_trigrams_utf8_lossy(b),
-                reference_lossy(b),
-                "bytes={b:?}"
-            );
+    fn narrow(
+        patterns: &[String],
+        case_insensitive: bool,
+        word_regexp: bool,
+        line_regexp: bool,
+    ) -> bool {
+        let mut flags = QueryFlags::empty();
+        if case_insensitive {
+            flags |= QueryFlags::CASE_INSENSITIVE;
         }
+        if word_regexp {
+            flags |= QueryFlags::WORD_REGEXP;
+        }
+        if line_regexp {
+            flags |= QueryFlags::LINE_REGEXP;
+        }
+        let spec = QuerySpec { patterns, flags };
+        TrigramCandidates::build(&spec).is_some()
+    }
+
+    fn full_scan(
+        patterns: &[String],
+        case_insensitive: bool,
+        word_regexp: bool,
+        line_regexp: bool,
+    ) -> bool {
+        let mut flags = QueryFlags::empty();
+        if case_insensitive {
+            flags |= QueryFlags::CASE_INSENSITIVE;
+        }
+        if word_regexp {
+            flags |= QueryFlags::WORD_REGEXP;
+        }
+        if line_regexp {
+            flags |= QueryFlags::LINE_REGEXP;
+        }
+        let spec = QuerySpec { patterns, flags };
+        TrigramCandidates::build(&spec).is_none()
     }
 
     #[test]
-    fn utf8_lossy_matches_reference_mixed() {
-        let b: Vec<u8> = (0_u8..=255)
-            .cycle()
-            .take(512)
-            .chain(std::iter::once(0xff))
-            .collect();
-        assert_eq!(extract_trigrams_utf8_lossy(&b), reference_lossy(&b));
+    fn literal_narrows() {
+        assert!(narrow(&["beta".to_string()], false, false, false));
     }
 
     #[test]
-    fn short_string_empty() {
-        assert!(extract_trigrams("").is_empty());
-        assert!(extract_trigrams("ab").is_empty());
+    fn dot_star_full_scan() {
+        assert!(full_scan(&[".*".to_string()], false, false, false));
     }
 
     #[test]
-    fn ascii_three_chars_one_trigram() {
-        assert_eq!(extract_trigrams("abc"), vec![*b"abc"]);
+    fn alternation_narrows() {
+        assert!(narrow(&[r"foo|bar".to_string()], false, false, false));
     }
 
     #[test]
-    fn overlapping_windows() {
-        assert_eq!(extract_trigrams("abcd"), vec![*b"abc", *b"bcd"]);
+    fn word_literal_narrows() {
+        assert!(narrow(&["beta".to_string()], false, true, false));
     }
 
     #[test]
-    fn extract_trigrams_from_bytes_exactly_three() {
-        assert_eq!(extract_trigrams_from_bytes(b"abc"), vec![*b"abc"]);
+    fn line_regexp_narrows() {
+        assert!(narrow(&["beta".to_string()], false, false, true));
     }
 
     #[test]
-    fn extract_trigrams_from_bytes_overlapping() {
-        assert_eq!(extract_trigrams_from_bytes(b"abcd"), vec![*b"abc", *b"bcd"]);
+    fn case_insensitive_narrows() {
+        assert!(narrow(&["beta".to_string()], true, false, false));
     }
 
     #[test]
-    fn extract_trigrams_from_bytes_short_returns_empty() {
-        assert!(extract_trigrams_from_bytes(b"").is_empty());
-        assert!(extract_trigrams_from_bytes(b"ab").is_empty());
+    fn required_literal_inside_regex_narrows() {
+        assert!(narrow(&["[A-Z]+_RESUME".to_string()], false, false, false));
     }
 
     #[test]
-    fn extract_unique_trigrams_deduplicates() {
-        let tris = extract_unique_trigrams_from_bytes(b"ababa");
-        assert_eq!(tris.len(), 2);
-        assert!(tris.contains(b"aba"));
-        assert!(tris.contains(b"bab"));
+    fn unicode_class_full_scan() {
+        assert!(full_scan(&[r"\p{Greek}".to_string()], false, false, false));
     }
 
     #[test]
-    fn extract_unique_trigrams_from_bytes_short_returns_empty() {
-        assert!(extract_unique_trigrams_from_bytes(b"").is_empty());
-        assert!(extract_unique_trigrams_from_bytes(b"ab").is_empty());
+    fn no_literal_full_scan() {
+        assert!(full_scan(
+            &[r"\w{5}\s+\w{5}".to_string()],
+            false,
+            false,
+            false
+        ));
     }
 
     #[test]
-    fn extract_unique_trigrams_utf8_lossy_matches_reference_invalid() {
-        let b = &[0xff, 0xfe, 0xfd][..];
-        let unique_lossy = extract_unique_trigrams_utf8_lossy(b);
-        let reference: HashSet<[u8; 3]> =
-            extract_unique_trigrams_from_bytes(String::from_utf8_lossy(b).as_ref().as_bytes());
-        assert_eq!(unique_lossy, reference);
+    fn short_literal_full_scan() {
+        assert!(full_scan(&["ab".to_string()], false, false, false));
+    }
+
+    #[test]
+    fn fixed_string_narrows() {
+        let spec = QuerySpec {
+            patterns: &["beta.gamma".to_string()],
+            flags: QueryFlags::FIXED_STRINGS,
+        };
+        assert!(TrigramCandidates::build(&spec).is_some());
     }
 }
