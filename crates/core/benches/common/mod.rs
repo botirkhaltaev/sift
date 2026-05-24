@@ -11,9 +11,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
-    IgnoreSources, LineStyleFlags, OutputEmission, PathDisplay, SearchFilter, SearchFilterConfig,
-    SearchLineStyle, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchRecordStyle,
+    ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    LineStyleFlags, OutputEmission, PathDisplay, SearchFilter, SearchFilterConfig, SearchLineStyle,
+    SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchRecordStyle,
     SearchSeparators, TrigramIndex, TrigramIndexBuilder, VisibilityConfig,
 };
 

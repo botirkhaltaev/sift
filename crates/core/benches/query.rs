@@ -1,12 +1,12 @@
-//! Query-planning and pattern-compilation benchmarks.
+//! Pattern-compilation and search-compilation benchmarks.
 //!
-//! Exercises public `QueryPlanner` and `PatternCompiler` APIs.
-//! All benches operate on small inputs and measure only the planning/compilation cost.
+//! Exercises public `PatternCompiler` and `CompiledSearch` APIs.
+//! All benches operate on small inputs and measure only the compilation cost.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::{CaseMode, CompiledSearch, PatternCompiler, QueryFlags, QueryPlanner, QuerySpec, SearchOptions};
+use sift_core::{CaseMode, CompiledSearch, PatternCompiler, SearchOptions};
 
 fn sift_criterion() -> Criterion {
     Criterion::default()
@@ -16,103 +16,6 @@ fn sift_criterion() -> Criterion {
         .significance_level(0.05)
         .noise_threshold(0.05)
         .configure_from_args()
-}
-
-// ─── QueryPlanner benches ────────────────────────────────────────────────────
-
-fn bench_query_planner(c: &mut Criterion) {
-    let mut g = c.benchmark_group("query_planner");
-
-    g.bench_function("literal", |b| {
-        let spec = QuerySpec {
-            patterns: &["beta".to_string()],
-            flags: QueryFlags::empty(),
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("fixed_string", |b| {
-        let spec = QuerySpec {
-            patterns: &["beta.gamma".to_string()],
-            flags: QueryFlags::FIXED_STRINGS,
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("word_regexp", |b| {
-        let spec = QuerySpec {
-            patterns: &["beta".to_string()],
-            flags: QueryFlags::WORD_REGEXP,
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("line_regexp", |b| {
-        let spec = QuerySpec {
-            patterns: &["beta".to_string()],
-            flags: QueryFlags::LINE_REGEXP,
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("case_insensitive", |b| {
-        let spec = QuerySpec {
-            patterns: &["beta".to_string()],
-            flags: QueryFlags::CASE_INSENSITIVE,
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("invert_match", |b| {
-        let spec = QuerySpec {
-            patterns: &["beta".to_string()],
-            flags: QueryFlags::INVERT_MATCH,
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("alternation", |b| {
-        let spec = QuerySpec {
-            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST".to_string()],
-            flags: QueryFlags::empty(),
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("required_literal", |b| {
-        let spec = QuerySpec {
-            patterns: &["[A-Z]+_RESUME".to_string()],
-            flags: QueryFlags::empty(),
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("no_literal", |b| {
-        let spec = QuerySpec {
-            patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
-            flags: QueryFlags::empty(),
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("unicode_class", |b| {
-        let spec = QuerySpec {
-            patterns: &[r"\p{Greek}".to_string()],
-            flags: QueryFlags::empty(),
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.bench_function("multi_pattern", |b| {
-        let pats = vec!["hello".to_string(), "world".to_string(), "foo".to_string()];
-        let spec = QuerySpec {
-            patterns: &pats,
-            flags: QueryFlags::empty(),
-        };
-        b.iter(|| black_box(QueryPlanner::should_use_indexes(&spec)));
-    });
-
-    g.finish();
 }
 
 // ─── PatternCompiler benches ─────────────────────────────────────────────────
@@ -196,6 +99,6 @@ fn bench_compiled_search_new(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_query_planner, bench_pattern_compiler, bench_compiled_search_new,
+    targets = bench_pattern_compiler, bench_compiled_search_new,
 }
 criterion_main!(benches);

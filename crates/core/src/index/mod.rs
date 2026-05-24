@@ -7,12 +7,25 @@ use serde::{Deserialize, Serialize};
 pub use trigram::TrigramIndex;
 pub use trigram::TrigramIndexError;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryPlanOutput {
+    pub pattern: String,
+    pub mode: &'static str,
+}
+
+/// Whether the index was built from a directory or a single file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum IndexKind {
+    /// Built from a directory path — all discovered files were indexed.
+    #[default]
+    Directory,
+    /// Built from a single file path — only that file was indexed.
+    SingleFile,
+}
+
 const INDEX_KINDS: &[&str] = &["trigram"];
 
 /// Errors specific to the index registry layer.
-///
-/// These cover layout discovery, root validation, and wrapping of concrete
-/// index implementation errors.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
     #[error("invalid index layout: {path}")]
@@ -28,17 +41,32 @@ pub enum IndexError {
     },
 }
 
+/// A candidate file returned by an index for searching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchCandidate {
+    pub rel_path: PathBuf,
+    pub abs_path: PathBuf,
+}
+
 /// Registry of opened indexes for a single `.sift` directory.
-///
-/// Owns index initialization, validates that all indexes share one root,
-/// and exposes only what callers need through `is_empty()`, `root()`, and `refs()`.
 pub struct Indexes {
     inner: Vec<Box<dyn SearchIndex>>,
     root: PathBuf,
 }
 
 impl Indexes {
-    /// Open all indexes found under `sift_dir` (e.g. `.sift/trigram/`).
+    /// Create an Indexes registry from a single index and its root.
+    ///
+    /// Useful for testing and benchmarking.
+    #[must_use]
+    pub fn from_single(index: impl SearchIndex + 'static, root: PathBuf) -> Self {
+        Self {
+            inner: vec![Box::new(index)],
+            root,
+        }
+    }
+
+    /// Open all indexes found under `sift_dir`.
     ///
     /// # Errors
     ///
@@ -98,19 +126,59 @@ impl Indexes {
         &self.root
     }
 
-    /// Returns a vector of trait object references for search execution.
+    /// Resolve candidates for a query across all registered indexes.
     ///
-    /// Allocates a new `Vec` on each call. The returned value borrows from
-    /// `self` and becomes invalid when `self` is dropped.
+    /// Each index returns its candidate set; results are deduplicated by
+    /// absolute path and returned as a flat list ready for filtering and scanning.
     #[must_use]
-    pub fn refs(&self) -> Vec<&dyn SearchIndex> {
-        self.inner.iter().map(AsRef::as_ref).collect()
+    pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+
+        for index in &self.inner {
+            for candidate in index.candidates(query) {
+                if seen.insert(candidate.abs_path.clone()) {
+                    out.push(candidate);
+                }
+            }
+        }
+
+        out
     }
 
-    /// Returns a reference to the first index, if any.
+    /// Return all indexed files across all registered indexes.
+    ///
+    /// Used for output modes that require scanning every file (e.g. `--count`,
+    /// `--files-without-match`). Deduplicated by absolute path.
+    #[must_use]
+    pub fn resolve_all_files(&self) -> Vec<SearchCandidate> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+
+        for index in &self.inner {
+            for candidate in index.all_files() {
+                if seen.insert(candidate.abs_path.clone()) {
+                    out.push(candidate);
+                }
+            }
+        }
+
+        out
+    }
+
     #[must_use]
     pub fn first(&self) -> Option<&dyn SearchIndex> {
         self.inner.first().map(AsRef::as_ref)
+    }
+
+    /// Returns true when the index was built from a single file input.
+    #[must_use]
+    pub fn is_single_file(&self) -> bool {
+        self.inner.len() == 1
+            && self
+                .inner
+                .first()
+                .is_some_and(|idx| idx.kind() == IndexKind::SingleFile)
     }
 }
 
@@ -144,31 +212,19 @@ impl IndexId {
     }
 }
 
+/// An indexed search corpus that can return candidate files for a query.
 pub trait SearchIndex: Sync + Send {
     fn root(&self) -> &Path;
-    fn file_count(&self) -> usize;
-    fn file_path(&self, id: FileId) -> Option<&Path>;
-    fn file_abs_path(&self, id: FileId) -> Option<PathBuf>;
-    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<FileId>;
-    fn is_single_file(&self) -> bool;
-    fn explain(&self, query: &crate::query::QuerySpec<'_>) -> QueryPlanOutput {
-        use crate::query::{CandidatePlan, QueryPlanner};
-        let mode = match QueryPlanner::plan(query) {
-            CandidatePlan::FullScan => "full_scan",
-            CandidatePlan::Trigram(_) => "indexed_candidates",
-        };
-        QueryPlanOutput {
-            pattern: query.patterns.to_vec().join("|"),
-            mode,
-        }
-    }
+    fn kind(&self) -> IndexKind;
+    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate>;
+    fn all_files(&self) -> Vec<SearchCandidate>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexMeta {
     pub root: PathBuf,
     #[serde(default)]
-    pub is_single_file_corpus: bool,
+    pub kind: IndexKind,
 }
 
 impl IndexMeta {
@@ -187,7 +243,6 @@ impl IndexMeta {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -217,7 +272,7 @@ mod tests {
     fn index_meta_validate_rejects_relative_root() {
         let meta = IndexMeta {
             root: PathBuf::from("relative/path"),
-            is_single_file_corpus: true,
+            kind: IndexKind::Directory,
         };
         let result = meta.validate(Path::new("/fake/meta.json"));
         assert!(matches!(result, Err(TrigramIndexError::InvalidMeta(_))));
@@ -253,19 +308,4 @@ mod tests {
         let indexes = Indexes::open(&sift_dir).expect("open indexes");
         assert!(indexes.first().is_none());
     }
-
-    #[test]
-    fn indexes_refs_returns_empty_vec_when_empty() {
-        let tmp = TempDir::new().expect("create temp dir");
-        let sift_dir = tmp.path().join(".sift");
-        fs::create_dir_all(&sift_dir).expect("create sift dir");
-        let indexes = Indexes::open(&sift_dir).expect("open indexes");
-        assert!(indexes.refs().is_empty());
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueryPlanOutput {
-    pub pattern: String,
-    pub mode: &'static str,
 }

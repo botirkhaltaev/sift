@@ -20,8 +20,7 @@ let index = TrigramIndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?
 // Open
 let index = TrigramIndex::open(&index_dir)?;
 
-// Use via trait
-let count: usize = index.file_count();
+// Concrete index methods
 let path = index.file_path(FileId::new(0));
 ```
 

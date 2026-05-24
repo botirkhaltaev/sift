@@ -134,6 +134,7 @@ impl MappedFilesView {
         Ok((count, offset_table_start))
     }
 
+    #[cfg(test)]
     pub const fn len(&self) -> usize {
         self.count
     }

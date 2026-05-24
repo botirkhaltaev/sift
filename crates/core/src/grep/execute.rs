@@ -11,8 +11,11 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
-use crate::index::{FileId, IndexId, SearchIndex};
-use crate::query::{QueryFlags, QueryPlanner, QuerySpec};
+use crate::index::{Indexes, SearchCandidate};
+use crate::query::{QueryFlags, QuerySpec};
+
+#[cfg(test)]
+use crate::index::SearchIndex;
 
 use super::{
     CandidateInfo, ColorChoice, CompiledSearch, FilenameMode, LineStyleFlags, OutputEmission,
@@ -200,33 +203,7 @@ impl CompiledSearch {
     /// Returns an error if the matcher cannot be built or stdout cannot be written.
     pub fn run_indexes(
         &self,
-        indexes: &[&dyn SearchIndex],
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-    ) -> crate::Result<bool> {
-        self.run_indexes_impl(indexes, filter, output, separators, None)
-    }
-
-    /// Like [`Self::run_indexes`], but fills `stats` with search counters.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`Self::run_indexes`].
-    pub fn run_indexes_with_stats(
-        &self,
-        indexes: &[&dyn SearchIndex],
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-        stats: &mut SearchStats,
-    ) -> crate::Result<bool> {
-        self.run_indexes_impl(indexes, filter, output, separators, Some(stats))
-    }
-
-    fn run_indexes_impl(
-        &self,
-        indexes: &[&dyn SearchIndex],
+        indexes: &Indexes,
         filter: &SearchFilter,
         output: SearchOutput,
         separators: &SearchSeparators,
@@ -247,13 +224,12 @@ impl CompiledSearch {
             output.mode,
             SearchMode::Count | SearchMode::FilesWithoutMatch
         );
-        let use_indexes = !needs_all_files && QueryPlanner::should_use_indexes(&spec);
 
         let threshold = parallel_candidate_threshold();
-        let candidates = if use_indexes {
-            Self::prepare_index_candidates(indexes, filter, threshold, &spec)
+        let candidates = if needs_all_files {
+            Self::prepare_candidates(indexes.resolve_all_files(), filter, threshold)
         } else {
-            Self::prepare_all_files(indexes, filter, threshold, &spec)
+            Self::prepare_candidates(indexes.resolve_candidates(&spec), filter, threshold)
         };
         if candidates.is_empty() {
             if let Some(s) = stats {
@@ -339,11 +315,10 @@ impl CompiledSearch {
         Ok(ok)
     }
 
-    fn prepare_all_files(
-        indexes: &[&dyn SearchIndex],
+    fn prepare_candidates(
+        candidates: Vec<SearchCandidate>,
         filter: &SearchFilter,
         threshold: usize,
-        _spec: &QuerySpec<'_>,
     ) -> Vec<CandidateInfo> {
         let need_rel = filter.needs_rel_str_for_matching();
         let max_fs = filter.max_filesize();
@@ -353,149 +328,51 @@ impl CompiledSearch {
             max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
         };
 
-        let all_ids: Vec<(IndexId, FileId)> = indexes
-            .iter()
-            .enumerate()
-            .flat_map(|(i, idx)| {
-                let index_id = IndexId::new(i);
-                (0..idx.file_count()).map(move |fid| (index_id, FileId::new(fid)))
-            })
-            .collect();
-
-        if all_ids.len() >= threshold {
-            all_ids
+        if candidates.len() >= threshold {
+            candidates
                 .into_par_iter()
-                .filter_map(|(index_id, file_id)| {
-                    let idx = *indexes.get(index_id.get())?;
-                    let rel_path = idx.file_path(file_id)?.to_path_buf();
-                    if exceeds_depth(&rel_path) {
+                .filter_map(|candidate| {
+                    if exceeds_depth(&candidate.rel_path) {
                         return None;
                     }
                     let rel_str = if need_rel {
-                        rel_path.to_string_lossy().replace('\\', "/")
+                        candidate.rel_path.to_string_lossy().replace('\\', "/")
                     } else {
                         String::new()
                     };
-                    let abs_path = idx.file_abs_path(file_id)?;
                     if max_fs.is_some_and(|limit| {
-                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                        std::fs::metadata(&candidate.abs_path).is_ok_and(|m| m.len() > limit)
                     }) {
                         return None;
                     }
                     let info = CandidateInfo {
-                        rel_path,
+                        rel_path: candidate.rel_path,
                         rel_str,
-                        abs_path,
+                        abs_path: candidate.abs_path,
                     };
                     filter.is_candidate_info(&info).then_some(info)
                 })
                 .collect()
         } else {
-            let mut out = Vec::with_capacity(all_ids.len());
-            out.extend(all_ids.into_iter().filter_map(|(index_id, file_id)| {
-                let idx = *indexes.get(index_id.get())?;
-                let rel_path = idx.file_path(file_id)?.to_path_buf();
-                if exceeds_depth(&rel_path) {
+            let mut out = Vec::with_capacity(candidates.len());
+            out.extend(candidates.into_iter().filter_map(|candidate| {
+                if exceeds_depth(&candidate.rel_path) {
                     return None;
                 }
                 let rel_str = if need_rel {
-                    rel_path.to_string_lossy().replace('\\', "/")
+                    candidate.rel_path.to_string_lossy().replace('\\', "/")
                 } else {
                     String::new()
                 };
-                let abs_path = idx.file_abs_path(file_id)?;
                 if max_fs.is_some_and(|limit| {
-                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
+                    std::fs::metadata(&candidate.abs_path).is_ok_and(|m| m.len() > limit)
                 }) {
                     return None;
                 }
                 let info = CandidateInfo {
-                    rel_path,
+                    rel_path: candidate.rel_path,
                     rel_str,
-                    abs_path,
-                };
-                filter.is_candidate_info(&info).then_some(info)
-            }));
-            out
-        }
-    }
-
-    fn prepare_index_candidates(
-        indexes: &[&dyn SearchIndex],
-        filter: &SearchFilter,
-        threshold: usize,
-        spec: &QuerySpec<'_>,
-    ) -> Vec<CandidateInfo> {
-        let need_rel = filter.needs_rel_str_for_matching();
-        let max_fs = filter.max_filesize();
-        let max_d = filter.max_depth();
-
-        let exceeds_depth = |rel: &Path| -> bool {
-            max_d.is_some_and(|d| rel.components().count().saturating_sub(1) > d)
-        };
-
-        let candidate_ids: Vec<(IndexId, FileId)> = indexes
-            .iter()
-            .enumerate()
-            .flat_map(|(i, idx)| {
-                let index_id = IndexId::new(i);
-                idx.candidates(spec)
-                    .into_iter()
-                    .map(move |fid| (index_id, fid))
-            })
-            .collect();
-
-        if candidate_ids.len() >= threshold {
-            candidate_ids
-                .into_par_iter()
-                .filter_map(|(index_id, file_id)| {
-                    let idx = *indexes.get(index_id.get())?;
-                    let rel_path = idx.file_path(file_id)?.to_path_buf();
-                    if exceeds_depth(&rel_path) {
-                        return None;
-                    }
-                    let rel_str = if need_rel {
-                        rel_path.to_string_lossy().replace('\\', "/")
-                    } else {
-                        String::new()
-                    };
-                    let abs_path = idx.file_abs_path(file_id)?;
-                    if max_fs.is_some_and(|limit| {
-                        std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
-                    }) {
-                        return None;
-                    }
-                    let info = CandidateInfo {
-                        rel_path,
-                        rel_str,
-                        abs_path,
-                    };
-                    filter.is_candidate_info(&info).then_some(info)
-                })
-                .collect()
-        } else {
-            let mut out = Vec::with_capacity(candidate_ids.len());
-            out.extend(candidate_ids.into_iter().filter_map(|(index_id, file_id)| {
-                let idx = *indexes.get(index_id.get())?;
-                let rel_path = idx.file_path(file_id)?.to_path_buf();
-                if exceeds_depth(&rel_path) {
-                    return None;
-                }
-                let rel_str = if need_rel {
-                    rel_path.to_string_lossy().replace('\\', "/")
-                } else {
-                    String::new()
-                };
-                let abs_path = idx.file_abs_path(file_id)?;
-                if max_fs.is_some_and(|limit| {
-                    std::fs::metadata(&abs_path).is_ok_and(|m| m.len() > limit)
-                }) {
-                    return None;
-                }
-                let info = CandidateInfo {
-                    rel_path,
-                    rel_str,
-                    abs_path,
+                    abs_path: candidate.abs_path,
                 };
                 filter.is_candidate_info(&info).then_some(info)
             }));
@@ -512,32 +389,6 @@ impl CompiledSearch {
     ///
     /// Returns an error if the matcher cannot be built or stdout cannot be written.
     pub fn run_walk(
-        &self,
-        filter_root: &Path,
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-    ) -> crate::Result<bool> {
-        self.run_walk_impl(filter_root, filter, output, separators, None)
-    }
-
-    /// Like [`Self::run_walk`], but fills `stats` with search counters.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`Self::run_walk`].
-    pub fn run_walk_with_stats(
-        &self,
-        filter_root: &Path,
-        filter: &SearchFilter,
-        output: SearchOutput,
-        separators: &SearchSeparators,
-        stats: &mut SearchStats,
-    ) -> crate::Result<bool> {
-        self.run_walk_impl(filter_root, filter, output, separators, Some(stats))
-    }
-
-    fn run_walk_impl(
         &self,
         filter_root: &Path,
         filter: &SearchFilter,
@@ -949,8 +800,8 @@ impl CompiledSearch {
         };
         let filter = SearchFilter::new(&config, index.root())?;
         let spec = self.build_query_spec();
-        let candidate_ids = index.candidates(&spec);
-        self.collect_index_candidates(index, &filter, &candidate_ids)
+        let candidates = index.candidates(&spec);
+        self.collect_index_candidate_paths(&filter, &candidates)
     }
 
     #[cfg(test)]
@@ -981,28 +832,24 @@ impl CompiledSearch {
     }
 
     #[cfg(test)]
-    fn collect_index_candidates(
+    fn collect_index_candidate_paths(
         &self,
-        index: &dyn SearchIndex,
         filter: &SearchFilter,
-        candidate_ids: &[FileId],
+        candidates: &[SearchCandidate],
     ) -> crate::Result<Vec<Match>> {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
         self.with_cached_searcher(true, None, |searcher| {
-            for &id in candidate_ids {
-                let Some(candidate) = index.file_path(id) else {
-                    continue;
-                };
-                if !filter.is_candidate(candidate) {
+            for candidate in candidates {
+                if !filter.is_candidate(&candidate.rel_path) {
                     continue;
                 }
                 let mut sink = CollectSink::new(
-                    index.root().join(candidate),
+                    candidate.abs_path.clone(),
                     self.opts.only_matching(),
                     matcher.clone(),
                 );
-                let _ = searcher.search_path(matcher, index.root().join(candidate), &mut sink);
+                let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
                 out.extend(sink.into_matches());
             }
         });

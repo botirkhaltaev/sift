@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use sift_core::{
-    CompiledSearch, Indexes, SearchFilter, SearchIndex, SearchLineStyle, SearchMode,
-    SearchRecordStyle, SearchStats,
+    CompiledSearch, Indexes, SearchFilter, SearchLineStyle, SearchMode, SearchRecordStyle,
+    SearchStats,
 };
 
 use crate::cli::Cli;
@@ -88,7 +88,6 @@ struct SearchCtx {
     filter_root: PathBuf,
     prefixes: Vec<PathBuf>,
     exclude_paths: Vec<PathBuf>,
-    corpus_is_single_file: bool,
 }
 
 impl Cli {
@@ -159,7 +158,6 @@ impl Cli {
                 filter_root: root,
                 prefixes,
                 exclude_paths,
-                corpus_is_single_file: false,
             }
         } else {
             let prefixes = corpus_path_prefixes(indexes.root(), &cwd, &self.search_scope.paths)?;
@@ -168,24 +166,22 @@ impl Cli {
                 filter_root: indexes.root().to_path_buf(),
                 prefixes,
                 exclude_paths,
-                corpus_is_single_file: indexes.first().is_some_and(SearchIndex::is_single_file),
             }
         };
 
-        let output = self.build_search_output(&out, &ctx);
+        let output = self.build_search_output(&out, indexes.is_single_file());
 
         if indexes.is_empty() {
             self.execute_walk(&query, &ctx, &output, &out, filter)
         } else {
-            let index_refs = indexes.refs();
-            self.execute_indexed(&query, &index_refs, &ctx, &output, &out, filter)
+            self.execute_indexed(&query, &indexes, &ctx, &output, &out, filter)
         }
     }
 
     fn build_search_output(
         &self,
         out: &SearchOutputCtx,
-        ctx: &SearchCtx,
+        is_single_file: bool,
     ) -> sift_core::SearchOutput {
         let path_display = effective_path_display(&self.search_scope.paths);
         let line_number = resolve_effective_line_number(
@@ -202,7 +198,7 @@ impl Cli {
                 filename_mode: effective_filename_mode(
                     out.lines.with_filename,
                     out.lines.is_path_mode,
-                    ctx.corpus_is_single_file,
+                    is_single_file,
                 ),
                 flags: line_flags,
                 path_display,
@@ -221,7 +217,7 @@ impl Cli {
     fn execute_indexed(
         &self,
         query: &CompiledSearch,
-        indexes: &[&dyn SearchIndex],
+        indexes: &Indexes,
         ctx: &SearchCtx,
         output: &sift_core::SearchOutput,
         out: &SearchOutputCtx,
@@ -230,21 +226,18 @@ impl Cli {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
         let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        if out.print_stats {
-            let mut stats = SearchStats::default();
-            let ok = query.run_indexes_with_stats(
-                indexes,
-                &search_filter,
-                *output,
-                &out.separators,
-                &mut stats,
-            )?;
-            write_search_stats(&stats);
-            return Ok(ok);
+        let mut stats = out.print_stats.then(SearchStats::default);
+        let ok = query.run_indexes(
+            indexes,
+            &search_filter,
+            *output,
+            &out.separators,
+            stats.as_mut(),
+        )?;
+        if let Some(s) = &stats {
+            write_search_stats(s);
         }
-        query
-            .run_indexes(indexes, &search_filter, *output, &out.separators)
-            .map_err(Into::into)
+        Ok(ok)
     }
 
     fn execute_walk(
@@ -258,20 +251,17 @@ impl Cli {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
         let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        if out.print_stats {
-            let mut stats = SearchStats::default();
-            let ok = query.run_walk_with_stats(
-                &ctx.filter_root,
-                &search_filter,
-                *output,
-                &out.separators,
-                &mut stats,
-            )?;
-            write_search_stats(&stats);
-            return Ok(ok);
+        let mut stats = out.print_stats.then(SearchStats::default);
+        let ok = query.run_walk(
+            &ctx.filter_root,
+            &search_filter,
+            *output,
+            &out.separators,
+            stats.as_mut(),
+        )?;
+        if let Some(s) = &stats {
+            write_search_stats(s);
         }
-        query
-            .run_walk(&ctx.filter_root, &search_filter, *output, &out.separators)
-            .map_err(Into::into)
+        Ok(ok)
     }
 }

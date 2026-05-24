@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use sift_core::{
-    FileId, IndexError, IndexMeta, Indexes, META_FILENAME, QueryFlags, QuerySpec, SearchIndex,
+    FileId, IndexError, IndexKind, IndexMeta, Indexes, META_FILENAME, QueryFlags, QuerySpec,
     TrigramIndex, TrigramIndexBuilder, TrigramIndexError,
 };
 use tempfile::TempDir;
@@ -31,7 +31,7 @@ fn open_missing_table_errors() {
     let root_path = tmp.path().canonicalize().expect("canonicalize");
     let meta = IndexMeta {
         root: root_path,
-        is_single_file_corpus: false,
+        kind: IndexKind::Directory,
     };
     fs::write(
         trigram_dir.join(META_FILENAME),
@@ -70,8 +70,7 @@ fn explain_reports_indexed_for_literal() {
         patterns: &["foo.*".to_string()],
         flags: QueryFlags::empty(),
     };
-    let plan: &dyn SearchIndex = &index;
-    let output = plan.explain(&spec);
+    let output = index.explain(&spec);
     assert_eq!(output.pattern, "foo.*");
     assert_eq!(output.mode, "indexed_candidates");
 }
@@ -88,8 +87,7 @@ fn explain_reports_full_scan_without_literal() {
         patterns: &[r"\w{5}\s+\w{5}".to_string()],
         flags: QueryFlags::empty(),
     };
-    let plan: &dyn SearchIndex = &index;
-    let output = plan.explain(&spec);
+    let output = index.explain(&spec);
     assert_eq!(output.pattern, r"\w{5}\s+\w{5}");
     assert_eq!(output.mode, "full_scan");
 }
@@ -108,13 +106,12 @@ fn explain_reports_full_scan_for_invert_match() {
         patterns: &["beta".to_string()],
         flags,
     };
-    let plan: &dyn SearchIndex = &index;
-    let output = plan.explain(&spec);
+    let output = index.explain(&spec);
     assert_eq!(output.mode, "full_scan");
 }
 
 #[test]
-fn single_file_corpus_has_correct_structure() {
+fn single_file_corpus_indexes_correctly() {
     let tmp = TempDir::new().expect("create temp dir");
     let corpus = tmp.path().join("corpus");
     fs::create_dir_all(&corpus).expect("create dir");
@@ -123,8 +120,15 @@ fn single_file_corpus_has_correct_structure() {
 
     let index = build_index_in_tmp(&tmp, &file);
 
-    assert!(index.is_single_file());
-    assert_eq!(index.file_count(), 1);
+    assert_eq!(index.kind(), IndexKind::SingleFile);
+    assert!(
+        index.file_path(FileId::new(0)).is_some(),
+        "single-file index should have file 0"
+    );
+    assert!(
+        index.file_path(FileId::new(1)).is_none(),
+        "single-file index should only have one file"
+    );
     assert_eq!(
         index.file_path(FileId::new(0)).expect("get path"),
         Path::new("one.txt")
@@ -132,7 +136,29 @@ fn single_file_corpus_has_correct_structure() {
 }
 
 #[test]
-fn single_file_meta_is_json_with_explicit_kind() {
+fn single_file_build_ignores_siblings() {
+    let tmp = TempDir::new().expect("create temp dir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("create dir");
+    let file = corpus.join("one.txt");
+    fs::write(&file, "needle\n").expect("write file");
+    fs::write(corpus.join("two.txt"), "haystack\n").expect("write sibling");
+
+    let index = build_index_in_tmp(&tmp, &file);
+
+    assert_eq!(index.kind(), IndexKind::SingleFile);
+    assert!(
+        index.file_path(FileId::new(0)).is_some(),
+        "should only index the specified file"
+    );
+    assert!(
+        index.file_path(FileId::new(1)).is_none(),
+        "should only index the specified file"
+    );
+}
+
+#[test]
+fn meta_contains_root_path() {
     let tmp = TempDir::new().expect("create temp dir");
     let corpus = tmp.path().join("corpus");
     fs::create_dir_all(&corpus).expect("create dir");
@@ -149,8 +175,8 @@ fn single_file_meta_is_json_with_explicit_kind() {
     let meta = fs::read_to_string(trigram_dir.join(META_FILENAME)).expect("read meta");
     assert!(meta.contains("\"root\""), "unexpected meta: {meta}");
     assert!(
-        meta.contains("\"is_single_file_corpus\": true"),
-        "unexpected meta: {meta}"
+        meta.contains("\"SingleFile\""),
+        "single-file build should set kind to SingleFile in meta: {meta}"
     );
 }
 
@@ -170,9 +196,12 @@ fn persisted_index_reopens_with_same_files() {
         .expect("build index");
 
     let reopened = TrigramIndex::open(&trigram_dir).expect("reopen index");
-    assert_eq!(reopened.file_count(), 2);
     assert!(reopened.file_path(FileId::new(0)).is_some());
     assert!(reopened.file_path(FileId::new(1)).is_some());
+    assert!(
+        reopened.file_path(FileId::new(2)).is_none(),
+        "should have exactly two files"
+    );
 }
 
 #[test]

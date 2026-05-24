@@ -48,12 +48,9 @@ Internal grep APIs (`filter.rs`, `matcher.rs`, `types.rs`) return `Result<_, Sea
 ```rust
 pub trait SearchIndex: Sync + Send {
     fn root(&self) -> &Path;
-    fn file_count(&self) -> usize;
-    fn file_path(&self, id: FileId) -> Option<&Path>;
-    fn file_abs_path(&self, id: FileId) -> Option<PathBuf>;
-    fn candidates(&self, query: &QuerySpec<'_>) -> Vec<FileId>;
-    fn is_single_file(&self) -> bool;
-    fn explain(&self, query: &QuerySpec<'_>) -> QueryPlanOutput;
+    fn kind(&self) -> IndexKind;
+    fn candidates(&self, query: &QuerySpec<'_>) -> Vec<SearchCandidate>;
+    fn all_files(&self) -> Vec<SearchCandidate>;
 }
 ```
 

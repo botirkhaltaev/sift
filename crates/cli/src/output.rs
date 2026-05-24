@@ -477,11 +477,11 @@ pub fn build_line_style_flags(out: &SearchOutputCtx, line_number: bool) -> LineS
 pub const fn effective_filename_mode(
     with_filename: Option<bool>,
     is_path_mode: bool,
-    corpus_is_single_file: bool,
+    is_single_file: bool,
 ) -> FilenameMode {
     if is_path_mode || matches!(with_filename, Some(true)) {
         FilenameMode::Always
-    } else if matches!(with_filename, Some(false)) || corpus_is_single_file {
+    } else if matches!(with_filename, Some(false)) || is_single_file {
         FilenameMode::Never
     } else {
         FilenameMode::Always
@@ -1098,7 +1098,15 @@ mod tests {
     }
 
     #[test]
-    fn filename_mode_single_file() {
+    fn filename_mode_default() {
+        assert!(matches!(
+            effective_filename_mode(None, false, false),
+            FilenameMode::Always
+        ));
+    }
+
+    #[test]
+    fn filename_mode_single_file_defaults_to_never() {
         assert!(matches!(
             effective_filename_mode(None, false, true),
             FilenameMode::Never
@@ -1106,9 +1114,9 @@ mod tests {
     }
 
     #[test]
-    fn filename_mode_default() {
+    fn filename_mode_single_file_respects_explicit_true() {
         assert!(matches!(
-            effective_filename_mode(None, false, false),
+            effective_filename_mode(Some(true), false, true),
             FilenameMode::Always
         ));
     }

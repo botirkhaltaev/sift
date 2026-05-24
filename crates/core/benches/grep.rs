@@ -6,7 +6,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::{SearchIndex, SearchMode, SearchOptions, SearchOutput, SearchStats};
+use sift_core::{Indexes, SearchMatchFlags, SearchMode, SearchOptions, SearchStats, TrigramIndex};
 
 mod common;
 
@@ -20,12 +20,18 @@ fn sift_criterion() -> Criterion {
         .configure_from_args()
 }
 
+fn wrap_index(index: TrigramIndex) -> Indexes {
+    let root = index.root().to_path_buf();
+    Indexes::from_single(index, root)
+}
+
 // ─── Indexed search benches ──────────────────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
 fn bench_indexed_search(c: &mut Criterion) {
     let (_tmp, index) = common::open_large_index();
-    let filter = common::make_filter(&common::default_filter(), index.root());
+    let indexes = wrap_index(index);
+    let filter = common::make_filter(&common::default_filter(), indexes.root());
 
     let mut g = c.benchmark_group("grep_indexed");
 
@@ -35,10 +41,11 @@ fn bench_indexed_search(c: &mut Criterion) {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
                         common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
@@ -51,10 +58,11 @@ fn bench_indexed_search(c: &mut Criterion) {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
                         common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
@@ -70,10 +78,34 @@ fn bench_indexed_search(c: &mut Criterion) {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
                         common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
+                        None,
+                    )
+                    .unwrap(),
+            );
+        });
+    });
+
+    g.bench_function("case_insensitive", |b| {
+        let query = common::make_search(
+            &["beta"],
+            SearchOptions {
+                case_mode: sift_core::CaseMode::Insensitive,
+                ..Default::default()
+            },
+        );
+        b.iter(|| {
+            black_box(
+                query
+                    .run_indexes(
+                        &indexes,
+                        &filter,
+                        common::output_quiet(SearchMode::Standard),
+                        &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
@@ -89,64 +121,52 @@ fn bench_indexed_search(c: &mut Criterion) {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
                         common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
         });
     });
 
-    g.bench_function("max_count", |b| {
-        let opts = SearchOptions {
-            max_results: Some(1),
-            ..SearchOptions::default()
-        };
-        let query = common::make_search(&["beta"], opts);
+    g.bench_function("invert_match", |b| {
+        let query = common::make_search(
+            &["beta"],
+            SearchOptions {
+                flags: SearchMatchFlags::INVERT_MATCH,
+                ..Default::default()
+            },
+        );
         b.iter(|| {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
-                        common::output_std(),
+                        common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
         });
     });
 
-    g.bench_function("quiet", |b| {
+    g.bench_function("indexed_search_with_stats", |b| {
         let query = common::make_search(&["beta"], SearchOptions::default());
+        let mut stats = SearchStats::default();
         b.iter(|| {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
                         common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("stats", |b| {
-        let query = common::make_search(&["beta"], SearchOptions::default());
-        b.iter(|| {
-            let mut stats = SearchStats::default();
-            black_box(
-                query
-                    .run_indexes_with_stats(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        &mut stats,
+                        Some(&mut stats),
                     )
                     .unwrap(),
             );
@@ -158,9 +178,11 @@ fn bench_indexed_search(c: &mut Criterion) {
 
 // ─── Walk search benches ─────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_lines)]
 fn bench_walk_search(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
-    let corpus = index.root().to_path_buf();
+    let tmp = tempfile::tempdir().unwrap();
+    let corpus = tmp.path().join("corpus");
+    common::make_filter_corpus(&corpus);
     let filter = common::make_filter(&common::default_filter(), &corpus);
 
     let mut g = c.benchmark_group("grep_walk");
@@ -175,17 +197,15 @@ fn bench_walk_search(c: &mut Criterion) {
                         &filter,
                         common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
         });
     });
 
-    g.bench_function("no_literal", |b| {
-        let query = common::make_search(
-            &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}"],
-            SearchOptions::default(),
-        );
+    g.bench_function("full_scan", |b| {
+        let query = common::make_search(&[".*"], SearchOptions::default());
         b.iter(|| {
             black_box(
                 query
@@ -194,24 +214,7 @@ fn bench_walk_search(c: &mut Criterion) {
                         &filter,
                         common::output_quiet(SearchMode::Standard),
                         &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("filtered_walk", |b| {
-        let filter_cfg = common::glob_include_filter();
-        let filter = common::make_filter(&filter_cfg, &corpus);
-        let query = common::make_search(&["beta"], SearchOptions::default());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_walk(
-                        &corpus,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
@@ -221,271 +224,58 @@ fn bench_walk_search(c: &mut Criterion) {
     g.finish();
 }
 
-// ─── Filter benches ──────────────────────────────────────────────────────────
+// ─── Output mode benches ─────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_lines)]
-fn bench_filters(c: &mut Criterion) {
-    let (_tmp, index) = common::open_filter_index();
-    let query = common::make_search(&["beta"], SearchOptions::default());
-
-    let mut g = c.benchmark_group("grep_filters");
-
-    g.bench_function("no_filter", |b| {
-        let filter = common::make_filter(&common::default_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("glob_include", |b| {
-        let filter = common::make_filter(&common::glob_include_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("glob_exclude", |b| {
-        let filter = common::make_filter(&common::glob_exclude_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("glob_casei", |b| {
-        let filter = common::make_filter(&common::glob_casei_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("hidden_default", |b| {
-        let filter = common::make_filter(&common::default_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("hidden_include", |b| {
-        let filter = common::make_filter(&common::hidden_include_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("ignore_default", |b| {
-        let filter = common::make_filter(&common::default_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("ignore_custom", |b| {
-        let filter = common::make_filter(&common::ignore_custom_filter(), index.root());
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(
-                        &[&index],
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                    )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("scoped", |b| {
-        let filter = common::make_filter(&common::scoped_filter("subdir"), index.root());
-        let output = SearchOutput {
-            mode: SearchMode::FilesWithMatches,
-            emission: common::output_std().emission,
-            ..SearchOutput::default()
-        };
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(&[&index], &filter, output, &common::default_seps())
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.finish();
-}
-
-// ─── Output-mode benches ─────────────────────────────────────────────────────
-
-#[allow(clippy::too_many_lines)]
 fn bench_output_modes(c: &mut Criterion) {
-    let (_tmp, index) = common::open_parity_index();
+    let (_tmp, index) = common::open_large_index();
+    let indexes = wrap_index(index);
+    let filter = common::make_filter(&common::default_filter(), indexes.root());
     let query = common::make_search(&["beta"], SearchOptions::default());
-    let filter = common::make_filter(&common::default_filter(), index.root());
 
     let mut g = c.benchmark_group("grep_output_modes");
 
-    g.bench_function("standard", |b| {
+    g.bench_function("count", |b| {
         b.iter(|| {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
-                        common::output_std(),
+                        common::output_quiet(SearchMode::Count),
                         &common::default_seps(),
+                        None,
                     )
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("only_matching", |b| {
-        let output = SearchOutput {
-            mode: SearchMode::OnlyMatching,
-            emission: common::output_std().emission,
-            ..SearchOutput::default()
-        };
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(&[&index], &filter, output, &common::default_seps())
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("count", |b| {
-        let output = SearchOutput {
-            mode: SearchMode::Count,
-            emission: common::output_std().emission,
-            ..SearchOutput::default()
-        };
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(&[&index], &filter, output, &common::default_seps())
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("count_matches", |b| {
-        let output = SearchOutput {
-            mode: SearchMode::CountMatches,
-            emission: common::output_std().emission,
-            ..SearchOutput::default()
-        };
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(&[&index], &filter, output, &common::default_seps())
                     .unwrap(),
             );
         });
     });
 
     g.bench_function("files_with_matches", |b| {
-        let output = SearchOutput {
-            mode: SearchMode::FilesWithMatches,
-            emission: common::output_std().emission,
-            ..SearchOutput::default()
-        };
         b.iter(|| {
             black_box(
                 query
-                    .run_indexes(&[&index], &filter, output, &common::default_seps())
+                    .run_indexes(
+                        &indexes,
+                        &filter,
+                        common::output_quiet(SearchMode::FilesWithMatches),
+                        &common::default_seps(),
+                        None,
+                    )
                     .unwrap(),
             );
         });
     });
 
     g.bench_function("files_without_match", |b| {
-        let output = SearchOutput {
-            mode: SearchMode::FilesWithoutMatch,
-            emission: common::output_std().emission,
-            ..SearchOutput::default()
-        };
-        b.iter(|| {
-            black_box(
-                query
-                    .run_indexes(&[&index], &filter, output, &common::default_seps())
-                    .unwrap(),
-            );
-        });
-    });
-
-    g.bench_function("json", |b| {
         b.iter(|| {
             black_box(
                 query
                     .run_indexes(
-                        &[&index],
+                        &indexes,
                         &filter,
-                        common::output_json(SearchMode::Standard),
+                        common::output_quiet(SearchMode::FilesWithoutMatch),
                         &common::default_seps(),
+                        None,
                     )
                     .unwrap(),
             );
@@ -498,6 +288,6 @@ fn bench_output_modes(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_indexed_search, bench_walk_search, bench_filters, bench_output_modes,
+    targets = bench_indexed_search, bench_walk_search, bench_output_modes,
 }
 criterion_main!(benches);

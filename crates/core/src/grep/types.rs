@@ -329,8 +329,8 @@ impl Default for SearchSeparators {
     }
 }
 
-/// Counters filled when running with [`CompiledSearch::run_index_with_stats`] /
-/// [`CompiledSearch::run_walk_with_stats`].
+/// Counters filled when running with `stats: Some(&mut SearchStats)` on
+/// [`CompiledSearch::run_indexes`] / [`CompiledSearch::run_walk`].
 ///
 /// `matches` is mode-dependent: line hits for standard / only-matching / count modes,
 /// one per matching file for `-l`, and one per listed file for `--files-without-match`.

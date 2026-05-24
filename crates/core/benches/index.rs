@@ -6,7 +6,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::{FileId, Indexes, QueryFlags, QuerySpec, SearchIndex};
+use sift_core::{Indexes, QueryFlags, QuerySpec, SearchIndex};
 
 mod common;
 
@@ -153,23 +153,19 @@ fn bench_index_save_reopen(c: &mut Criterion) {
     g.finish();
 }
 
-// ─── SearchIndex trait benches ───────────────────────────────────────────────
+// ─── TrigramIndex inherent method benches ────────────────────────────────────
 
-fn bench_search_index_trait(c: &mut Criterion) {
+fn bench_trigram_index_methods(c: &mut Criterion) {
     let (_tmp, index) = common::open_large_index();
 
-    let mut g = c.benchmark_group("search_index_trait");
-
-    g.bench_function("file_count", |b| {
-        b.iter(|| black_box(index.file_count()));
-    });
+    let mut g = c.benchmark_group("trigram_index");
 
     g.bench_function("file_path", |b| {
-        b.iter(|| black_box(index.file_path(FileId::new(0))));
+        b.iter(|| black_box(index.file_path(sift_core::FileId::new(0))));
     });
 
     g.bench_function("file_abs_path", |b| {
-        b.iter(|| black_box(index.file_abs_path(FileId::new(0))));
+        b.iter(|| black_box(index.file_abs_path(sift_core::FileId::new(0))));
     });
 
     g.finish();
@@ -254,6 +250,6 @@ fn bench_explain(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_index_build, bench_index_open, bench_indexes_open, bench_index_save_reopen, bench_search_index_trait, bench_candidates, bench_explain,
+    targets = bench_index_build, bench_index_open, bench_indexes_open, bench_index_save_reopen, bench_trigram_index_methods, bench_candidates, bench_explain,
 }
 criterion_main!(benches);
