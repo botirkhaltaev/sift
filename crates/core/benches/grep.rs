@@ -6,7 +6,10 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::{Indexes, SearchMatchFlags, SearchMode, SearchOptions, SearchStats, TrigramIndex};
+use sift_core::{
+    Indexes, SearchExecution, SearchMatchFlags, SearchMode, SearchOptions, SearchStats,
+    TrigramIndex,
+};
 
 mod common;
 
@@ -42,10 +45,12 @@ fn bench_indexed_search(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Standard),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -59,10 +64,12 @@ fn bench_indexed_search(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Standard),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -79,10 +86,12 @@ fn bench_indexed_search(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Standard),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -102,10 +111,12 @@ fn bench_indexed_search(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Standard),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -122,10 +133,12 @@ fn bench_indexed_search(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Standard),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -145,10 +158,12 @@ fn bench_indexed_search(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Standard),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -163,10 +178,12 @@ fn bench_indexed_search(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        Some(&mut stats),
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Standard),
+                            separators: &common::default_seps(),
+                            stats: Some(&mut stats),
+                        },
                     )
                     .unwrap(),
             );
@@ -192,13 +209,12 @@ fn bench_walk_search(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_walk(
-                        &corpus,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
-                    )
+                    .run_walk(SearchExecution {
+                        filter: &filter,
+                        output: common::output_quiet(SearchMode::Standard),
+                        separators: &common::default_seps(),
+                        stats: None,
+                    })
                     .unwrap(),
             );
         });
@@ -209,13 +225,12 @@ fn bench_walk_search(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 query
-                    .run_walk(
-                        &corpus,
-                        &filter,
-                        common::output_quiet(SearchMode::Standard),
-                        &common::default_seps(),
-                        None,
-                    )
+                    .run_walk(SearchExecution {
+                        filter: &filter,
+                        output: common::output_quiet(SearchMode::Standard),
+                        separators: &common::default_seps(),
+                        stats: None,
+                    })
                     .unwrap(),
             );
         });
@@ -240,10 +255,12 @@ fn bench_output_modes(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::Count),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::Count),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -256,10 +273,12 @@ fn bench_output_modes(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::FilesWithMatches),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::FilesWithMatches),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );
@@ -272,10 +291,12 @@ fn bench_output_modes(c: &mut Criterion) {
                 query
                     .run_indexes(
                         &indexes,
-                        &filter,
-                        common::output_quiet(SearchMode::FilesWithoutMatch),
-                        &common::default_seps(),
-                        None,
+                        SearchExecution {
+                            filter: &filter,
+                            output: common::output_quiet(SearchMode::FilesWithoutMatch),
+                            separators: &common::default_seps(),
+                            stats: None,
+                        },
                     )
                     .unwrap(),
             );

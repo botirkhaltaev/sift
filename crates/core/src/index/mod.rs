@@ -7,15 +7,25 @@ use serde::{Deserialize, Serialize};
 pub use trigram::TrigramIndex;
 pub use trigram::TrigramIndexError;
 
+/// How an index query plan resolves candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PlanMode {
+    /// The query was narrowed using trigram candidates from the index.
+    #[default]
+    IndexedCandidates,
+    /// No trigrams were usable — all indexed files must be scanned.
+    FullScan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryPlanOutput {
     pub pattern: String,
-    pub mode: &'static str,
+    pub mode: PlanMode,
 }
 
 /// Whether the index was built from a directory or a single file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum IndexKind {
+pub enum CorpusKind {
     /// Built from a directory path — all discovered files were indexed.
     #[default]
     Directory,
@@ -171,14 +181,14 @@ impl Indexes {
         self.inner.first().map(AsRef::as_ref)
     }
 
-    /// Returns true when the index was built from a single file input.
+    /// Returns the corpus kind if all indexes agree, or `None` for mixed/empty.
     #[must_use]
-    pub fn is_single_file(&self) -> bool {
-        self.inner.len() == 1
-            && self
-                .inner
-                .first()
-                .is_some_and(|idx| idx.kind() == IndexKind::SingleFile)
+    pub fn corpus_kind(&self) -> Option<CorpusKind> {
+        let kind = self.inner.first()?.corpus_kind();
+        if self.inner.iter().any(|idx| idx.corpus_kind() != kind) {
+            return None;
+        }
+        Some(kind)
     }
 }
 
@@ -215,7 +225,7 @@ impl IndexId {
 /// An indexed search corpus that can return candidate files for a query.
 pub trait SearchIndex: Sync + Send {
     fn root(&self) -> &Path;
-    fn kind(&self) -> IndexKind;
+    fn corpus_kind(&self) -> CorpusKind;
     fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate>;
     fn all_files(&self) -> Vec<SearchCandidate>;
 }
@@ -224,7 +234,7 @@ pub trait SearchIndex: Sync + Send {
 pub struct IndexMeta {
     pub root: PathBuf,
     #[serde(default)]
-    pub kind: IndexKind,
+    pub corpus_kind: CorpusKind,
 }
 
 impl IndexMeta {
@@ -262,7 +272,7 @@ mod tests {
         let abs = std::env::current_dir().unwrap();
         let meta = IndexMeta {
             root: abs,
-            kind: IndexKind::Directory,
+            corpus_kind: CorpusKind::Directory,
         };
         let result = meta.validate(Path::new("/fake/meta.json"));
         assert!(result.is_ok());
@@ -272,7 +282,7 @@ mod tests {
     fn index_meta_validate_rejects_relative_root() {
         let meta = IndexMeta {
             root: PathBuf::from("relative/path"),
-            kind: IndexKind::Directory,
+            corpus_kind: CorpusKind::Directory,
         };
         let result = meta.validate(Path::new("/fake/meta.json"));
         assert!(matches!(result, Err(TrigramIndexError::InvalidMeta(_))));

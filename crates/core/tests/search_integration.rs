@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use sift_core::{
-    FileId, IndexError, IndexKind, IndexMeta, Indexes, META_FILENAME, QueryFlags, QuerySpec,
+    CorpusKind, FileId, IndexError, IndexMeta, Indexes, META_FILENAME, QueryFlags, QuerySpec,
     TrigramIndex, TrigramIndexBuilder, TrigramIndexError,
 };
 use tempfile::TempDir;
@@ -31,7 +31,7 @@ fn open_missing_table_errors() {
     let root_path = tmp.path().canonicalize().expect("canonicalize");
     let meta = IndexMeta {
         root: root_path,
-        kind: IndexKind::Directory,
+        corpus_kind: CorpusKind::Directory,
     };
     fs::write(
         trigram_dir.join(META_FILENAME),
@@ -72,7 +72,7 @@ fn explain_reports_indexed_for_literal() {
     };
     let output = index.explain(&spec);
     assert_eq!(output.pattern, "foo.*");
-    assert_eq!(output.mode, "indexed_candidates");
+    assert_eq!(output.mode, sift_core::PlanMode::IndexedCandidates);
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn explain_reports_full_scan_without_literal() {
     };
     let output = index.explain(&spec);
     assert_eq!(output.pattern, r"\w{5}\s+\w{5}");
-    assert_eq!(output.mode, "full_scan");
+    assert_eq!(output.mode, sift_core::PlanMode::FullScan);
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn explain_reports_full_scan_for_invert_match() {
         flags,
     };
     let output = index.explain(&spec);
-    assert_eq!(output.mode, "full_scan");
+    assert_eq!(output.mode, sift_core::PlanMode::FullScan);
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn single_file_corpus_indexes_correctly() {
 
     let index = build_index_in_tmp(&tmp, &file);
 
-    assert_eq!(index.kind(), IndexKind::SingleFile);
+    assert_eq!(index.corpus_kind(), CorpusKind::SingleFile);
     assert!(
         index.file_path(FileId::new(0)).is_some(),
         "single-file index should have file 0"
@@ -146,7 +146,7 @@ fn single_file_build_ignores_siblings() {
 
     let index = build_index_in_tmp(&tmp, &file);
 
-    assert_eq!(index.kind(), IndexKind::SingleFile);
+    assert_eq!(index.corpus_kind(), CorpusKind::SingleFile);
     assert!(
         index.file_path(FileId::new(0)).is_some(),
         "should only index the specified file"
@@ -175,8 +175,12 @@ fn meta_contains_root_path() {
     let meta = fs::read_to_string(trigram_dir.join(META_FILENAME)).expect("read meta");
     assert!(meta.contains("\"root\""), "unexpected meta: {meta}");
     assert!(
+        meta.contains("\"corpus_kind\":"),
+        "single-file build should set corpus_kind in meta: {meta}"
+    );
+    assert!(
         meta.contains("\"SingleFile\""),
-        "single-file build should set kind to SingleFile in meta: {meta}"
+        "single-file build should set corpus_kind to SingleFile in meta: {meta}"
     );
 }
 

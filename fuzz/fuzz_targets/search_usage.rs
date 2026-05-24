@@ -2,8 +2,8 @@
 
 use libfuzzer_sys::fuzz_target;
 use sift_core::{
-    compile_search_pattern, CompiledSearch, SearchIndex, SearchMatchFlags, SearchOptions,
-    TrigramIndex, TrigramIndexBuilder,
+    CompiledSearch, Indexes, PatternCompiler, SearchFilter, SearchFilterConfig, SearchOutput,
+    SearchOutputFormat, SearchSeparators, TrigramIndexBuilder,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -12,28 +12,30 @@ const MAX_PATTERN_LEN: usize = 512;
 
 struct IndexHolder {
     _tmp: tempfile::TempDir,
-    index: TrigramIndex,
+    indexes: Indexes,
 }
 
-static INDEX: OnceLock<IndexHolder> = OnceLock::new();
+static INDEXES: OnceLock<IndexHolder> = OnceLock::new();
 
-fn indexed() -> &'static TrigramIndex {
-    &INDEX
+fn indexed() -> &'static Indexes {
+    &INDEXES
         .get_or_init(|| {
             let tmp = tempfile::tempdir().expect("tempdir");
             let corpus = tmp.path().join("c");
             fs::create_dir_all(&corpus).expect("mkdir");
             fs::write(corpus.join("a.txt"), b"hello world\nfoo bar\n").expect("a.txt");
             fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
-            let index_dir = tmp.path().join(".sift");
-            TrigramIndexBuilder::new(&corpus)
-                .with_dir(&index_dir)
+            let sift_dir = tmp.path().join(".sift");
+            let trigram_dir = sift_dir.join("trigram");
+            let index = TrigramIndexBuilder::new(&corpus)
+                .with_dir(&trigram_dir)
                 .build()
                 .expect("build_index");
-            let index = TrigramIndex::open(&index_dir).expect("open");
-            IndexHolder { _tmp: tmp, index }
+            index.save_to_dir(&trigram_dir).expect("save_index");
+            let indexes = Indexes::open(&sift_dir).expect("open_index");
+            IndexHolder { _tmp: tmp, indexes }
         })
-        .index
+        .indexes
 }
 
 fn lossy_pattern(data: &[u8]) -> String {
@@ -43,17 +45,37 @@ fn lossy_pattern(data: &[u8]) -> String {
         .collect()
 }
 
-fn opts_from_bytes(data: &[u8]) -> SearchOptions {
+fn opts_from_bytes(data: &[u8]) -> sift_core::SearchOptions {
     let flags = data
         .first()
-        .map(|b| SearchMatchFlags::from_bits_truncate(*b))
+        .map(|b| sift_core::SearchMatchFlags::from_bits_truncate(u16::from(*b)))
         .unwrap_or_default();
     let max_results = data.get(1).map(|b| (*b as usize).min(10_000));
-    SearchOptions {
+    sift_core::SearchOptions {
         flags,
         max_results,
-        ..SearchOptions::default()
+        ..sift_core::SearchOptions::default()
     }
+}
+
+fn run_search(indexes: &Indexes, patterns: &[String], opts: &sift_core::SearchOptions) {
+    let Ok(q) = CompiledSearch::new(patterns, opts.clone()) else {
+        return;
+    };
+    let filter = SearchFilter::new(&SearchFilterConfig::default(), indexes.root()).unwrap();
+    let _ = q.run_indexes(
+        indexes,
+        sift_core::SearchExecution {
+            filter: &filter,
+            output: SearchOutput {
+                format: SearchOutputFormat::Text,
+                emission: sift_core::OutputEmission::Quiet,
+                ..SearchOutput::default()
+            },
+            separators: &SearchSeparators::default(),
+            stats: None,
+        },
+    );
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -62,46 +84,35 @@ fuzz_target!(|data: &[u8]| {
     }
 
     let opts = opts_from_bytes(data);
-    let index = indexed();
-
-    let indexes: &[&dyn SearchIndex] = &[index];
+    let indexes = indexed();
 
     let pat1 = lossy_pattern(&data[2..]);
-    if let Ok(q) = CompiledSearch::new(&[pat1], opts) {
-        let _ = q.run_indexes(
-            indexes,
-            &sift_core::SearchFilter::new(&sift_core::SearchFilterConfig::default(), index.root()).unwrap(),
-            sift_core::SearchOutput {
-                emission: sift_core::OutputEmission::Quiet,
-                ..sift_core::SearchOutput::default()
-            },
-            &sift_core::SearchSeparators::default(),
-        );
-    }
+    run_search(indexes, &[pat1], &opts);
 
     if data.len() > 4 {
         let mid = 2 + (data.len() - 2) / 2;
         let p_a = lossy_pattern(&data[2..mid]);
         let p_b = lossy_pattern(&data[mid..]);
-        if let Ok(q) = CompiledSearch::new(&[p_a, p_b], opts) {
-            let _ = q.run_indexes(
-                indexes,
-                &sift_core::SearchFilter::new(&sift_core::SearchFilterConfig::default(), index.root()).unwrap(),
-                sift_core::SearchOutput {
-                    emission: sift_core::OutputEmission::Quiet,
-                    ..sift_core::SearchOutput::default()
-                },
-                &sift_core::SearchSeparators::default(),
-            );
-        }
+        run_search(indexes, &[p_a, p_b], &opts);
     }
 
     let p = lossy_pattern(&data[2..]);
-    let _ = compile_search_pattern(&[p], &opts);
+    let _ = compile_with_flags(&[&p], &opts);
     if data.len() > 4 {
         let mid = 2 + (data.len() - 2) / 2;
         let p_a = lossy_pattern(&data[2..mid]);
         let p_b = lossy_pattern(&data[mid..]);
-        let _ = compile_search_pattern(&[p_a, p_b], &opts);
+        let _ = compile_with_flags(&[&p_a, &p_b], &opts);
     }
 });
+
+fn compile_with_flags(patterns: &[&str], opts: &sift_core::SearchOptions) -> Result<(), ()> {
+    PatternCompiler::new()
+        .fixed_strings(opts.fixed_strings())
+        .word_regexp(opts.word_regexp())
+        .line_regexp(opts.line_regexp())
+        .case_insensitive(opts.case_insensitive())
+        .compile(patterns)
+        .map(|_| ())
+        .map_err(|_| ())
+}

@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 
 use sift_core::{
     ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    LineStyleFlags, OutputEmission, PathDisplay, SearchFilter, SearchFilterConfig, SearchLineStyle,
-    SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchRecordStyle,
-    SearchSeparators, TrigramIndex, TrigramIndexBuilder, VisibilityConfig,
+    LineStyleFlags, OutputEmission, PassthruMode, PathDisplay, RecordTerminator, SearchFilter,
+    SearchFilterConfig, SearchLineStyle, SearchMode, SearchOptions, SearchOutput,
+    SearchOutputFormat, SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder,
+    VisibilityConfig, ZeroCountMode,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -245,16 +246,15 @@ pub const fn output_std() -> SearchOutput {
             filename_mode: FilenameMode::Auto,
             flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
-            max_columns: None,
-            max_columns_preview: false,
+            columns: None,
         },
         records: SearchRecordStyle {
-            null_data: false,
+            terminator: RecordTerminator::Newline,
             color: ColorChoice::Never,
             path_separator: None,
         },
-        passthru: false,
-        include_zero: false,
+        passthru: PassthruMode::Disabled,
+        include_zero: ZeroCountMode::Omit,
     }
 }
 
@@ -267,16 +267,15 @@ pub const fn output_quiet(mode: SearchMode) -> SearchOutput {
             filename_mode: FilenameMode::Auto,
             flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
-            max_columns: None,
-            max_columns_preview: false,
+            columns: None,
         },
         records: SearchRecordStyle {
-            null_data: false,
+            terminator: RecordTerminator::Newline,
             color: ColorChoice::Never,
             path_separator: None,
         },
-        passthru: false,
-        include_zero: false,
+        passthru: PassthruMode::Disabled,
+        include_zero: ZeroCountMode::Omit,
     }
 }
 
@@ -289,16 +288,15 @@ pub const fn output_json(mode: SearchMode) -> SearchOutput {
             filename_mode: FilenameMode::Auto,
             flags: LineStyleFlags::empty(),
             path_display: PathDisplay::Relative,
-            max_columns: None,
-            max_columns_preview: false,
+            columns: None,
         },
         records: SearchRecordStyle {
-            null_data: false,
+            terminator: RecordTerminator::Newline,
             color: ColorChoice::Never,
             path_separator: None,
         },
-        passthru: false,
-        include_zero: false,
+        passthru: PassthruMode::Disabled,
+        include_zero: ZeroCountMode::Omit,
     }
 }
 

@@ -4,6 +4,7 @@ use regex_automata::meta::Regex;
 use regex_syntax::escape;
 
 use super::error::SearchError;
+use super::types::SearchMatchFlags;
 
 /// Configurable pattern compiler for grep-style regex building.
 ///
@@ -11,17 +12,8 @@ use super::error::SearchError;
 /// individual patterns or compile a combined regex from multiple patterns.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PatternCompiler {
-    flags: PatternFlags,
-}
-
-bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    struct PatternFlags: u8 {
-        const FIXED_STRINGS    = 1 << 0;
-        const WORD_REGEXP      = 1 << 1;
-        const LINE_REGEXP      = 1 << 2;
-        const CASE_INSENSITIVE = 1 << 3;
-    }
+    flags: SearchMatchFlags,
+    case_insensitive: bool,
 }
 
 impl PatternCompiler {
@@ -29,7 +21,8 @@ impl PatternCompiler {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            flags: PatternFlags::empty(),
+            flags: SearchMatchFlags::empty(),
+            case_insensitive: false,
         }
     }
 
@@ -37,7 +30,7 @@ impl PatternCompiler {
     #[must_use]
     pub fn fixed_strings(mut self, on: bool) -> Self {
         if on {
-            self.flags |= PatternFlags::FIXED_STRINGS;
+            self.flags |= SearchMatchFlags::FIXED_STRINGS;
         }
         self
     }
@@ -46,7 +39,7 @@ impl PatternCompiler {
     #[must_use]
     pub fn word_regexp(mut self, on: bool) -> Self {
         if on {
-            self.flags |= PatternFlags::WORD_REGEXP;
+            self.flags |= SearchMatchFlags::WORD_REGEXP;
         }
         self
     }
@@ -55,31 +48,29 @@ impl PatternCompiler {
     #[must_use]
     pub fn line_regexp(mut self, on: bool) -> Self {
         if on {
-            self.flags |= PatternFlags::LINE_REGEXP;
+            self.flags |= SearchMatchFlags::LINE_REGEXP;
         }
         self
     }
 
     /// Conditionally enable case-insensitive matching.
     #[must_use]
-    pub fn case_insensitive(mut self, on: bool) -> Self {
-        if on {
-            self.flags |= PatternFlags::CASE_INSENSITIVE;
-        }
+    pub const fn case_insensitive(mut self, on: bool) -> Self {
+        self.case_insensitive = on;
         self
     }
 
     /// Shape a single pattern string by applying escaping and anchors/boundaries.
     #[must_use]
     pub fn shape(&self, pattern: &str) -> String {
-        let mut s = if self.flags.contains(PatternFlags::FIXED_STRINGS) {
+        let mut s = if self.flags.contains(SearchMatchFlags::FIXED_STRINGS) {
             escape(pattern)
         } else {
             pattern.to_string()
         };
-        if self.flags.contains(PatternFlags::LINE_REGEXP) {
+        if self.flags.contains(SearchMatchFlags::LINE_REGEXP) {
             s = format!("^(?:{s})$");
-        } else if self.flags.contains(PatternFlags::WORD_REGEXP) {
+        } else if self.flags.contains(SearchMatchFlags::WORD_REGEXP) {
             s = format!(r"\b(?:{s})\b");
         }
         s
@@ -102,7 +93,7 @@ impl PatternCompiler {
                 .join("|")
         };
         let mut builder = Regex::builder();
-        if self.flags.contains(PatternFlags::CASE_INSENSITIVE) {
+        if self.case_insensitive {
             builder.syntax(regex_automata::util::syntax::Config::new().case_insensitive(true));
         }
         builder
@@ -120,72 +111,9 @@ impl PatternCompiler {
     }
 }
 
-/// Shape a single pattern string using the given options.
-#[must_use]
-pub fn pattern_branch(p: &str, opts: &super::types::SearchOptions) -> String {
-    PatternCompiler::new()
-        .fixed_strings(opts.fixed_strings())
-        .word_regexp(opts.word_regexp())
-        .line_regexp(opts.line_regexp())
-        .shape(p)
-}
-
-/// Build a combined `Regex` from one or more patterns.
-///
-/// # Errors
-///
-/// Returns a boxed [`regex_automata::meta::BuildError`] if the combined pattern is invalid.
-pub fn compile_search_pattern(
-    patterns: &[String],
-    opts: &super::types::SearchOptions,
-) -> Result<Regex, Box<regex_automata::meta::BuildError>> {
-    debug_assert!(!patterns.is_empty());
-    let compiler = PatternCompiler::new()
-        .fixed_strings(opts.fixed_strings())
-        .word_regexp(opts.word_regexp())
-        .line_regexp(opts.line_regexp())
-        .case_insensitive(opts.case_insensitive());
-    let pattern_refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
-    let branches: Vec<String> = pattern_refs.iter().map(|p| compiler.shape(p)).collect();
-    let combined = if branches.len() == 1 {
-        branches[0].clone()
-    } else {
-        branches
-            .into_iter()
-            .map(|b| format!("(?:{b})"))
-            .collect::<Vec<_>>()
-            .join("|")
-    };
-    let mut builder = Regex::builder();
-    if compiler.flags.contains(PatternFlags::CASE_INSENSITIVE) {
-        builder.syntax(regex_automata::util::syntax::Config::new().case_insensitive(true));
-    }
-    builder.build(&combined).map_err(Box::new)
-}
-
-/// Build a `Regex` for a single pattern.
-///
-/// # Errors
-///
-/// Returns a boxed [`regex_automata::meta::BuildError`] if `pattern` is invalid.
-pub fn compile_pattern(
-    pattern: &str,
-    case_insensitive: bool,
-) -> Result<Regex, Box<regex_automata::meta::BuildError>> {
-    let shaped = PatternCompiler::new()
-        .case_insensitive(case_insensitive)
-        .shape(pattern);
-    let mut builder = Regex::builder();
-    if case_insensitive {
-        builder.syntax(regex_automata::util::syntax::Config::new().case_insensitive(true));
-    }
-    builder.build(&shaped).map_err(Box::new)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SearchMatchFlags, SearchOptions};
 
     #[test]
     fn alternation_matches_either_pattern() {
@@ -306,35 +234,6 @@ mod tests {
         let shaped = compiler.shape("yes");
         assert!(shaped.starts_with("^(?:"));
         assert!(!shaped.contains(r"\b"));
-    }
-
-    #[test]
-    fn pattern_branch_reflects_search_options() {
-        let mut opts = SearchOptions::default();
-        opts.flags |= SearchMatchFlags::FIXED_STRINGS;
-        let shaped = pattern_branch("a.c", &opts);
-        assert_eq!(shaped, r"a\.c");
-    }
-
-    #[test]
-    fn compile_search_pattern_rejects_invalid_regex() {
-        let opts = SearchOptions::default();
-        let result = compile_search_pattern(&["(".to_string()], &opts);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn compile_search_pattern_case_insensitive() {
-        let opts = SearchOptions {
-            case_mode: crate::CaseMode::Insensitive,
-            ..SearchOptions::default()
-        };
-        let re = compile_search_pattern(&["hello".to_string()], &opts).expect("compile");
-        let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"HELLO"))
-                .is_some()
-        );
     }
 
     #[test]

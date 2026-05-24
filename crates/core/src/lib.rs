@@ -4,23 +4,25 @@
 
 mod grep;
 mod index;
+pub(crate) mod parallel;
 pub(crate) mod query;
 
 pub use grep::{
-    BinaryMode, CandidateInfo, CaseMode, ColorChoice, CompiledSearch, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, Match, OutputEmission, PathDisplay,
-    PatternCompiler, SearchError, SearchFilter, SearchFilterConfig, SearchLineStyle,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
-    SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig, compile_pattern,
-    compile_search_pattern, pattern_branch, walk_file_paths,
+    BinaryMode, CandidateInfo, CandidateSet, CaseMode, ColorChoice, ColumnLimit, ColumnOverflow,
+    CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
+    PathDisplay, PatternCompiler, RecordTerminator, SearchError, SearchExecution, SearchFilter,
+    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
+    SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
+    VisibilityConfig, WalkOptions, ZeroCountMode, discover_files,
 };
 
 pub use ignore::{Walk, WalkBuilder};
 
 pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
 pub use index::{
-    FileId, IndexError, IndexId, IndexKind, IndexMeta, Indexes, QueryPlanOutput, SearchCandidate,
-    SearchIndex,
+    CorpusKind, FileId, IndexError, IndexId, IndexMeta, Indexes, PlanMode, QueryPlanOutput,
+    SearchCandidate, SearchIndex,
 };
 
 pub use query::{QueryFlags, QuerySpec};

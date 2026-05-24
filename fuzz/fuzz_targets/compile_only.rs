@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::{compile_search_pattern, SearchMatchFlags, SearchOptions};
+use sift_core::{PatternCompiler, SearchMatchFlags, SearchOptions};
 
 /// Static branches combined with random bytes to stress alternation and flag shaping.
 const STATIC_BRANCHES: &[&str] = &[
@@ -14,10 +14,19 @@ const STATIC_BRANCHES: &[&str] = &[
     "",
 ];
 
+fn compile_with_flags(patterns: &[String], opts: &SearchOptions) {
+    let _ = PatternCompiler::new()
+        .fixed_strings(opts.fixed_strings())
+        .word_regexp(opts.word_regexp())
+        .line_regexp(opts.line_regexp())
+        .case_insensitive(opts.case_insensitive())
+        .compile(&patterns.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
 fuzz_target!(|data: &[u8]| {
     let flags = data
         .first()
-        .map(|b| SearchMatchFlags::from_bits_truncate(*b))
+        .map(|b| SearchMatchFlags::from_bits_truncate(u16::from(*b)))
         .unwrap_or_default();
     let max_results = data.get(1).map(|b| (*b as usize).min(5000));
     let opts = SearchOptions {
@@ -31,12 +40,12 @@ fuzz_target!(|data: &[u8]| {
 
     for s in STATIC_BRANCHES {
         let patterns = vec![s.to_string(), dynamic.clone()];
-        let _ = compile_search_pattern(&patterns, &opts);
+        compile_with_flags(&patterns, &opts);
     }
 
     let patterns: Vec<String> = STATIC_BRANCHES.iter().map(|s| (*s).to_string()).collect();
-    let _ = compile_search_pattern(&patterns, &opts);
+    compile_with_flags(&patterns, &opts);
 
     let single = dynamic.clone();
-    let _ = compile_search_pattern(&[single], &opts);
+    compile_with_flags(&[single], &opts);
 });

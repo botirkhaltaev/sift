@@ -1,8 +1,17 @@
 use clap::{ArgAction, Args};
 use sift_core::{
-    ColorChoice, FilenameMode, LineStyleFlags, OutputEmission, SearchLineStyle, SearchMode,
-    SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
+    ColorChoice, FilenameMode, LineStyleFlags, OutputEmission, PassthruMode, SearchLineStyle,
+    SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
+    ZeroCountMode,
 };
+
+/// Describes the filename display context for deciding whether to show paths.
+#[derive(Clone, Copy)]
+pub enum FilenameContext {
+    PathMode,
+    DirectoryCorpus,
+    SingleFileCorpus,
+}
 
 use crate::cli::Cli;
 
@@ -447,8 +456,12 @@ pub const fn search_output(
         },
         lines,
         records,
-        passthru: false,
-        include_zero,
+        passthru: PassthruMode::Disabled,
+        include_zero: if include_zero {
+            ZeroCountMode::Include
+        } else {
+            ZeroCountMode::Omit
+        },
     }
 }
 
@@ -476,12 +489,13 @@ pub fn build_line_style_flags(out: &SearchOutputCtx, line_number: bool) -> LineS
 #[must_use]
 pub const fn effective_filename_mode(
     with_filename: Option<bool>,
-    is_path_mode: bool,
-    is_single_file: bool,
+    context: FilenameContext,
 ) -> FilenameMode {
-    if is_path_mode || matches!(with_filename, Some(true)) {
+    if matches!(context, FilenameContext::PathMode) || matches!(with_filename, Some(true)) {
         FilenameMode::Always
-    } else if matches!(with_filename, Some(false)) || is_single_file {
+    } else if matches!(with_filename, Some(false))
+        || matches!(context, FilenameContext::SingleFileCorpus)
+    {
         FilenameMode::Never
     } else {
         FilenameMode::Always
@@ -647,6 +661,7 @@ impl Cli {
 mod tests {
     use super::*;
     use clap::Parser;
+    use sift_core::RecordTerminator;
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(ToString::to_string).collect()
@@ -1076,7 +1091,7 @@ mod tests {
     #[test]
     fn filename_mode_path_mode() {
         assert!(matches!(
-            effective_filename_mode(None, true, false),
+            effective_filename_mode(None, FilenameContext::PathMode),
             FilenameMode::Always
         ));
     }
@@ -1084,7 +1099,7 @@ mod tests {
     #[test]
     fn filename_mode_with_filename_true() {
         assert!(matches!(
-            effective_filename_mode(Some(true), false, false),
+            effective_filename_mode(Some(true), FilenameContext::DirectoryCorpus),
             FilenameMode::Always
         ));
     }
@@ -1092,7 +1107,7 @@ mod tests {
     #[test]
     fn filename_mode_with_filename_false() {
         assert!(matches!(
-            effective_filename_mode(Some(false), false, false),
+            effective_filename_mode(Some(false), FilenameContext::DirectoryCorpus),
             FilenameMode::Never
         ));
     }
@@ -1100,7 +1115,7 @@ mod tests {
     #[test]
     fn filename_mode_default() {
         assert!(matches!(
-            effective_filename_mode(None, false, false),
+            effective_filename_mode(None, FilenameContext::DirectoryCorpus),
             FilenameMode::Always
         ));
     }
@@ -1108,7 +1123,7 @@ mod tests {
     #[test]
     fn filename_mode_single_file_defaults_to_never() {
         assert!(matches!(
-            effective_filename_mode(None, false, true),
+            effective_filename_mode(None, FilenameContext::SingleFileCorpus),
             FilenameMode::Never
         ));
     }
@@ -1116,7 +1131,7 @@ mod tests {
     #[test]
     fn filename_mode_single_file_respects_explicit_true() {
         assert!(matches!(
-            effective_filename_mode(Some(true), false, true),
+            effective_filename_mode(Some(true), FilenameContext::SingleFileCorpus),
             FilenameMode::Always
         ));
     }
@@ -1239,6 +1254,8 @@ mod tests {
         }
     }
 
+    // Move search_output tests after this block
+
     #[test]
     fn line_style_flags_empty() {
         let out = ctx_with_lines(SearchLineResolveCtx {
@@ -1351,18 +1368,17 @@ mod tests {
                 filename_mode: FilenameMode::Always,
                 flags: LineStyleFlags::empty(),
                 path_display: sift_core::PathDisplay::Relative,
-                max_columns: None,
-                max_columns_preview: false,
+                columns: None,
             },
             SearchRecordStyle {
-                null_data: false,
+                terminator: RecordTerminator::Newline,
                 color: ColorChoice::Auto,
                 path_separator: None,
             },
             false,
         );
         assert!(matches!(result.emission, OutputEmission::Quiet));
-        assert!(!result.passthru);
+        assert!(matches!(result.passthru, PassthruMode::Disabled));
     }
 
     #[test]
@@ -1375,18 +1391,17 @@ mod tests {
                 filename_mode: FilenameMode::Always,
                 flags: LineStyleFlags::empty(),
                 path_display: sift_core::PathDisplay::Relative,
-                max_columns: None,
-                max_columns_preview: false,
+                columns: None,
             },
             SearchRecordStyle {
-                null_data: false,
+                terminator: RecordTerminator::Newline,
                 color: ColorChoice::Auto,
                 path_separator: None,
             },
             true,
         );
         assert!(matches!(result.emission, OutputEmission::Normal));
-        assert!(result.include_zero);
+        assert!(matches!(result.include_zero, ZeroCountMode::Include));
     }
 
     // ── Cli::resolve_separators ──

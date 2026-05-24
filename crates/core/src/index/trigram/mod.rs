@@ -8,7 +8,9 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{FileId, IndexKind, IndexMeta, QueryPlanOutput, SearchCandidate, SearchIndex};
+use crate::index::{
+    CorpusKind, FileId, IndexMeta, PlanMode, QueryPlanOutput, SearchCandidate, SearchIndex,
+};
 use crate::query::{QuerySpec, TrigramCandidates};
 
 use crate::query::trigram::TrigramCandidatePlan;
@@ -39,7 +41,7 @@ pub struct TrigramIndex {
     lexicon: storage::lexicon::MappedLexicon,
     postings: storage::postings::MappedPostings,
     pub index_dir: Option<PathBuf>,
-    kind: IndexKind,
+    corpus_kind: CorpusKind,
 }
 
 impl TrigramIndex {
@@ -89,7 +91,7 @@ impl TrigramIndex {
             lexicon,
             postings,
             index_dir: Some(sift_dir),
-            kind: meta.kind,
+            corpus_kind: meta.corpus_kind,
         })
     }
 
@@ -103,7 +105,7 @@ impl TrigramIndex {
         let meta_path = dir.join(crate::META_FILENAME);
         let meta = IndexMeta {
             root: self.root.clone(),
-            kind: self.kind,
+            corpus_kind: self.corpus_kind,
         };
         std::fs::write(
             &meta_path,
@@ -136,8 +138,8 @@ impl TrigramIndex {
     }
 
     #[must_use]
-    pub const fn kind(&self) -> IndexKind {
-        self.kind
+    pub const fn corpus_kind(&self) -> CorpusKind {
+        self.corpus_kind
     }
 
     #[must_use]
@@ -159,8 +161,8 @@ impl TrigramIndex {
     #[must_use]
     pub fn explain(&self, query: &QuerySpec<'_>) -> QueryPlanOutput {
         let mode = match TrigramCandidates::build(query) {
-            Some(_) => "indexed_candidates",
-            None => "full_scan",
+            Some(_) => PlanMode::IndexedCandidates,
+            None => PlanMode::FullScan,
         };
         QueryPlanOutput {
             pattern: query.patterns.to_vec().join("|"),
@@ -242,8 +244,8 @@ impl SearchIndex for TrigramIndex {
         &self.root
     }
 
-    fn kind(&self) -> IndexKind {
-        self.kind
+    fn corpus_kind(&self) -> CorpusKind {
+        self.corpus_kind
     }
 
     fn candidates(&self, query: &QuerySpec<'_>) -> Vec<SearchCandidate> {

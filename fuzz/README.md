@@ -1,6 +1,6 @@
 # Fuzz
 
-LibFuzzer targets for `sift-core` — exercises `CompiledSearch`, `search_index`, and `compile_search_pattern`.
+LibFuzzer targets for `sift-core` — exercises `CompiledSearch`, `search_index`, and `PatternCompiler`.
 
 ## Setup
 
@@ -29,7 +29,7 @@ cd fuzz && cargo fuzz run search_usage -- -max_total_time=30
 | Target | Description |
 |--------|-------------|
 | `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `SearchOptions` → `CompiledSearch::new` → `search_index` |
-| `compile_only` | Fuzzes `compile_search_pattern` only (no filesystem) |
+| `compile_only` | Fuzzes `PatternCompiler` only (no filesystem) |
 
 ## Layout
 

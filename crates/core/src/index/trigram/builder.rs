@@ -12,8 +12,8 @@ use super::storage::mmap::open_mmap;
 use super::storage::postings::MappedPostings;
 use super::types::Trigram;
 
-use crate::grep::parallel_candidate_threshold;
-use crate::index::IndexKind;
+use crate::index::CorpusKind;
+use crate::parallel::{ParallelWorkload, parallel_threshold};
 
 pub struct IndexTables {
     pub files: Vec<PathBuf>,
@@ -21,15 +21,18 @@ pub struct IndexTables {
     pub postings: Vec<u8>,
 }
 
-fn collect_paths(
-    root: &Path,
-    follow_links: bool,
-    exclude_paths: &[PathBuf],
-    include_paths: &[PathBuf],
-) -> crate::Result<Vec<PathBuf>> {
+/// Configuration for index building: walk policy and path filters.
+pub struct IndexBuildConfig<'a> {
+    pub root: &'a Path,
+    pub follow_links: bool,
+    pub exclude_paths: &'a [PathBuf],
+    pub include_paths: &'a [PathBuf],
+}
+
+fn collect_paths(config: &IndexBuildConfig<'_>) -> crate::Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = Vec::new();
-    let walker = WalkBuilder::new(root)
-        .follow_links(follow_links)
+    let walker = WalkBuilder::new(config.root)
+        .follow_links(config.follow_links)
         .hidden(false)
         .parents(false)
         .ignore(false)
@@ -44,15 +47,17 @@ fn collect_paths(
             continue;
         }
         let path = entry.path();
-        let display = path.strip_prefix(root).unwrap_or(path).to_path_buf();
-        if exclude_paths
+        let display = path.strip_prefix(config.root).unwrap_or(path).to_path_buf();
+        if config
+            .exclude_paths
             .iter()
             .any(|excluded| display.starts_with(excluded))
         {
             continue;
         }
-        if !include_paths.is_empty()
-            && !include_paths
+        if !config.include_paths.is_empty()
+            && !config
+                .include_paths
                 .iter()
                 .any(|included| display == *included || display.starts_with(included))
         {
@@ -72,33 +77,12 @@ fn unique_trigrams_for_file(path: &Path) -> crate::Result<Vec<Trigram>> {
     Ok(Trigram::unique_from_lossy_utf8(mmap.as_ref()))
 }
 
-pub fn build_index_tables(
-    root: &Path,
-    follow_links: bool,
-    exclude_paths: &[PathBuf],
-    include_paths: &[PathBuf],
-) -> crate::Result<IndexTables> {
-    let mut paths = collect_paths(root, follow_links, exclude_paths, include_paths)?;
+pub fn build_index_tables(config: &IndexBuildConfig<'_>) -> crate::Result<IndexTables> {
+    let mut paths = collect_paths(config)?;
     paths.sort_unstable();
 
-    let min_parallel = parallel_candidate_threshold();
-    let per_file: Vec<(PathBuf, Vec<Trigram>)> = if paths.len() >= min_parallel {
-        paths
-            .par_iter()
-            .map(|display| {
-                let path = root.join(display);
-                unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
-            })
-            .collect::<crate::Result<Vec<_>>>()?
-    } else {
-        paths
-            .iter()
-            .map(|display| {
-                let path = root.join(display);
-                unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
-            })
-            .collect::<crate::Result<Vec<_>>>()?
-    };
+    let threshold = parallel_threshold(ParallelWorkload::IndexBuild);
+    let per_file = extract_trigrams_per_file(config.root, &paths, threshold)?;
     let rel_paths: Vec<PathBuf> = per_file.iter().map(|(p, _)| p.clone()).collect();
 
     let mut map: BTreeMap<Trigram, Vec<u32>> = BTreeMap::new();
@@ -146,6 +130,22 @@ pub fn build_index_tables(
         lexicon: lex_entries,
         postings: posting_bytes,
     })
+}
+
+fn extract_trigrams_per_file(
+    root: &Path,
+    paths: &[PathBuf],
+    threshold: usize,
+) -> crate::Result<Vec<(PathBuf, Vec<Trigram>)>> {
+    let op = |display: &PathBuf| {
+        let path = root.join(display);
+        unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
+    };
+    if paths.len() >= threshold {
+        paths.par_iter().map(op).collect()
+    } else {
+        paths.iter().map(op).collect()
+    }
 }
 
 fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -226,12 +226,17 @@ impl<'a> TrigramIndexBuilder<'a> {
                     "single-file corpus must have a file name",
                 ))
             })?);
-            (parent, vec![file_name], IndexKind::SingleFile)
+            (parent, vec![file_name], CorpusKind::SingleFile)
         } else {
-            (canonical, Vec::new(), IndexKind::Directory)
+            (canonical, Vec::new(), CorpusKind::Directory)
         };
         let exclude_paths = self.excluded_build_paths(&root)?;
-        let tables = build_index_tables(&root, self.follow_links, &exclude_paths, &include_paths)?;
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: &root,
+            follow_links: self.follow_links,
+            exclude_paths: &exclude_paths,
+            include_paths: &include_paths,
+        })?;
 
         let lexicon = MappedLexicon::from_entries(&tables.lexicon);
         let postings = MappedPostings::from_bytes(&tables.postings);
@@ -244,7 +249,7 @@ impl<'a> TrigramIndexBuilder<'a> {
             lexicon,
             postings,
             index_dir: None,
-            kind,
+            corpus_kind: kind,
         };
 
         if let Some(dir) = self.dir {
@@ -269,7 +274,13 @@ mod tests {
         fs::write(tmp.path().join("a.txt"), "world\n").expect("write a");
         fs::write(tmp.path().join("m.txt"), "test\n").expect("write m");
 
-        let tables = build_index_tables(tmp.path(), false, &[], &[]).expect("build tables");
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+        })
+        .expect("build tables");
         let expected = vec![
             PathBuf::from("a.txt"),
             PathBuf::from("m.txt"),
@@ -286,8 +297,13 @@ mod tests {
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::write(excluded_dir.join("skip.txt"), "world\n").expect("write skip");
 
-        let tables = build_index_tables(tmp.path(), false, &[PathBuf::from("excluded")], &[])
-            .expect("build tables");
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[PathBuf::from("excluded")],
+            include_paths: &[],
+        })
+        .expect("build tables");
         assert_eq!(tables.files.len(), 1);
         assert_eq!(tables.files[0], PathBuf::from("keep.txt"));
     }
@@ -298,7 +314,13 @@ mod tests {
         fs::write(tmp.path().join("a.txt"), "ababab\n").expect("write file");
         fs::write(tmp.path().join("b.txt"), "ababab\n").expect("write file");
 
-        let tables = build_index_tables(tmp.path(), false, &[], &[]).expect("build tables");
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+        })
+        .expect("build tables");
         assert_eq!(tables.files.len(), 2);
         let file_id_0: u32 = 0;
         let file_id_1: u32 = 1;
@@ -355,8 +377,13 @@ mod tests {
         fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
         fs::write(tmp.path().join("skip.txt"), "world\n").expect("write skip");
 
-        let tables = build_index_tables(tmp.path(), false, &[], &[PathBuf::from("keep.txt")])
-            .expect("build tables");
+        let tables = build_index_tables(&IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[PathBuf::from("keep.txt")],
+        })
+        .expect("build tables");
         assert_eq!(tables.files.len(), 1);
         assert_eq!(tables.files[0], PathBuf::from("keep.txt"));
     }
@@ -371,7 +398,7 @@ mod tests {
         let index = TrigramIndexBuilder::new(&file)
             .build()
             .expect("build index");
-        assert_eq!(index.kind(), IndexKind::SingleFile);
+        assert_eq!(index.corpus_kind(), CorpusKind::SingleFile);
         assert_eq!(index.file_paths.len(), 1);
         assert_eq!(
             index.file_paths[0],

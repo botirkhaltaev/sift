@@ -7,6 +7,7 @@ use grep_searcher::Searcher;
 use once_cell::sync::OnceCell;
 
 use super::error::SearchError;
+use super::filter::SearchFilter;
 
 type SearcherCacheEntry = ((bool, Option<usize>, usize, usize), Searcher);
 
@@ -202,16 +203,32 @@ bitflags::bitflags! {
     }
 }
 
+/// How to handle lines that exceed the column limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnOverflow {
+    /// Silently omit lines that exceed the column limit.
+    Omit,
+    /// Show a truncated preview of lines that exceed the column limit.
+    Preview,
+}
+
+/// Maximum column limit with overflow behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnLimit {
+    /// Maximum number of columns per line.
+    pub max: u64,
+    /// How to display lines that exceed the limit.
+    pub overflow: ColumnOverflow,
+}
+
 /// Per-line presentation: paths, headings, and line numbers (standard / only-matching modes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchLineStyle {
     pub filename_mode: FilenameMode,
     pub flags: LineStyleFlags,
     pub path_display: PathDisplay,
-    /// Maximum columns per line (`-M`); lines exceeding this are omitted or previewed.
-    pub max_columns: Option<u64>,
-    /// Show a preview of truncated lines instead of omitting them entirely.
-    pub max_columns_preview: bool,
+    /// Maximum columns per line (`-M`); `None` means no limit.
+    pub columns: Option<ColumnLimit>,
 }
 
 impl SearchLineStyle {
@@ -242,17 +259,25 @@ impl Default for SearchLineStyle {
             filename_mode: FilenameMode::Auto,
             flags: LineStyleFlags::empty(),
             path_display: PathDisplay::default(),
-            max_columns: None,
-            max_columns_preview: false,
+            columns: None,
         }
     }
+}
+
+/// Line terminator for path-only records (`-0` / `--null`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordTerminator {
+    /// End records with a newline (default).
+    Newline,
+    /// End records with a NUL byte.
+    Nul,
 }
 
 /// Path record terminators and color (`-0`, `--color`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchRecordStyle {
-    /// `-0` / `--null`: end path-only records with NUL instead of newline.
-    pub null_data: bool,
+    /// How to terminate path-only records (`-0` / `--null`).
+    pub terminator: RecordTerminator,
     pub color: ColorChoice,
     /// `--path-separator`: override the platform path separator in output.
     pub path_separator: Option<u8>,
@@ -261,7 +286,7 @@ pub struct SearchRecordStyle {
 impl Default for SearchRecordStyle {
     fn default() -> Self {
         Self {
-            null_data: false,
+            terminator: RecordTerminator::Newline,
             color: ColorChoice::Auto,
             path_separator: None,
         }
@@ -278,6 +303,88 @@ pub enum SearchOutputFormat {
     Json,
 }
 
+/// Whether to show every line including non-matching ones (`--passthru`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PassthruMode {
+    #[default]
+    Disabled,
+    /// Show every line (non-matching lines as context).
+    Enabled,
+}
+
+/// Whether to follow symbolic links when walking the filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkTraversal {
+    /// Do not follow symbolic links.
+    DoNotFollow,
+    /// Follow symbolic links.
+    Follow,
+}
+
+/// Grouped parameters for search execution, replacing long parameter lists
+/// on [`CompiledSearch::run_indexes`] and [`CompiledSearch::run_walk`].
+pub struct SearchExecution<'a> {
+    /// Search-time filtering rules (glob, hidden, ignore, scope).
+    pub filter: &'a SearchFilter,
+    /// Output mode, line style, record style, and pass-through/zero settings.
+    pub output: SearchOutput,
+    /// Field and context separator configuration.
+    pub separators: &'a SearchSeparators,
+    /// Optional mutable stats reference filled during execution.
+    pub stats: Option<&'a mut SearchStats>,
+}
+
+/// Options for walking the filesystem to discover files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalkOptions {
+    /// How to handle symbolic links.
+    pub links: LinkTraversal,
+    /// Maximum directory depth for walk-based search.
+    pub max_depth: Option<usize>,
+    /// Maximum file size in bytes; files above this are skipped.
+    pub max_filesize: Option<u64>,
+    /// Whether to stay on the same filesystem when walking.
+    pub one_file_system: bool,
+}
+
+impl Default for WalkOptions {
+    fn default() -> Self {
+        Self {
+            links: LinkTraversal::DoNotFollow,
+            max_depth: None,
+            max_filesize: None,
+            one_file_system: false,
+        }
+    }
+}
+
+/// How to emit matches from a per-file search sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchEmissionMode {
+    /// Emit full matching lines (default).
+    Lines,
+    /// Emit only the matched portion of each line.
+    OnlyMatching,
+}
+
+/// Whether to use indexed candidate narrowing or return all files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateSet {
+    /// Use the index to narrow down candidate files for a query.
+    IndexedCandidates,
+    /// Return all indexed files (for modes that need a full scan).
+    AllIndexedFiles,
+}
+
+/// Whether to include files with zero matches in count mode (`--include-zero`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZeroCountMode {
+    #[default]
+    Omit,
+    /// In count mode, print files with zero matches.
+    Include,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchOutput {
     pub format: SearchOutputFormat,
@@ -286,9 +393,23 @@ pub struct SearchOutput {
     pub lines: SearchLineStyle,
     pub records: SearchRecordStyle,
     /// `--passthru`: show every line (non-matching as context).
-    pub passthru: bool,
+    pub passthru: PassthruMode,
     /// `--include-zero`: in count mode, print files with zero matches.
-    pub include_zero: bool,
+    pub include_zero: ZeroCountMode,
+}
+
+impl SearchOutput {
+    /// Whether this output mode needs all indexed files rather than narrowed candidates.
+    #[must_use]
+    pub const fn candidate_set(self) -> CandidateSet {
+        match self.mode {
+            SearchMode::Count | SearchMode::FilesWithoutMatch => CandidateSet::AllIndexedFiles,
+            SearchMode::Standard
+            | SearchMode::OnlyMatching
+            | SearchMode::CountMatches
+            | SearchMode::FilesWithMatches => CandidateSet::IndexedCandidates,
+        }
+    }
 }
 
 impl Default for SearchOutput {
@@ -299,8 +420,8 @@ impl Default for SearchOutput {
             emission: OutputEmission::Normal,
             lines: SearchLineStyle::default(),
             records: SearchRecordStyle::default(),
-            passthru: false,
-            include_zero: false,
+            passthru: PassthruMode::Disabled,
+            include_zero: ZeroCountMode::Omit,
         }
     }
 }
@@ -454,7 +575,7 @@ mod tests {
     #[test]
     fn search_record_style_defaults() {
         let style = SearchRecordStyle::default();
-        assert!(!style.null_data);
+        assert!(matches!(style.terminator, RecordTerminator::Newline));
         assert_eq!(style.color, ColorChoice::Auto);
         assert!(style.path_separator.is_none());
     }
@@ -465,8 +586,8 @@ mod tests {
         assert_eq!(output.format, SearchOutputFormat::Text);
         assert_eq!(output.mode, SearchMode::Standard);
         assert_eq!(output.emission, OutputEmission::Normal);
-        assert!(!output.passthru);
-        assert!(!output.include_zero);
+        assert!(matches!(output.passthru, PassthruMode::Disabled));
+        assert!(matches!(output.include_zero, ZeroCountMode::Omit));
     }
 
     #[test]
