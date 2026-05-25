@@ -2,18 +2,22 @@
 //!
 //! **Walking:** [`WalkBuilder`] from the [`ignore`] crate.
 
-mod grep;
+pub mod candidate;
+pub mod grep;
 mod index;
 pub(crate) mod query;
+mod search;
 
-pub use grep::{
-    BinaryMode, CandidateInfo, CandidateSet, CaseMode, ColorChoice, ColumnLimit, ColumnOverflow,
-    FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags,
-    LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode, PathDisplay,
-    PatternCompiler, RecordTerminator, SearchError, SearchFilter, SearchFilterConfig,
-    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput,
-    SearchOutputFormat, SearchQuery, SearchRecordStyle, SearchRequest, SearchSeparators,
-    SearchStats, TypeDef, VisibilityConfig, WalkOptions, ZeroCountMode, discover_files,
+pub use candidate::Candidate;
+
+pub use search::{
+    BinaryMode, CandidateFilter, CandidateFilterConfig, CaseMode, ColorChoice, ColumnLimit,
+    ColumnOverflow, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
+    PathDisplay, PatternCompiler, RecordTerminator, SearchError, SearchLineStyle, SearchMatchFlags,
+    SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat, SearchQuery,
+    SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig, WalkOptions,
+    ZeroCountMode, discover_files,
 };
 
 pub use ignore::{Walk, WalkBuilder};
@@ -21,7 +25,7 @@ pub use ignore::{Walk, WalkBuilder};
 pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
 pub use index::{
     CorpusKind, FileId, IndexError, IndexId, IndexMeta, Indexes, PlanMode, QueryPlanOutput,
-    SearchCandidate, SearchIndex,
+    SearchIndex,
 };
 
 pub use query::{QueryFlags, QuerySpec};

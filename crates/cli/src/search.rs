@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use sift_core::{
-    ColumnLimit, ColumnOverflow, CorpusKind, Indexes, RecordTerminator, SearchFilter,
-    SearchLineStyle, SearchMode, SearchQuery, SearchRecordStyle, SearchRequest,
+    CandidateFilter, ColumnLimit, ColumnOverflow, CorpusKind, Indexes, RecordTerminator,
+    SearchLineStyle, SearchMode, SearchQuery, SearchRecordStyle,
 };
 
 use crate::cli::Cli;
@@ -66,7 +66,7 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
     };
 
     let filter_config = build_search_filter_config(cli, filter_ctx, scopes.clone(), exclude_paths)?;
-    let search_filter = SearchFilter::new(&filter_config, &filter_root)?;
+    let search_filter = CandidateFilter::new(&filter_config, &filter_root)?;
 
     let walk_opts = sift_core::WalkOptions {
         links: if search_filter.follow_links() {
@@ -101,7 +101,7 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
                 .strip_prefix(&filter_root)
                 .unwrap_or(&scope_path)
                 .to_path_buf();
-            if search_filter.is_candidate(&rel) {
+            if search_filter.matches_path(&rel) {
                 all_paths.push(rel);
             }
         } else if scope_path.is_dir() {
@@ -112,7 +112,7 @@ pub fn run_files_mode(cli: &Cli, args: &[String]) -> anyhow::Result<bool> {
                 } else {
                     scope.join(rel_in_scope)
                 };
-                if search_filter.is_candidate(&full_rel) {
+                if search_filter.matches_path(&full_rel) {
                     all_paths.push(full_rel);
                 }
             }
@@ -281,14 +281,17 @@ impl Cli {
     ) -> anyhow::Result<bool> {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
-        let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        let outcome = query.run(SearchRequest {
-            indexes,
-            filter: &search_filter,
-            output: *output,
-            separators: &out.separators,
-            collect_stats: out.print_stats,
-        })?;
+        let search_filter = CandidateFilter::new(&filter_config, &ctx.filter_root)?;
+        let outcome = sift_core::grep::run(
+            query,
+            &sift_core::grep::GrepRequest {
+                indexes,
+                filter: &search_filter,
+                output: *output,
+                separators: &out.separators,
+                collect_stats: out.print_stats,
+            },
+        )?;
         if let Some(s) = &outcome.stats {
             write_search_stats(s);
         }

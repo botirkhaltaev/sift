@@ -1,6 +1,6 @@
-# grep/
+# search/
 
-Grep-style search execution built on the public grep crates (`grep_matcher`, `grep_regex`, `grep_searcher`, `grep_printer`).
+Regex execution: pattern compilation, file scanning, output formatting, and parallelism.
 
 ## Modules
 
@@ -9,9 +9,9 @@ Grep-style search execution built on the public grep crates (`grep_matcher`, `gr
 | [`options/`](options/) | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
 | [`pattern/`](pattern/) | `PatternCompiler` — composable regex builder |
 | [`query/`](query/) | `SearchQuery`, `Match` |
-| [`request/`](request/) | `SearchRequest`, `WalkOptions`, `LinkTraversal` |
-| [`filter/`](filter/) | `SearchFilter`, `CandidateInfo`, config/ignore/type_filter |
-| [`output/`](output/) | `SearchOutput`, style/mode/format/passthru |
+| [`request/`](request/) | `SearchExecution`, `WalkOptions`, `LinkTraversal` |
+| [`filter/`](filter/) | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |
+| [`output/`](output/) | `SearchOutput`, style/mode/format/passthru, `CandidateCoverage` |
 | [`candidates/`](candidates/) | Candidate resolution for indexed and walk paths |
 | [`scan/`](scan/) | Text / summary / JSON scanning workers |
 | [`emit/`](emit/) | Output formatting, result chunks, and stats helpers |
@@ -20,10 +20,10 @@ Grep-style search execution built on the public grep crates (`grep_matcher`, `gr
 ## API
 
 ```rust
-use sift_core::{SearchQuery, SearchRequest, SearchOptions, SearchFilter, SearchOutput};
+use sift_core::{SearchQuery, SearchOptions, CandidateFilter};
 
 let search = SearchQuery::new(&patterns, SearchOptions::default())?;
-search.run(SearchRequest { indexes: &indexes, filter: &filter, output, separators: &separators, collect_stats: false })?;
+search.run(SearchExecution { candidates: &candidates, output, separators, collect_stats: false })?;
 ```
 
 `SearchQuery` compiles the regex once; repeated calls reuse the compiled matcher and searcher cache.

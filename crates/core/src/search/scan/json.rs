@@ -7,12 +7,12 @@ use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use rayon::prelude::*;
 
-use crate::grep::emit::result::{ChunkOutput, FileResult};
-use crate::grep::emit::stats::SearchStats;
-use crate::grep::filter::CandidateInfo;
-use crate::grep::output::SearchOutput;
-use crate::grep::output::mode::OutputEmission;
-use crate::grep::query::SearchQuery;
+use crate::Candidate;
+use crate::search::emit::result::{ChunkOutput, FileResult};
+use crate::search::emit::stats::SearchStats;
+use crate::search::output::SearchOutput;
+use crate::search::output::mode::OutputEmission;
+use crate::search::query::SearchQuery;
 
 struct NullWriter;
 
@@ -45,7 +45,7 @@ impl<'a> JsonWorker<'a> {
 
     fn search_candidate(
         &mut self,
-        candidate: &CandidateInfo,
+        candidate: &Candidate,
         result_index: usize,
         stop: &AtomicBool,
     ) -> FileResult {
@@ -59,18 +59,18 @@ impl<'a> JsonWorker<'a> {
         }
         let (bytes, file_stats) = if quiet {
             let mut json = JSON::new(NullWriter);
-            let mut sink = json.sink_with_path(self.matcher, &candidate.abs_path);
+            let mut sink = json.sink_with_path(self.matcher, candidate.abs_path());
             let _ = self
                 .searcher
-                .search_path(self.matcher, &candidate.abs_path, &mut sink);
+                .search_path(self.matcher, candidate.abs_path(), &mut sink);
             (Vec::new(), sink.stats().clone())
         } else {
             let mut json = JSON::new(Vec::new());
             let file_stats = {
-                let mut sink = json.sink_with_path(self.matcher, &candidate.abs_path);
+                let mut sink = json.sink_with_path(self.matcher, candidate.abs_path());
                 let _ = self
                     .searcher
-                    .search_path(self.matcher, &candidate.abs_path, &mut sink);
+                    .search_path(self.matcher, candidate.abs_path(), &mut sink);
                 sink.stats().clone()
             };
             (json.into_inner(), file_stats)
@@ -94,7 +94,7 @@ impl<'a> JsonWorker<'a> {
 fn format_json_summary_line(
     wall: std::time::Duration,
     agg: &JsonStats,
-) -> Result<String, crate::grep::SearchError> {
+) -> Result<String, crate::search::SearchError> {
     let stats_val = serde_json::to_value(agg)?;
     let wall_secs = f64::from(wall.subsec_nanos()).mul_add(1e-9, wall.as_secs_f64());
     let v = serde_json::json!({
@@ -135,7 +135,7 @@ impl<'a> JsonScan<'a> {
 
     pub fn run(
         &self,
-        candidates: &[CandidateInfo],
+        candidates: &[Candidate],
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         let stop = AtomicBool::new(false);
@@ -146,8 +146,7 @@ impl<'a> JsonScan<'a> {
             .enumerate()
             .map_init(
                 || JsonWorker::new(self),
-                |worker: &mut JsonWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
+                |worker: &mut JsonWorker<'_>, (result_index, candidate): (usize, &Candidate)| {
                     worker.search_candidate(candidate, result_index, &stop)
                 },
             )
@@ -169,7 +168,7 @@ impl<'a> JsonScan<'a> {
         stdout.write_all(summary_line.as_bytes())?;
         stdout.write_all(b"\n")?;
         if let Some(s) = stats {
-            use crate::grep::emit::format::sum_candidate_file_bytes;
+            use crate::search::emit::format::sum_candidate_file_bytes;
             s.fill_from_json(
                 &merged,
                 candidates.len(),

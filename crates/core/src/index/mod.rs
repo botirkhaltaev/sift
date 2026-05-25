@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::search::output::mode::CandidateCoverage;
+
 pub use trigram::TrigramIndex;
 pub use trigram::TrigramIndexError;
 
@@ -49,13 +51,6 @@ pub enum IndexError {
         path: PathBuf,
         source: std::io::Error,
     },
-}
-
-/// A candidate file returned by an index for searching.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchCandidate {
-    pub rel_path: PathBuf,
-    pub abs_path: PathBuf,
 }
 
 /// Registry of opened indexes for a single `.sift` directory.
@@ -138,42 +133,75 @@ impl Indexes {
 
     /// Resolve candidates for a query across all registered indexes.
     ///
-    /// Each index returns its candidate set; results are deduplicated by
-    /// absolute path and returned as a flat list ready for filtering and scanning.
+    /// Each index returns its candidate set; results are intersected by
+    /// absolute path across all indexes and returned as a flat list
+    /// ready for filtering and scanning.
+    ///
+    /// Multiple conservative indexes together produce a narrower candidate
+    /// set than any single index alone.
     #[must_use]
-    pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate> {
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
+    pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
+        let mut iter = self.inner.iter();
+        let Some(first) = iter.next() else {
+            return Vec::new();
+        };
 
-        for index in &self.inner {
-            for candidate in index.candidates(query) {
-                if seen.insert(candidate.abs_path.clone()) {
-                    out.push(candidate);
-                }
+        let mut candidates = first.candidates(query);
+
+        for index in iter {
+            let next: std::collections::HashSet<PathBuf> = index
+                .candidates(query)
+                .into_iter()
+                .map(|c| c.abs_path().to_path_buf())
+                .collect();
+            candidates.retain(|c| next.contains(c.abs_path()));
+            if candidates.is_empty() {
+                break;
             }
         }
 
-        out
+        candidates
+    }
+
+    /// Resolve candidates for a query, selecting narrowed or complete coverage.
+    #[must_use]
+    pub fn candidates(
+        &self,
+        query: &crate::query::QuerySpec<'_>,
+        coverage: CandidateCoverage,
+    ) -> Vec<crate::Candidate> {
+        match coverage {
+            CandidateCoverage::Narrowed => self.resolve_candidates(query),
+            CandidateCoverage::Complete => self.resolve_all_files(),
+        }
     }
 
     /// Return all indexed files across all registered indexes.
     ///
     /// Used for output modes that require scanning every file (e.g. `--count`,
-    /// `--files-without-match`). Deduplicated by absolute path.
+    /// `--files-without-match`). Intersected by absolute path across all indexes.
     #[must_use]
-    pub fn resolve_all_files(&self) -> Vec<SearchCandidate> {
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
+    pub fn resolve_all_files(&self) -> Vec<crate::Candidate> {
+        let mut iter = self.inner.iter();
+        let Some(first) = iter.next() else {
+            return Vec::new();
+        };
 
-        for index in &self.inner {
-            for candidate in index.all_files() {
-                if seen.insert(candidate.abs_path.clone()) {
-                    out.push(candidate);
-                }
+        let mut files = first.all_files();
+
+        for index in iter {
+            let next: std::collections::HashSet<PathBuf> = index
+                .all_files()
+                .into_iter()
+                .map(|c| c.abs_path().to_path_buf())
+                .collect();
+            files.retain(|c| next.contains(c.abs_path()));
+            if files.is_empty() {
+                break;
             }
         }
 
-        out
+        files
     }
 
     #[must_use]
@@ -226,8 +254,8 @@ impl IndexId {
 pub trait SearchIndex: Sync + Send {
     fn root(&self) -> &Path;
     fn corpus_kind(&self) -> CorpusKind;
-    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate>;
-    fn all_files(&self) -> Vec<SearchCandidate>;
+    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate>;
+    fn all_files(&self) -> Vec<crate::Candidate>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

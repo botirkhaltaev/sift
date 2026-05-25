@@ -1,107 +1,66 @@
-//! Indexed search execution built on the public grep crates.
+//! Grep pipeline orchestration.
+//!
+//! Bridges the logical query, index planner, and candidate filter.
+//! This is the primary API the CLI calls.
 
-mod candidates;
-mod emit;
-mod filter;
-mod options;
-mod output;
-mod pattern;
-mod query;
-mod request;
-mod scan;
+use crate::Candidate;
+use crate::CandidateFilter;
+use crate::SearchOutput;
+use crate::SearchQuery;
+use crate::SearchSeparators;
+use crate::SearchStats;
+use crate::index::Indexes;
+use crate::search::SearchError;
+use crate::search::SearchOutcome;
+use crate::search::candidates::walk;
+use crate::search::request::SearchExecution;
+use rayon::prelude::*;
 
-use thiserror::Error;
-
-use emit::error::ExecutionError;
-use filter::error::FilterError;
-use output::error::OutputError;
-use pattern::error::CompileError;
-
-#[derive(Debug, Error)]
-pub enum SearchError {
-    #[error("search patterns must not be empty")]
-    EmptyPatterns,
-
-    #[error("regex build error: {0}")]
-    RegexBuild(String),
-
-    #[error("invalid max-count: 0 matches requested")]
-    InvalidMaxCount,
-
-    #[error("JSON output is only supported for standard search (not count or file-list modes)")]
-    JsonOutputIncompatibleMode,
-
-    #[error("JSON serialization error: {0}")]
-    JsonSerialize(#[from] serde_json::Error),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("ignore walk error: {0}")]
-    Ignore(#[from] ignore::Error),
+/// User-facing request to the grep pipeline.
+pub struct GrepRequest<'a> {
+    pub indexes: &'a Indexes,
+    pub filter: &'a CandidateFilter,
+    pub output: SearchOutput,
+    pub separators: &'a SearchSeparators,
+    pub collect_stats: bool,
 }
 
-impl From<CompileError> for SearchError {
-    fn from(e: CompileError) -> Self {
-        match e {
-            CompileError::RegexBuild(s) => Self::RegexBuild(s),
-        }
+/// Run the full grep pipeline: resolve candidates, execute search, return outcome.
+///
+/// # Errors
+///
+/// Returns an error if candidate resolution, regex compilation, or search execution fails.
+pub fn run(query: &SearchQuery, request: &GrepRequest<'_>) -> crate::Result<SearchOutcome> {
+    if query.opts.max_results == Some(0) {
+        return Err(crate::Error::Search(SearchError::InvalidMaxCount));
     }
-}
 
-impl From<FilterError> for SearchError {
-    fn from(e: FilterError) -> Self {
-        match e {
-            FilterError::RegexBuild(s) => Self::RegexBuild(s),
-            FilterError::Ignore(e) => Self::Ignore(e),
-        }
+    let spec = query.spec();
+    let output = request.output;
+
+    let raw = if request.indexes.is_empty() {
+        walk::collect_candidates(request.filter)?
+    } else {
+        let coverage = output.candidate_coverage();
+        request.indexes.candidates(&spec, coverage)
+    };
+
+    let candidates: Vec<Candidate> = raw
+        .into_par_iter()
+        .filter(|c| c.matches(request.filter))
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok(SearchOutcome {
+            matched: false,
+            stats: request.collect_stats.then_some(SearchStats::default()),
+        });
     }
-}
 
-impl From<OutputError> for SearchError {
-    fn from(e: OutputError) -> Self {
-        match e {
-            OutputError::JsonOutputIncompatibleMode => Self::JsonOutputIncompatibleMode,
-            OutputError::JsonSerialize(e) => Self::JsonSerialize(e),
-            OutputError::Io(e) => Self::Io(e),
-        }
-    }
-}
-
-impl From<ExecutionError> for SearchError {
-    fn from(e: ExecutionError) -> Self {
-        match e {
-            ExecutionError::InvalidMaxCount => Self::InvalidMaxCount,
-            ExecutionError::Io(e) => Self::Io(e),
-            ExecutionError::Ignore(e) => Self::Ignore(e),
-        }
-    }
-}
-
-pub use candidates::walk::discover_files;
-pub use emit::stats::SearchStats;
-pub use filter::{
-    CandidateInfo, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilter,
-    SearchFilterConfig, TypeDef, VisibilityConfig,
-};
-pub use options::{BinaryMode, CaseMode, SearchMatchFlags, SearchOptions};
-pub use output::format::{ColumnLimit, ColumnOverflow};
-pub use output::mode::{
-    CandidateSet, MatchEmissionMode, OutputEmission, SearchMode, ZeroCountMode,
-};
-pub use output::passthru::PassthruMode;
-pub use output::style::{
-    ColorChoice, FilenameMode, LineStyleFlags, PathDisplay, RecordTerminator, SearchLineStyle,
-    SearchRecordStyle, SearchSeparators,
-};
-pub use output::{SearchOutput, SearchOutputFormat};
-pub use pattern::PatternCompiler;
-pub use query::Match;
-pub use query::SearchQuery;
-pub use request::{LinkTraversal, SearchRequest, WalkOptions};
-
-#[derive(Debug)]
-pub struct SearchOutcome {
-    pub matched: bool,
-    pub stats: Option<SearchStats>,
+    query.search(&SearchExecution {
+        candidates,
+        output,
+        separators: request.separators,
+        collect_stats: request.collect_stats,
+    })
 }

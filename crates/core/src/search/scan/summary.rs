@@ -7,14 +7,14 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::emit::format::{ANSI_PATH, ANSI_RESET};
-use crate::grep::emit::result::{ChunkOutput, FileResult};
-use crate::grep::emit::stats::TextStatsCounters;
-use crate::grep::filter::CandidateInfo;
-use crate::grep::output::SearchOutput;
-use crate::grep::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
-use crate::grep::output::style::FilenameMode;
-use crate::grep::query::SearchQuery;
+use crate::Candidate;
+use crate::search::emit::format::{ANSI_PATH, ANSI_RESET};
+use crate::search::emit::result::{ChunkOutput, FileResult};
+use crate::search::emit::stats::TextStatsCounters;
+use crate::search::output::SearchOutput;
+use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
+use crate::search::output::style::FilenameMode;
+use crate::search::query::SearchQuery;
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -207,7 +207,7 @@ impl<'a> SummaryWorker<'a> {
 
     fn search_candidate(
         &mut self,
-        candidate: &CandidateInfo,
+        candidate: &Candidate,
         result_index: usize,
         stop: &AtomicBool,
     ) -> FileResult {
@@ -219,7 +219,7 @@ impl<'a> SummaryWorker<'a> {
             };
         }
 
-        let result = self.search_file(&candidate.abs_path);
+        let result = self.search_file(candidate.abs_path());
         if let Some(c) = self.summary_counter {
             c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
         }
@@ -273,7 +273,7 @@ impl<'a> SummaryScan<'a> {
         }
     }
 
-    pub fn run(&self, candidates: &[CandidateInfo]) -> crate::Result<bool> {
+    pub fn run(&self, candidates: &[Candidate]) -> crate::Result<bool> {
         let stop = AtomicBool::new(false);
         let n = candidates.len();
         let mut files = Vec::with_capacity(n);
@@ -282,8 +282,7 @@ impl<'a> SummaryScan<'a> {
             .enumerate()
             .map_init(
                 || SummaryWorker::new(self),
-                |worker: &mut SummaryWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
+                |worker: &mut SummaryWorker<'_>, (result_index, candidate): (usize, &Candidate)| {
                     worker.search_candidate(candidate, result_index, &stop)
                 },
             )

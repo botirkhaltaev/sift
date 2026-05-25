@@ -1,12 +1,11 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use rayon::prelude::*;
+use crate::Candidate;
+use crate::search::filter::CandidateFilter;
+use crate::search::request::{LinkTraversal, WalkOptions};
 
-use crate::grep::filter::{CandidateInfo, SearchFilter};
-use crate::grep::request::{LinkTraversal, WalkOptions};
-
-fn walk_directory_files(root: &Path, filter: &SearchFilter) -> crate::Result<Vec<PathBuf>> {
+fn walk_directory_files(root: &Path, filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
     let root = root.canonicalize()?;
     let mut builder = ignore::WalkBuilder::new(&root);
     builder
@@ -22,6 +21,10 @@ fn walk_directory_files(root: &Path, filter: &SearchFilter) -> crate::Result<Vec
     if let Some(d) = filter.max_depth() {
         builder.max_depth(Some(d + 1));
     }
+    let filter_root = filter
+        .root()
+        .canonicalize()
+        .unwrap_or_else(|_| filter.root().to_path_buf());
     let mut out = Vec::new();
     for entry in builder.build() {
         let entry = entry.map_err(crate::Error::Ignore)?;
@@ -34,13 +37,22 @@ fn walk_directory_files(root: &Path, filter: &SearchFilter) -> crate::Result<Vec
                 continue;
             }
         }
-        out.push(entry.path().to_path_buf());
+        let abs_path = entry.path().to_path_buf();
+        let rel_path = abs_path
+            .strip_prefix(&filter_root)
+            .unwrap_or(&abs_path)
+            .to_path_buf();
+        out.push(Candidate::new(rel_path, abs_path));
     }
     Ok(out)
 }
 
-pub fn collect_abs_paths_for_scopes(filter: &SearchFilter) -> crate::Result<Vec<PathBuf>> {
-    let filter_root = filter.root().canonicalize()?;
+/// Collect candidate files across all scopes by walking the filesystem.
+pub fn collect_candidates(filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
+    let filter_root = filter
+        .root()
+        .canonicalize()
+        .unwrap_or_else(|_| filter.root().to_path_buf());
     let mut out = Vec::new();
     for scope in filter.scopes() {
         let path = if scope.as_os_str().is_empty() {
@@ -53,43 +65,18 @@ pub fn collect_abs_paths_for_scopes(filter: &SearchFilter) -> crate::Result<Vec<
         }
         let path = path.canonicalize().unwrap_or(path);
         if path.is_file() {
-            out.push(path);
+            let rel_path = path
+                .strip_prefix(&filter_root)
+                .unwrap_or(&path)
+                .to_path_buf();
+            out.push(Candidate::new(rel_path, path));
         } else if path.is_dir() {
             out.extend(walk_directory_files(&path, filter)?);
         }
     }
-    out.sort();
+    out.sort_by(|a, b| a.rel_path().cmp(b.rel_path()));
     out.dedup();
     Ok(out)
-}
-
-pub fn prepare_walk_candidates(abs_paths: &[PathBuf], filter: &SearchFilter) -> Vec<CandidateInfo> {
-    let filter_root = filter
-        .root()
-        .canonicalize()
-        .unwrap_or_else(|_| filter.root().to_path_buf());
-    let need_rel = filter.needs_rel_str_for_matching();
-
-    abs_paths
-        .par_iter()
-        .filter_map(|abs_path| {
-            let rel_path = abs_path
-                .strip_prefix(&filter_root)
-                .unwrap_or(abs_path.as_path())
-                .to_path_buf();
-            let rel_str = if need_rel {
-                rel_path.to_string_lossy().replace('\\', "/")
-            } else {
-                String::new()
-            };
-            let info = CandidateInfo {
-                rel_path,
-                rel_str,
-                abs_path: abs_path.clone(),
-            };
-            filter.is_candidate_info(&info).then_some(info)
-        })
-        .collect()
 }
 
 /// Discovers files under the given root matching the walk options.

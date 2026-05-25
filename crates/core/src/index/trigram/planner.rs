@@ -2,8 +2,6 @@ use regex_syntax::ast::parse::Parser as AstParser;
 use regex_syntax::hir::literal::{ExtractKind, Extractor};
 use regex_syntax::hir::{self, Hir};
 
-use super::QuerySpec;
-
 /// One OR branch: every literal here must appear in a candidate file.
 pub type LiteralArm = Vec<u8>;
 
@@ -14,13 +12,13 @@ pub struct TrigramCandidatePlan {
     pub arms: Vec<LiteralArm>,
 }
 
-pub struct TrigramCandidates;
+pub struct TrigramPlanner;
 
-impl TrigramCandidates {
+impl TrigramPlanner {
     /// Attempt to build a trigram candidate plan from a query.
     /// Returns `None` if the query requires a full scan.
     #[must_use]
-    pub fn build(spec: &QuerySpec<'_>) -> Option<TrigramCandidatePlan> {
+    pub fn build(spec: &crate::query::QuerySpec<'_>) -> Option<TrigramCandidatePlan> {
         if spec.invert_match() {
             return None;
         }
@@ -191,8 +189,8 @@ mod tests {
         if line_regexp {
             flags |= QueryFlags::LINE_REGEXP;
         }
-        let spec = QuerySpec { patterns, flags };
-        TrigramCandidates::build(&spec).is_some()
+        let spec = crate::query::QuerySpec { patterns, flags };
+        TrigramPlanner::build(&spec).is_some()
     }
 
     fn full_scan(
@@ -211,8 +209,8 @@ mod tests {
         if line_regexp {
             flags |= QueryFlags::LINE_REGEXP;
         }
-        let spec = QuerySpec { patterns, flags };
-        TrigramCandidates::build(&spec).is_none()
+        let spec = crate::query::QuerySpec { patterns, flags };
+        TrigramPlanner::build(&spec).is_none()
     }
 
     #[test]
@@ -272,10 +270,10 @@ mod tests {
 
     #[test]
     fn fixed_string_narrows() {
-        let spec = QuerySpec {
+        let spec = crate::query::QuerySpec {
             patterns: &["beta.gamma".to_string()],
             flags: QueryFlags::FIXED_STRINGS,
         };
-        assert!(TrigramCandidates::build(&spec).is_some());
+        assert!(TrigramPlanner::build(&spec).is_some());
     }
 }

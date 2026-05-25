@@ -11,11 +11,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    ColorChoice, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags,
-    OutputEmission, PassthruMode, PathDisplay, RecordTerminator, SearchFilter, SearchFilterConfig,
-    SearchLineStyle, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchQuery,
-    SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder, VisibilityConfig,
-    ZeroCountMode,
+    CandidateFilter, CandidateFilterConfig, ColorChoice, FilenameMode, GlobConfig, HiddenMode,
+    IgnoreConfig, IgnoreSources, LineStyleFlags, OutputEmission, PassthruMode, PathDisplay,
+    RecordTerminator, SearchLineStyle, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
+    SearchQuery, SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder,
+    VisibilityConfig, ZeroCountMode,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -160,8 +160,8 @@ pub fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
 
 // ─── Filter configs ─────────────────────────────────────────────────────────
 
-pub fn default_filter() -> SearchFilterConfig {
-    SearchFilterConfig {
+pub fn default_filter() -> CandidateFilterConfig {
+    CandidateFilterConfig {
         visibility: VisibilityConfig {
             hidden: HiddenMode::Respect,
             ignore: IgnoreConfig {
@@ -170,12 +170,12 @@ pub fn default_filter() -> SearchFilterConfig {
                 require_git: true,
             },
         },
-        ..SearchFilterConfig::default()
+        ..CandidateFilterConfig::default()
     }
 }
 
-pub fn glob_include_filter() -> SearchFilterConfig {
-    SearchFilterConfig {
+pub fn glob_include_filter() -> CandidateFilterConfig {
+    CandidateFilterConfig {
         glob: GlobConfig {
             patterns: vec!["**/*.txt".to_string()],
             case_insensitive: false,
@@ -184,8 +184,8 @@ pub fn glob_include_filter() -> SearchFilterConfig {
     }
 }
 
-pub fn glob_exclude_filter() -> SearchFilterConfig {
-    SearchFilterConfig {
+pub fn glob_exclude_filter() -> CandidateFilterConfig {
+    CandidateFilterConfig {
         glob: GlobConfig {
             patterns: vec!["!**/*.txt".to_string()],
             case_insensitive: false,
@@ -194,8 +194,8 @@ pub fn glob_exclude_filter() -> SearchFilterConfig {
     }
 }
 
-pub fn glob_casei_filter() -> SearchFilterConfig {
-    SearchFilterConfig {
+pub fn glob_casei_filter() -> CandidateFilterConfig {
+    CandidateFilterConfig {
         glob: GlobConfig {
             patterns: vec!["**/*.TXT".to_string()],
             case_insensitive: true,
@@ -204,8 +204,8 @@ pub fn glob_casei_filter() -> SearchFilterConfig {
     }
 }
 
-pub fn hidden_include_filter() -> SearchFilterConfig {
-    SearchFilterConfig {
+pub fn hidden_include_filter() -> CandidateFilterConfig {
+    CandidateFilterConfig {
         visibility: VisibilityConfig {
             hidden: HiddenMode::Include,
             ..default_filter().visibility
@@ -214,8 +214,8 @@ pub fn hidden_include_filter() -> SearchFilterConfig {
     }
 }
 
-pub fn ignore_custom_filter() -> SearchFilterConfig {
-    SearchFilterConfig {
+pub fn ignore_custom_filter() -> CandidateFilterConfig {
+    CandidateFilterConfig {
         visibility: VisibilityConfig {
             hidden: HiddenMode::Respect,
             ignore: IgnoreConfig {
@@ -224,12 +224,12 @@ pub fn ignore_custom_filter() -> SearchFilterConfig {
                 require_git: false,
             },
         },
-        ..SearchFilterConfig::default()
+        ..CandidateFilterConfig::default()
     }
 }
 
-pub fn scoped_filter(subdir: &str) -> SearchFilterConfig {
-    SearchFilterConfig {
+pub fn scoped_filter(subdir: &str) -> CandidateFilterConfig {
+    CandidateFilterConfig {
         scopes: vec![PathBuf::from(subdir)],
         ..default_filter()
     }
@@ -311,6 +311,6 @@ pub fn make_search(patterns: &[&str], opts: SearchOptions) -> SearchQuery {
     SearchQuery::new(&pats, opts).unwrap()
 }
 
-pub fn make_filter(config: &SearchFilterConfig, root: &Path) -> SearchFilter {
-    SearchFilter::new(config, root).unwrap()
+pub fn make_filter(config: &CandidateFilterConfig, root: &Path) -> CandidateFilter {
+    CandidateFilter::new(config, root).unwrap()
 }

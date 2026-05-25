@@ -3,17 +3,17 @@ pub mod file_table;
 pub mod storage;
 pub mod types;
 
+mod planner;
+
 use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{
-    CorpusKind, FileId, IndexMeta, PlanMode, QueryPlanOutput, SearchCandidate, SearchIndex,
-};
-use crate::query::{QuerySpec, TrigramCandidates};
+use crate::index::{CorpusKind, FileId, IndexMeta, PlanMode, QueryPlanOutput, SearchIndex};
+use crate::query::QuerySpec;
 
-use crate::query::trigram::TrigramCandidatePlan;
+use self::planner::{TrigramCandidatePlan, TrigramPlanner};
 pub use builder::TrigramIndexBuilder;
 pub use types::Trigram;
 
@@ -160,7 +160,7 @@ impl TrigramIndex {
     /// Returns an explanation of how a query would be handled.
     #[must_use]
     pub fn explain(&self, query: &QuerySpec<'_>) -> QueryPlanOutput {
-        let mode = match TrigramCandidates::build(query) {
+        let mode = match TrigramPlanner::build(query) {
             Some(_) => PlanMode::IndexedCandidates,
             None => PlanMode::FullScan,
         };
@@ -228,12 +228,12 @@ impl TrigramIndex {
         (0..self.file_paths.len()).map(FileId::new).collect()
     }
 
-    fn resolve_candidates(&self, ids: impl IntoIterator<Item = FileId>) -> Vec<SearchCandidate> {
+    fn resolve_candidates(&self, ids: impl IntoIterator<Item = FileId>) -> Vec<crate::Candidate> {
         ids.into_iter()
             .filter_map(|id| {
                 let rel_path = self.file_paths.get(id.get())?.clone();
                 let abs_path = self.abs_paths.get(id.get())?.clone();
-                Some(SearchCandidate { rel_path, abs_path })
+                Some(crate::Candidate::new(rel_path, abs_path))
             })
             .collect()
     }
@@ -248,15 +248,15 @@ impl SearchIndex for TrigramIndex {
         self.corpus_kind
     }
 
-    fn candidates(&self, query: &QuerySpec<'_>) -> Vec<SearchCandidate> {
-        let ids = TrigramCandidates::build(query).map_or_else(
+    fn candidates(&self, query: &QuerySpec<'_>) -> Vec<crate::Candidate> {
+        let ids = TrigramPlanner::build(query).map_or_else(
             || self.all_file_ids(),
             |plan| self.trigram_candidate_ids(&plan),
         );
         self.resolve_candidates(ids)
     }
 
-    fn all_files(&self) -> Vec<SearchCandidate> {
+    fn all_files(&self) -> Vec<crate::Candidate> {
         self.resolve_candidates(self.all_file_ids())
     }
 }
