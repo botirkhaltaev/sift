@@ -15,7 +15,7 @@ SIFT_REPO="${SIFT_REPO:-botirk38/sift}"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-$PREFIX/bin}"
 
-# Bump when you cut a release (used if GitHub API is rate-limited or unreachable).
+# Managed by scripts/release.sh — do not edit manually.
 SIFT_DEFAULT_VERSION="${SIFT_DEFAULT_VERSION:-0.1.2}"
 
 # Optional: pin a version, e.g. export SIFT_VERSION=0.1.2
@@ -45,6 +45,7 @@ detect_asset() {
 	_arch=$(uname -m)
 	case "${_os}:${_arch}" in
 	Linux:x86_64) printf '%s\n' "sift-x86_64-unknown-linux-gnu" ;;
+	Linux:aarch64) printf '%s\n' "sift-aarch64-unknown-linux-gnu" ;;
 	Darwin:arm64) printf '%s\n' "sift-aarch64-apple-darwin" ;;
 	Darwin:x86_64) printf '%s\n' "sift-x86_64-apple-darwin" ;;
 	MINGW*|MSYS*|CYGWIN*) printf '%s\n' "sift-x86_64-pc-windows-msvc.exe" ;;

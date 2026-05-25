@@ -1,4 +1,4 @@
-# On tag v*: publish sift-core to crates.io, build sift CLI binaries, upload to GitHub Release.
+# On tag v*: publish crates to crates.io, build CLI binaries, upload to GitHub Release.
 name: Publish
 
 on:
@@ -14,10 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  publish_core:
-    name: crates.io — sift-core ${{ github.ref_name }}
+  publish_crates:
+    name: crates.io — ${{ matrix.crate }} ${{ github.ref_name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      max-parallel: 1
+      matrix:
+        crate: [sift-core, sift-cli]
     env:
       TAG_VERSION: ${{ github.ref_name }}
     steps:
@@ -40,12 +44,12 @@ jobs:
           echo "Version validated: $CARGO_VERSION"
 
       - name: cargo package (dry run)
-        run: cargo package -p sift-core --allow-dirty
+        run: cargo package -p ${{ matrix.crate }} --allow-dirty
         env:
           CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
       - name: publish to crates.io
-        run: cargo publish -p sift-core
+        run: cargo publish -p ${{ matrix.crate }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -59,6 +63,10 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset_name: sift-x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset_name: sift-aarch64-unknown-linux-gnu
+            cross: true
           - os: macos-latest
             target: aarch64-apple-darwin
             asset_name: sift-aarch64-apple-darwin
@@ -75,8 +83,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: install cross-compilation tools
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: build
         run: cargo build --release -p sift-cli --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross && 'aarch64-linux-gnu-gcc' || '' }}
 
       - name: stage binary
         shell: bash
@@ -86,7 +102,9 @@ jobs:
             cp "target/${{ matrix.target }}/release/sift.exe" "${{ matrix.asset_name }}"
           else
             cp "target/${{ matrix.target }}/release/sift" "${{ matrix.asset_name }}"
-            strip "${{ matrix.asset_name }}" || true
+            if [[ "${{ matrix.cross }}" != "true" ]]; then
+              strip "${{ matrix.asset_name }}" || true
+            fi
           fi
 
       - uses: actions/upload-artifact@v4
@@ -99,16 +117,32 @@ jobs:
     needs: build_cli
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           pattern: sift-*
           merge-multiple: true
 
+      - name: generate checksums
+        working-directory: dist
+        run: sha256sum sift-* > checksums-sha256.txt
+
       - run: ls -la dist
+
+      - name: extract changelog for this release
+        id: changelog
+        run: |
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          # Extract the section for this version from CHANGELOG.md.
+          awk "/^## \\[${VER}\\]/{found=1; next} /^## \\[/{if(found) exit} found" CHANGELOG.md > release_notes.md
+          echo "has_notes=$([ -s release_notes.md ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: dist/*
-          generate_release_notes: true
+          body_path: ${{ steps.changelog.outputs.has_notes == 'true' && 'release_notes.md' || '' }}
+          generate_release_notes: ${{ steps.changelog.outputs.has_notes != 'true' }}
