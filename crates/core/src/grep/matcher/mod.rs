@@ -1,22 +1,28 @@
+pub mod error;
+
 use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
-use super::error::SearchError;
-use super::{BinaryMode, CaseMode, CompiledSearch};
+use crate::grep::SearchError;
+use crate::grep::options::BinaryMode;
+use crate::grep::search::CompiledSearch;
 
 impl CompiledSearch {
+    /// Builds a regex matcher from the compiled patterns and options.
+    ///
     /// # Errors
-    /// Returns an error if pattern compilation fails.
+    ///
+    /// Returns `SearchError::RegexBuild` if pattern compilation fails.
     pub fn build_matcher(&self) -> Result<RegexMatcher, SearchError> {
         let mut builder = RegexMatcherBuilder::new();
         builder.multi_line(true);
         match self.opts.case_mode {
-            CaseMode::Sensitive => {}
-            CaseMode::Insensitive => {
+            crate::grep::options::CaseMode::Sensitive => {}
+            crate::grep::options::CaseMode::Insensitive => {
                 builder.case_insensitive(true);
             }
-            CaseMode::Smart => {
+            crate::grep::options::CaseMode::Smart => {
                 builder.case_smart(true);
             }
         }
@@ -61,7 +67,6 @@ impl CompiledSearch {
             .map_err(|e| SearchError::RegexBuild(e.to_string()))
     }
 
-    /// `include_context`: standard search uses configured `-A`/`-B`/`-C`; summary/count modes pass `false`.
     pub(super) fn build_searcher(
         &self,
         line_number: bool,
@@ -130,7 +135,8 @@ impl CompiledSearch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SearchMatchFlags, SearchOptions};
+    use crate::grep::options::{SearchMatchFlags, SearchOptions};
+    use crate::grep::search::CompiledSearch;
 
     fn make_search(patterns: &[&str], opts: SearchOptions) -> CompiledSearch {
         let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
@@ -166,6 +172,7 @@ mod tests {
 
     #[test]
     fn sensitive_mode_matches_exact_case_only() {
+        use crate::grep::options::CaseMode;
         let opts = SearchOptions {
             case_mode: CaseMode::Sensitive,
             ..SearchOptions::default()
@@ -177,6 +184,7 @@ mod tests {
 
     #[test]
     fn insensitive_mode_matches_case_variants() {
+        use crate::grep::options::CaseMode;
         let opts = SearchOptions {
             case_mode: CaseMode::Insensitive,
             ..SearchOptions::default()
@@ -238,6 +246,24 @@ mod tests {
             binary_mode: BinaryMode::Quit,
             ..SearchOptions::default()
         };
+        let search = make_search(&["hello"], opts);
+        let result = search.build_matcher();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn multiline_mode_builds_without_error() {
+        let mut opts = SearchOptions::default();
+        opts.flags |= SearchMatchFlags::MULTILINE;
+        let search = make_search(&["hello"], opts);
+        let result = search.build_matcher();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn crlf_mode_builds_without_error() {
+        let mut opts = SearchOptions::default();
+        opts.flags |= SearchMatchFlags::CRLF;
         let search = make_search(&["hello"], opts);
         let result = search.build_matcher();
         assert!(result.is_ok());

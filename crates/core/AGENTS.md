@@ -19,28 +19,31 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `Co
 | `index/trigram/builder.rs` | `TrigramIndexBuilder` — corpus walk, trigram extraction, table construction |
 | `index/trigram/file_table.rs` | `MappedFilesView` — file ID → relative path mapping |
 | `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
-| `grep/mod.rs` | Module declarations and public re-exports |
-| `grep/error.rs` | `SearchError` — pattern compilation, execution, and output errors |
-| `grep/compile.rs` | `PatternCompiler` — composable regex builder; legacy free-fn wrappers for public API |
-| `grep/types.rs` | `CompiledSearch`, `SearchOptions`, output types |
-| `grep/execute.rs` | `run_indexes`, `run_walk`, parallel scanning, output writing |
-| `grep/filter.rs` | Glob, hidden-file, ignore-rule, and scope filtering |
-| `grep/matcher.rs` | `grep_regex`/`grep_searcher` integration |
+| `grep/mod.rs` | Module declarations, `SearchError` aggregate, public re-exports |
+| `grep/options/` | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
+| `grep/search/` | `CompiledSearch`, `Match` |
+| `grep/compile/` | `PatternCompiler` — composable regex builder |
+| `grep/matcher/` | `grep_regex`/`grep_searcher` integration, matcher/searcher cache |
+| `grep/filter/` | `SearchFilter`, `CandidateInfo`, config/ignore/type_filter |
+| `grep/output/` | `SearchOutput`, style/mode/format/passthru |
+| `grep/execution/` | `run_indexes`, `run_walk`, workers, sinks, stats, candidate prep |
 | `bin/sift_profile/` | `sift-profile` — feature `profile` only |
 
 ## Error Ownership
 
-Each module defines its own error type and `crate::Error` aggregates them via `#[from]`:
+Each grep sub-module defines its own error type; `grep/mod.rs` aggregates them into a unified `SearchError` via `From` impls:
 
-| Module | Error Type | Aggregated As |
-|--------|-----------|---------------|
-| `index/` | `IndexError` | `Error::Index` |
-| `index/trigram/` | `TrigramIndexError` | `IndexError::Trigram` (manual `From` impl) |
-| `grep/` | `SearchError` | `Error::Search` |
+| Module | Error Type | Mapped To |
+|--------|-----------|-----------|
+| `compile/` | `CompileError` | `SearchError::RegexBuild` |
+| `matcher/` | `MatcherError` | `SearchError::RegexBuild` |
+| `filter/` | `FilterError` | `SearchError::RegexBuild`, `SearchError::Ignore` |
+| `output/` | `OutputError` | `SearchError::JsonOutputIncompatibleMode`, `JsonSerialize`, `Io` |
+| `execution/` | `ExecutionError` | `SearchError::InvalidMaxCount`, `Io`, `Ignore` |
 
-`crate::Error` is a thin umbrella: `Index`, `Search`, `Io`, `Ignore`, `Regex`. Do not add new variants to `crate::Error` — define them in the owning module's error type instead.
+`SearchError` variants not owned by a sub-module (`EmptyPatterns`, `RegexBuild` direct) live in the aggregate. `crate::Error` aggregates `SearchError` as `Error::Search`.
 
-Internal grep APIs (`filter.rs`, `matcher.rs`, `types.rs`) return `Result<_, SearchError>` directly. Functions that cross module boundaries or are called from the CLI use `crate::Result<T>` and rely on `From<SearchError>`.
+Public grep APIs (`CompiledSearch::new`, `run_indexes`, `run_walk`, `discover_files`) return `crate::Result<T>` and rely on `From<SearchError> for crate::Error`.
 
 ## Architecture
 

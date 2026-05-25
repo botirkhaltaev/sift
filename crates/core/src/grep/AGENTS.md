@@ -22,7 +22,7 @@ Grep-style search execution: pattern compilation, file scanning, filtering, outp
 ## Search Flow
 
 ```text
-run_indexes(&[&dyn SearchIndex], filter, output, separators)
+CompiledSearch::run_indexes(&Indexes, SearchExecution { filter, output, separators, stats })
   -> build QuerySpec
   -> decide: full scan vs indexed (QueryPlanner + output mode)
   -> prepare candidates (resolve paths, apply filter)
