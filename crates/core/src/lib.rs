@@ -22,7 +22,11 @@ pub use search::{
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
+pub use index::maintenance::{IndexBuildConfig, IndexMaintenance};
+pub use index::store::{IndexStore, StoreMeta};
+pub use index::trigram::{
+    TrigramIndex, TrigramIndexBuilder, TrigramIndexError, TrigramMaintenance,
+};
 pub use index::{
     CorpusKind, FileId, IndexError, IndexId, IndexMeta, Indexes, PlanMode, QueryPlanOutput,
     SearchIndex,
@@ -33,8 +37,6 @@ pub use query::{QueryFlags, QuerySpec};
 use thiserror::Error;
 
 pub const SIFT_DIR: &str = ".sift";
-pub const INDEX_SUBDIR: &str = ".index";
-pub const META_FILENAME: &str = "sift.meta";
 pub const FILES_BIN: &str = "files.bin";
 pub const LEXICON_BIN: &str = "lexicon.bin";
 pub const POSTINGS_BIN: &str = "postings.bin";

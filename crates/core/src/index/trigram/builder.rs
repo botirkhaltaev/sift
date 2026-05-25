@@ -235,18 +235,16 @@ impl<'a> TrigramIndexBuilder<'a> {
         let postings = MappedPostings::from_bytes(&tables.postings);
 
         let abs_paths = compute_abs_paths(&root, &tables.files);
-        let mut index = super::TrigramIndex {
+        let index = super::TrigramIndex {
             root,
             file_paths: tables.files,
             abs_paths,
             lexicon,
             postings,
-            index_dir: None,
             corpus_kind: kind,
         };
 
         if let Some(dir) = self.dir {
-            index.index_dir = Some(dir.clone());
             index.save_to_dir(&dir)?;
         }
         Ok(index)

@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod file_table;
+pub mod maintenance;
 pub mod storage;
 pub mod types;
 
@@ -10,22 +11,17 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{CorpusKind, FileId, IndexMeta, PlanMode, QueryPlanOutput, SearchIndex};
+use crate::index::{CorpusKind, FileId, PlanMode, QueryPlanOutput, SearchIndex};
 use crate::query::QuerySpec;
 
 use self::planner::{TrigramCandidatePlan, TrigramPlanner};
 pub use builder::TrigramIndexBuilder;
+pub use maintenance::TrigramMaintenance;
 pub use types::Trigram;
 
 /// Errors specific to opening or persisting a trigram index.
 #[derive(Debug, thiserror::Error)]
 pub enum TrigramIndexError {
-    #[error("index not initialized (missing {0})")]
-    MissingMeta(PathBuf),
-
-    #[error("invalid index metadata: {0}")]
-    InvalidMeta(PathBuf),
-
     #[error("index component missing: {0}")]
     MissingComponent(PathBuf),
 
@@ -40,34 +36,25 @@ pub struct TrigramIndex {
     abs_paths: Vec<PathBuf>,
     lexicon: storage::lexicon::MappedLexicon,
     postings: storage::postings::MappedPostings,
-    pub index_dir: Option<PathBuf>,
     corpus_kind: CorpusKind,
 }
 
 impl TrigramIndex {
-    /// Open an index directory produced by [`TrigramIndexBuilder::build`].
+    /// Open an index written to `dir` by `save_to_dir`.
     ///
     /// # Errors
     ///
-    /// Returns [`TrigramIndexError::MissingMeta`] if `sift.meta` is absent,
-    /// [`TrigramIndexError::InvalidMeta`] if metadata is empty or malformed,
-    /// [`TrigramIndexError::MissingComponent`] if a trigram table file is missing,
-    /// or [`TrigramIndexError::Io`] on read/mmap failure.
-    pub fn open(path: &Path) -> Result<Self, TrigramIndexError> {
-        let sift_dir = path.to_path_buf();
-        let index_dir = sift_dir.join(crate::INDEX_SUBDIR);
-        let meta_path = sift_dir.join(crate::META_FILENAME);
-        if !meta_path.is_file() {
-            return Err(TrigramIndexError::MissingMeta(meta_path));
-        }
-        let raw = std::fs::read_to_string(&meta_path)?;
-        let meta = serde_json::from_str::<IndexMeta>(&raw)
-            .map_err(|_| TrigramIndexError::InvalidMeta(meta_path.clone()))?
-            .validate(&meta_path)?;
+    /// Returns [`TrigramIndexError::MissingComponent`] if a trigram table file
+    /// is missing, or [`TrigramIndexError::Io`] on read/mmap failure.
+    pub fn open(
+        dir: &Path,
+        root: &Path,
+        corpus_kind: CorpusKind,
+    ) -> Result<Self, TrigramIndexError> {
         let paths = [
-            index_dir.join(crate::FILES_BIN),
-            index_dir.join(crate::LEXICON_BIN),
-            index_dir.join(crate::POSTINGS_BIN),
+            dir.join(crate::FILES_BIN),
+            dir.join(crate::LEXICON_BIN),
+            dir.join(crate::POSTINGS_BIN),
         ];
         for p in &paths {
             if !p.is_file() {
@@ -77,21 +64,20 @@ impl TrigramIndex {
 
         let files = file_table::MappedFilesView::open(&paths[0]).map_err(TrigramIndexError::Io)?;
         let file_paths = files.to_path_bufs().map_err(TrigramIndexError::Io)?;
-        validate_file_paths(&file_paths, &meta_path)?;
-        let abs_paths = compute_abs_paths(&meta.root, &file_paths);
+        validate_file_paths(&file_paths, &paths[0])?;
+        let abs_paths = compute_abs_paths(root, &file_paths);
         let lexicon =
             storage::lexicon::MappedLexicon::open(&paths[1]).map_err(TrigramIndexError::Io)?;
         let postings =
             storage::postings::MappedPostings::open(&paths[2]).map_err(TrigramIndexError::Io)?;
 
         Ok(Self {
-            root: meta.root,
+            root: root.to_path_buf(),
             file_paths,
             abs_paths,
             lexicon,
             postings,
-            index_dir: Some(sift_dir),
-            corpus_kind: meta.corpus_kind,
+            corpus_kind,
         })
     }
 
@@ -102,33 +88,14 @@ impl TrigramIndex {
     /// Propagates IO errors from creating directories or writing files.
     pub fn save_to_dir(&self, dir: &Path) -> Result<(), TrigramIndexError> {
         std::fs::create_dir_all(dir)?;
-        let meta_path = dir.join(crate::META_FILENAME);
-        let meta = IndexMeta {
-            root: self.root.clone(),
-            corpus_kind: self.corpus_kind,
-        };
-        std::fs::write(
-            &meta_path,
-            serde_json::to_vec_pretty(&meta)
-                .map_err(|_| TrigramIndexError::InvalidMeta(meta_path.clone()))?,
-        )?;
-
-        let index_dir = dir.join(crate::INDEX_SUBDIR);
-        std::fs::create_dir_all(&index_dir)?;
 
         let files = file_table::MappedFilesView::from_paths(&self.file_paths);
-        std::fs::write(index_dir.join(crate::FILES_BIN), files.backing_slice())
+        std::fs::write(dir.join(crate::FILES_BIN), files.backing_slice())
             .map_err(TrigramIndexError::Io)?;
-        std::fs::write(
-            index_dir.join(crate::LEXICON_BIN),
-            self.lexicon.backing_slice(),
-        )
-        .map_err(TrigramIndexError::Io)?;
-        std::fs::write(
-            index_dir.join(crate::POSTINGS_BIN),
-            self.postings.backing_slice(),
-        )
-        .map_err(TrigramIndexError::Io)?;
+        std::fs::write(dir.join(crate::LEXICON_BIN), self.lexicon.backing_slice())
+            .map_err(TrigramIndexError::Io)?;
+        std::fs::write(dir.join(crate::POSTINGS_BIN), self.postings.backing_slice())
+            .map_err(TrigramIndexError::Io)?;
         Ok(())
     }
 
@@ -150,11 +117,6 @@ impl TrigramIndex {
     #[must_use]
     pub fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
         self.abs_paths.get(id.get()).cloned()
-    }
-
-    #[must_use]
-    pub fn index_dir(&self) -> Option<&Path> {
-        self.index_dir.as_deref()
     }
 
     /// Returns an explanation of how a query would be handled.
@@ -265,7 +227,7 @@ fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
     file_paths.iter().map(|p| root.join(p)).collect()
 }
 
-fn validate_file_paths(file_paths: &[PathBuf], meta_path: &Path) -> Result<(), TrigramIndexError> {
+fn validate_file_paths(file_paths: &[PathBuf], _meta_path: &Path) -> Result<(), TrigramIndexError> {
     for path in file_paths {
         if path.as_os_str().is_empty()
             || path.is_absolute()
@@ -273,7 +235,10 @@ fn validate_file_paths(file_paths: &[PathBuf], meta_path: &Path) -> Result<(), T
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
         {
-            return Err(TrigramIndexError::InvalidMeta(meta_path.to_path_buf()));
+            return Err(TrigramIndexError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid file path in index: {}", path.display()),
+            )));
         }
     }
     Ok(())

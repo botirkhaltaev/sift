@@ -6,7 +6,10 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::{Indexes, QueryFlags, QuerySpec, SearchIndex};
+use sift_core::{
+    CorpusKind, IndexBuildConfig, IndexStore, Indexes, QueryFlags, QuerySpec, SearchIndex,
+    TrigramMaintenance,
+};
 
 mod common;
 
@@ -74,30 +77,34 @@ fn bench_index_open(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_open");
 
     g.bench_function("small", |b| {
-        let (_tmp, idx_dir) = {
+        let (_tmp, idx_dir, root) = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             common::make_parity_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
-            (tmp, idx)
+            let built = common::build_index(&corpus, &idx);
+            let root = built.root().to_path_buf();
+            drop(built);
+            (tmp, idx, root)
         };
         b.iter(|| {
-            black_box(common::open_index(&idx_dir));
+            black_box(common::open_index(&idx_dir, &root, CorpusKind::Directory));
         });
     });
 
     g.bench_function("large", |b| {
-        let (_tmp, idx_dir) = {
+        let (_tmp, idx_dir, root) = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             common::materialize_large_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
-            (tmp, idx)
+            let built = common::build_index(&corpus, &idx);
+            let root = built.root().to_path_buf();
+            drop(built);
+            (tmp, idx, root)
         };
         b.iter(|| {
-            black_box(common::open_index(&idx_dir));
+            black_box(common::open_index(&idx_dir, &root, CorpusKind::Directory));
         });
     });
 
@@ -123,9 +130,21 @@ fn bench_indexes_open(c: &mut Criterion) {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             common::make_parity_corpus(&corpus);
-            let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
-            (tmp, idx)
+            let sift = tmp.path().join(".sift");
+            let mut store =
+                IndexStore::open_or_create(&sift, &corpus, CorpusKind::Directory, false)
+                    .expect("open store");
+            store
+                .build::<TrigramMaintenance>(&IndexBuildConfig {
+                    root: &corpus,
+                    follow_links: false,
+                    exclude_paths: &[],
+                    include_paths: &[],
+                    corpus_kind: CorpusKind::Directory,
+                })
+                .expect("build");
+            drop(store);
+            (tmp, sift)
         };
         b.iter(|| {
             black_box(Indexes::open(&sift_dir).unwrap());
@@ -142,11 +161,13 @@ fn bench_index_save_reopen(c: &mut Criterion) {
 
     g.bench_function("save_and_reopen", |b| {
         let (_tmp, index) = common::open_parity_index();
+        let root = index.root().to_path_buf();
+        let corpus_kind = index.corpus_kind();
         b.iter(|| {
             let tmp2 = tempfile::tempdir().unwrap();
             let save_dir = tmp2.path().join("saved_index");
             index.save_to_dir(&save_dir).unwrap();
-            black_box(common::open_index(&save_dir));
+            black_box(common::open_index(&save_dir, &root, corpus_kind));
         });
     });
 

@@ -11,11 +11,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    CandidateFilter, CandidateFilterConfig, ColorChoice, FilenameMode, GlobConfig, HiddenMode,
-    IgnoreConfig, IgnoreSources, LineStyleFlags, OutputEmission, PassthruMode, PathDisplay,
-    RecordTerminator, SearchLineStyle, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat,
-    SearchQuery, SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder,
-    VisibilityConfig, ZeroCountMode,
+    CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, FilenameMode, GlobConfig,
+    HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, OutputEmission, PassthruMode,
+    PathDisplay, RecordTerminator, SearchLineStyle, SearchMode, SearchOptions, SearchOutput,
+    SearchOutputFormat, SearchQuery, SearchRecordStyle, SearchSeparators, TrigramIndex,
+    TrigramIndexBuilder, VisibilityConfig, ZeroCountMode,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -124,8 +124,8 @@ pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
         .unwrap()
 }
 
-pub fn open_index(idx_dir: &Path) -> TrigramIndex {
-    TrigramIndex::open(idx_dir).unwrap()
+pub fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> TrigramIndex {
+    TrigramIndex::open(idx_dir, root, kind).unwrap()
 }
 
 pub fn open_parity_index() -> (tempfile::TempDir, TrigramIndex) {
@@ -133,8 +133,11 @@ pub fn open_parity_index() -> (tempfile::TempDir, TrigramIndex) {
     let corpus = tmp.path().join("corpus");
     make_parity_corpus(&corpus);
     let idx = tmp.path().join(".sift");
-    build_index(&corpus, &idx);
-    let index = open_index(&idx);
+    let built = build_index(&corpus, &idx);
+    let root = built.root().to_path_buf();
+    let kind = built.corpus_kind();
+    drop(built);
+    let index = open_index(&idx, &root, kind);
     (tmp, index)
 }
 
@@ -143,8 +146,11 @@ pub fn open_filter_index() -> (tempfile::TempDir, TrigramIndex) {
     let corpus = tmp.path().join("corpus");
     make_filter_corpus(&corpus);
     let idx = tmp.path().join(".sift");
-    build_index(&corpus, &idx);
-    let index = open_index(&idx);
+    let built = build_index(&corpus, &idx);
+    let root = built.root().to_path_buf();
+    let kind = built.corpus_kind();
+    drop(built);
+    let index = open_index(&idx, &root, kind);
     (tmp, index)
 }
 
@@ -153,8 +159,11 @@ pub fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
     let corpus = tmp.path().join("corpus");
     materialize_large_corpus(&corpus, 8_000, 100, 256);
     let idx = tmp.path().join(".sift");
-    build_index(&corpus, &idx);
-    let index = open_index(&idx);
+    let built = build_index(&corpus, &idx);
+    let root = built.root().to_path_buf();
+    let kind = built.corpus_kind();
+    drop(built);
+    let index = open_index(&idx, &root, kind);
     (tmp, index)
 }
 
