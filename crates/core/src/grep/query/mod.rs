@@ -1,5 +1,4 @@
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 #[cfg(test)]
 use std::{
@@ -15,9 +14,8 @@ use once_cell::sync::OnceCell;
 
 use crate::grep::SearchError;
 use crate::grep::SearchOutcome;
-use crate::grep::candidates::{resolve_all_indexed_candidates, resolve_indexed_candidates, walk};
 use crate::grep::emit::format::sum_candidate_file_bytes;
-use crate::grep::emit::stats::{SearchStats, StatsCollection};
+use crate::grep::emit::stats::{SearchStats, TextStatsCounters};
 #[cfg(test)]
 use crate::grep::filter::SearchFilter;
 #[cfg(test)]
@@ -26,7 +24,7 @@ use crate::grep::options::SearchOptions;
 use crate::grep::output::SearchOutputFormat;
 #[cfg(test)]
 use crate::grep::output::mode::MatchEmissionMode;
-use crate::grep::output::mode::{CandidateSet, SearchMode};
+use crate::grep::output::mode::SearchMode;
 use crate::grep::request::SearchRequest;
 #[cfg(test)]
 use crate::index::SearchCandidate;
@@ -98,30 +96,6 @@ impl SearchQuery {
         }
     }
 
-    fn resolve_candidates(
-        request: SearchRequest<'_>,
-        spec: &QuerySpec<'_>,
-    ) -> crate::Result<Vec<crate::grep::filter::CandidateInfo>> {
-        let output = request.output;
-        if request.indexes.is_empty() {
-            let abs_paths = walk::collect_abs_paths_for_scopes(request.filter)?;
-            if abs_paths.is_empty() {
-                return Ok(Vec::new());
-            }
-            return Ok(walk::prepare_walk_candidates(&abs_paths, request.filter));
-        }
-
-        let candidates = match output.candidate_set() {
-            CandidateSet::AllIndexedFiles => {
-                resolve_all_indexed_candidates(request.indexes, request.filter)
-            }
-            CandidateSet::IndexedCandidates => {
-                resolve_indexed_candidates(request.indexes, spec, request.filter)
-            }
-        };
-        Ok(candidates)
-    }
-
     fn run_text_output(
         &self,
         candidates: &[crate::grep::filter::CandidateInfo],
@@ -131,60 +105,30 @@ impl SearchQuery {
         search_start: Instant,
         collect_stats: bool,
     ) -> crate::Result<(bool, Option<SearchStats>)> {
-        let match_counter = AtomicUsize::new(0);
-        let files_with_matches = AtomicUsize::new(0);
-        let summary_counter = AtomicUsize::new(0);
-        let bytes_printed = AtomicU64::new(0);
-
-        let runner_stats = StatsCollection {
-            primary: if collect_stats {
-                match output.mode {
-                    SearchMode::Standard | SearchMode::OnlyMatching => Some(&match_counter),
-                    _ => Some(&summary_counter),
-                }
-            } else {
-                None
-            },
-            files_with_matches: collect_stats.then_some(&files_with_matches),
-            bytes_printed: collect_stats.then_some(&bytes_printed),
-        };
+        let counters = TextStatsCounters::new(collect_stats);
 
         let did_match = match output.mode {
             SearchMode::Standard | SearchMode::OnlyMatching => {
-                crate::grep::scan::standard::run_standard_with_info(
-                    self,
-                    candidates,
-                    matcher,
-                    output,
-                    separators,
-                    runner_stats,
-                )?
+                let scan = crate::grep::scan::standard::StandardScan::new(
+                    self, matcher, output, separators, &counters,
+                );
+                scan.run(candidates)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
             | SearchMode::FilesWithMatches
-            | SearchMode::FilesWithoutMatch => crate::grep::scan::summary::run_summary_with_info(
-                self,
-                candidates,
-                matcher,
-                output,
-                runner_stats,
-            )?,
+            | SearchMode::FilesWithoutMatch => {
+                let scan =
+                    crate::grep::scan::summary::SummaryScan::new(self, matcher, output, &counters);
+                scan.run(candidates)?
+            }
         };
 
-        let stats = collect_stats.then(|| SearchStats {
-            matches: match output.mode {
-                SearchMode::Standard | SearchMode::OnlyMatching => {
-                    match_counter.load(Ordering::Relaxed)
-                }
-                _ => summary_counter.load(Ordering::Relaxed),
-            },
-            files_with_matches: files_with_matches.load(Ordering::Relaxed),
-            files_searched: candidates.len(),
-            bytes_printed: bytes_printed.load(Ordering::Relaxed),
-            bytes_searched: sum_candidate_file_bytes(candidates),
-            elapsed: search_start.elapsed(),
-        });
+        let stats = counters.finish(
+            candidates.len(),
+            sum_candidate_file_bytes(candidates),
+            search_start.elapsed(),
+        );
 
         Ok((did_match, stats))
     }
@@ -201,7 +145,7 @@ impl SearchQuery {
 
         let spec = self.build_query_spec();
         let output = request.output;
-        let candidates = Self::resolve_candidates(request, &spec)?;
+        let candidates = request.resolve_candidates(&spec)?;
 
         if candidates.is_empty() {
             return Ok(SearchOutcome {
@@ -217,14 +161,9 @@ impl SearchQuery {
             SearchOutputFormat::Json => match output.mode {
                 SearchMode::Standard | SearchMode::OnlyMatching => {
                     let mut stats = request.collect_stats.then_some(SearchStats::default());
-                    let json_matched = crate::grep::scan::json::run_json_standard_with_info(
-                        self,
-                        &candidates,
-                        matcher,
-                        output,
-                        search_start,
-                        stats.as_mut(),
-                    )?;
+                    let scan =
+                        crate::grep::scan::json::JsonScan::new(self, matcher, output, search_start);
+                    let json_matched = scan.run(&candidates, stats.as_mut())?;
                     (json_matched, stats)
                 }
                 _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),

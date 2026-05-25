@@ -21,32 +21,32 @@ impl ChunkOutput {
             heading: false,
         }
     }
-}
 
-pub fn flush_chunk_output(
-    outputs: impl IntoIterator<Item = ChunkOutput>,
-    bytes_printed: Option<&AtomicU64>,
-) -> crate::Result<bool> {
-    let mut stdout = io::stdout().lock();
-    let mut any_match = false;
-    let mut emitted = false;
-    for output in outputs {
-        any_match |= output.matched;
-        if output.bytes.is_empty() {
-            continue;
-        }
-        if output.heading && emitted {
-            stdout.write_all(b"\n")?;
-            if let Some(p) = bytes_printed {
-                p.fetch_add(1, Ordering::Relaxed);
+    pub fn flush_all(
+        outputs: impl IntoIterator<Item = Self>,
+        bytes_printed: Option<&AtomicU64>,
+    ) -> crate::Result<bool> {
+        let mut stdout = io::stdout().lock();
+        let mut any_match = false;
+        let mut emitted = false;
+        for output in outputs {
+            any_match |= output.matched;
+            if output.bytes.is_empty() {
+                continue;
             }
+            if output.heading && emitted {
+                stdout.write_all(b"\n")?;
+                if let Some(p) = bytes_printed {
+                    p.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            let n = output.bytes.len() as u64;
+            if let Some(p) = bytes_printed {
+                p.fetch_add(n, Ordering::Relaxed);
+            }
+            stdout.write_all(&output.bytes)?;
+            emitted = true;
         }
-        let n = output.bytes.len() as u64;
-        if let Some(p) = bytes_printed {
-            p.fetch_add(n, Ordering::Relaxed);
-        }
-        stdout.write_all(&output.bytes)?;
-        emitted = true;
+        Ok(any_match)
     }
-    Ok(any_match)
 }
