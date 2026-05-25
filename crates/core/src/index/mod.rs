@@ -1,4 +1,3 @@
-pub mod maintenance;
 pub mod store;
 pub mod trigram;
 
@@ -36,6 +35,15 @@ pub enum CorpusKind {
     SingleFile,
 }
 
+/// Configuration for building an index over a corpus.
+pub struct IndexBuildConfig<'a> {
+    pub root: &'a Path,
+    pub follow_links: bool,
+    pub exclude_paths: &'a [PathBuf],
+    pub include_paths: &'a [PathBuf],
+    pub corpus_kind: CorpusKind,
+}
+
 /// Errors specific to the index registry layer.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
@@ -61,9 +69,48 @@ pub enum IndexError {
     },
 }
 
+/// A searchable index that can also be built and opened from disk.
+///
+/// Object-safe surface: [`root`](Index::root), [`corpus_kind`](Index::corpus_kind),
+/// [`candidates`](Index::candidates), [`all_files`](Index::all_files).
+///
+/// Lifecycle methods ([`kind_name`](Index::kind_name), [`build`](Index::build),
+/// [`open`](Index::open)) require `Self: Sized` and are only callable on
+/// concrete types or in generic contexts.
+pub trait Index: Sync + Send {
+    fn root(&self) -> &Path;
+    fn corpus_kind(&self) -> CorpusKind;
+    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate>;
+    fn all_files(&self) -> Vec<crate::Candidate>;
+
+    /// Short identifier for the index kind (e.g. `"trigram"`).
+    fn kind_name() -> &'static str
+    where
+        Self: Sized;
+
+    /// Build a new index over the corpus described in `config`, writing
+    /// persistence files into `output_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if corpus walking, extraction, or file I/O fails.
+    fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self>
+    where
+        Self: Sized;
+
+    /// Open an index that was previously persisted to `index_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if persistence files are missing or malformed.
+    fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self>
+    where
+        Self: Sized;
+}
+
 /// Registry of opened indexes read from a snapshot store.
 pub struct Indexes {
-    inner: Vec<Box<dyn SearchIndex>>,
+    inner: Vec<Box<dyn Index>>,
     root: PathBuf,
 }
 
@@ -72,7 +119,7 @@ impl Indexes {
     ///
     /// Useful for testing and benchmarking.
     #[must_use]
-    pub fn from_single(index: impl SearchIndex + 'static, root: PathBuf) -> Self {
+    pub fn from_single(index: impl Index + 'static, root: PathBuf) -> Self {
         Self {
             inner: vec![Box::new(index)],
             root,
@@ -194,7 +241,7 @@ impl Indexes {
     }
 
     #[must_use]
-    pub fn first(&self) -> Option<&dyn SearchIndex> {
+    pub fn first(&self) -> Option<&dyn Index> {
         self.inner.first().map(AsRef::as_ref)
     }
 
@@ -237,14 +284,6 @@ impl IndexId {
     pub const fn get(self) -> usize {
         self.0
     }
-}
-
-/// An indexed search corpus that can return candidate files for a query.
-pub trait SearchIndex: Sync + Send {
-    fn root(&self) -> &Path;
-    fn corpus_kind(&self) -> CorpusKind;
-    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate>;
-    fn all_files(&self) -> Vec<crate::Candidate>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

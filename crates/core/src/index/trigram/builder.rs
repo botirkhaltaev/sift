@@ -254,6 +254,7 @@ impl<'a> TrigramIndexBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::Index;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;

@@ -3,8 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use super::{CorpusKind, IndexError, SearchIndex};
-use crate::index::maintenance::{IndexBuildConfig, IndexMaintenance};
+use super::{CorpusKind, Index, IndexBuildConfig, IndexError};
 
 const STORE_VERSION: u32 = 1;
 const SNAPSHOTS_DIR: &str = "snapshots";
@@ -135,19 +134,16 @@ impl IndexStore {
     ///
     /// Returns an error if the index build fails, the manifest cannot be
     /// written, or snapshot rename/publish fails.
-    pub fn build<M: IndexMaintenance>(
-        &mut self,
-        config: &IndexBuildConfig<'_>,
-    ) -> crate::Result<M::Index> {
+    pub fn build<I: Index>(&mut self, config: &IndexBuildConfig<'_>) -> crate::Result<I> {
         let snapshots_dir = self.sift_dir.join(SNAPSHOTS_DIR);
         std::fs::create_dir_all(&snapshots_dir)?;
 
         let id = snapshot_id(&self.counter);
         let tmp_dir = snapshots_dir.join(format!("tmp-{id}"));
-        let index_dir = tmp_dir.join(M::NAME);
+        let index_dir = tmp_dir.join(I::kind_name());
         std::fs::create_dir_all(&index_dir)?;
 
-        let index = <M as IndexMaintenance>::build(config, &index_dir)?;
+        let index = I::build(config, &index_dir)?;
 
         let canonical_root = config
             .root
@@ -157,7 +153,7 @@ impl IndexStore {
             id: id.clone(),
             root: canonical_root,
             corpus_kind: config.corpus_kind,
-            indexes: vec![M::NAME.to_string()],
+            indexes: vec![I::kind_name().to_string()],
         };
         let tmp_manifest = tmp_dir.join(MANIFEST_FILE);
         let json = serde_json::to_vec_pretty(&manifest).map_err(|e| {
@@ -192,7 +188,7 @@ impl IndexStore {
     /// # Errors
     ///
     /// Returns an error if the manifest is malformed or an index kind is unknown.
-    pub fn open_current(&self) -> crate::Result<Vec<Box<dyn SearchIndex>>> {
+    pub fn open_current(&self) -> crate::Result<Vec<Box<dyn Index>>> {
         let Some(id) = &self.current_id else {
             return Ok(Vec::new());
         };
@@ -210,16 +206,13 @@ impl IndexStore {
         let root = &manifest.root;
         let corpus_kind = manifest.corpus_kind;
 
-        let mut indexes: Vec<Box<dyn SearchIndex>> = Vec::new();
+        let mut indexes: Vec<Box<dyn Index>> = Vec::new();
         for name in &manifest.indexes {
             let index_dir = snapshot_dir.join(name);
             match name.as_str() {
                 "trigram" => {
-                    let idx = crate::index::trigram::TrigramMaintenance::open(
-                        &index_dir,
-                        root,
-                        corpus_kind,
-                    )?;
+                    let idx =
+                        crate::index::trigram::TrigramIndex::open(&index_dir, root, corpus_kind)?;
                     indexes.push(Box::new(idx));
                 }
                 other => {
@@ -301,9 +294,8 @@ impl IndexStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::CorpusKind;
-    use crate::index::maintenance::IndexBuildConfig;
-    use crate::index::trigram::TrigramMaintenance;
+    use crate::index::trigram::TrigramIndex;
+    use crate::index::{CorpusKind, IndexBuildConfig};
     use std::fs;
     use tempfile::TempDir;
 
@@ -319,8 +311,8 @@ mod tests {
             IndexStore::open_or_create(&sift_dir, &corpus, CorpusKind::Directory, false)
                 .expect("open store");
 
-        let _: crate::index::trigram::TrigramIndex = store
-            .build::<TrigramMaintenance>(&IndexBuildConfig {
+        let _: TrigramIndex = store
+            .build::<TrigramIndex>(&IndexBuildConfig {
                 root: &corpus,
                 follow_links: false,
                 exclude_paths: &[],
@@ -354,8 +346,8 @@ mod tests {
             IndexStore::open_or_create(&sift_dir, &corpus, CorpusKind::Directory, false)
                 .expect("open store");
 
-        let _: crate::index::trigram::TrigramIndex = store
-            .build::<TrigramMaintenance>(&IndexBuildConfig {
+        let _: TrigramIndex = store
+            .build::<TrigramIndex>(&IndexBuildConfig {
                 root: &corpus,
                 follow_links: false,
                 exclude_paths: &[],

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use fslock::LockFile;
 use notify::{RecursiveMode, Watcher};
-use sift_core::{IndexBuildConfig, IndexStore, TrigramMaintenance};
+use sift_core::{IndexBuildConfig, IndexStore, TrigramIndex};
 
 const DEBOUNCE_MS: u64 = 250;
 
@@ -59,7 +59,7 @@ pub fn run(config: &DaemonConfig) -> anyhow::Result<()> {
             include_paths: &[],
             corpus_kind,
         };
-        store.build::<TrigramMaintenance>(&build_config)?;
+        store.build::<TrigramIndex>(&build_config)?;
     }
 
     // ── file watcher ─────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ fn refresh(sift_dir: &Path) {
         corpus_kind: meta.corpus_kind,
     };
 
-    if let Err(e) = store.build::<TrigramMaintenance>(&build_config) {
+    if let Err(e) = store.build::<TrigramIndex>(&build_config) {
         eprintln!("sift-daemon: refresh failed: {e}");
     }
 }

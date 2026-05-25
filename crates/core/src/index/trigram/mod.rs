@@ -1,6 +1,5 @@
 pub mod builder;
 pub mod file_table;
-pub mod maintenance;
 pub mod storage;
 pub mod types;
 
@@ -11,12 +10,11 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{CorpusKind, FileId, PlanMode, QueryPlanOutput, SearchIndex};
+use crate::index::{CorpusKind, FileId, Index, IndexBuildConfig, PlanMode, QueryPlanOutput};
 use crate::query::QuerySpec;
 
 use self::planner::{TrigramCandidatePlan, TrigramPlanner};
 pub use builder::TrigramIndexBuilder;
-pub use maintenance::TrigramMaintenance;
 pub use types::Trigram;
 
 /// Errors specific to opening or persisting a trigram index.
@@ -40,47 +38,6 @@ pub struct TrigramIndex {
 }
 
 impl TrigramIndex {
-    /// Open an index written to `dir` by `save_to_dir`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TrigramIndexError::MissingComponent`] if a trigram table file
-    /// is missing, or [`TrigramIndexError::Io`] on read/mmap failure.
-    pub fn open(
-        dir: &Path,
-        root: &Path,
-        corpus_kind: CorpusKind,
-    ) -> Result<Self, TrigramIndexError> {
-        let paths = [
-            dir.join(crate::FILES_BIN),
-            dir.join(crate::LEXICON_BIN),
-            dir.join(crate::POSTINGS_BIN),
-        ];
-        for p in &paths {
-            if !p.is_file() {
-                return Err(TrigramIndexError::MissingComponent(p.clone()));
-            }
-        }
-
-        let files = file_table::MappedFilesView::open(&paths[0]).map_err(TrigramIndexError::Io)?;
-        let file_paths = files.to_path_bufs().map_err(TrigramIndexError::Io)?;
-        validate_file_paths(&file_paths, &paths[0])?;
-        let abs_paths = compute_abs_paths(root, &file_paths);
-        let lexicon =
-            storage::lexicon::MappedLexicon::open(&paths[1]).map_err(TrigramIndexError::Io)?;
-        let postings =
-            storage::postings::MappedPostings::open(&paths[2]).map_err(TrigramIndexError::Io)?;
-
-        Ok(Self {
-            root: root.to_path_buf(),
-            file_paths,
-            abs_paths,
-            lexicon,
-            postings,
-            corpus_kind,
-        })
-    }
-
     /// Persist the in-memory index to `dir`.
     ///
     /// # Errors
@@ -97,16 +54,6 @@ impl TrigramIndex {
         std::fs::write(dir.join(crate::POSTINGS_BIN), self.postings.backing_slice())
             .map_err(TrigramIndexError::Io)?;
         Ok(())
-    }
-
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    #[must_use]
-    pub const fn corpus_kind(&self) -> CorpusKind {
-        self.corpus_kind
     }
 
     #[must_use]
@@ -199,9 +146,48 @@ impl TrigramIndex {
             })
             .collect()
     }
+
+    fn open_tables(
+        dir: &Path,
+        root: &Path,
+        corpus_kind: CorpusKind,
+    ) -> Result<Self, TrigramIndexError> {
+        let paths = [
+            dir.join(crate::FILES_BIN),
+            dir.join(crate::LEXICON_BIN),
+            dir.join(crate::POSTINGS_BIN),
+        ];
+        for p in &paths {
+            if !p.is_file() {
+                return Err(TrigramIndexError::MissingComponent(p.clone()));
+            }
+        }
+
+        let files = file_table::MappedFilesView::open(&paths[0]).map_err(TrigramIndexError::Io)?;
+        let file_paths = files.to_path_bufs().map_err(TrigramIndexError::Io)?;
+        validate_file_paths(&file_paths, &paths[0])?;
+        let abs_paths = compute_abs_paths(root, &file_paths);
+        let lexicon =
+            storage::lexicon::MappedLexicon::open(&paths[1]).map_err(TrigramIndexError::Io)?;
+        let postings =
+            storage::postings::MappedPostings::open(&paths[2]).map_err(TrigramIndexError::Io)?;
+
+        Ok(Self {
+            root: root.to_path_buf(),
+            file_paths,
+            abs_paths,
+            lexicon,
+            postings,
+            corpus_kind,
+        })
+    }
 }
 
-impl SearchIndex for TrigramIndex {
+impl Index for TrigramIndex {
+    fn kind_name() -> &'static str {
+        "trigram"
+    }
+
     fn root(&self) -> &Path {
         &self.root
     }
@@ -220,6 +206,45 @@ impl SearchIndex for TrigramIndex {
 
     fn all_files(&self) -> Vec<crate::Candidate> {
         self.resolve_candidates(self.all_file_ids())
+    }
+
+    fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
+        std::fs::create_dir_all(output_dir)?;
+
+        let tables = builder::build_index_tables(&builder::IndexBuildConfig {
+            root: config.root,
+            follow_links: config.follow_links,
+            exclude_paths: config.exclude_paths,
+            include_paths: config.include_paths,
+        })?;
+
+        let files = file_table::MappedFilesView::from_paths(&tables.files);
+        std::fs::write(output_dir.join(crate::FILES_BIN), files.backing_slice())?;
+
+        let lex = storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
+        std::fs::write(output_dir.join(crate::LEXICON_BIN), lex.backing_slice())?;
+
+        let post = storage::postings::MappedPostings::from_bytes(&tables.postings);
+        std::fs::write(output_dir.join(crate::POSTINGS_BIN), post.backing_slice())?;
+
+        let root = config.root.canonicalize()?;
+        let abs_paths = tables.files.iter().map(|p| root.join(p)).collect();
+
+        let lexicon = storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
+        let postings = storage::postings::MappedPostings::from_bytes(&tables.postings);
+
+        Ok(Self {
+            root,
+            file_paths: tables.files,
+            abs_paths,
+            lexicon,
+            postings,
+            corpus_kind: config.corpus_kind,
+        })
+    }
+
+    fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self> {
+        Ok(Self::open_tables(index_dir, root, corpus_kind)?)
     }
 }
 

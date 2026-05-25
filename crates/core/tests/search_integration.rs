@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use sift_core::{
-    CorpusKind, FileId, Indexes, QueryFlags, QuerySpec, TrigramIndex, TrigramIndexBuilder,
+    CorpusKind, FileId, Index, Indexes, QueryFlags, QuerySpec, TrigramIndex, TrigramIndexBuilder,
 };
 use tempfile::TempDir;
 

@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
-use sift_core::{CorpusKind, IndexBuildConfig, IndexStore, TrigramMaintenance};
+use sift_core::{CorpusKind, IndexBuildConfig, IndexStore, TrigramIndex};
 
 use cli::{Cli, Commands};
 use ignore::{MessageFlags, resolve_visibility_and_ignore};
@@ -65,7 +65,7 @@ pub fn main_entry() -> ExitCode {
             include_paths: &include_paths,
             corpus_kind,
         };
-        if let Err(e) = store.build::<TrigramMaintenance>(&config) {
+        if let Err(e) = store.build::<TrigramIndex>(&config) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }

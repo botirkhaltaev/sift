@@ -6,7 +6,7 @@ Core search engine: query planning, trigram index, grep-style execution, and par
 
 ## Public API
 
-Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `SearchIndex`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
+Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
 
 ## Source Map
 
@@ -14,8 +14,8 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `Se
 |--------|----------------|
 | `query/` | Query description (`QuerySpec`), planning (`QueryPlanner`) |
 | `query/trigram.rs` | Trigram extraction, scoring sort, candidate selection |
-| `index/mod.rs` | `Indexes` registry, `SearchIndex` trait, shared types (`FileId`, `IndexId`, `IndexMeta`), `IndexError` |
-| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, `SearchIndex` impl, `TrigramIndexError` |
+| `index/mod.rs` | `Indexes` registry, `Index` trait, `IndexBuildConfig`, shared types (`FileId`, `IndexId`, `IndexMeta`), `IndexError` |
+| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, `Index` impl, `TrigramIndexError` |
 | `index/trigram/builder.rs` | `TrigramIndexBuilder` — corpus walk, trigram extraction, table construction |
 | `index/trigram/file_table.rs` | `MappedFilesView` — file ID → relative path mapping |
 | `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
@@ -50,13 +50,17 @@ Public grep APIs (`SearchQuery::new`, `SearchQuery::run`, `discover_files`, `Ind
 
 ## Architecture
 
-### SearchIndex Trait
+### Index Trait
 ```rust
-pub trait SearchIndex: Sync + Send {
+pub trait Index: Sync + Send {
     fn root(&self) -> &Path;
-    fn kind(&self) -> IndexKind;
+    fn corpus_kind(&self) -> CorpusKind;
     fn candidates(&self, query: &QuerySpec<'_>) -> Vec<Candidate>;
     fn all_files(&self) -> Vec<Candidate>;
+
+    fn kind_name() -> &'static str where Self: Sized;
+    fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> Result<Self> where Self: Sized;
+    fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> Result<Self> where Self: Sized;
 }
 ```
 
@@ -84,7 +88,7 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect_stat
 - **Determinism:** parallel search merges hits sorted by `(file, line, text)`.
 - **Index file order:** lexicographic relative paths (stable file IDs).
 - **Rayon gating:** same effective-worker heuristic for parallel search and parallel index extraction.
-- **Conservative candidates:** `SearchIndex::candidates` may over-return but must not under-return.
+- **Conservative candidates:** `Index::candidates` may over-return but must not under-return.
 
 ## Testing
 
@@ -101,7 +105,7 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 | File | Coverage |
 |------|----------|
 | `query.rs` | `QueryPlanner`, `PatternCompiler`, `SearchQuery::new` |
-| `index.rs` | `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, `SearchIndex` trait, candidates, explain, save/reopen |
+| `index.rs` | `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, `Index` trait, candidates, explain, save/reopen |
 | `grep.rs` | `SearchQuery::run`, `CandidateFilter`, output modes |
 
 ### Conventions
@@ -127,6 +131,6 @@ See [`benches/README.md`](benches/README.md) for the full benchmark and profilin
 - Break the public API without updating the CLI crate.
 - Add `unsafe` outside `index/trigram/storage/mmap.rs`.
 - Use `#[allow(clippy::…)]` without a documented reason.
-- Have `grep/` import from `index::trigram` — use `SearchIndex` trait only.
+- Have `grep/` import from `index::trigram` — use `Index` trait only.
 - Add variants to `crate::Error` — define them in the owning module's error type.
 - Expose internal APIs for benchmarking purposes.

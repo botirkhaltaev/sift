@@ -1,14 +1,13 @@
 //! Index build, open, candidate, and persistence benchmarks.
 //!
-//! Exercises public `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, and `SearchIndex` APIs.
+//! Exercises public `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, and `Index` APIs.
 //! Storage effects are measured indirectly through build/open/save/reopen paths.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use sift_core::{
-    CorpusKind, IndexBuildConfig, IndexStore, Indexes, QueryFlags, QuerySpec, SearchIndex,
-    TrigramMaintenance,
+    CorpusKind, Index, IndexBuildConfig, IndexStore, Indexes, QueryFlags, QuerySpec, TrigramIndex,
 };
 
 mod common;
@@ -135,7 +134,7 @@ fn bench_indexes_open(c: &mut Criterion) {
                 IndexStore::open_or_create(&sift, &corpus, CorpusKind::Directory, false)
                     .expect("open store");
             store
-                .build::<TrigramMaintenance>(&IndexBuildConfig {
+                .build::<TrigramIndex>(&IndexBuildConfig {
                     root: &corpus,
                     follow_links: false,
                     exclude_paths: &[],

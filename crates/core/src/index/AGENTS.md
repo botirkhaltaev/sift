@@ -2,11 +2,11 @@
 
 ## Responsibility
 
-Generic index trait (`SearchIndex`), shared types (`FileId`, `IndexId`, `FileCandidate`, `IndexMeta`), and concrete index implementations.
+Unified index trait (`Index`), shared types (`FileId`, `IndexId`, `IndexBuildConfig`, `IndexMeta`), and concrete index implementations.
 
 ## Key Types
 
-- `SearchIndex` — trait for any indexed corpus (file access, candidate lookup, single-file detection).
+- `Index` — unified trait for any indexed corpus (query surface + lifecycle: build, open, kind name).
 - `FileId` — type-safe file identifier within an index.
 - `IndexId` — type-safe index identifier in a multi-index search.
 - `Candidate` — single file candidate with `rel_path`, `abs_path`, filtering methods.
@@ -17,8 +17,8 @@ Generic index trait (`SearchIndex`), shared types (`FileId`, `IndexId`, `FileCan
 ## Conventions
 
 - Traits are simple and composable; no trigram-specific details leak through.
-- `SearchIndex` exposes file/root access and candidate retrieval; each implementation decides how to narrow.
-- `grep/` only talks to `SearchIndex` trait, never to concrete index internals.
+- `Index` exposes file/root access and candidate retrieval; each implementation decides how to narrow.
+- `grep/` only talks to `Index` trait, never to concrete index internals.
 - Future index kinds (symbol, suffix, etc.) are siblings of `trigram/`.
 
 ## Do NOT

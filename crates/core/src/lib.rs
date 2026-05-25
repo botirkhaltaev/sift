@@ -22,14 +22,11 @@ pub use search::{
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::maintenance::{IndexBuildConfig, IndexMaintenance};
 pub use index::store::{IndexStore, StoreMeta};
-pub use index::trigram::{
-    TrigramIndex, TrigramIndexBuilder, TrigramIndexError, TrigramMaintenance,
-};
+pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
 pub use index::{
-    CorpusKind, FileId, IndexError, IndexId, IndexMeta, Indexes, PlanMode, QueryPlanOutput,
-    SearchIndex,
+    CorpusKind, FileId, Index, IndexBuildConfig, IndexError, IndexId, IndexMeta, Indexes, PlanMode,
+    QueryPlanOutput,
 };
 
 pub use query::{QueryFlags, QuerySpec};
