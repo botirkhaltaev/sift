@@ -3,8 +3,8 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
 use super::SearchQuery;
-use crate::grep::SearchError;
-use crate::grep::options::BinaryMode;
+use crate::search::SearchError;
+use crate::search::options::BinaryMode;
 
 impl SearchQuery {
     /// Builds a regex matcher from the compiled patterns and options.
@@ -16,11 +16,11 @@ impl SearchQuery {
         let mut builder = RegexMatcherBuilder::new();
         builder.multi_line(true);
         match self.opts.case_mode {
-            crate::grep::options::CaseMode::Sensitive => {}
-            crate::grep::options::CaseMode::Insensitive => {
+            crate::search::options::CaseMode::Sensitive => {}
+            crate::search::options::CaseMode::Insensitive => {
                 builder.case_insensitive(true);
             }
-            crate::grep::options::CaseMode::Smart => {
+            crate::search::options::CaseMode::Smart => {
                 builder.case_smart(true);
             }
         }
@@ -101,7 +101,7 @@ impl SearchQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grep::options::{SearchMatchFlags, SearchOptions};
+    use crate::search::options::{SearchMatchFlags, SearchOptions};
 
     fn make_search(patterns: &[&str], opts: SearchOptions) -> SearchQuery {
         let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn sensitive_mode_matches_exact_case_only() {
-        use crate::grep::options::CaseMode;
+        use crate::search::options::CaseMode;
         let opts = SearchOptions {
             case_mode: CaseMode::Sensitive,
             ..SearchOptions::default()
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn insensitive_mode_matches_case_variants() {
-        use crate::grep::options::CaseMode;
+        use crate::search::options::CaseMode;
         let opts = SearchOptions {
             case_mode: CaseMode::Insensitive,
             ..SearchOptions::default()

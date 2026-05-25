@@ -1,4 +1,4 @@
-use crate::grep::filter::CandidateInfo;
+use crate::search::filter::CandidateInfo;
 
 pub const ANSI_RESET: &[u8] = b"\x1b[0m";
 pub const ANSI_PATH: &[u8] = b"\x1b[35m\x1b[1m";

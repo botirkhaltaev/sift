@@ -10,7 +10,7 @@ use error::FilterError;
 use ignore::build_gitignore_matcher;
 use type_filter::build_type_glob;
 
-use crate::grep::SearchError;
+use crate::search::SearchError;
 
 use ::ignore::gitignore::Gitignore;
 use ::ignore::overrides::{Override, OverrideBuilder};
@@ -26,7 +26,7 @@ pub struct SearchFilter {
     root: PathBuf,
     scopes: Vec<PathBuf>,
     exclude_paths: Vec<PathBuf>,
-    hidden: crate::grep::filter::config::HiddenMode,
+    hidden: crate::search::filter::config::HiddenMode,
     gitignore: Option<Gitignore>,
     glob: Option<Override>,
     glob_case_insensitive: bool,
@@ -190,7 +190,7 @@ impl SearchFilter {
     }
 
     fn matches_file(&self, rel_path: &Path) -> bool {
-        if self.hidden == crate::grep::filter::config::HiddenMode::Respect
+        if self.hidden == crate::search::filter::config::HiddenMode::Respect
             && Self::path_is_hidden(rel_path)
         {
             return false;
@@ -205,7 +205,7 @@ impl SearchFilter {
     }
 
     fn matches_file_info(&self, info: &CandidateInfo) -> bool {
-        if self.hidden == crate::grep::filter::config::HiddenMode::Respect
+        if self.hidden == crate::search::filter::config::HiddenMode::Respect
             && Self::path_is_hidden(&info.rel_path)
         {
             return false;
@@ -256,7 +256,7 @@ impl SearchFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grep::filter::config::*;
+    use crate::search::filter::config::*;
 
     fn make_filter(config: &SearchFilterConfig) -> SearchFilter {
         SearchFilter::new(config, Path::new("/root")).expect("create filter")

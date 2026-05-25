@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::grep::output::style::PathDisplay;
+use crate::search::output::style::PathDisplay;
 
 #[derive(Debug, Clone)]
 pub struct CandidateInfo {

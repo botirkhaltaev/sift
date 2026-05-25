@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use sift_core::{
     ColumnLimit, ColumnOverflow, CorpusKind, Indexes, RecordTerminator, SearchFilter,
-    SearchLineStyle, SearchMode, SearchQuery, SearchRecordStyle, SearchRequest,
+    SearchLineStyle, SearchMode, SearchQuery, SearchRecordStyle,
 };
 
 use crate::cli::Cli;
@@ -282,13 +282,16 @@ impl Cli {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
         let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        let outcome = query.run(SearchRequest {
-            indexes,
-            filter: &search_filter,
-            output: *output,
-            separators: &out.separators,
-            collect_stats: out.print_stats,
-        })?;
+        let outcome = sift_core::grep::run(
+            query,
+            &sift_core::grep::GrepRequest {
+                indexes,
+                filter: &search_filter,
+                output: *output,
+                separators: &out.separators,
+                collect_stats: out.print_stats,
+            },
+        )?;
         if let Some(s) = &outcome.stats {
             write_search_stats(s);
         }

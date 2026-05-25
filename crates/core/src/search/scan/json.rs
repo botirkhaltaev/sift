@@ -7,12 +7,12 @@ use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use rayon::prelude::*;
 
-use crate::grep::emit::result::{ChunkOutput, FileResult};
-use crate::grep::emit::stats::SearchStats;
-use crate::grep::filter::CandidateInfo;
-use crate::grep::output::SearchOutput;
-use crate::grep::output::mode::OutputEmission;
-use crate::grep::query::SearchQuery;
+use crate::search::emit::result::{ChunkOutput, FileResult};
+use crate::search::emit::stats::SearchStats;
+use crate::search::filter::CandidateInfo;
+use crate::search::output::SearchOutput;
+use crate::search::output::mode::OutputEmission;
+use crate::search::query::SearchQuery;
 
 struct NullWriter;
 
@@ -94,7 +94,7 @@ impl<'a> JsonWorker<'a> {
 fn format_json_summary_line(
     wall: std::time::Duration,
     agg: &JsonStats,
-) -> Result<String, crate::grep::SearchError> {
+) -> Result<String, crate::search::SearchError> {
     let stats_val = serde_json::to_value(agg)?;
     let wall_secs = f64::from(wall.subsec_nanos()).mul_add(1e-9, wall.as_secs_f64());
     let v = serde_json::json!({
@@ -169,7 +169,7 @@ impl<'a> JsonScan<'a> {
         stdout.write_all(summary_line.as_bytes())?;
         stdout.write_all(b"\n")?;
         if let Some(s) = stats {
-            use crate::grep::emit::format::sum_candidate_file_bytes;
+            use crate::search::emit::format::sum_candidate_file_bytes;
             s.fill_from_json(
                 &merged,
                 candidates.len(),

@@ -3,8 +3,8 @@ pub mod error;
 use regex_automata::meta::Regex;
 use regex_syntax::escape;
 
-use crate::grep::SearchError;
-use crate::grep::options::SearchMatchFlags;
+use crate::search::SearchError;
+use crate::search::options::SearchMatchFlags;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PatternCompiler {

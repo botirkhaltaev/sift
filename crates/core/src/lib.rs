@@ -2,18 +2,19 @@
 //!
 //! **Walking:** [`WalkBuilder`] from the [`ignore`] crate.
 
-mod grep;
+pub mod grep;
 mod index;
 pub(crate) mod query;
+mod search;
 
-pub use grep::{
+pub use search::{
     BinaryMode, CandidateInfo, CandidateSet, CaseMode, ColorChoice, ColumnLimit, ColumnOverflow,
     FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags,
     LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode, PathDisplay,
     PatternCompiler, RecordTerminator, SearchError, SearchFilter, SearchFilterConfig,
     SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput,
-    SearchOutputFormat, SearchQuery, SearchRecordStyle, SearchRequest, SearchSeparators,
-    SearchStats, TypeDef, VisibilityConfig, WalkOptions, ZeroCountMode, discover_files,
+    SearchOutputFormat, SearchQuery, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
+    VisibilityConfig, WalkOptions, ZeroCountMode, discover_files,
 };
 
 pub use ignore::{Walk, WalkBuilder};

@@ -6,17 +6,17 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::emit::format::{ANSI_LINE, ANSI_PATH, ANSI_RESET};
-use crate::grep::emit::result::{ChunkOutput, FileResult};
-use crate::grep::emit::stats::TextStatsCounters;
-use crate::grep::filter::CandidateInfo;
-use crate::grep::output::SearchOutput;
-use crate::grep::output::format::ColumnAction;
-use crate::grep::output::mode::OutputEmission;
-use crate::grep::output::style::{
+use crate::search::emit::format::{ANSI_LINE, ANSI_PATH, ANSI_RESET};
+use crate::search::emit::result::{ChunkOutput, FileResult};
+use crate::search::emit::stats::TextStatsCounters;
+use crate::search::filter::CandidateInfo;
+use crate::search::output::SearchOutput;
+use crate::search::output::format::ColumnAction;
+use crate::search::output::mode::OutputEmission;
+use crate::search::output::style::{
     FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
-use crate::grep::query::SearchQuery;
+use crate::search::query::SearchQuery;
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -77,7 +77,7 @@ impl Sink for StandardSink<'_> {
 
         if matches!(
             self.output.mode,
-            crate::grep::output::mode::SearchMode::OnlyMatching
+            crate::search::output::mode::SearchMode::OnlyMatching
         ) {
             return Ok(self.handle_only_matching(mat));
         }
@@ -107,7 +107,7 @@ impl Sink for StandardSink<'_> {
         }
         if matches!(
             self.output.mode,
-            crate::grep::output::mode::SearchMode::OnlyMatching
+            crate::search::output::mode::SearchMode::OnlyMatching
         ) {
             return Ok(true);
         }
@@ -166,7 +166,7 @@ impl Sink for StandardSink<'_> {
         }
         if matches!(
             self.output.mode,
-            crate::grep::output::mode::SearchMode::OnlyMatching
+            crate::search::output::mode::SearchMode::OnlyMatching
         ) {
             return Ok(true);
         }
@@ -349,7 +349,7 @@ struct StandardWorker<'a> {
     records: SearchRecordStyle,
     lines_flags: LineStyleFlags,
     filename_mode: FilenameMode,
-    path_display: crate::grep::output::style::PathDisplay,
+    path_display: crate::search::output::style::PathDisplay,
     path_separator: Option<u8>,
     emission: OutputEmission,
 }

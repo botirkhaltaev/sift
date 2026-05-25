@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use crate::grep::output::format::ColumnLimit;
+use crate::search::output::format::ColumnLimit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilenameMode {

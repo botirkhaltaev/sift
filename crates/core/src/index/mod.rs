@@ -138,42 +138,59 @@ impl Indexes {
 
     /// Resolve candidates for a query across all registered indexes.
     ///
-    /// Each index returns its candidate set; results are deduplicated by
-    /// absolute path and returned as a flat list ready for filtering and scanning.
+    /// Each index returns its candidate set; results are intersected by
+    /// absolute path across all indexes and returned as a flat list
+    /// ready for filtering and scanning.
+    ///
+    /// Multiple conservative indexes together produce a narrower candidate
+    /// set than any single index alone.
     #[must_use]
     pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate> {
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
+        let mut iter = self.inner.iter();
+        let Some(first) = iter.next() else {
+            return Vec::new();
+        };
 
-        for index in &self.inner {
-            for candidate in index.candidates(query) {
-                if seen.insert(candidate.abs_path.clone()) {
-                    out.push(candidate);
-                }
+        let mut candidates = first.candidates(query);
+
+        for index in iter {
+            let next: std::collections::HashSet<PathBuf> = index
+                .candidates(query)
+                .into_iter()
+                .map(|c| c.abs_path)
+                .collect();
+            candidates.retain(|c| next.contains(&c.abs_path));
+            if candidates.is_empty() {
+                break;
             }
         }
 
-        out
+        candidates
     }
 
     /// Return all indexed files across all registered indexes.
     ///
     /// Used for output modes that require scanning every file (e.g. `--count`,
-    /// `--files-without-match`). Deduplicated by absolute path.
+    /// `--files-without-match`). Intersected by absolute path across all indexes.
     #[must_use]
     pub fn resolve_all_files(&self) -> Vec<SearchCandidate> {
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
+        let mut iter = self.inner.iter();
+        let Some(first) = iter.next() else {
+            return Vec::new();
+        };
 
-        for index in &self.inner {
-            for candidate in index.all_files() {
-                if seen.insert(candidate.abs_path.clone()) {
-                    out.push(candidate);
-                }
+        let mut files = first.all_files();
+
+        for index in iter {
+            let next: std::collections::HashSet<PathBuf> =
+                index.all_files().into_iter().map(|c| c.abs_path).collect();
+            files.retain(|c| next.contains(&c.abs_path));
+            if files.is_empty() {
+                break;
             }
         }
 
-        out
+        files
     }
 
     #[must_use]

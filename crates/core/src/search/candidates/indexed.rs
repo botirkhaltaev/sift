@@ -2,8 +2,8 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
-use crate::grep::filter::{CandidateInfo, SearchFilter};
 use crate::index::SearchCandidate;
+use crate::search::filter::{CandidateInfo, SearchFilter};
 
 pub fn prepare_candidates(
     candidates: Vec<SearchCandidate>,

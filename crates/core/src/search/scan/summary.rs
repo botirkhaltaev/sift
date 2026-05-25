@@ -7,14 +7,14 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::emit::format::{ANSI_PATH, ANSI_RESET};
-use crate::grep::emit::result::{ChunkOutput, FileResult};
-use crate::grep::emit::stats::TextStatsCounters;
-use crate::grep::filter::CandidateInfo;
-use crate::grep::output::SearchOutput;
-use crate::grep::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
-use crate::grep::output::style::FilenameMode;
-use crate::grep::query::SearchQuery;
+use crate::search::emit::format::{ANSI_PATH, ANSI_RESET};
+use crate::search::emit::result::{ChunkOutput, FileResult};
+use crate::search::emit::stats::TextStatsCounters;
+use crate::search::filter::CandidateInfo;
+use crate::search::output::SearchOutput;
+use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
+use crate::search::output::style::FilenameMode;
+use crate::search::query::SearchQuery;
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
