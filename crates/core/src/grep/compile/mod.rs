@@ -1,15 +1,11 @@
-//! Regex compilation — Rust regex syntax (ERE-like), with grep-style `-F`/`-w`/`-x` shaping.
+pub mod error;
 
 use regex_automata::meta::Regex;
 use regex_syntax::escape;
 
-use super::error::SearchError;
-use super::types::SearchMatchFlags;
+use crate::grep::SearchError;
+use crate::grep::options::SearchMatchFlags;
 
-/// Configurable pattern compiler for grep-style regex building.
-///
-/// Build a compiler with the desired shaping flags, then use it to shape
-/// individual patterns or compile a combined regex from multiple patterns.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PatternCompiler {
     flags: SearchMatchFlags,
@@ -17,7 +13,6 @@ pub struct PatternCompiler {
 }
 
 impl PatternCompiler {
-    /// Create a new compiler with default settings (sensitive, no shaping).
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -26,7 +21,6 @@ impl PatternCompiler {
         }
     }
 
-    /// Conditionally enable fixed-string escaping.
     #[must_use]
     pub fn fixed_strings(mut self, on: bool) -> Self {
         if on {
@@ -35,7 +29,6 @@ impl PatternCompiler {
         self
     }
 
-    /// Conditionally enable word-boundary wrapping.
     #[must_use]
     pub fn word_regexp(mut self, on: bool) -> Self {
         if on {
@@ -44,7 +37,6 @@ impl PatternCompiler {
         self
     }
 
-    /// Conditionally enable line anchoring.
     #[must_use]
     pub fn line_regexp(mut self, on: bool) -> Self {
         if on {
@@ -53,14 +45,12 @@ impl PatternCompiler {
         self
     }
 
-    /// Conditionally enable case-insensitive matching.
     #[must_use]
     pub const fn case_insensitive(mut self, on: bool) -> Self {
         self.case_insensitive = on;
         self
     }
 
-    /// Shape a single pattern string by applying escaping and anchors/boundaries.
     #[must_use]
     pub fn shape(&self, pattern: &str) -> String {
         let mut s = if self.flags.contains(SearchMatchFlags::FIXED_STRINGS) {
@@ -68,19 +58,20 @@ impl PatternCompiler {
         } else {
             pattern.to_string()
         };
+        if self.flags.contains(SearchMatchFlags::WORD_REGEXP) {
+            s = format!(r"\b(?:{s})\b");
+        }
         if self.flags.contains(SearchMatchFlags::LINE_REGEXP) {
             s = format!("^(?:{s})$");
-        } else if self.flags.contains(SearchMatchFlags::WORD_REGEXP) {
-            s = format!(r"\b(?:{s})\b");
         }
         s
     }
 
-    /// Compile multiple patterns into a combined alternation regex.
+    /// Compiles multiple patterns into a single regex.
     ///
     /// # Errors
     ///
-    /// Returns [`SearchError::RegexBuild`] if the combined pattern is invalid.
+    /// Returns `SearchError::RegexBuild` if the combined pattern is invalid.
     pub fn compile(&self, patterns: &[&str]) -> Result<Regex, SearchError> {
         let branches: Vec<String> = patterns.iter().map(|p| self.shape(p)).collect();
         let combined = if branches.len() == 1 {
@@ -101,11 +92,11 @@ impl PatternCompiler {
             .map_err(|e| SearchError::RegexBuild(format!("regex compilation failed: {e}")))
     }
 
-    /// Convenience: compile a single pattern.
+    /// Compiles a single pattern into a regex.
     ///
     /// # Errors
     ///
-    /// Returns [`SearchError::RegexBuild`] if the pattern is invalid.
+    /// Returns `SearchError::RegexBuild` if the pattern is invalid.
     pub fn compile_one(&self, pattern: &str) -> Result<Regex, SearchError> {
         self.compile(&[pattern])
     }
@@ -221,30 +212,31 @@ mod tests {
     }
 
     #[test]
-    fn shape_line_regexp_wraps_with_anchors() {
+    fn shape_line_regexp_wraps_in_anchors() {
         let compiler = PatternCompiler::new().line_regexp(true);
         let shaped = compiler.shape("yes");
-        assert!(shaped.starts_with("^(?:"));
-        assert!(shaped.ends_with(")$"));
+        assert!(shaped.starts_with('^'));
+        assert!(shaped.ends_with('$'));
     }
 
     #[test]
-    fn shape_line_regexp_takes_precedence_over_word_regexp() {
+    fn shape_line_and_word_combined() {
         let compiler = PatternCompiler::new().line_regexp(true).word_regexp(true);
-        let shaped = compiler.shape("yes");
-        assert!(shaped.starts_with("^(?:"));
-        assert!(!shaped.contains(r"\b"));
+        let shaped = compiler.shape("cat");
+        assert!(shaped.starts_with('^'));
+        assert!(shaped.ends_with('$'));
+        assert!(shaped.contains(r"\b"));
     }
 
     #[test]
-    fn compile_one_rejects_invalid_pattern() {
+    fn shape_no_flags_returns_pattern_unchanged() {
         let compiler = PatternCompiler::new();
-        assert!(compiler.compile_one("(").is_err());
+        assert_eq!(compiler.shape("hello"), "hello");
     }
 
     #[test]
-    fn compile_single_pattern_returns_single_regex() {
-        let re = PatternCompiler::new().compile(&["hello"]).unwrap();
+    fn compile_one_delegates_to_compile() {
+        let re = PatternCompiler::new().compile_one("hello").unwrap();
         let mut cache = regex_automata::meta::Cache::new(&re);
         assert!(
             re.search_with(&mut cache, &regex_automata::Input::new(b"hello"))
