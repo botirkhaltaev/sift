@@ -135,7 +135,7 @@ fn refresh(sift_dir: &Path) {
         corpus_kind: meta.corpus_kind,
     };
 
-    if let Err(e) = store.build::<TrigramIndex>(&build_config) {
+    if let Err(e) = store.update::<TrigramIndex>(&build_config) {
         eprintln!("sift-daemon: refresh failed: {e}");
     }
 }

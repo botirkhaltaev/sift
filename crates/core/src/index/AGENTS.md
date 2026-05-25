@@ -6,7 +6,7 @@ Unified index trait (`Index`), shared types (`FileId`, `IndexId`, `IndexBuildCon
 
 ## Key Types
 
-- `Index` — unified trait for any indexed corpus (query surface + lifecycle: build, open, kind name).
+- `Index` — unified trait for any indexed corpus (query surface + lifecycle: build, open, update, kind name).
 - `FileId` — type-safe file identifier within an index.
 - `IndexId` — type-safe index identifier in a multi-index search.
 - `Candidate` — single file candidate with `rel_path`, `abs_path`, filtering methods.

@@ -181,6 +181,95 @@ impl IndexStore {
         Ok(index)
     }
 
+    /// Update the current snapshot, rebuilding only if the corpus changed.
+    ///
+    /// Returns `true` if a new snapshot was published, `false` if the corpus
+    /// was unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current snapshot cannot be opened, the update
+    /// check fails, or publishing the new snapshot fails.
+    pub fn update<I: Index>(&mut self, config: &IndexBuildConfig<'_>) -> crate::Result<bool> {
+        let current_index = self.open_current_typed::<I>(config)?;
+
+        let Some(existing) = current_index else {
+            self.build::<I>(config)?;
+            return Ok(true);
+        };
+
+        let snapshots_dir = self.sift_dir.join(SNAPSHOTS_DIR);
+        std::fs::create_dir_all(&snapshots_dir)?;
+
+        let id = snapshot_id(&self.counter);
+        let tmp_dir = snapshots_dir.join(format!("tmp-{id}"));
+        let index_dir = tmp_dir.join(I::kind_name());
+        std::fs::create_dir_all(&index_dir)?;
+
+        let Some(updated) = existing.update(config, &index_dir)? else {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return Ok(false);
+        };
+
+        let canonical_root = config
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| config.root.to_path_buf());
+        let manifest = SnapshotManifest {
+            id: id.clone(),
+            root: canonical_root,
+            corpus_kind: config.corpus_kind,
+            indexes: vec![I::kind_name().to_string()],
+        };
+        let json = serde_json::to_vec_pretty(&manifest).map_err(|e| {
+            crate::Error::Index(crate::index::IndexError::InvalidManifest {
+                path: tmp_dir.join(MANIFEST_FILE),
+                source: e,
+            })
+        })?;
+        std::fs::write(tmp_dir.join(MANIFEST_FILE), json)?;
+
+        let final_dir = snapshots_dir.join(&id);
+        std::fs::rename(&tmp_dir, &final_dir)?;
+
+        let current_path = self.sift_dir.join(CURRENT_FILE);
+        write_atomic(&current_path, &id)?;
+
+        let old_current = self.current_id.replace(id);
+        if let Some(ref old_id) = old_current {
+            let old_dir = snapshots_dir.join(old_id);
+            if old_dir.exists() {
+                std::fs::remove_dir_all(&old_dir)?;
+            }
+        }
+
+        drop(updated);
+        Ok(true)
+    }
+
+    fn open_current_typed<I: Index>(
+        &self,
+        config: &IndexBuildConfig<'_>,
+    ) -> crate::Result<Option<I>> {
+        let Some(id) = &self.current_id else {
+            return Ok(None);
+        };
+
+        let snapshot_dir = self.sift_dir.join(SNAPSHOTS_DIR).join(id);
+        let index_dir = snapshot_dir.join(I::kind_name());
+
+        if !index_dir.exists() {
+            return Ok(None);
+        }
+
+        let canonical_root = config
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| config.root.to_path_buf());
+
+        I::open(&index_dir, &canonical_root, config.corpus_kind).map(Some)
+    }
+
     /// Open all indexes in the current snapshot.
     ///
     /// Returns an empty vector if no snapshot exists.
@@ -397,5 +486,88 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         let store = IndexStore::open(&tmp.path().join(".sift")).expect("open store");
         assert!(store.current_id().is_none());
+    }
+
+    #[test]
+    fn update_skips_rebuild_when_unchanged() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let corpus = tmp.path().join("corpus");
+        fs::create_dir_all(&corpus).expect("create corpus");
+        fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
+
+        let sift_dir = tmp.path().join(".sift");
+        let config = IndexBuildConfig {
+            root: &corpus,
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+        };
+
+        let mut store =
+            IndexStore::open_or_create(&sift_dir, &corpus, CorpusKind::Directory, false)
+                .expect("open store");
+        let _: TrigramIndex = store.build::<TrigramIndex>(&config).expect("build");
+
+        let id_after_build = store.current_id().expect("has id").to_string();
+
+        let changed = store.update::<TrigramIndex>(&config).expect("update");
+        assert!(!changed, "expected no rebuild when corpus unchanged");
+        assert_eq!(store.current_id().unwrap(), id_after_build);
+    }
+
+    #[test]
+    fn update_rebuilds_when_file_added() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let corpus = tmp.path().join("corpus");
+        fs::create_dir_all(&corpus).expect("create corpus");
+        fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
+
+        let sift_dir = tmp.path().join(".sift");
+        let config = IndexBuildConfig {
+            root: &corpus,
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+        };
+
+        let mut store =
+            IndexStore::open_or_create(&sift_dir, &corpus, CorpusKind::Directory, false)
+                .expect("open store");
+        let _: TrigramIndex = store.build::<TrigramIndex>(&config).expect("build");
+
+        let id_after_build = store.current_id().expect("has id").to_string();
+
+        fs::write(corpus.join("g.txt"), "new file\n").expect("write new file");
+
+        let changed = store.update::<TrigramIndex>(&config).expect("update");
+        assert!(changed, "expected rebuild when file added");
+        assert_ne!(store.current_id().unwrap(), id_after_build);
+    }
+
+    #[test]
+    fn update_builds_when_no_current_snapshot() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let corpus = tmp.path().join("corpus");
+        fs::create_dir_all(&corpus).expect("create corpus");
+        fs::write(corpus.join("f.txt"), "hello\n").expect("write file");
+
+        let sift_dir = tmp.path().join(".sift");
+        let config = IndexBuildConfig {
+            root: &corpus,
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+        };
+
+        let mut store =
+            IndexStore::open_or_create(&sift_dir, &corpus, CorpusKind::Directory, false)
+                .expect("open store");
+
+        let changed = store.update::<TrigramIndex>(&config).expect("update");
+        assert!(changed, "expected build when no snapshot exists");
+        assert!(store.current_id().is_some());
     }
 }

@@ -106,6 +106,22 @@ pub trait Index: Sync + Send {
     fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self>
     where
         Self: Sized;
+
+    /// Incrementally update the index, rebuilding only if the corpus changed.
+    ///
+    /// Returns `Ok(Some(new_index))` if the index was rebuilt, or `Ok(None)`
+    /// if the corpus is unchanged and no rebuild was needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if corpus walking or file I/O fails.
+    fn update(
+        &self,
+        config: &IndexBuildConfig<'_>,
+        output_dir: &Path,
+    ) -> crate::Result<Option<Self>>
+    where
+        Self: Sized;
 }
 
 /// Registry of opened indexes read from a snapshot store.

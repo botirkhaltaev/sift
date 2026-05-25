@@ -113,7 +113,13 @@ pub fn main_entry() -> ExitCode {
 }
 
 /// Best-effort spawn `sift-daemon` in the background.
+///
+/// Respects `SIFT_NO_DAEMON=1` to suppress spawning (used in tests).
 fn spawn_daemon(sift_dir: &Path, init_root: Option<&Path>) {
+    if std::env::var_os("SIFT_NO_DAEMON").is_some_and(|v| v == "1") {
+        return;
+    }
+
     let exe = match std::env::current_exe() {
         Ok(p) => p.with_file_name("sift-daemon"),
         Err(_) => return,

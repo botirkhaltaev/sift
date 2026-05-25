@@ -246,6 +246,26 @@ impl Index for TrigramIndex {
     fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self> {
         Ok(Self::open_tables(index_dir, root, corpus_kind)?)
     }
+
+    fn update(
+        &self,
+        config: &IndexBuildConfig<'_>,
+        output_dir: &Path,
+    ) -> crate::Result<Option<Self>> {
+        let mut current_paths = builder::collect_paths(&builder::IndexBuildConfig {
+            root: config.root,
+            follow_links: config.follow_links,
+            exclude_paths: config.exclude_paths,
+            include_paths: config.include_paths,
+        })?;
+        current_paths.sort_unstable();
+
+        if current_paths == self.file_paths {
+            return Ok(None);
+        }
+
+        Self::build(config, output_dir).map(Some)
+    }
 }
 
 fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {

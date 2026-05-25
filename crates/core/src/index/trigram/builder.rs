@@ -28,7 +28,7 @@ pub struct IndexBuildConfig<'a> {
     pub include_paths: &'a [PathBuf],
 }
 
-fn collect_paths(config: &IndexBuildConfig<'_>) -> crate::Result<Vec<PathBuf>> {
+pub fn collect_paths(config: &IndexBuildConfig<'_>) -> crate::Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = Vec::new();
     let walker = WalkBuilder::new(config.root)
         .follow_links(config.follow_links)
