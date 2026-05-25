@@ -11,22 +11,6 @@ const CURRENT_FILE: &str = "CURRENT";
 const META_FILE: &str = "meta.json";
 const MANIFEST_FILE: &str = "manifest.json";
 
-fn snapshot_id(counter: &AtomicU64) -> String {
-    format!("{:016x}", counter.fetch_add(1, Ordering::Relaxed))
-}
-
-fn read_current(path: &Path) -> crate::Result<String> {
-    let raw = std::fs::read_to_string(path)?;
-    Ok(raw.trim().to_string())
-}
-
-fn write_atomic(path: &Path, contents: &str) -> crate::Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreMeta {
     pub version: u32,
@@ -50,6 +34,22 @@ pub struct IndexStore {
 }
 
 impl IndexStore {
+    fn snapshot_id(counter: &AtomicU64) -> String {
+        format!("{:016x}", counter.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn read_current(path: &Path) -> crate::Result<String> {
+        let raw = std::fs::read_to_string(path)?;
+        Ok(raw.trim().to_string())
+    }
+
+    fn write_atomic(path: &Path, contents: &str) -> crate::Result<()> {
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, contents)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
     /// Open an existing store at `sift_dir`.
     ///
     /// # Errors
@@ -59,7 +59,7 @@ impl IndexStore {
     pub fn open(sift_dir: &Path) -> crate::Result<Self> {
         let current_path = sift_dir.join(CURRENT_FILE);
         let current_id = if current_path.exists() {
-            Some(read_current(&current_path)?)
+            Some(Self::read_current(&current_path)?)
         } else {
             None
         };
@@ -106,7 +106,7 @@ impl IndexStore {
 
         let current_path = sift_dir.join(CURRENT_FILE);
         let current_id = if current_path.exists() {
-            Some(read_current(&current_path)?)
+            Some(Self::read_current(&current_path)?)
         } else {
             None
         };
@@ -138,7 +138,7 @@ impl IndexStore {
         let snapshots_dir = self.sift_dir.join(SNAPSHOTS_DIR);
         std::fs::create_dir_all(&snapshots_dir)?;
 
-        let id = snapshot_id(&self.counter);
+        let id = Self::snapshot_id(&self.counter);
         let tmp_dir = snapshots_dir.join(format!("tmp-{id}"));
         let index_dir = tmp_dir.join(I::kind_name());
         std::fs::create_dir_all(&index_dir)?;
@@ -168,7 +168,7 @@ impl IndexStore {
         std::fs::rename(&tmp_dir, &final_dir)?;
 
         let current_path = self.sift_dir.join(CURRENT_FILE);
-        write_atomic(&current_path, &id)?;
+        Self::write_atomic(&current_path, &id)?;
 
         let old_current = self.current_id.replace(id);
         if let Some(ref old_id) = old_current {
@@ -201,7 +201,7 @@ impl IndexStore {
         let snapshots_dir = self.sift_dir.join(SNAPSHOTS_DIR);
         std::fs::create_dir_all(&snapshots_dir)?;
 
-        let id = snapshot_id(&self.counter);
+        let id = Self::snapshot_id(&self.counter);
         let tmp_dir = snapshots_dir.join(format!("tmp-{id}"));
         let index_dir = tmp_dir.join(I::kind_name());
         std::fs::create_dir_all(&index_dir)?;
@@ -233,7 +233,7 @@ impl IndexStore {
         std::fs::rename(&tmp_dir, &final_dir)?;
 
         let current_path = self.sift_dir.join(CURRENT_FILE);
-        write_atomic(&current_path, &id)?;
+        Self::write_atomic(&current_path, &id)?;
 
         let old_current = self.current_id.replace(id);
         if let Some(ref old_id) = old_current {
@@ -421,6 +421,7 @@ mod tests {
         assert!(snapshot_dir.join("trigram").join("files.bin").exists());
         assert!(snapshot_dir.join("trigram").join("lexicon.bin").exists());
         assert!(snapshot_dir.join("trigram").join("postings.bin").exists());
+        assert!(snapshot_dir.join("trigram").join("trigrams.bin").exists());
     }
 
     #[test]

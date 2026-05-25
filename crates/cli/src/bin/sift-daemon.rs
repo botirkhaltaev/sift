@@ -18,7 +18,7 @@ fn main() {
         sift_dir: args.sift_dir,
         init_root: args.init_root,
     };
-    if let Err(e) = sift_cli::daemon::run(&config) {
+    if let Err(e) = config.run() {
         eprintln!("sift-daemon: {e}");
         std::process::exit(1);
     }

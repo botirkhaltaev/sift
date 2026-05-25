@@ -69,7 +69,7 @@ pub fn main_entry() -> ExitCode {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
-        spawn_daemon(sift_dir, None);
+        daemon::DaemonConfig::spawn(sift_dir, None);
         eprintln!(
             "indexed corpus {} → {}",
             path.display(),
@@ -110,30 +110,4 @@ pub fn main_entry() -> ExitCode {
             ExitCode::from(2)
         }
     }
-}
-
-/// Best-effort spawn `sift-daemon` in the background.
-///
-/// Respects `SIFT_NO_DAEMON=1` to suppress spawning (used in tests).
-fn spawn_daemon(sift_dir: &Path, init_root: Option<&Path>) {
-    if std::env::var_os("SIFT_NO_DAEMON").is_some_and(|v| v == "1") {
-        return;
-    }
-
-    let exe = match std::env::current_exe() {
-        Ok(p) => p.with_file_name("sift-daemon"),
-        Err(_) => return,
-    };
-
-    let mut cmd = std::process::Command::new(&exe);
-    cmd.arg("--sift-dir").arg(sift_dir);
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
-    cmd.stdin(std::process::Stdio::null());
-
-    if let Some(root) = init_root {
-        cmd.arg("--init-root").arg(root);
-    }
-
-    let _ = cmd.spawn();
 }

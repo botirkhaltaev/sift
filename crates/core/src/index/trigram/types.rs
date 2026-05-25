@@ -1,7 +1,9 @@
 /// A trigram encoded as a compact `u32` in big-endian order.
 ///
 /// Numeric ordering matches bytewise ordering of the original `[u8; 3]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Trigram(u32);
 
 impl Trigram {

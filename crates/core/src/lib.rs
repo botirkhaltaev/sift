@@ -37,6 +37,7 @@ pub const SIFT_DIR: &str = ".sift";
 pub const FILES_BIN: &str = "files.bin";
 pub const LEXICON_BIN: &str = "lexicon.bin";
 pub const POSTINGS_BIN: &str = "postings.bin";
+pub const TRIGRAMS_BIN: &str = "trigrams.bin";
 
 /// Top-level umbrella error for all core operations.
 #[derive(Debug, Error)]

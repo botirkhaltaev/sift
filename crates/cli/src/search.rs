@@ -204,7 +204,7 @@ impl Cli {
             let sift_dir = self.paths.sift_dir.clone();
             let init_root = root.clone();
             std::thread::spawn(move || {
-                crate::spawn_daemon(&sift_dir, Some(&init_root));
+                crate::daemon::DaemonConfig::spawn(&sift_dir, Some(&init_root));
             });
 
             SearchCtx {

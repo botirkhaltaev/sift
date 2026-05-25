@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use crate::index::{CorpusKind, FileId, Index, IndexBuildConfig, PlanMode, QueryPlanOutput};
 use crate::query::QuerySpec;
 
+use self::builder::{IndexTableBuilder, IndexTables};
+use self::file_table::FileFingerprint;
 use self::planner::{TrigramCandidatePlan, TrigramPlanner};
 pub use builder::TrigramIndexBuilder;
 pub use types::Trigram;
@@ -32,12 +34,37 @@ pub struct TrigramIndex {
     root: PathBuf,
     file_paths: Vec<PathBuf>,
     abs_paths: Vec<PathBuf>,
+    pub(crate) fingerprints: Vec<FileFingerprint>,
+    file_trigrams: Vec<Vec<Trigram>>,
     lexicon: storage::lexicon::MappedLexicon,
     postings: storage::postings::MappedPostings,
     corpus_kind: CorpusKind,
 }
 
 impl TrigramIndex {
+    /// Construct from in-memory index tables.
+    pub(crate) fn from_tables(tables: IndexTables, root: PathBuf, corpus_kind: CorpusKind) -> Self {
+        let file_paths: Vec<PathBuf> = tables
+            .fingerprints
+            .iter()
+            .map(|fp| fp.path.clone())
+            .collect();
+        let abs_paths: Vec<PathBuf> = file_paths.iter().map(|p| root.join(p)).collect();
+        let lexicon = storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
+        let postings = storage::postings::MappedPostings::from_bytes(&tables.postings);
+
+        Self {
+            root,
+            file_paths,
+            abs_paths,
+            fingerprints: tables.fingerprints,
+            file_trigrams: tables.file_trigrams,
+            lexicon,
+            postings,
+            corpus_kind,
+        }
+    }
+
     /// Persist the in-memory index to `dir`.
     ///
     /// # Errors
@@ -46,13 +73,18 @@ impl TrigramIndex {
     pub fn save_to_dir(&self, dir: &Path) -> Result<(), TrigramIndexError> {
         std::fs::create_dir_all(dir)?;
 
-        let files = file_table::MappedFilesView::from_paths(&self.file_paths);
+        let files = file_table::MappedFilesView::from_fingerprints(&self.fingerprints);
         std::fs::write(dir.join(crate::FILES_BIN), files.backing_slice())
             .map_err(TrigramIndexError::Io)?;
         std::fs::write(dir.join(crate::LEXICON_BIN), self.lexicon.backing_slice())
             .map_err(TrigramIndexError::Io)?;
         std::fs::write(dir.join(crate::POSTINGS_BIN), self.postings.backing_slice())
             .map_err(TrigramIndexError::Io)?;
+
+        let tri_sets = storage::trigram_sets::MappedTrigramSets::from_sets(&self.file_trigrams);
+        std::fs::write(dir.join(crate::TRIGRAMS_BIN), tri_sets.backing_slice())
+            .map_err(TrigramIndexError::Io)?;
+
         Ok(())
     }
 
@@ -102,7 +134,7 @@ impl TrigramIndex {
                 id_lists.push(ids);
             }
         }
-        merge_sorted_runs(id_lists)
+        PostingOps::merge_sorted_runs(id_lists)
     }
 
     fn posting_ids_for_literal(&self, lit: &[u8]) -> Option<Vec<u32>> {
@@ -122,7 +154,7 @@ impl TrigramIndex {
             slices.push(s);
         }
         slices.sort_unstable_by_key(|slice| slice.len());
-        let ids = intersect_sorted_posting_byte_slices(&slices);
+        let ids = PostingOps::intersect_sorted_slices(&slices);
         if ids.is_empty() { None } else { Some(ids) }
     }
 
@@ -152,34 +184,64 @@ impl TrigramIndex {
         root: &Path,
         corpus_kind: CorpusKind,
     ) -> Result<Self, TrigramIndexError> {
-        let paths = [
-            dir.join(crate::FILES_BIN),
-            dir.join(crate::LEXICON_BIN),
-            dir.join(crate::POSTINGS_BIN),
-        ];
-        for p in &paths {
+        let files_path = dir.join(crate::FILES_BIN);
+        let lexicon_path = dir.join(crate::LEXICON_BIN);
+        let postings_path = dir.join(crate::POSTINGS_BIN);
+        let trigrams_path = dir.join(crate::TRIGRAMS_BIN);
+
+        for p in [&files_path, &lexicon_path, &postings_path, &trigrams_path] {
             if !p.is_file() {
                 return Err(TrigramIndexError::MissingComponent(p.clone()));
             }
         }
 
-        let files = file_table::MappedFilesView::open(&paths[0]).map_err(TrigramIndexError::Io)?;
-        let file_paths = files.to_path_bufs().map_err(TrigramIndexError::Io)?;
-        validate_file_paths(&file_paths, &paths[0])?;
-        let abs_paths = compute_abs_paths(root, &file_paths);
+        let files =
+            file_table::MappedFilesView::open(&files_path).map_err(TrigramIndexError::Io)?;
+        let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
+        Self::validate_file_paths(&fingerprints, &files_path)?;
+        let file_paths: Vec<PathBuf> = fingerprints.iter().map(|fp| fp.path.clone()).collect();
+        let abs_paths: Vec<PathBuf> = file_paths.iter().map(|p| root.join(p)).collect();
+
         let lexicon =
-            storage::lexicon::MappedLexicon::open(&paths[1]).map_err(TrigramIndexError::Io)?;
-        let postings =
-            storage::postings::MappedPostings::open(&paths[2]).map_err(TrigramIndexError::Io)?;
+            storage::lexicon::MappedLexicon::open(&lexicon_path).map_err(TrigramIndexError::Io)?;
+        let postings = storage::postings::MappedPostings::open(&postings_path)
+            .map_err(TrigramIndexError::Io)?;
+
+        let tri_sets = storage::trigram_sets::MappedTrigramSets::open(&trigrams_path)
+            .map_err(TrigramIndexError::Io)?;
+        let file_trigrams = tri_sets.to_sets().map_err(TrigramIndexError::Io)?;
 
         Ok(Self {
             root: root.to_path_buf(),
             file_paths,
             abs_paths,
+            fingerprints,
+            file_trigrams,
             lexicon,
             postings,
             corpus_kind,
         })
+    }
+
+    fn validate_file_paths(
+        fingerprints: &[FileFingerprint],
+        _meta_path: &Path,
+    ) -> Result<(), TrigramIndexError> {
+        for fp in fingerprints {
+            if fp.path.as_os_str().is_empty()
+                || fp.path.is_absolute()
+                || fp
+                    .path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(TrigramIndexError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid file path in index: {}", fp.path.display()),
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -211,36 +273,16 @@ impl Index for TrigramIndex {
     fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
         std::fs::create_dir_all(output_dir)?;
 
-        let tables = builder::build_index_tables(&builder::IndexBuildConfig {
-            root: config.root,
-            follow_links: config.follow_links,
-            exclude_paths: config.exclude_paths,
-            include_paths: config.include_paths,
-        })?;
-
-        let files = file_table::MappedFilesView::from_paths(&tables.files);
-        std::fs::write(output_dir.join(crate::FILES_BIN), files.backing_slice())?;
-
-        let lex = storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
-        std::fs::write(output_dir.join(crate::LEXICON_BIN), lex.backing_slice())?;
-
-        let post = storage::postings::MappedPostings::from_bytes(&tables.postings);
-        std::fs::write(output_dir.join(crate::POSTINGS_BIN), post.backing_slice())?;
-
+        let tables = IndexTableBuilder::new(config).build()?;
         let root = config.root.canonicalize()?;
-        let abs_paths = tables.files.iter().map(|p| root.join(p)).collect();
-
-        let lexicon = storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
-        let postings = storage::postings::MappedPostings::from_bytes(&tables.postings);
-
-        Ok(Self {
-            root,
-            file_paths: tables.files,
-            abs_paths,
-            lexicon,
-            postings,
-            corpus_kind: config.corpus_kind,
-        })
+        let index = Self::from_tables(tables, root, config.corpus_kind);
+        index.save_to_dir(output_dir).map_err(|e| match e {
+            TrigramIndexError::Io(io) => crate::Error::Io(io),
+            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
+                format!("missing component: {}", p.display()),
+            )),
+        })?;
+        Ok(index)
     }
 
     fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self> {
@@ -252,158 +294,143 @@ impl Index for TrigramIndex {
         config: &IndexBuildConfig<'_>,
         output_dir: &Path,
     ) -> crate::Result<Option<Self>> {
-        let mut current_paths = builder::collect_paths(&builder::IndexBuildConfig {
-            root: config.root,
-            follow_links: config.follow_links,
-            exclude_paths: config.exclude_paths,
-            include_paths: config.include_paths,
-        })?;
-        current_paths.sort_unstable();
+        let tables = IndexTableBuilder::new(config)
+            .with_previous(&self.fingerprints, &self.file_trigrams)
+            .build()?;
 
-        if current_paths == self.file_paths {
+        if tables.fingerprints == self.fingerprints {
             return Ok(None);
         }
 
-        Self::build(config, output_dir).map(Some)
+        std::fs::create_dir_all(output_dir)?;
+        let root = config.root.canonicalize()?;
+        let index = Self::from_tables(tables, root, config.corpus_kind);
+        index.save_to_dir(output_dir).map_err(|e| match e {
+            TrigramIndexError::Io(io) => crate::Error::Io(io),
+            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
+                format!("missing component: {}", p.display()),
+            )),
+        })?;
+        Ok(Some(index))
     }
 }
 
-fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
-    file_paths.iter().map(|p| root.join(p)).collect()
-}
+struct PostingOps;
 
-fn validate_file_paths(file_paths: &[PathBuf], _meta_path: &Path) -> Result<(), TrigramIndexError> {
-    for path in file_paths {
-        if path.as_os_str().is_empty()
-            || path.is_absolute()
-            || path
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
-            return Err(TrigramIndexError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("invalid file path in index: {}", path.display()),
-            )));
+impl PostingOps {
+    fn intersect_sorted_slices(slices: &[&[u8]]) -> Vec<u32> {
+        if slices.is_empty() {
+            return Vec::new();
         }
-    }
-    Ok(())
-}
-
-fn intersect_sorted_posting_byte_slices(slices: &[&[u8]]) -> Vec<u32> {
-    if slices.is_empty() {
-        return Vec::new();
-    }
-    if slices.len() == 1 {
-        return u32_vec_from_le_bytes(slices[0]);
-    }
-    let mut cur = intersect_two_posting_bytes(slices[0], slices[1]);
-    for s in &slices[2..] {
-        cur = intersect_vec_with_posting_bytes(&cur, s);
-        if cur.is_empty() {
-            break;
+        if slices.len() == 1 {
+            return Self::u32_vec_from_le_bytes(slices[0]);
         }
-    }
-    cur
-}
-
-fn intersect_two_posting_bytes(a: &[u8], b: &[u8]) -> Vec<u32> {
-    if !a.len().is_multiple_of(4) || !b.len().is_multiple_of(4) {
-        return Vec::new();
-    }
-    let an = a.len() / 4;
-    let bn = b.len() / 4;
-    let mut i = 0usize;
-    let mut j = 0usize;
-    let mut out = Vec::new();
-    while i < an && j < bn {
-        let ai = u32::from_le_bytes(a[i * 4..i * 4 + 4].try_into().unwrap());
-        let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
-        match ai.cmp(&bj) {
-            Ordering::Less => i += 1,
-            Ordering::Greater => j += 1,
-            Ordering::Equal => {
-                out.push(ai);
-                i += 1;
-                j += 1;
+        let mut cur = Self::intersect_two_byte_slices(slices[0], slices[1]);
+        for s in &slices[2..] {
+            cur = Self::intersect_vec_with_bytes(&cur, s);
+            if cur.is_empty() {
+                break;
             }
         }
+        cur
     }
-    out
-}
 
-fn intersect_vec_with_posting_bytes(cur: &[u32], b: &[u8]) -> Vec<u32> {
-    if !b.len().is_multiple_of(4) {
-        return Vec::new();
-    }
-    let bn = b.len() / 4;
-    let mut i = 0usize;
-    let mut j = 0usize;
-    let mut out = Vec::new();
-    while i < cur.len() && j < bn {
-        let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
-        match cur[i].cmp(&bj) {
-            Ordering::Less => i += 1,
-            Ordering::Greater => j += 1,
-            Ordering::Equal => {
-                out.push(cur[i]);
-                i += 1;
-                j += 1;
+    fn intersect_two_byte_slices(a: &[u8], b: &[u8]) -> Vec<u32> {
+        if !a.len().is_multiple_of(4) || !b.len().is_multiple_of(4) {
+            return Vec::new();
+        }
+        let an = a.len() / 4;
+        let bn = b.len() / 4;
+        let mut i = 0usize;
+        let mut j = 0usize;
+        let mut out = Vec::new();
+        while i < an && j < bn {
+            let ai = u32::from_le_bytes(a[i * 4..i * 4 + 4].try_into().unwrap());
+            let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
+            match ai.cmp(&bj) {
+                Ordering::Less => i += 1,
+                Ordering::Greater => j += 1,
+                Ordering::Equal => {
+                    out.push(ai);
+                    i += 1;
+                    j += 1;
+                }
             }
         }
-    }
-    out
-}
-
-fn u32_vec_from_le_bytes(slice: &[u8]) -> Vec<u32> {
-    if !slice.len().is_multiple_of(4) {
-        return Vec::new();
-    }
-    slice
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
-        .collect()
-}
-
-fn merge_sorted_runs(lists: Vec<Vec<u32>>) -> Vec<u32> {
-    if lists.is_empty() {
-        return Vec::new();
-    }
-    if lists.len() == 1 {
-        return lists.into_iter().next().unwrap_or_default();
+        out
     }
 
-    let total: usize = lists.iter().map(Vec::len).sum();
-    let mut heap: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::with_capacity(lists.len());
-    let mut positions = vec![0usize; lists.len()];
-
-    for (list_idx, list) in lists.iter().enumerate() {
-        if let Some(&first) = list.first() {
-            heap.push(Reverse((first, list_idx)));
+    fn intersect_vec_with_bytes(cur: &[u32], b: &[u8]) -> Vec<u32> {
+        if !b.len().is_multiple_of(4) {
+            return Vec::new();
         }
+        let bn = b.len() / 4;
+        let mut i = 0usize;
+        let mut j = 0usize;
+        let mut out = Vec::new();
+        while i < cur.len() && j < bn {
+            let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
+            match cur[i].cmp(&bj) {
+                Ordering::Less => i += 1,
+                Ordering::Greater => j += 1,
+                Ordering::Equal => {
+                    out.push(cur[i]);
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        out
     }
 
-    let mut out = Vec::with_capacity(total);
-    let mut last = None;
-    while let Some(Reverse((value, list_idx))) = heap.pop() {
-        if last != Some(value) {
-            out.push(value);
-            last = Some(value);
+    fn u32_vec_from_le_bytes(slice: &[u8]) -> Vec<u32> {
+        if !slice.len().is_multiple_of(4) {
+            return Vec::new();
+        }
+        slice
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    fn merge_sorted_runs(lists: Vec<Vec<u32>>) -> Vec<u32> {
+        if lists.is_empty() {
+            return Vec::new();
+        }
+        if lists.len() == 1 {
+            return lists.into_iter().next().unwrap_or_default();
         }
 
-        positions[list_idx] += 1;
-        if let Some(&next) = lists[list_idx].get(positions[list_idx]) {
-            heap.push(Reverse((next, list_idx)));
+        let total: usize = lists.iter().map(Vec::len).sum();
+        let mut heap: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::with_capacity(lists.len());
+        let mut positions = vec![0usize; lists.len()];
+
+        for (list_idx, list) in lists.iter().enumerate() {
+            if let Some(&first) = list.first() {
+                heap.push(Reverse((first, list_idx)));
+            }
         }
+
+        let mut out = Vec::with_capacity(total);
+        let mut last = None;
+        while let Some(Reverse((value, list_idx))) = heap.pop() {
+            if last != Some(value) {
+                out.push(value);
+                last = Some(value);
+            }
+
+            positions[list_idx] += 1;
+            if let Some(&next) = lists[list_idx].get(positions[list_idx]) {
+                heap.push(Reverse((next, list_idx)));
+            }
+        }
+        out
     }
-    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        compute_abs_paths, intersect_sorted_posting_byte_slices, merge_sorted_runs,
-        validate_file_paths,
-    };
+    use super::*;
     use std::path::PathBuf;
 
     fn bytes(ids: &[u32]) -> Vec<u8> {
@@ -412,7 +439,8 @@ mod tests {
 
     #[test]
     fn merge_sorted_runs_preserves_order_and_uniqueness() {
-        let merged = merge_sorted_runs(vec![vec![1, 3, 7], vec![1, 2, 7, 9], vec![4, 7, 8]]);
+        let merged =
+            PostingOps::merge_sorted_runs(vec![vec![1, 3, 7], vec![1, 2, 7, 9], vec![4, 7, 8]]);
         assert_eq!(merged, vec![1, 2, 3, 4, 7, 8, 9]);
     }
 
@@ -422,91 +450,105 @@ mod tests {
         let b = bytes(&[3, 7]);
         let c = bytes(&[0, 3, 4, 7, 8]);
         let slices = vec![a.as_slice(), b.as_slice(), c.as_slice()];
-        let ids = intersect_sorted_posting_byte_slices(&slices);
+        let ids = PostingOps::intersect_sorted_slices(&slices);
         assert_eq!(ids, vec![3, 7]);
     }
 
     #[test]
     fn merge_sorted_runs_empty_input_returns_empty() {
-        let merged = merge_sorted_runs(vec![]);
+        let merged = PostingOps::merge_sorted_runs(vec![]);
         assert!(merged.is_empty());
     }
 
     #[test]
     fn merge_sorted_runs_single_list_returns_as_is() {
-        let merged = merge_sorted_runs(vec![vec![1, 2, 3]]);
+        let merged = PostingOps::merge_sorted_runs(vec![vec![1, 2, 3]]);
         assert_eq!(merged, vec![1, 2, 3]);
     }
 
     #[test]
     fn merge_sorted_runs_with_empty_lists_mixed_in() {
-        let merged = merge_sorted_runs(vec![vec![1, 3], vec![], vec![2, 3]]);
+        let merged = PostingOps::merge_sorted_runs(vec![vec![1, 3], vec![], vec![2, 3]]);
         assert_eq!(merged, vec![1, 2, 3]);
     }
 
     #[test]
     fn intersect_sorted_posting_byte_slices_empty_input_returns_empty() {
-        let ids = intersect_sorted_posting_byte_slices(&[]);
+        let ids = PostingOps::intersect_sorted_slices(&[]);
         assert!(ids.is_empty());
     }
 
     #[test]
-    fn intersect_sorted_posting_byte_slices_single_slice_returns_decoded_ids() {
+    fn intersect_sorted_slices_single_returns_decoded_ids() {
         let a = bytes(&[1, 3, 5]);
-        let ids = intersect_sorted_posting_byte_slices(&[a.as_slice()]);
+        let ids = PostingOps::intersect_sorted_slices(&[a.as_slice()]);
         assert_eq!(ids, vec![1, 3, 5]);
     }
 
     #[test]
-    fn intersect_sorted_posting_byte_slices_non_multiple_of_four_returns_empty() {
+    fn intersect_sorted_slices_non_multiple_of_four_returns_empty() {
         let a = &[1, 2, 3];
-        let ids = intersect_sorted_posting_byte_slices(&[a]);
+        let ids = PostingOps::intersect_sorted_slices(&[a]);
         assert!(ids.is_empty());
     }
 
     #[test]
-    fn intersect_sorted_posting_byte_slices_no_overlap_returns_empty() {
+    fn intersect_sorted_slices_no_overlap_returns_empty() {
         let a = bytes(&[1, 2, 3]);
         let b = bytes(&[4, 5, 6]);
-        let ids = intersect_sorted_posting_byte_slices(&[a.as_slice(), b.as_slice()]);
+        let ids = PostingOps::intersect_sorted_slices(&[a.as_slice(), b.as_slice()]);
         assert!(ids.is_empty());
     }
 
     #[test]
     fn validate_file_paths_accepts_normal_relative_paths() {
-        let paths = vec![PathBuf::from("a.txt"), PathBuf::from("sub/b.txt")];
-        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        let fps = vec![
+            FileFingerprint {
+                path: PathBuf::from("a.txt"),
+                mtime_secs: 0,
+                size: 0,
+            },
+            FileFingerprint {
+                path: PathBuf::from("sub/b.txt"),
+                mtime_secs: 0,
+                size: 0,
+            },
+        ];
+        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
         assert!(result.is_ok());
     }
 
     #[test]
     fn validate_file_paths_rejects_absolute_paths() {
         let abs = std::env::current_dir().unwrap().join("a.txt");
-        let paths = vec![abs];
-        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        let fps = vec![FileFingerprint {
+            path: abs,
+            mtime_secs: 0,
+            size: 0,
+        }];
+        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
         assert!(result.is_err());
     }
 
     #[test]
     fn validate_file_paths_rejects_empty_paths() {
-        let paths = vec![PathBuf::from("")];
-        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        let fps = vec![FileFingerprint {
+            path: PathBuf::from(""),
+            mtime_secs: 0,
+            size: 0,
+        }];
+        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
         assert!(result.is_err());
     }
 
     #[test]
     fn validate_file_paths_rejects_parent_dir_paths() {
-        let paths = vec![PathBuf::from("../escape.txt")];
-        let result = validate_file_paths(&paths, std::path::Path::new("/meta.json"));
+        let fps = vec![FileFingerprint {
+            path: PathBuf::from("../escape.txt"),
+            mtime_secs: 0,
+            size: 0,
+        }];
+        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn compute_abs_paths_joins_root_with_relative_paths() {
-        let root = std::path::Path::new("/corpus");
-        let rel = vec![PathBuf::from("a.txt"), PathBuf::from("sub/b.txt")];
-        let abs = compute_abs_paths(root, &rel);
-        assert_eq!(abs[0], PathBuf::from("/corpus/a.txt"));
-        assert_eq!(abs[1], PathBuf::from("/corpus/sub/b.txt"));
     }
 }

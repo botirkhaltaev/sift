@@ -4,147 +4,295 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
-use memmap2::Mmap;
 use rayon::prelude::*;
 
-use super::storage::lexicon::{LexiconEntry, MappedLexicon};
+use super::file_table::FileFingerprint;
+use super::storage::lexicon::LexiconEntry;
 use super::storage::mmap::open_mmap;
-use super::storage::postings::MappedPostings;
 use super::types::Trigram;
 
-use crate::index::CorpusKind;
+use crate::index::{CorpusKind, IndexBuildConfig};
 
+/// Collected index data ready for persistence.
 pub struct IndexTables {
-    pub files: Vec<PathBuf>,
+    pub fingerprints: Vec<FileFingerprint>,
+    pub file_trigrams: Vec<Vec<Trigram>>,
     pub lexicon: Vec<LexiconEntry>,
     pub postings: Vec<u8>,
 }
 
-/// Configuration for index building: walk policy and path filters.
-pub struct IndexBuildConfig<'a> {
-    pub root: &'a Path,
-    pub follow_links: bool,
-    pub exclude_paths: &'a [PathBuf],
-    pub include_paths: &'a [PathBuf],
+/// Walks a corpus and builds index tables, optionally reusing cached data
+/// from a previous index for files that have not changed.
+pub struct IndexTableBuilder<'a> {
+    config: &'a IndexBuildConfig<'a>,
+    prev_fingerprints: Option<&'a [FileFingerprint]>,
+    prev_trigrams: Option<&'a [Vec<Trigram>]>,
 }
 
-pub fn collect_paths(config: &IndexBuildConfig<'_>) -> crate::Result<Vec<PathBuf>> {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    let walker = WalkBuilder::new(config.root)
-        .follow_links(config.follow_links)
-        .hidden(false)
-        .parents(false)
-        .ignore(false)
-        .git_global(false)
-        .git_ignore(false)
-        .git_exclude(false)
-        .require_git(false)
-        .build();
-    for entry in walker {
-        let entry = entry.map_err(crate::Error::Ignore)?;
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
+impl<'a> IndexTableBuilder<'a> {
+    #[must_use]
+    pub const fn new(config: &'a IndexBuildConfig<'a>) -> Self {
+        Self {
+            config,
+            prev_fingerprints: None,
+            prev_trigrams: None,
         }
-        let path = entry.path();
-        let display = path.strip_prefix(config.root).unwrap_or(path).to_path_buf();
-        if config
-            .exclude_paths
-            .iter()
-            .any(|excluded| display.starts_with(excluded))
+    }
+
+    #[must_use]
+    pub const fn with_previous(
+        mut self,
+        fingerprints: &'a [FileFingerprint],
+        trigrams: &'a [Vec<Trigram>],
+    ) -> Self {
+        self.prev_fingerprints = Some(fingerprints);
+        self.prev_trigrams = Some(trigrams);
+        self
+    }
+
+    /// Build the index tables.
+    ///
+    /// When previous data is provided via [`with_previous`](Self::with_previous),
+    /// files whose fingerprint matches the previous index skip trigram
+    /// extraction entirely.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if corpus walking, file I/O, or trigram extraction fails.
+    pub fn build(self) -> crate::Result<IndexTables> {
+        let paths = CorpusWalker::new(self.config).collect()?;
+        let fingerprints = FingerprintCollector::new(self.config.root, &paths).collect()?;
+
+        let extractor = if let (Some(prev_fps), Some(prev_tris)) =
+            (self.prev_fingerprints, self.prev_trigrams)
         {
-            continue;
-        }
-        if !config.include_paths.is_empty()
-            && !config
-                .include_paths
+            TrigramExtractor::incremental(self.config.root, &fingerprints, prev_fps, prev_tris)
+        } else {
+            TrigramExtractor::fresh(self.config.root, &fingerprints)
+        };
+        let file_trigrams = extractor.extract()?;
+
+        let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
+
+        Ok(IndexTables {
+            fingerprints,
+            file_trigrams,
+            lexicon,
+            postings,
+        })
+    }
+}
+
+/// Walks the corpus directory and collects sorted relative file paths.
+struct CorpusWalker<'a> {
+    config: &'a IndexBuildConfig<'a>,
+}
+
+impl<'a> CorpusWalker<'a> {
+    const fn new(config: &'a IndexBuildConfig<'a>) -> Self {
+        Self { config }
+    }
+
+    fn collect(&self) -> crate::Result<Vec<PathBuf>> {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        let walker = WalkBuilder::new(self.config.root)
+            .follow_links(self.config.follow_links)
+            .hidden(false)
+            .parents(false)
+            .ignore(false)
+            .git_global(false)
+            .git_ignore(false)
+            .git_exclude(false)
+            .require_git(false)
+            .build();
+        for entry in walker {
+            let entry = entry.map_err(crate::Error::Ignore)?;
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(self.config.root)
+                .unwrap_or(path)
+                .to_path_buf();
+            if self
+                .config
+                .exclude_paths
                 .iter()
-                .any(|included| display == *included || display.starts_with(included))
-        {
-            continue;
+                .any(|excluded| rel.starts_with(excluded))
+            {
+                continue;
+            }
+            if !self.config.include_paths.is_empty()
+                && !self
+                    .config
+                    .include_paths
+                    .iter()
+                    .any(|included| rel == *included || rel.starts_with(included))
+            {
+                continue;
+            }
+            paths.push(rel);
         }
-        paths.push(display);
+        paths.sort_unstable();
+        Ok(paths)
     }
-    Ok(paths)
 }
 
-fn open_corpus_bytes(path: &Path) -> crate::Result<Mmap> {
-    open_mmap(path).map_err(crate::Error::Io)
+/// Stats each file to produce fingerprints with mtime and size.
+struct FingerprintCollector<'a> {
+    root: &'a Path,
+    paths: &'a [PathBuf],
 }
 
-fn unique_trigrams_for_file(path: &Path) -> crate::Result<Vec<Trigram>> {
-    let mmap = open_corpus_bytes(path)?;
-    Ok(Trigram::unique_from_lossy_utf8(mmap.as_ref()))
-}
-
-pub fn build_index_tables(config: &IndexBuildConfig<'_>) -> crate::Result<IndexTables> {
-    let mut paths = collect_paths(config)?;
-    paths.sort_unstable();
-
-    let per_file = extract_trigrams_per_file(config.root, &paths)?;
-    let rel_paths: Vec<PathBuf> = per_file.iter().map(|(p, _)| p.clone()).collect();
-
-    let mut map: BTreeMap<Trigram, Vec<u32>> = BTreeMap::new();
-
-    for (id, (_rel, tris)) in per_file.iter().enumerate() {
-        let id_u32: u32 = id.try_into().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "too many indexed files",
-            ))
-        })?;
-        for tri in tris {
-            map.entry(*tri).or_default().push(id_u32);
-        }
+impl<'a> FingerprintCollector<'a> {
+    const fn new(root: &'a Path, paths: &'a [PathBuf]) -> Self {
+        Self { root, paths }
     }
 
-    let total_u32s: usize = map.values().map(Vec::len).sum();
-    let mut posting_bytes: Vec<u8> = Vec::with_capacity(total_u32s.saturating_mul(4));
-    let mut lex_entries: Vec<LexiconEntry> = Vec::with_capacity(map.len());
-    for (tri, ids) in map {
-        let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "postings offset overflow",
-            ))
-        })?;
-        let len: u32 = ids.len().try_into().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "posting list too long",
-            ))
-        })?;
-        for fid in &ids {
-            posting_bytes.extend_from_slice(&fid.to_le_bytes());
+    fn collect(&self) -> crate::Result<Vec<FileFingerprint>> {
+        self.paths
+            .par_iter()
+            .map(|rel| {
+                let abs = self.root.join(rel);
+                let meta = std::fs::metadata(&abs)?;
+                let mtime_secs = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+                let size = meta.len();
+                Ok(FileFingerprint {
+                    path: rel.clone(),
+                    mtime_secs,
+                    size,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Extracts unique trigrams per file, reusing cached trigrams for unchanged files.
+struct TrigramExtractor<'a> {
+    root: &'a Path,
+    fingerprints: &'a [FileFingerprint],
+    prev_fingerprints: Option<&'a [FileFingerprint]>,
+    prev_trigrams: Option<&'a [Vec<Trigram>]>,
+}
+
+impl<'a> TrigramExtractor<'a> {
+    const fn fresh(root: &'a Path, fingerprints: &'a [FileFingerprint]) -> Self {
+        Self {
+            root,
+            fingerprints,
+            prev_fingerprints: None,
+            prev_trigrams: None,
         }
-        lex_entries.push(LexiconEntry {
-            trigram: tri.to_bytes(),
-            offset,
-            len,
-        });
     }
 
-    Ok(IndexTables {
-        files: rel_paths,
-        lexicon: lex_entries,
-        postings: posting_bytes,
-    })
+    const fn incremental(
+        root: &'a Path,
+        fingerprints: &'a [FileFingerprint],
+        prev_fingerprints: &'a [FileFingerprint],
+        prev_trigrams: &'a [Vec<Trigram>],
+    ) -> Self {
+        Self {
+            root,
+            fingerprints,
+            prev_fingerprints: Some(prev_fingerprints),
+            prev_trigrams: Some(prev_trigrams),
+        }
+    }
+
+    fn extract(&self) -> crate::Result<Vec<Vec<Trigram>>> {
+        let cache = self.build_lookup();
+        self.fingerprints
+            .par_iter()
+            .map(|fp| {
+                if let Some(tris) = cache.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
+                    return Ok(tris.to_vec());
+                }
+                let abs = self.root.join(&fp.path);
+                let mmap = open_mmap(&abs).map_err(crate::Error::Io)?;
+                Ok(Trigram::unique_from_lossy_utf8(mmap.as_ref()))
+            })
+            .collect()
+    }
+
+    fn build_lookup(&self) -> std::collections::HashMap<(&Path, i64, u64), &[Trigram]> {
+        let (Some(prev_fps), Some(prev_tris)) = (self.prev_fingerprints, self.prev_trigrams) else {
+            return std::collections::HashMap::new();
+        };
+        if prev_fps.len() != prev_tris.len() {
+            return std::collections::HashMap::new();
+        }
+        prev_fps
+            .iter()
+            .zip(prev_tris.iter())
+            .map(|(fp, tris)| ((fp.path.as_path(), fp.mtime_secs, fp.size), tris.as_slice()))
+            .collect()
+    }
 }
 
-fn extract_trigrams_per_file(
-    root: &Path,
-    paths: &[PathBuf],
-) -> crate::Result<Vec<(PathBuf, Vec<Trigram>)>> {
-    let op = |display: &PathBuf| {
-        let path = root.join(display);
-        unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
-    };
-    paths.par_iter().map(op).collect()
+/// Assembles trigram → file ID posting lists from per-file trigram sets.
+struct PostingAssembler<'a> {
+    file_trigrams: &'a [Vec<Trigram>],
 }
 
-fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {
-    file_paths.iter().map(|p| root.join(p)).collect()
+impl<'a> PostingAssembler<'a> {
+    const fn new(file_trigrams: &'a [Vec<Trigram>]) -> Self {
+        Self { file_trigrams }
+    }
+
+    fn assemble(&self) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
+        let mut map: BTreeMap<Trigram, Vec<u32>> = BTreeMap::new();
+
+        for (id, tris) in self.file_trigrams.iter().enumerate() {
+            let id_u32: u32 = id.try_into().map_err(|_| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "too many indexed files",
+                ))
+            })?;
+            for tri in tris {
+                map.entry(*tri).or_default().push(id_u32);
+            }
+        }
+
+        let total_u32s: usize = map.values().map(Vec::len).sum();
+        let mut posting_bytes: Vec<u8> = Vec::with_capacity(total_u32s.saturating_mul(4));
+        let mut lex_entries: Vec<LexiconEntry> = Vec::with_capacity(map.len());
+        for (tri, ids) in map {
+            let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "postings offset overflow",
+                ))
+            })?;
+            let len: u32 = ids.len().try_into().map_err(|_| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "posting list too long",
+                ))
+            })?;
+            for fid in &ids {
+                posting_bytes.extend_from_slice(&fid.to_le_bytes());
+            }
+            lex_entries.push(LexiconEntry {
+                trigram: tri.to_bytes(),
+                offset,
+                len,
+            });
+        }
+
+        Ok((lex_entries, posting_bytes))
+    }
 }
 
+/// Fluent builder for standalone trigram index construction.
+///
+/// Used by `sift build` and tests. For snapshot-managed builds, use
+/// `Index::build` via `IndexStore`.
 pub struct TrigramIndexBuilder<'a> {
     root: &'a Path,
     dir: Option<PathBuf>,
@@ -223,26 +371,18 @@ impl<'a> TrigramIndexBuilder<'a> {
         } else {
             (canonical, Vec::new(), CorpusKind::Directory)
         };
+
         let exclude_paths = self.excluded_build_paths(&root)?;
-        let tables = build_index_tables(&IndexBuildConfig {
+        let config = IndexBuildConfig {
             root: &root,
             follow_links: self.follow_links,
             exclude_paths: &exclude_paths,
             include_paths: &include_paths,
-        })?;
-
-        let lexicon = MappedLexicon::from_entries(&tables.lexicon);
-        let postings = MappedPostings::from_bytes(&tables.postings);
-
-        let abs_paths = compute_abs_paths(&root, &tables.files);
-        let index = super::TrigramIndex {
-            root,
-            file_paths: tables.files,
-            abs_paths,
-            lexicon,
-            postings,
             corpus_kind: kind,
         };
+
+        let tables = IndexTableBuilder::new(&config).build()?;
+        let index = super::TrigramIndex::from_tables(tables, root, kind);
 
         if let Some(dir) = self.dir {
             index.save_to_dir(&dir)?;
@@ -259,6 +399,19 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    fn build_tables(tmp: &TempDir) -> IndexTables {
+        let config = IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+        };
+        IndexTableBuilder::new(&config)
+            .build()
+            .expect("build tables")
+    }
+
     #[test]
     fn build_index_tables_sorts_file_paths_deterministically() {
         let tmp = TempDir::new().expect("create temp dir");
@@ -266,19 +419,18 @@ mod tests {
         fs::write(tmp.path().join("a.txt"), "world\n").expect("write a");
         fs::write(tmp.path().join("m.txt"), "test\n").expect("write m");
 
-        let tables = build_index_tables(&IndexBuildConfig {
-            root: tmp.path(),
-            follow_links: false,
-            exclude_paths: &[],
-            include_paths: &[],
-        })
-        .expect("build tables");
+        let tables = build_tables(&tmp);
+        let paths: Vec<PathBuf> = tables
+            .fingerprints
+            .iter()
+            .map(|fp| fp.path.clone())
+            .collect();
         let expected = vec![
             PathBuf::from("a.txt"),
             PathBuf::from("m.txt"),
             PathBuf::from("z.txt"),
         ];
-        assert_eq!(tables.files, expected);
+        assert_eq!(paths, expected);
     }
 
     #[test]
@@ -289,15 +441,18 @@ mod tests {
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::write(excluded_dir.join("skip.txt"), "world\n").expect("write skip");
 
-        let tables = build_index_tables(&IndexBuildConfig {
+        let config = IndexBuildConfig {
             root: tmp.path(),
             follow_links: false,
             exclude_paths: &[PathBuf::from("excluded")],
             include_paths: &[],
-        })
-        .expect("build tables");
-        assert_eq!(tables.files.len(), 1);
-        assert_eq!(tables.files[0], PathBuf::from("keep.txt"));
+            corpus_kind: CorpusKind::Directory,
+        };
+        let tables = IndexTableBuilder::new(&config)
+            .build()
+            .expect("build tables");
+        assert_eq!(tables.fingerprints.len(), 1);
+        assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
 
     #[test]
@@ -306,14 +461,8 @@ mod tests {
         fs::write(tmp.path().join("a.txt"), "ababab\n").expect("write file");
         fs::write(tmp.path().join("b.txt"), "ababab\n").expect("write file");
 
-        let tables = build_index_tables(&IndexBuildConfig {
-            root: tmp.path(),
-            follow_links: false,
-            exclude_paths: &[],
-            include_paths: &[],
-        })
-        .expect("build tables");
-        assert_eq!(tables.files.len(), 2);
+        let tables = build_tables(&tmp);
+        assert_eq!(tables.fingerprints.len(), 2);
         let file_id_0: u32 = 0;
         let file_id_1: u32 = 1;
         let occurrences_0 = tables
@@ -344,22 +493,16 @@ mod tests {
     }
 
     #[test]
-    fn unique_trigrams_for_file_returns_sorted_deduped_keys() {
+    fn trigram_extraction_returns_sorted_deduped_keys() {
         let tmp = TempDir::new().expect("create temp dir");
-        let file = tmp.path().join("test.txt");
-        fs::write(&file, "ababab\n").expect("write file");
+        fs::write(tmp.path().join("test.txt"), "ababab\n").expect("write file");
 
-        let tris = unique_trigrams_for_file(&file).expect("extract trigrams");
+        let tables = build_tables(&tmp);
+        assert_eq!(tables.file_trigrams.len(), 1);
+        let tris = &tables.file_trigrams[0];
         assert_eq!(tris.len(), 3);
         for i in 0..tris.len() - 1 {
             assert!(tris[i] <= tris[i + 1]);
-        }
-        let mut prev = None;
-        for tri in &tris {
-            if let Some(p) = prev {
-                assert_ne!(*tri, p);
-            }
-            prev = Some(*tri);
         }
     }
 
@@ -369,15 +512,18 @@ mod tests {
         fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
         fs::write(tmp.path().join("skip.txt"), "world\n").expect("write skip");
 
-        let tables = build_index_tables(&IndexBuildConfig {
+        let config = IndexBuildConfig {
             root: tmp.path(),
             follow_links: false,
             exclude_paths: &[],
             include_paths: &[PathBuf::from("keep.txt")],
-        })
-        .expect("build tables");
-        assert_eq!(tables.files.len(), 1);
-        assert_eq!(tables.files[0], PathBuf::from("keep.txt"));
+            corpus_kind: CorpusKind::Directory,
+        };
+        let tables = IndexTableBuilder::new(&config)
+            .build()
+            .expect("build tables");
+        assert_eq!(tables.fingerprints.len(), 1);
+        assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
 
     #[test]
@@ -391,11 +537,52 @@ mod tests {
             .build()
             .expect("build index");
         assert_eq!(index.corpus_kind(), CorpusKind::SingleFile);
-        assert_eq!(index.file_paths.len(), 1);
+        assert_eq!(index.fingerprints.len(), 1);
         assert_eq!(
-            index.file_paths[0],
+            index.fingerprints[0].path,
             PathBuf::from("only.txt"),
             "should only index the specified file, not siblings"
         );
+    }
+
+    #[test]
+    fn fingerprints_have_nonzero_size() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::write(tmp.path().join("a.txt"), "hello world\n").expect("write file");
+
+        let tables = build_tables(&tmp);
+        assert_eq!(tables.fingerprints.len(), 1);
+        assert!(
+            tables.fingerprints[0].size > 0,
+            "fingerprint should capture file size"
+        );
+    }
+
+    #[test]
+    fn incremental_build_reuses_cached_trigrams() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::write(tmp.path().join("a.txt"), "hello\n").expect("write a");
+        fs::write(tmp.path().join("b.txt"), "world\n").expect("write b");
+
+        let config = IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+        };
+
+        let tables1 = IndexTableBuilder::new(&config)
+            .build()
+            .expect("first build");
+
+        let tables2 = IndexTableBuilder::new(&config)
+            .with_previous(&tables1.fingerprints, &tables1.file_trigrams)
+            .build()
+            .expect("incremental build");
+
+        assert_eq!(tables1.file_trigrams, tables2.file_trigrams);
+        assert_eq!(tables1.lexicon, tables2.lexicon);
+        assert_eq!(tables1.postings, tables2.postings);
     }
 }
