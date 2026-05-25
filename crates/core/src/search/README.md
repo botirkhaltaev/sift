@@ -7,7 +7,7 @@ Regex execution: pattern compilation, file scanning, output formatting, and para
 | Directory | Description |
 |-----------|-------------|
 | [`options/`](options/) | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
-| [`pattern/`](pattern/) | `PatternCompiler` — composable regex builder |
+| [`pattern/`](pattern/) | `PatternCompiler`: composable regex builder |
 | [`query/`](query/) | `SearchQuery`, `Match` |
 | [`request/`](request/) | `SearchExecution`, `WalkOptions`, `LinkTraversal` |
 | [`filter/`](filter/) | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |

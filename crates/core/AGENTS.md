@@ -1,8 +1,8 @@
-# AGENTS.md — sift-core
+# AGENTS.md -- sift-core
 
 ## Responsibility
 
-Core search engine: query planning, trigram index, grep-style execution, and parallel file scanning.
+Core search engine: query planning, index-backed candidate narrowing, grep-style execution, and parallel file scanning.
 
 ## Public API
 
@@ -12,26 +12,25 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `Se
 
 | Module | Responsibility |
 |--------|----------------|
-| `query/` | Query description (`QuerySpec`), planning (`QueryPlanner`) |
-| `query/trigram.rs` | Trigram extraction, scoring sort, candidate selection |
+| `query/` | Query description (`QuerySpec`), planning |
 | `index/mod.rs` | `Indexes` registry, `SearchIndex` trait, shared types (`FileId`, `IndexId`, `IndexMeta`), `IndexError` |
 | `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, `SearchIndex` impl, `TrigramIndexError` |
-| `index/trigram/builder.rs` | `TrigramIndexBuilder` — corpus walk, trigram extraction, table construction |
-| `index/trigram/file_table.rs` | `MappedFilesView` — file ID → relative path mapping |
+| `index/trigram/builder.rs` | `TrigramIndexBuilder`: corpus walk, trigram extraction, table construction |
+| `index/trigram/file_table.rs` | `MappedFilesView`: file ID to relative path mapping |
 | `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
-| `grep/mod.rs` | Pipeline orchestration — `GrepRequest`, `run()` |
+| `grep/mod.rs` | Pipeline orchestration: `GrepRequest`, `run()` |
 | `search/` | Regex execution (scan workers, output, pattern, filter) |
 | `search/options/` | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
 | `search/query/` | `SearchQuery`, `Match` |
-| `search/pattern/` | `PatternCompiler` — composable regex builder |
+| `search/pattern/` | `PatternCompiler`: composable regex builder |
 | `search/request/` | `SearchExecution`, `WalkOptions`, `LinkTraversal` |
 | `search/candidates/` | Walk-based candidate collection |
 | `search/scan/` | Text / summary / JSON scanning workers |
 | `search/emit/` | Output formatting, result chunks, stats helpers |
 | `search/filter/` | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |
 | `search/output/` | `SearchOutput`, style/mode/format/passthru |
-| `candidate.rs` | `Candidate` — single file candidate with `rel_path`, `abs_path`, filtering |
-| `bin/sift_profile/` | `sift-profile` — feature `profile` only |
+| `candidate.rs` | `Candidate`: single file candidate with `rel_path`, `abs_path`, filtering |
+| `bin/sift_profile/` | `sift-profile`, feature `profile` only |
 
 ## Error Ownership
 
@@ -73,11 +72,11 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect_stat
 ```
 
 ### Key Types
-- `Indexes` — registry of opened indexes; owns initialization via `Indexes::open(sift_dir)`
-- `FileId` — type-safe file identifier within an index
-- `IndexId` — type-safe index identifier in a multi-index search
-- `Candidate` — single file with rel_path, abs_path, filtering predicates
-- `PatternCompiler` — composable regex builder with bitflags; `shape()`, `compile()`, `compile_one()`
+- `Indexes`: registry of opened indexes; owns initialization via `Indexes::open(sift_dir)`
+- `FileId`: type-safe file identifier within an index
+- `IndexId`: type-safe index identifier in a multi-index search
+- `Candidate`: single file with rel_path, abs_path, filtering predicates
+- `PatternCompiler`: composable regex builder with bitflags; `shape()`, `compile()`, `compile_one()`
 
 ## Invariants
 
@@ -107,7 +106,7 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 ### Conventions
 
 - **Public API only.** No `bench-internals` feature, no `pub mod internals`, no direct benchmarking of private helpers.
-- **Storage is benchmarked indirectly** through `index.rs` build/open/save/reopen paths — storage is private to the index module.
+- **Storage is benchmarked indirectly** through `index.rs` build/open/save/reopen paths. Storage is private to the index module.
 - **Benchmarks mirror implementation modules.** One bench file per domain (`query`, `index`, `grep`).
 - **Fixture placement:** build benches materialize corpus + build inside `b.iter`; search/open/candidate benches build fixtures outside `b.iter`.
 - **Shared fixtures** live in `benches/common/mod.rs`.
@@ -126,7 +125,7 @@ See [`benches/README.md`](benches/README.md) for the full benchmark and profilin
 
 - Break the public API without updating the CLI crate.
 - Add `unsafe` outside `index/trigram/storage/mmap.rs`.
-- Use `#[allow(clippy::…)]` without a documented reason.
-- Have `grep/` import from `index::trigram` — use `SearchIndex` trait only.
-- Add variants to `crate::Error` — define them in the owning module's error type.
+- Use `#[allow(clippy::...)]` without a documented reason.
+- Have `grep/` import from `index::trigram`. Use `SearchIndex` trait only.
+- Add variants to `crate::Error`. Define them in the owning module's error type.
 - Expose internal APIs for benchmarking purposes.

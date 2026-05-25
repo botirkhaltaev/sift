@@ -19,7 +19,7 @@ npx skills add https://github.com/botirk38/sift/tree/master/skills/sift-cli
 
 | Directory | Description |
 |-----------|-------------|
-| [`sift-cli/`](sift-cli/) | Work on the `sift` CLI — flags, tests, integration |
+| [`sift-cli/`](sift-cli/) | Work on the `sift` CLI: flags, tests, integration |
 
 ## Listing
 

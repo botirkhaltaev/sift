@@ -1,17 +1,17 @@
 # sift-core
 
-Indexed grep-style search engine. Build a trigram index on disk, then run regex or fixed-string queries with automatic candidate narrowing.
+Indexed grep-style search engine. Build on-disk indexes, then run regex or fixed-string queries with automatic candidate narrowing. The shipped index type is a trigram index; the `SearchIndex` trait allows plugging in additional index kinds.
 
 ## Modules
 
 | Module | Description |
 |--------|-------------|
-| [`query/`](src/query/) | Query description (`QuerySpec`), planning (`QueryPlanner`) |
-| [`query/trigram.rs`](src/query/trigram.rs) | Trigram extraction, scoring sort, candidate selection |
+| [`query/`](src/query/) | Query description (`QuerySpec`), planning |
 | [`index/`](src/index/) | `SearchIndex` trait, `Indexes` registry, shared types (`FileId`, `IndexId`, `IndexMeta`) |
 | [`index/trigram/`](src/index/trigram/) | Trigram index: build, load, search, and persistence |
 | [`index/trigram/storage/`](src/index/trigram/storage/) | Binary persistence format (lexicon, postings, file tables) |
-| [`grep/`](src/grep/) | Pipeline orchestration — `GrepRequest`, `run()` |
+| [`grep/`](src/grep/) | Pipeline orchestration: `GrepRequest`, `run()` |
+| [`search/`](src/search/) | Regex execution, scanning, output formatting, parallelism |
 | [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
 
 ## API
@@ -19,7 +19,7 @@ Indexed grep-style search engine. Build a trigram index on disk, then run regex 
 ```rust
 use sift_core::{SearchOptions, SearchQuery, TrigramIndex, TrigramIndexBuilder, Indexes, CandidateFilter};
 
-// Build
+// Build (using the shipped trigram index)
 let index = TrigramIndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?;
 
 // Open

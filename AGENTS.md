@@ -4,7 +4,7 @@ Guidelines for AI agents working on the sift codebase.
 
 ## Project Overview
 
-Sift is an indexed regex search engine for codebases, written in Rust. It builds a trigram index on disk and uses it to narrow candidate files before running the full regex engine — achieving up to 60× speedup over ripgrep on indexed queries.
+Sift is an indexed regex search engine for codebases, written in Rust. It builds on-disk indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine. The shipped index type is a trigram index, achieving up to 60x speedup over ripgrep on indexed queries. The `SearchIndex` trait makes the system pluggable: new index kinds can be added alongside the trigram index.
 
 ## Build & Test
 
@@ -20,12 +20,12 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 
 | Path | Role |
 |------|------|
-| `crates/core/` | `sift-core` — query planning, trigram index, grep execution, search engine |
+| `crates/core/` | `sift-core`: query planning, index-backed candidate narrowing, search engine |
 | `crates/core/src/query/` | Query description, planning, candidate plans |
-| `crates/core/src/index/` | Generic index traits and concrete implementations |
-| `crates/core/src/index/trigram/` | Trigram index build, storage, and search |
+| `crates/core/src/index/` | Generic `SearchIndex` trait and concrete implementations |
+| `crates/core/src/index/trigram/` | Trigram index: build, storage, and search |
 | `crates/core/src/grep/` | Grep-style matching, scanning, output, filtering |
-| `crates/cli/` | `sift-cli` — `sift` binary (clap CLI over core) |
+| `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
 | `benchsuite/` | Comparative `rg` vs `sift` benchmarks |
 | `scripts/` | `bench.sh`, `fuzz.sh`, `install.sh` |
@@ -36,7 +36,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 
 - **No `unsafe`** except in `index/trigram/storage/mmap.rs` (documented safety invariant).
 - **Strict clippy:** workspace uses `pedantic + nursery + cargo` warnings; CI uses `-D warnings`.
-- Fix lints at the root cause — `#[allow]` is **never** permitted.
+- Fix lints at the root cause. `#[allow]` is **never** permitted.
 - Small, focused changes; follow existing patterns in the crate you touch.
 - Do not commit `target/`, `.cursor/`, local `.sift/` directories.
 
@@ -53,7 +53,7 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`TrigramIndexBuilder::build` → `Indexes::open` → `SearchQuery::new` → `SearchQuery::run(SearchRequest)`. See `crates/core/README.md`.
+`Indexes::open` loads all available indexes. `SearchQuery::new` compiles the regex. `SearchQuery::run(SearchExecution)` scans candidates. Currently the shipped index is the trigram index, built via `TrigramIndexBuilder::build`. See `crates/core/README.md`.
 
 ## Function Evolution
 

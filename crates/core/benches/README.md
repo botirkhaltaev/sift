@@ -12,7 +12,7 @@ Benchmarks mirror the `src/` module layout and exercise only public APIs.
 | `index.rs` | `TrigramIndexBuilder::build`, `TrigramIndex::open`, `Indexes::open`, `SearchIndex` trait methods, `candidates`, `explain`, save/reopen |
 | `grep.rs` | `SearchQuery::run` (indexed search / walk search), `CandidateFilter` paths, output modes |
 
-Storage is benchmarked indirectly through `index.rs` build/open/save/reopen paths — no direct storage benchmarks.
+Storage is benchmarked indirectly through `index.rs` build/open/save/reopen paths. No direct storage benchmarks.
 
 ## Running
 

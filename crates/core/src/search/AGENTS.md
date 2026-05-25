@@ -1,13 +1,13 @@
-# search/
+# AGENTS.md -- search/
 
 Regex execution: pattern compilation, file scanning, output formatting, and parallelism.
 
 ## Key Types
 
-- `SearchQuery` — compiled regex + options + cached matcher/searcher. Reuse across queries.
-- `SearchOptions` — flags, case mode, max results, context lines.
-- `SearchMode` — output mode enum (standard, count, files-with-matches, etc.).
-- `Match` — single search hit (file, line number, matched text).
+- `SearchQuery`: compiled regex + options + cached matcher/searcher. Reuse across queries.
+- `SearchOptions`: flags, case mode, max results, context lines.
+- `SearchMode`: output mode enum (standard, count, files-with-matches, etc.).
+- `Match`: single search hit (file, line number, matched text).
 
 ## Conventions
 
@@ -15,7 +15,7 @@ Regex execution: pattern compilation, file scanning, output formatting, and para
 - Parallel scanning uses Rayon with `par_iter`/`map_init`.
 - Results are always sorted by `(file, line, text)` for determinism.
 - `grep_regex`/`grep_searcher` are the underlying line-scanning engines.
-- `search/` receives already-prepared `Vec<Candidate>` — no candidate resolution logic.
+- `search/` receives already-prepared `Vec<Candidate>`: no candidate resolution logic.
 
 ## Search Flow (orchestrated by `grep::run`)
 
@@ -32,7 +32,7 @@ grep::run(query, GrepRequest{ indexes, filter, output, separators, collect_stats
 
 ## Do NOT
 
-- Be aware of index internals — callers provide candidates.
+- Be aware of index internals. Callers provide candidates.
 - Break deterministic output ordering.
 - Bypass the matcher/searcher cache in `SearchQuery`.
-- Import from `crate::index::trigram` — use `SearchIndex` trait only.
+- Import from `crate::index::trigram`. Use `SearchIndex` trait only.

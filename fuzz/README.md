@@ -1,6 +1,6 @@
 # Fuzz
 
-LibFuzzer targets for `sift-core` — exercises `SearchQuery`, `search_index`, and `PatternCompiler`.
+LibFuzzer targets for `sift-core`. Exercises `SearchQuery`, `search_index`, and `PatternCompiler`.
 
 ## Setup
 
@@ -13,7 +13,7 @@ Requires **nightly** Rust (sanitizers). The `fuzz/rust-toolchain.toml` file hand
 ## Usage
 
 ```bash
-# From repo root (recommended — uses fuzz/rust-toolchain.toml)
+# From repo root (recommended, uses fuzz/rust-toolchain.toml)
 ./scripts/fuzz.sh build search_usage
 ./scripts/fuzz.sh run search_usage -- -max_total_time=30
 
@@ -28,7 +28,7 @@ cd fuzz && cargo fuzz run search_usage -- -max_total_time=30
 
 | Target | Description |
 |--------|-------------|
-| `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `SearchOptions` → `SearchQuery::new` → `search_index` |
+| `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `SearchOptions` into `SearchQuery::new` then `search_index` |
 | `compile_only` | Fuzzes `PatternCompiler` only (no filesystem) |
 
 ## Layout
