@@ -7,10 +7,10 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
+use crate::Candidate;
 use crate::search::emit::format::{ANSI_PATH, ANSI_RESET};
 use crate::search::emit::result::{ChunkOutput, FileResult};
 use crate::search::emit::stats::TextStatsCounters;
-use crate::search::filter::CandidateInfo;
 use crate::search::output::SearchOutput;
 use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::search::output::style::FilenameMode;
@@ -207,7 +207,7 @@ impl<'a> SummaryWorker<'a> {
 
     fn search_candidate(
         &mut self,
-        candidate: &CandidateInfo,
+        candidate: &Candidate,
         result_index: usize,
         stop: &AtomicBool,
     ) -> FileResult {
@@ -273,7 +273,7 @@ impl<'a> SummaryScan<'a> {
         }
     }
 
-    pub fn run(&self, candidates: &[CandidateInfo]) -> crate::Result<bool> {
+    pub fn run(&self, candidates: &[Candidate]) -> crate::Result<bool> {
         let stop = AtomicBool::new(false);
         let n = candidates.len();
         let mut files = Vec::with_capacity(n);
@@ -282,8 +282,7 @@ impl<'a> SummaryScan<'a> {
             .enumerate()
             .map_init(
                 || SummaryWorker::new(self),
-                |worker: &mut SummaryWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
+                |worker: &mut SummaryWorker<'_>, (result_index, candidate): (usize, &Candidate)| {
                     worker.search_candidate(candidate, result_index, &stop)
                 },
             )

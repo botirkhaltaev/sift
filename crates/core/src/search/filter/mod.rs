@@ -1,4 +1,3 @@
-pub mod candidate;
 pub mod config;
 pub mod error;
 pub mod ignore;
@@ -15,7 +14,6 @@ use crate::search::SearchError;
 use ::ignore::gitignore::Gitignore;
 use ::ignore::overrides::{Override, OverrideBuilder};
 
-pub use candidate::CandidateInfo;
 pub use config::{
     GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilterConfig, TypeDef,
     VisibilityConfig,
@@ -149,7 +147,18 @@ impl SearchFilter {
     }
 
     #[must_use]
-    pub fn is_candidate_info(&self, info: &CandidateInfo) -> bool {
+    pub fn is_candidate_info(&self, info: &crate::Candidate) -> bool {
+        if let Some(d) = self.max_depth {
+            if info.rel_path.components().count().saturating_sub(1) > d {
+                return false;
+            }
+        }
+        if self
+            .max_filesize
+            .is_some_and(|limit| std::fs::metadata(&info.abs_path).is_ok_and(|m| m.len() > limit))
+        {
+            return false;
+        }
         if !self.in_scope_info(info) {
             return false;
         }
@@ -177,7 +186,7 @@ impl SearchFilter {
         false
     }
 
-    fn in_scope_info(&self, info: &CandidateInfo) -> bool {
+    fn in_scope_info(&self, info: &crate::Candidate) -> bool {
         for scope in &self.scopes {
             if scope.as_os_str().is_empty() {
                 return true;
@@ -204,7 +213,7 @@ impl SearchFilter {
         true
     }
 
-    fn matches_file_info(&self, info: &CandidateInfo) -> bool {
+    fn matches_file_info(&self, info: &crate::Candidate) -> bool {
         if self.hidden == crate::search::filter::config::HiddenMode::Respect
             && Self::path_is_hidden(&info.rel_path)
         {
@@ -214,7 +223,7 @@ impl SearchFilter {
         if !self.needs_rel_str_for_matching() {
             return true;
         }
-        self.matches_file_str(Path::new(&info.rel_str))
+        self.matches_file_str(Path::new(info.rel_str()))
     }
 
     fn matches_file_str(&self, rel_path: &Path) -> bool {
@@ -334,11 +343,7 @@ mod tests {
         };
         let filter = make_filter(&config);
         let rel_path = Path::new("src/lib.rs");
-        let info = CandidateInfo {
-            rel_path: rel_path.to_path_buf(),
-            rel_str: "src/lib.rs".to_string(),
-            abs_path: PathBuf::from("/root/src/lib.rs"),
-        };
+        let info = crate::Candidate::new(rel_path.to_path_buf(), PathBuf::from("/root/src/lib.rs"));
         assert_eq!(
             filter.is_candidate(rel_path),
             filter.is_candidate_info(&info)

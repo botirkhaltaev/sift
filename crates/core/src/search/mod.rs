@@ -81,14 +81,12 @@ impl From<ExecutionError> for SearchError {
 pub use candidates::walk::discover_files;
 pub use emit::stats::SearchStats;
 pub use filter::{
-    CandidateInfo, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilter,
-    SearchFilterConfig, TypeDef, VisibilityConfig,
+    GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilter, SearchFilterConfig, TypeDef,
+    VisibilityConfig,
 };
 pub use options::{BinaryMode, CaseMode, SearchMatchFlags, SearchOptions};
 pub use output::format::{ColumnLimit, ColumnOverflow};
-pub use output::mode::{
-    CandidateSet, MatchEmissionMode, OutputEmission, SearchMode, ZeroCountMode,
-};
+pub use output::mode::{MatchEmissionMode, OutputEmission, SearchMode, ZeroCountMode};
 pub use output::passthru::PassthruMode;
 pub use output::style::{
     ColorChoice, FilenameMode, LineStyleFlags, PathDisplay, RecordTerminator, SearchLineStyle,

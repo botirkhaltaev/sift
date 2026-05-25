@@ -4,7 +4,7 @@ pub mod mode;
 pub mod passthru;
 pub mod style;
 
-use mode::{CandidateSet, OutputEmission, SearchMode, ZeroCountMode};
+use mode::{OutputEmission, SearchMode, ZeroCountMode};
 use passthru::PassthruMode;
 use style::{SearchLineStyle, SearchRecordStyle};
 
@@ -24,19 +24,6 @@ pub struct SearchOutput {
     pub records: SearchRecordStyle,
     pub passthru: PassthruMode,
     pub include_zero: ZeroCountMode,
-}
-
-impl SearchOutput {
-    #[must_use]
-    pub const fn candidate_set(self) -> CandidateSet {
-        match self.mode {
-            SearchMode::Count | SearchMode::FilesWithoutMatch => CandidateSet::AllIndexedFiles,
-            SearchMode::Standard
-            | SearchMode::OnlyMatching
-            | SearchMode::CountMatches
-            | SearchMode::FilesWithMatches => CandidateSet::IndexedCandidates,
-        }
-    }
 }
 
 impl Default for SearchOutput {

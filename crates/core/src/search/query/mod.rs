@@ -13,7 +13,7 @@ use grep_searcher::Searcher;
 use once_cell::sync::OnceCell;
 
 #[cfg(test)]
-use crate::index::SearchCandidate;
+use crate::candidate::Candidate;
 use crate::query::QueryFlags;
 use crate::query::QuerySpec;
 use crate::search::SearchError;
@@ -153,7 +153,7 @@ impl SearchQuery {
 
     fn run_text_output(
         &self,
-        candidates: &[crate::search::filter::CandidateInfo],
+        candidates: &[crate::Candidate],
         matcher: &RegexMatcher,
         output: crate::search::output::SearchOutput,
         separators: &crate::search::output::style::SearchSeparators,
@@ -241,7 +241,7 @@ impl SearchQuery {
     fn collect_index_candidate_paths(
         &self,
         filter: &SearchFilter,
-        candidates: &[SearchCandidate],
+        candidates: &[Candidate],
     ) -> crate::Result<Vec<crate::search::Match>> {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();

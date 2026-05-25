@@ -6,10 +6,10 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
+use crate::Candidate;
 use crate::search::emit::format::{ANSI_LINE, ANSI_PATH, ANSI_RESET};
 use crate::search::emit::result::{ChunkOutput, FileResult};
 use crate::search::emit::stats::TextStatsCounters;
-use crate::search::filter::CandidateInfo;
 use crate::search::output::SearchOutput;
 use crate::search::output::format::ColumnAction;
 use crate::search::output::mode::OutputEmission;
@@ -384,7 +384,7 @@ impl<'a> StandardWorker<'a> {
 
     fn search_candidate(
         &mut self,
-        candidate: &CandidateInfo,
+        candidate: &Candidate,
         result_index: usize,
         stop: &AtomicBool,
     ) -> FileResult {
@@ -492,7 +492,7 @@ impl<'a> StandardScan<'a> {
         }
     }
 
-    pub fn run(&self, candidates: &[CandidateInfo]) -> crate::Result<bool> {
+    pub fn run(&self, candidates: &[Candidate]) -> crate::Result<bool> {
         let stop = AtomicBool::new(false);
         let n = candidates.len();
         let mut files = Vec::with_capacity(n);
@@ -502,7 +502,7 @@ impl<'a> StandardScan<'a> {
             .map_init(
                 || StandardWorker::new(self),
                 |worker: &mut StandardWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
+                 (result_index, candidate): (usize, &Candidate)| {
                     worker.search_candidate(candidate, result_index, &stop)
                 },
             )

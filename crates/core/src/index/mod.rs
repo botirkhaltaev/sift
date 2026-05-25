@@ -51,13 +51,6 @@ pub enum IndexError {
     },
 }
 
-/// A candidate file returned by an index for searching.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchCandidate {
-    pub rel_path: PathBuf,
-    pub abs_path: PathBuf,
-}
-
 /// Registry of opened indexes for a single `.sift` directory.
 pub struct Indexes {
     inner: Vec<Box<dyn SearchIndex>>,
@@ -145,7 +138,7 @@ impl Indexes {
     /// Multiple conservative indexes together produce a narrower candidate
     /// set than any single index alone.
     #[must_use]
-    pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate> {
+    pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
         let mut iter = self.inner.iter();
         let Some(first) = iter.next() else {
             return Vec::new();
@@ -173,7 +166,7 @@ impl Indexes {
     /// Used for output modes that require scanning every file (e.g. `--count`,
     /// `--files-without-match`). Intersected by absolute path across all indexes.
     #[must_use]
-    pub fn resolve_all_files(&self) -> Vec<SearchCandidate> {
+    pub fn resolve_all_files(&self) -> Vec<crate::Candidate> {
         let mut iter = self.inner.iter();
         let Some(first) = iter.next() else {
             return Vec::new();
@@ -243,8 +236,8 @@ impl IndexId {
 pub trait SearchIndex: Sync + Send {
     fn root(&self) -> &Path;
     fn corpus_kind(&self) -> CorpusKind;
-    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<SearchCandidate>;
-    fn all_files(&self) -> Vec<SearchCandidate>;
+    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate>;
+    fn all_files(&self) -> Vec<crate::Candidate>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

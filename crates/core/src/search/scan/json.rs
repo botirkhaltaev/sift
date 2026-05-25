@@ -7,9 +7,9 @@ use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use rayon::prelude::*;
 
+use crate::Candidate;
 use crate::search::emit::result::{ChunkOutput, FileResult};
 use crate::search::emit::stats::SearchStats;
-use crate::search::filter::CandidateInfo;
 use crate::search::output::SearchOutput;
 use crate::search::output::mode::OutputEmission;
 use crate::search::query::SearchQuery;
@@ -45,7 +45,7 @@ impl<'a> JsonWorker<'a> {
 
     fn search_candidate(
         &mut self,
-        candidate: &CandidateInfo,
+        candidate: &Candidate,
         result_index: usize,
         stop: &AtomicBool,
     ) -> FileResult {
@@ -135,7 +135,7 @@ impl<'a> JsonScan<'a> {
 
     pub fn run(
         &self,
-        candidates: &[CandidateInfo],
+        candidates: &[Candidate],
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         let stop = AtomicBool::new(false);
@@ -146,8 +146,7 @@ impl<'a> JsonScan<'a> {
             .enumerate()
             .map_init(
                 || JsonWorker::new(self),
-                |worker: &mut JsonWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
+                |worker: &mut JsonWorker<'_>, (result_index, candidate): (usize, &Candidate)| {
                     worker.search_candidate(candidate, result_index, &stop)
                 },
             )

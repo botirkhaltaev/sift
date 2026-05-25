@@ -1,4 +1,4 @@
-use crate::search::filter::CandidateInfo;
+use crate::Candidate;
 use crate::search::output::SearchOutput;
 use crate::search::output::style::SearchSeparators;
 
@@ -29,7 +29,7 @@ impl Default for WalkOptions {
 
 #[derive(Clone)]
 pub struct SearchExecution<'a> {
-    pub candidates: Vec<CandidateInfo>,
+    pub candidates: Vec<Candidate>,
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
     pub collect_stats: bool,
