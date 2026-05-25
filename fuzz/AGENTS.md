@@ -1,17 +1,17 @@
-# AGENTS.md — fuzz/
+# AGENTS.md -- fuzz/
 
 ## Isolation
 
-Standalone package excluded from the root workspace (`Cargo.toml` `exclude = ["fuzz"]`). Use `./scripts/fuzz.sh` or `cd fuzz && cargo fuzz …` so `fuzz/rust-toolchain.toml` (nightly) applies.
+Standalone package excluded from the root workspace (`Cargo.toml` `exclude = ["fuzz"]`). Use `./scripts/fuzz.sh` or `cd fuzz && cargo fuzz ...` so `fuzz/rust-toolchain.toml` (nightly) applies.
 
 ## Targets
 
-- **`search_usage`** — shared tiny index per process (`OnceLock`); fuzzes pattern strings + `SearchOptions` against `SearchQuery` + `search_index`.
-- **`compile_only`** — fuzzes `PatternCompiler` only (no filesystem).
+- **`search_usage`**: shared tiny index per process (`OnceLock`); fuzzes pattern strings + `SearchOptions` against `SearchQuery` + `search_index`.
+- **`compile_only`**: fuzzes `PatternCompiler` only (no filesystem).
 
 ## Scope
 
-Fuzz targets cover **`sift-core` only** — not the CLI.
+Fuzz targets cover **`sift-core` only**, not the CLI.
 
 ## Do NOT
 

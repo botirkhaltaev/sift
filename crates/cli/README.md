@@ -1,6 +1,6 @@
 # sift-cli
 
-Grep-like CLI for indexed codebase search. Thin wrapper over `sift-core` — parses flags with clap, maps them to `SearchOptions`, and prints matches.
+Grep-like CLI for indexed codebase search. Thin wrapper over `sift-core`: parses flags with clap, maps them to `SearchOptions`, and prints matches.
 
 ## Usage
 

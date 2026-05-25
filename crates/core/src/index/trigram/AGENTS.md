@@ -1,12 +1,12 @@
-# index/trigram/
+# AGENTS.md -- index/trigram/
 
 Trigram index implementation: corpus walk, trigram extraction, index building, file table, and persistence storage.
 
 ## Key Types
 
-- `TrigramIndex` — memory-mapped handle over the trigram index files.
-- `TrigramIndexBuilder` — fluent builder for corpus indexing.
-- `MappedFilesView` — O(1) file ID → path lookup.
+- `TrigramIndex`: memory-mapped handle over the trigram index files.
+- `TrigramIndexBuilder`: fluent builder for corpus indexing.
+- `MappedFilesView`: O(1) file ID to path lookup.
 
 ## Conventions
 
