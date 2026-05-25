@@ -150,7 +150,7 @@ impl CandidateFilter {
     /// Check path-based rules only (scope, hidden, gitignore, glob, type).
     /// Depth and filesize are checked by [`crate::Candidate::matches`].
     #[must_use]
-    pub fn matches_candidate(&self, candidate: &crate::Candidate) -> bool {
+    pub(crate) fn matches_candidate(&self, candidate: &crate::Candidate) -> bool {
         if !self.in_scope(candidate.rel_path()) {
             return false;
         }

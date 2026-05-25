@@ -12,7 +12,7 @@ description: >-
 ## Scope
 
 - **Crate:** `crates/cli` (package `sift-cli`), binary **`sift`** (`src/main.rs`).
-- **Engine:** `sift-core` only — no regex/index logic in the CLI; map flags → `SearchOptions` / `SearchMatchFlags` → `SearchQuery::new` → `SearchQuery::run(SearchRequest)` or `discover_files`.
+- **Engine:** `sift-core` only — no regex/index logic in the CLI; map flags → `SearchOptions` / `SearchMatchFlags` → `SearchQuery::new` → `grep::run` or `discover_files`.
 
 ## Invariants
 

@@ -70,8 +70,9 @@ impl Candidate {
     /// Check filesize constraint against a filter's max filesize.
     #[must_use]
     pub fn within_filesize(&self, max_filesize: Option<u64>) -> bool {
-        max_filesize
-            .is_none_or(|limit| std::fs::metadata(&self.abs_path).is_ok_and(|m| m.len() <= limit))
+        max_filesize.is_none_or(|limit| {
+            std::fs::metadata(&self.abs_path).map_or(true, |m| m.len() <= limit)
+        })
     }
 
     /// Check all configured filter rules: depth, filesize, and path-based rules.
