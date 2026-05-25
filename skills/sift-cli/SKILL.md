@@ -12,11 +12,11 @@ description: >-
 ## Scope
 
 - **Crate:** `crates/cli` (package `sift-cli`), binary **`sift`** (`src/main.rs`).
-- **Engine:** `sift-core` only — no regex/index logic in the CLI; map flags → `SearchOptions` / `SearchMatchFlags` → `SearchQuery::new` → `grep::run` or `discover_files`.
+- **Engine:** `sift-core` only. No regex/index logic in the CLI; map flags to `SearchOptions` / `SearchMatchFlags` then to `SearchQuery::new`, `grep::run`, or `discover_files`.
 
 ## Invariants
 
-1. **Global options before `build`:** e.g. `sift --sift-dir .sift build [corpus]` — `--sift-dir` is global on `Cli`, not on the `build` subcommand.
+1. **Global options before `build`:** e.g. `sift --sift-dir .sift build [corpus]`. `--sift-dir` is global on `Cli`, not on the `build` subcommand.
 2. **Search paths** must resolve under the **indexed corpus root** (metadata in the index dir); see `corpus_path_prefixes` and related errors in `main.rs`.
 3. **Patterns:** Rust `regex` unless `-F`. Literal `build`: `sift -- build` or `-e build` (documented in clap `about`).
 
@@ -37,7 +37,7 @@ cargo test -p sift-cli
 cargo build --release -p sift-cli
 ```
 
-After core API changes, run **`cargo test --workspace --all-features`** — CLI depends on `sift-core`.
+After core API changes, run **`cargo test --workspace --all-features`** (CLI depends on `sift-core`).
 
 ## Docs in repo
 
@@ -48,4 +48,4 @@ After core API changes, run **`cargo test --workspace --all-features`** — CLI 
 
 - [ ] Thread through clap field → `SearchOptions` / `SearchMatchFlags` (or explicit branch) consistently with `sift-core`.
 - [ ] Update `--help` strings; add or extend the relevant CLI integration test if behavior is user-visible.
-- [ ] No duplicate regex/planner logic — keep it in **`sift-core`**.
+- [ ] No duplicate regex/planner logic. Keep it in **`sift-core`**.

@@ -1,13 +1,13 @@
-# index/trigram/storage/
+# AGENTS.md -- index/trigram/storage/
 
 Binary persistence format for the trigram index. Read/write `files.bin`, `lexicon.bin`, `postings.bin`, and `trigrams.bin` with zero-copy memory-mapped access.
 
 ## Key Types
 
-- `LexiconEntry` — trigram + postings offset + length.
-- `MappedLexicon` — memory-mapped lexicon with binary-search lookup.
-- `MappedPostings` — memory-mapped postings blob.
-- `MappedTrigramSets` — memory-mapped per-file trigram sets for incremental updates.
+- `LexiconEntry`: trigram + postings offset + length.
+- `MappedLexicon`: memory-mapped lexicon with binary-search lookup.
+- `MappedPostings`: memory-mapped postings blob.
+- `MappedTrigramSets`: memory-mapped per-file trigram sets for incremental updates.
 
 ## Conventions
 

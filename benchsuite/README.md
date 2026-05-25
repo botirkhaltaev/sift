@@ -29,7 +29,7 @@ python3 benchsuite/benchsuite --dir /tmp/benchsuite --raw /tmp/results.csv
 
 ## Indexing
 
-`sift` requires a per-corpus trigram index. The benchsuite builds each index once on first use and caches it for subsequent runs.
+`sift` requires a per-corpus index. The benchsuite builds each index once on first use and caches it for subsequent runs.
 
 ## Custom Binary
 

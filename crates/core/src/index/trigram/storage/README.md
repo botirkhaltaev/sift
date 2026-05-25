@@ -8,10 +8,10 @@ On-disk binary format for the trigram index tables. All access is zero-copy via 
 |------|-------------|
 | [`mod.rs`](mod.rs) | Module re-exports |
 | [`format.rs`](format.rs) | Magic bytes (`SIFTFIL1`, `SIFTLEX1`, `SIFTPST1`, `SIFTTRI1`) |
-| [`lexicon.rs`](lexicon.rs) | `LexiconEntry`, `MappedLexicon` — sorted trigram → postings slice descriptor |
-| [`postings.rs`](postings.rs) | `MappedPostings` — contiguous `u32` LE file-ID payloads |
-| [`trigram_sets.rs`](trigram_sets.rs) | `MappedTrigramSets` — per-file trigram sets for incremental updates |
-| [`mmap.rs`](mmap.rs) | `open_mmap` — minimal memory-map wrapper (contains the only `unsafe` in the crate) |
+| [`lexicon.rs`](lexicon.rs) | `LexiconEntry`, `MappedLexicon`: sorted trigram to postings slice descriptor |
+| [`postings.rs`](postings.rs) | `MappedPostings`: contiguous `u32` LE file-ID payloads |
+| [`trigram_sets.rs`](trigram_sets.rs) | `MappedTrigramSets`: per-file trigram sets for incremental updates |
+| [`mmap.rs`](mmap.rs) | `open_mmap`: minimal memory-map wrapper (contains the only `unsafe` in the crate) |
 
 ## Format Overview
 

@@ -1,14 +1,13 @@
-# index/trigram/
+# AGENTS.md -- index/trigram/
 
 Trigram index implementation: corpus walk, trigram extraction, index building, file table, and persistence storage.
 
 ## Key Types
 
-- `TrigramIndex` — memory-mapped handle over the trigram index files (files, lexicon, postings, trigram sets).
-- `TrigramIndexBuilder` — fluent builder for standalone corpus indexing.
-- `IndexTableBuilder` — incremental table builder; reuses cached trigrams for unchanged files.
-- `MappedFilesView` — O(1) file ID → path + fingerprint lookup.
-- `FileFingerprint` — per-file change detection data (path, mtime, size).
+- `TrigramIndex`: memory-mapped handle over the trigram index files (files, lexicon, postings, trigram sets).
+- `IndexTableBuilder`: incremental table builder; reuses cached trigrams for unchanged files.
+- `MappedFilesView`: O(1) file ID to path + fingerprint lookup.
+- `FileFingerprint`: per-file change detection data (path, mtime, size).
 
 ## Conventions
 

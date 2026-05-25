@@ -7,8 +7,8 @@ Trigram index construction and in-memory index handle. Walks the corpus, extract
 | File | Description |
 |------|-------------|
 | [`mod.rs`](mod.rs) | `TrigramIndex` struct, posting list intersection, `Index` impl |
-| [`builder.rs`](builder.rs) | `TrigramIndexBuilder`, `IndexTableBuilder` — corpus walk, trigram extraction, incremental table construction |
-| [`file_table.rs`](file_table.rs) | `MappedFilesView`, `FileFingerprint` — file ID → relative path + fingerprint mapping |
+| [`builder.rs`](builder.rs) | `IndexTableBuilder`: corpus walk, trigram extraction, incremental table construction |
+| [`file_table.rs`](file_table.rs) | `MappedFilesView`, `FileFingerprint`: file ID to relative path + fingerprint mapping |
 | [`storage/`](storage/) | Binary persistence format (lexicon, postings, trigram sets, mmap, format constants) |
 
 ## API
