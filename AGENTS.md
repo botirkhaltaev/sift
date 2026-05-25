@@ -53,7 +53,7 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`TrigramIndexBuilder::build` → `Indexes::open` → `CompiledSearch::new` → `run_indexes` / `run_walk`. See `crates/core/README.md`.
+`TrigramIndexBuilder::build` → `Indexes::open` → `SearchQuery::new` → `SearchQuery::run(SearchRequest)`. See `crates/core/README.md`.
 
 ## Function Evolution
 

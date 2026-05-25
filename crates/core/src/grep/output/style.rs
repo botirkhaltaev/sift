@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use crate::grep::output::format::ColumnLimit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -86,6 +88,26 @@ pub struct SearchRecordStyle {
     pub terminator: RecordTerminator,
     pub color: ColorChoice,
     pub path_separator: Option<u8>,
+}
+
+impl SearchRecordStyle {
+    #[must_use]
+    pub fn should_color(&self) -> bool {
+        match self.color {
+            ColorChoice::Never => false,
+            ColorChoice::Always => true,
+            ColorChoice::Auto => std::io::stdout().is_terminal(),
+        }
+    }
+}
+
+impl RecordTerminator {
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Nul => out.push(0),
+            Self::Newline => out.push(b'\n'),
+        }
+    }
 }
 
 impl Default for SearchRecordStyle {

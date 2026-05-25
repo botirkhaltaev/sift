@@ -1,20 +1,21 @@
 //! Indexed search execution built on the public grep crates.
 
-mod compile;
-mod execution;
+mod candidates;
+mod emit;
 mod filter;
-mod matcher;
 mod options;
 mod output;
-mod search;
+mod pattern;
+mod query;
+mod request;
+mod scan;
 
 use thiserror::Error;
 
-use compile::error::CompileError;
-use execution::error::ExecutionError;
+use emit::error::ExecutionError;
 use filter::error::FilterError;
-use matcher::error::MatcherError;
 use output::error::OutputError;
+use pattern::error::CompileError;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -48,14 +49,6 @@ impl From<CompileError> for SearchError {
     }
 }
 
-impl From<MatcherError> for SearchError {
-    fn from(e: MatcherError) -> Self {
-        match e {
-            MatcherError::RegexBuild(s) => Self::RegexBuild(s),
-        }
-    }
-}
-
 impl From<FilterError> for SearchError {
     fn from(e: FilterError) -> Self {
         match e {
@@ -85,10 +78,8 @@ impl From<ExecutionError> for SearchError {
     }
 }
 
-pub use compile::PatternCompiler;
-pub use execution::config::{LinkTraversal, SearchExecution, WalkOptions};
-pub use execution::discover_files;
-pub use execution::stats::SearchStats;
+pub use candidates::walk::discover_files;
+pub use emit::stats::SearchStats;
 pub use filter::{
     CandidateInfo, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilter,
     SearchFilterConfig, TypeDef, VisibilityConfig,
@@ -104,4 +95,13 @@ pub use output::style::{
     SearchRecordStyle, SearchSeparators,
 };
 pub use output::{SearchOutput, SearchOutputFormat};
-pub use search::{CompiledSearch, Match};
+pub use pattern::PatternCompiler;
+pub use query::Match;
+pub use query::SearchQuery;
+pub use request::{LinkTraversal, SearchRequest, WalkOptions};
+
+#[derive(Debug)]
+pub struct SearchOutcome {
+    pub matched: bool,
+    pub stats: Option<SearchStats>,
+}

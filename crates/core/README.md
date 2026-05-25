@@ -11,13 +11,13 @@ Indexed grep-style search engine. Build a trigram index on disk, then run regex 
 | [`index/`](src/index/) | `SearchIndex` trait, `Indexes` registry, shared types (`FileId`, `IndexId`, `IndexMeta`) |
 | [`index/trigram/`](src/index/trigram/) | Trigram index: build, load, search, and persistence |
 | [`index/trigram/storage/`](src/index/trigram/storage/) | Binary persistence format (lexicon, postings, file tables) |
-| [`grep/`](src/grep/) | `CompiledSearch`, pattern compilation, parallel file scanning, filtering, output formatting |
+| [`grep/`](src/grep/) | `SearchQuery`, pattern compilation, parallel file scanning, filtering, output formatting |
 | [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
 
 ## API
 
 ```rust
-use sift_core::{TrigramIndexBuilder, TrigramIndex, CompiledSearch, SearchOptions};
+use sift_core::{SearchOptions, SearchQuery, TrigramIndex, TrigramIndexBuilder};
 
 // Build
 let index = TrigramIndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?;
@@ -26,11 +26,11 @@ let index = TrigramIndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?
 let index = TrigramIndex::open(&index_dir)?;
 
 // Search
-let search = CompiledSearch::new(&patterns, SearchOptions::default())?;
+let search = SearchQuery::new(&patterns, SearchOptions::default())?;
 let hits = search.collect_index_matches(&index)?;
 ```
 
-`CompiledSearch` compiles the regex once; repeated `run_index` / `collect_index_matches` calls reuse the compiled matcher and searcher cache.
+`SearchQuery` compiles the regex once; repeated `run` / `collect_index_matches` calls reuse the compiled matcher and searcher cache.
 
 ## Features
 

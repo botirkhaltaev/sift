@@ -7,16 +7,14 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::execution::format::{
-    ANSI_PATH, ANSI_RESET, display_path_for_candidate, should_color, write_line_terminator,
-};
-use crate::grep::execution::standard::{ChunkOutput, FileResult, flush_chunk_output};
-use crate::grep::execution::stats::StatsCollection;
+use crate::grep::emit::format::{ANSI_PATH, ANSI_RESET};
+use crate::grep::emit::result::{ChunkOutput, FileResult};
+use crate::grep::emit::stats::TextStatsCounters;
 use crate::grep::filter::CandidateInfo;
 use crate::grep::output::SearchOutput;
 use crate::grep::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::grep::output::style::FilenameMode;
-use crate::grep::search::CompiledSearch;
+use crate::grep::query::SearchQuery;
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -24,22 +22,34 @@ pub struct FileSummary {
     pub count: usize,
 }
 
-#[inline]
-pub const fn summary_file_had_positive_hit(mode: SearchMode, r: FileSummary) -> bool {
-    match mode {
-        SearchMode::Count | SearchMode::CountMatches => r.count > 0,
-        SearchMode::FilesWithMatches => r.matched,
-        SearchMode::FilesWithoutMatch | SearchMode::Standard | SearchMode::OnlyMatching => false,
+impl FileSummary {
+    pub fn tally(&self, mode: SearchMode) -> usize {
+        match mode {
+            SearchMode::Count | SearchMode::CountMatches => self.count,
+            SearchMode::FilesWithMatches => usize::from(self.matched),
+            SearchMode::FilesWithoutMatch => usize::from(!self.matched),
+            SearchMode::Standard | SearchMode::OnlyMatching => 0,
+        }
     }
-}
 
-#[inline]
-pub fn summary_matches_tally(mode: SearchMode, result: FileSummary) -> usize {
-    match mode {
-        SearchMode::Count | SearchMode::CountMatches => result.count,
-        SearchMode::FilesWithMatches => usize::from(result.matched),
-        SearchMode::FilesWithoutMatch => usize::from(!result.matched),
-        SearchMode::Standard | SearchMode::OnlyMatching => 0,
+    pub const fn is_success(&self, mode: SearchMode) -> bool {
+        match mode {
+            SearchMode::Count | SearchMode::CountMatches => self.count > 0,
+            SearchMode::FilesWithMatches | SearchMode::Standard | SearchMode::OnlyMatching => {
+                self.matched
+            }
+            SearchMode::FilesWithoutMatch => !self.matched,
+        }
+    }
+
+    pub const fn had_positive_hit(&self, mode: SearchMode) -> bool {
+        match mode {
+            SearchMode::Count | SearchMode::CountMatches => self.count > 0,
+            SearchMode::FilesWithMatches => self.matched,
+            SearchMode::FilesWithoutMatch | SearchMode::Standard | SearchMode::OnlyMatching => {
+                false
+            }
+        }
     }
 }
 
@@ -93,7 +103,7 @@ impl Sink for SummarySink {
     }
 }
 
-pub fn summary_search_file(
+fn summary_search_file(
     searcher: &mut Searcher,
     matcher: &RegexMatcher,
     mode: SearchMode,
@@ -109,17 +119,7 @@ pub fn summary_search_file(
     sink.finish()
 }
 
-pub const fn mode_is_success(mode: SearchMode, result: FileSummary) -> bool {
-    match mode {
-        SearchMode::Count | SearchMode::CountMatches => result.count > 0,
-        SearchMode::FilesWithMatches | SearchMode::Standard | SearchMode::OnlyMatching => {
-            result.matched
-        }
-        SearchMode::FilesWithoutMatch => !result.matched,
-    }
-}
-
-pub fn write_summary_record(
+fn write_summary_record(
     out: &mut Vec<u8>,
     output: SearchOutput,
     display_path: &str,
@@ -128,6 +128,7 @@ pub fn write_summary_record(
     if output.emission == OutputEmission::Quiet {
         return Ok(());
     }
+    let records = output.records;
     match output.mode {
         SearchMode::Count | SearchMode::CountMatches => {
             if result.count == 0 && matches!(output.include_zero, ZeroCountMode::Omit) {
@@ -135,11 +136,11 @@ pub fn write_summary_record(
             }
             let print_filename = output.lines.filename_mode != FilenameMode::Never;
             if print_filename {
-                if should_color(output.records) {
+                if records.should_color() {
                     out.extend_from_slice(ANSI_PATH);
                 }
                 write!(out, "{display_path}")?;
-                if should_color(output.records) {
+                if records.should_color() {
                     out.extend_from_slice(ANSI_RESET);
                 }
                 writeln!(out, ":{}", result.count)?;
@@ -150,14 +151,14 @@ pub fn write_summary_record(
         }
         SearchMode::FilesWithMatches => {
             if result.matched {
-                if should_color(output.records) {
+                if records.should_color() {
                     out.extend_from_slice(ANSI_PATH);
                 }
                 write!(out, "{display_path}")?;
-                if should_color(output.records) {
+                if records.should_color() {
                     out.extend_from_slice(ANSI_RESET);
                 }
-                write_line_terminator(out, output.records.terminator);
+                records.terminator.write_to(out);
             }
             Ok(())
         }
@@ -165,55 +166,49 @@ pub fn write_summary_record(
             if result.matched {
                 return Ok(());
             }
-            if should_color(output.records) {
+            if records.should_color() {
                 out.extend_from_slice(ANSI_PATH);
             }
             write!(out, "{display_path}")?;
-            if should_color(output.records) {
+            if records.should_color() {
                 out.extend_from_slice(ANSI_RESET);
             }
-            write_line_terminator(out, output.records.terminator);
+            records.terminator.write_to(out);
             Ok(())
         }
         SearchMode::Standard | SearchMode::OnlyMatching => unreachable!(),
     }
 }
 
-pub struct SummaryWorker<'a> {
+struct SummaryWorker<'a> {
     matcher: &'a RegexMatcher,
     searcher: Searcher,
-    mode: SearchMode,
+    output: SearchOutput,
     summary_counter: Option<&'a AtomicUsize>,
     files_with_matches: Option<&'a AtomicUsize>,
 }
 
 impl<'a> SummaryWorker<'a> {
-    pub fn new(
-        search: &CompiledSearch,
-        matcher: &'a RegexMatcher,
-        max_results: Option<usize>,
-        mode: SearchMode,
-        summary_counter: Option<&'a AtomicUsize>,
-        files_with_matches: Option<&'a AtomicUsize>,
-    ) -> Self {
+    fn new(scan: &'a SummaryScan<'a>) -> Self {
         Self {
-            searcher: search.build_searcher(false, max_results, false),
-            matcher,
-            mode,
-            summary_counter,
-            files_with_matches,
+            searcher: scan
+                .search
+                .build_searcher(false, scan.search.opts.max_results, false),
+            matcher: scan.matcher,
+            output: scan.output,
+            summary_counter: scan.counters.primary(),
+            files_with_matches: scan.counters.files_with_matches(),
         }
     }
 
-    pub fn search_file(&mut self, path: &Path) -> FileSummary {
-        summary_search_file(&mut self.searcher, self.matcher, self.mode, path)
+    fn search_file(&mut self, path: &Path) -> FileSummary {
+        summary_search_file(&mut self.searcher, self.matcher, self.output.mode, path)
     }
 
-    pub fn search_candidate(
+    fn search_candidate(
         &mut self,
         candidate: &CandidateInfo,
         result_index: usize,
-        output: SearchOutput,
         stop: &AtomicBool,
     ) -> FileResult {
         if stop.load(Ordering::SeqCst) {
@@ -226,22 +221,21 @@ impl<'a> SummaryWorker<'a> {
 
         let result = self.search_file(&candidate.abs_path);
         if let Some(c) = self.summary_counter {
-            c.fetch_add(summary_matches_tally(self.mode, result), Ordering::Relaxed);
+            c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
         }
         if let Some(c) = self.files_with_matches
-            && summary_file_had_positive_hit(self.mode, result)
+            && result.had_positive_hit(self.output.mode)
         {
             c.fetch_add(1, Ordering::Relaxed);
         }
-        let matched = mode_is_success(output.mode, result);
+        let matched = result.is_success(self.output.mode);
         let mut bytes = Vec::new();
-        let display = display_path_for_candidate(
-            candidate,
-            output.lines.path_display,
-            output.records.path_separator,
+        let display = candidate.display_path(
+            self.output.lines.path_display,
+            self.output.records.path_separator,
         );
-        let _ = write_summary_record(&mut bytes, output, &display, result);
-        if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result) {
+        let _ = write_summary_record(&mut bytes, self.output, &display, result);
+        if self.output.emission == OutputEmission::Quiet && result.is_success(self.output.mode) {
             stop.store(true, Ordering::SeqCst);
         }
 
@@ -257,38 +251,47 @@ impl<'a> SummaryWorker<'a> {
     }
 }
 
-pub fn run_summary_with_info(
-    search: &CompiledSearch,
-    candidates: &[CandidateInfo],
-    matcher: &RegexMatcher,
+pub struct SummaryScan<'a> {
+    search: &'a SearchQuery,
+    matcher: &'a RegexMatcher,
     output: SearchOutput,
-    stats: StatsCollection<'_>,
-) -> crate::Result<bool> {
-    let stop = AtomicBool::new(false);
-    let n = candidates.len();
-    let mut files = Vec::with_capacity(n);
-    candidates
-        .par_iter()
-        .enumerate()
-        .map_init(
-            || {
-                SummaryWorker::new(
-                    search,
-                    matcher,
-                    search.opts.max_results,
-                    output.mode,
-                    stats.primary,
-                    stats.files_with_matches,
-                )
-            },
-            |worker: &mut SummaryWorker<'_>, (result_index, candidate): (usize, &CandidateInfo)| {
-                worker.search_candidate(candidate, result_index, output, &stop)
-            },
+    counters: &'a TextStatsCounters,
+}
+
+impl<'a> SummaryScan<'a> {
+    pub const fn new(
+        search: &'a SearchQuery,
+        matcher: &'a RegexMatcher,
+        output: SearchOutput,
+        counters: &'a TextStatsCounters,
+    ) -> Self {
+        Self {
+            search,
+            matcher,
+            output,
+            counters,
+        }
+    }
+
+    pub fn run(&self, candidates: &[CandidateInfo]) -> crate::Result<bool> {
+        let stop = AtomicBool::new(false);
+        let n = candidates.len();
+        let mut files = Vec::with_capacity(n);
+        candidates
+            .par_iter()
+            .enumerate()
+            .map_init(
+                || SummaryWorker::new(self),
+                |worker: &mut SummaryWorker<'_>,
+                 (result_index, candidate): (usize, &CandidateInfo)| {
+                    worker.search_candidate(candidate, result_index, &stop)
+                },
+            )
+            .collect_into_vec(&mut files);
+        files.sort_by_key(|file| file.index);
+        ChunkOutput::flush_all(
+            files.into_iter().map(|file| file.output),
+            self.counters.bytes_printed(),
         )
-        .collect_into_vec(&mut files);
-    files.sort_by_key(|file| file.index);
-    flush_chunk_output(
-        files.into_iter().map(|file| file.output),
-        stats.bytes_printed,
-    )
+    }
 }

@@ -4,7 +4,7 @@ Grep-style search execution: pattern compilation, file scanning, filtering, outp
 
 ## Key Types
 
-- `CompiledSearch` — compiled regex + options + cached matcher/searcher. Reuse across queries.
+- `SearchQuery` — compiled regex + options + cached matcher/searcher. Reuse across queries.
 - `SearchOptions` — flags, case mode, max results, context lines.
 - `SearchFilter` — search-time filtering (globs, hidden files, ignore rules, path scoping).
 - `SearchMode` — output mode enum (standard, count, files-with-matches, etc.).
@@ -22,9 +22,9 @@ Grep-style search execution: pattern compilation, file scanning, filtering, outp
 ## Search Flow
 
 ```text
-CompiledSearch::run_indexes(&Indexes, SearchExecution { filter, output, separators, stats })
+SearchQuery::run(SearchRequest { indexes, filter, output, separators, collect_stats })
   -> build QuerySpec
-  -> decide: full scan vs indexed (QueryPlanner + output mode)
+  -> choose candidates from indexes or walk path
   -> prepare candidates (resolve paths, apply filter)
   -> scan with regex engine
   -> emit output
@@ -34,5 +34,5 @@ CompiledSearch::run_indexes(&Indexes, SearchExecution { filter, output, separato
 
 - Apply filtering logic at index build time.
 - Break deterministic output ordering.
-- Bypass the matcher/searcher cache in `CompiledSearch`.
+- Bypass the matcher/searcher cache in `SearchQuery`.
 - Import from `crate::index::trigram` — use `SearchIndex` trait only.

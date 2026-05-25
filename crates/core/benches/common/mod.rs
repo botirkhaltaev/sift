@@ -11,11 +11,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    ColorChoice, CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    LineStyleFlags, OutputEmission, PassthruMode, PathDisplay, RecordTerminator, SearchFilter,
-    SearchFilterConfig, SearchLineStyle, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder,
-    VisibilityConfig, ZeroCountMode,
+    ColorChoice, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags,
+    OutputEmission, PassthruMode, PathDisplay, RecordTerminator, SearchFilter, SearchFilterConfig,
+    SearchLineStyle, SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchQuery,
+    SearchRecordStyle, SearchSeparators, TrigramIndex, TrigramIndexBuilder, VisibilityConfig,
+    ZeroCountMode,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -306,9 +306,9 @@ pub fn default_seps() -> SearchSeparators {
 
 // ─── Search helpers ─────────────────────────────────────────────────────────
 
-pub fn make_search(patterns: &[&str], opts: SearchOptions) -> CompiledSearch {
+pub fn make_search(patterns: &[&str], opts: SearchOptions) -> SearchQuery {
     let pats: Vec<String> = patterns.iter().map(ToString::to_string).collect();
-    CompiledSearch::new(&pats, opts).unwrap()
+    SearchQuery::new(&pats, opts).unwrap()
 }
 
 pub fn make_filter(config: &SearchFilterConfig, root: &Path) -> SearchFilter {
