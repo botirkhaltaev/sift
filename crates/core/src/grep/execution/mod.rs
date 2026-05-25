@@ -13,7 +13,6 @@ use grep_regex::RegexMatcher;
 use crate::index::Indexes;
 #[cfg(test)]
 use crate::index::SearchCandidate;
-use crate::parallel::{ParallelWorkload, parallel_threshold};
 use crate::query::{QueryFlags, QuerySpec};
 
 pub mod candidate;
@@ -90,13 +89,12 @@ impl CompiledSearch {
 
         let spec = self.build_query_spec();
 
-        let threshold = parallel_threshold(ParallelWorkload::CandidateScan);
         let candidates = match exec.output.candidate_set() {
             CandidateSet::AllIndexedFiles => {
-                prepare_candidates(indexes.resolve_all_files(), filter, threshold)
+                prepare_candidates(indexes.resolve_all_files(), filter)
             }
             CandidateSet::IndexedCandidates => {
-                prepare_candidates(indexes.resolve_candidates(&spec), filter, threshold)
+                prepare_candidates(indexes.resolve_candidates(&spec), filter)
             }
         };
         if candidates.is_empty() {
@@ -108,7 +106,6 @@ impl CompiledSearch {
 
         let search_start = Instant::now();
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
-        let parallel = candidates.len() >= threshold;
 
         if matches!(exec.output.format, SearchOutputFormat::Json) {
             return match exec.output.mode {
@@ -117,7 +114,6 @@ impl CompiledSearch {
                     &candidates,
                     matcher,
                     exec.output,
-                    parallel,
                     search_start,
                     exec.stats,
                 ),
@@ -125,7 +121,7 @@ impl CompiledSearch {
             };
         }
 
-        self.run_candidate_search(&candidates, matcher, exec, parallel, search_start)
+        self.run_candidate_search(&candidates, matcher, exec, search_start)
     }
 
     fn run_candidate_search(
@@ -133,7 +129,6 @@ impl CompiledSearch {
         candidates: &[CandidateInfo],
         matcher: &RegexMatcher,
         exec: SearchExecution<'_>,
-        parallel: bool,
         search_start: Instant,
     ) -> crate::Result<bool> {
         let SearchExecution {
@@ -158,7 +153,6 @@ impl CompiledSearch {
                 matcher,
                 output,
                 separators,
-                parallel,
                 StatsCollection {
                     primary: counter_ref,
                     files_with_matches: files_with_ref,
@@ -173,7 +167,6 @@ impl CompiledSearch {
                 candidates,
                 matcher,
                 output,
-                parallel,
                 StatsCollection {
                     primary: summary_ref,
                     files_with_matches: files_with_ref,
@@ -221,8 +214,7 @@ impl CompiledSearch {
             return Ok(false);
         }
 
-        let threshold = parallel_threshold(ParallelWorkload::CandidateScan);
-        let candidates = prepare_walk_candidates(&abs_paths, exec.filter, threshold);
+        let candidates = prepare_walk_candidates(&abs_paths, exec.filter);
         if candidates.is_empty() {
             if let Some(s) = exec.stats.as_mut() {
                 **s = SearchStats::default();
@@ -232,7 +224,6 @@ impl CompiledSearch {
 
         let search_start = Instant::now();
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
-        let parallel = candidates.len() >= threshold;
 
         if matches!(exec.output.format, SearchOutputFormat::Json) {
             return match exec.output.mode {
@@ -241,7 +232,6 @@ impl CompiledSearch {
                     &candidates,
                     matcher,
                     exec.output,
-                    parallel,
                     search_start,
                     exec.stats,
                 ),
@@ -249,7 +239,7 @@ impl CompiledSearch {
             };
         }
 
-        self.run_candidate_search(&candidates, matcher, exec, parallel, search_start)
+        self.run_candidate_search(&candidates, matcher, exec, search_start)
     }
 
     #[cfg(test)]
@@ -312,24 +302,23 @@ impl CompiledSearch {
         use crate::grep::output::mode::MatchEmissionMode;
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
-        self.with_cached_searcher(true, None, |searcher| {
-            for candidate in candidates {
-                if !filter.is_candidate(&candidate.rel_path) {
-                    continue;
-                }
-                let mut sink = CollectSink::new(
-                    candidate.abs_path.clone(),
-                    if self.opts.only_matching() {
-                        MatchEmissionMode::OnlyMatching
-                    } else {
-                        MatchEmissionMode::Lines
-                    },
-                    matcher.clone(),
-                );
-                let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
-                out.extend(sink.into_matches());
+        let mut searcher = self.build_searcher(true, None, true);
+        for candidate in candidates {
+            if !filter.is_candidate(&candidate.rel_path) {
+                continue;
             }
-        });
+            let mut sink = CollectSink::new(
+                candidate.abs_path.clone(),
+                if self.opts.only_matching() {
+                    MatchEmissionMode::OnlyMatching
+                } else {
+                    MatchEmissionMode::Lines
+                },
+                matcher.clone(),
+            );
+            let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
+            out.extend(sink.into_matches());
+        }
         Ok(out)
     }
 
@@ -341,21 +330,20 @@ impl CompiledSearch {
         use crate::grep::output::mode::MatchEmissionMode;
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
-        self.with_cached_searcher(true, None, |searcher| {
-            for candidate in candidates {
-                let mut sink = CollectSink::new(
-                    candidate.clone(),
-                    if self.opts.only_matching() {
-                        MatchEmissionMode::OnlyMatching
-                    } else {
-                        MatchEmissionMode::Lines
-                    },
-                    matcher.clone(),
-                );
-                let _ = searcher.search_path(matcher, candidate, &mut sink);
-                out.extend(sink.into_matches());
-            }
-        });
+        let mut searcher = self.build_searcher(true, None, true);
+        for candidate in candidates {
+            let mut sink = CollectSink::new(
+                candidate.clone(),
+                if self.opts.only_matching() {
+                    MatchEmissionMode::OnlyMatching
+                } else {
+                    MatchEmissionMode::Lines
+                },
+                matcher.clone(),
+            );
+            let _ = searcher.search_path(matcher, candidate, &mut sink);
+            out.extend(sink.into_matches());
+        }
         Ok(out)
     }
 }

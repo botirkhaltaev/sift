@@ -4,7 +4,6 @@
 
 mod grep;
 mod index;
-pub(crate) mod parallel;
 pub(crate) mod query;
 
 pub use grep::{

@@ -262,85 +262,33 @@ pub fn run_summary_with_info(
     candidates: &[CandidateInfo],
     matcher: &RegexMatcher,
     output: SearchOutput,
-    parallel: bool,
     stats: StatsCollection<'_>,
 ) -> crate::Result<bool> {
-    if parallel {
-        let stop = AtomicBool::new(false);
-        let n = candidates.len();
-        let mut files = Vec::with_capacity(n);
-        candidates
-            .par_iter()
-            .enumerate()
-            .map_init(
-                || {
-                    SummaryWorker::new(
-                        search,
-                        matcher,
-                        search.opts.max_results,
-                        output.mode,
-                        stats.primary,
-                        stats.files_with_matches,
-                    )
-                },
-                |worker: &mut SummaryWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
-                    worker.search_candidate(candidate, result_index, output, &stop)
-                },
-            )
-            .collect_into_vec(&mut files);
-        files.sort_by_key(|file| file.index);
-        return flush_chunk_output(
-            files.into_iter().map(|file| file.output),
-            stats.bytes_printed,
-        );
-    }
-
-    run_summary_capped_with_info(search, candidates, matcher, output, stats)
-}
-
-pub fn run_summary_capped_with_info(
-    search: &CompiledSearch,
-    candidates: &[CandidateInfo],
-    matcher: &RegexMatcher,
-    output: SearchOutput,
-    stats: StatsCollection<'_>,
-) -> crate::Result<bool> {
-    search.with_cached_searcher(false, search.opts.max_results, |searcher| {
-        let mut any_match = false;
-        let mut out = Vec::new();
-        for candidate in candidates {
-            let result = summary_search_file(searcher, matcher, output.mode, &candidate.abs_path);
-            if let Some(c) = stats.primary {
-                c.fetch_add(
-                    summary_matches_tally(output.mode, result),
-                    Ordering::Relaxed,
-                );
-            }
-            if let Some(c) = stats.files_with_matches
-                && summary_file_had_positive_hit(output.mode, result)
-            {
-                c.fetch_add(1, Ordering::Relaxed);
-            }
-            any_match |= mode_is_success(output.mode, result);
-            let display = display_path_for_candidate(
-                candidate,
-                output.lines.path_display,
-                output.records.path_separator,
-            );
-            write_summary_record(&mut out, output, &display, result)?;
-            if output.emission == OutputEmission::Quiet && mode_is_success(output.mode, result) {
-                break;
-            }
-        }
-
-        flush_chunk_output(
-            std::iter::once(ChunkOutput {
-                bytes: out,
-                matched: any_match,
-                heading: false,
-            }),
-            stats.bytes_printed,
+    let stop = AtomicBool::new(false);
+    let n = candidates.len();
+    let mut files = Vec::with_capacity(n);
+    candidates
+        .par_iter()
+        .enumerate()
+        .map_init(
+            || {
+                SummaryWorker::new(
+                    search,
+                    matcher,
+                    search.opts.max_results,
+                    output.mode,
+                    stats.primary,
+                    stats.files_with_matches,
+                )
+            },
+            |worker: &mut SummaryWorker<'_>, (result_index, candidate): (usize, &CandidateInfo)| {
+                worker.search_candidate(candidate, result_index, output, &stop)
+            },
         )
-    })
+        .collect_into_vec(&mut files);
+    files.sort_by_key(|file| file.index);
+    flush_chunk_output(
+        files.into_iter().map(|file| file.output),
+        stats.bytes_printed,
+    )
 }
