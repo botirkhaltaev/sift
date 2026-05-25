@@ -98,38 +98,6 @@ impl CompiledSearch {
         }
         builder.build()
     }
-
-    pub(crate) fn with_cached_searcher<R>(
-        &self,
-        line_number: bool,
-        max_matches: Option<usize>,
-        f: impl FnOnce(&mut Searcher) -> R,
-    ) -> R {
-        let key = (
-            line_number,
-            max_matches,
-            self.opts.before_context,
-            self.opts.after_context,
-        );
-        let mut inner = {
-            let mut guard = self
-                .searcher_cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let need_new = guard.as_ref().is_none_or(|(k, _)| *k != key);
-            if need_new {
-                *guard = Some((key, self.build_searcher(line_number, max_matches, true)));
-            }
-            guard.take().expect("searcher_cache populated above")
-        };
-        let out = f(&mut inner.1);
-        let mut guard = self
-            .searcher_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(inner);
-        out
-    }
 }
 
 #[cfg(test)]
@@ -164,9 +132,8 @@ mod tests {
     fn search_content(search: &CompiledSearch, content: &[u8]) -> Vec<String> {
         let matcher = search.build_matcher().expect("build matcher");
         let mut sink = CollectStringSink { hits: Vec::new() };
-        search.with_cached_searcher(true, None, |searcher| {
-            let _ = searcher.search_slice(&matcher, content, &mut sink);
-        });
+        let mut searcher = search.build_searcher(true, None, true);
+        let _ = searcher.search_slice(&matcher, content, &mut sink);
         sink.hits
     }
 

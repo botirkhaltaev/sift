@@ -506,127 +506,35 @@ pub fn run_standard_with_info(
     matcher: &RegexMatcher,
     output: SearchOutput,
     separators: &SearchSeparators,
-    parallel: bool,
     stats: StatsCollection<'_>,
 ) -> crate::Result<bool> {
-    if parallel {
-        let stop = AtomicBool::new(false);
-        let n = candidates.len();
-        let mut files = Vec::with_capacity(n);
-        candidates
-            .par_iter()
-            .enumerate()
-            .map_init(
-                || {
-                    StandardWorker::new(
-                        search,
-                        matcher,
-                        output,
-                        separators,
-                        stats.primary,
-                        stats.files_with_matches,
-                    )
-                },
-                |worker: &mut StandardWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
-                    worker.search_candidate(candidate, result_index, &stop)
-                },
-            )
-            .collect_into_vec(&mut files);
-        files.sort_by_key(|file| file.index);
-        return flush_chunk_output(
-            files.into_iter().map(|file| file.output),
-            stats.bytes_printed,
-        );
-    }
-
-    run_standard_capped_with_info(search, candidates, matcher, output, separators, stats)
-}
-
-pub fn run_standard_capped_with_info(
-    search: &CompiledSearch,
-    candidates: &[CandidateInfo],
-    matcher: &RegexMatcher,
-    output: SearchOutput,
-    separators: &SearchSeparators,
-    stats: StatsCollection<'_>,
-) -> crate::Result<bool> {
-    search.with_cached_searcher(
-        output.lines.line_number(),
-        search.opts.max_results,
-        |searcher| {
-            let mut any_match = false;
-            let mut out = Vec::new();
-            for candidate in candidates {
-                let heading = output.lines.heading()
-                    && output.lines.filename_mode
-                        != crate::grep::output::style::FilenameMode::Never;
-                let mut sink_output = output;
-                if heading {
-                    sink_output.lines.filename_mode =
-                        crate::grep::output::style::FilenameMode::Never;
-                }
-                let mut bytes = Vec::new();
-                let display = display_path_for_candidate(
-                    candidate,
-                    output.lines.path_display,
-                    output.records.path_separator,
-                );
-                let mut sink = StandardSink::new(
+    let stop = AtomicBool::new(false);
+    let n = candidates.len();
+    let mut files = Vec::with_capacity(n);
+    candidates
+        .par_iter()
+        .enumerate()
+        .map_init(
+            || {
+                StandardWorker::new(
+                    search,
                     matcher,
-                    sink_output,
-                    display,
-                    &mut bytes,
+                    output,
                     separators,
-                    search.opts.replace.as_deref(),
-                    SinkConfig {
-                        before_context: search.opts.before_context,
-                        after_context: search.opts.after_context,
-                    },
-                );
-                let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
-                if let Some(c) = stats.primary {
-                    c.fetch_add(sink.match_count, Ordering::Relaxed);
-                }
-                if sink.matched
-                    && let Some(c) = stats.files_with_matches
-                {
-                    c.fetch_add(1, Ordering::Relaxed);
-                }
-                any_match |= sink.matched;
-                if sink.matched && heading {
-                    if !out.is_empty() {
-                        out.push(b'\n');
-                    }
-                    if should_color(output.records) {
-                        out.extend_from_slice(ANSI_PATH);
-                    }
-                    let display = display_path_for_candidate(
-                        candidate,
-                        output.lines.path_display,
-                        output.records.path_separator,
-                    );
-                    write!(out, "{display}")?;
-                    if should_color(output.records) {
-                        out.extend_from_slice(ANSI_RESET);
-                    }
-                    write_line_terminator(&mut out, output.records.terminator);
-                }
-                out.extend(bytes);
-                if output.emission == OutputEmission::Quiet && any_match {
-                    break;
-                }
-            }
-
-            flush_chunk_output(
-                std::iter::once(ChunkOutput {
-                    bytes: out,
-                    matched: any_match,
-                    heading: false,
-                }),
-                stats.bytes_printed,
-            )
-        },
+                    stats.primary,
+                    stats.files_with_matches,
+                )
+            },
+            |worker: &mut StandardWorker<'_>,
+             (result_index, candidate): (usize, &CandidateInfo)| {
+                worker.search_candidate(candidate, result_index, &stop)
+            },
+        )
+        .collect_into_vec(&mut files);
+    files.sort_by_key(|file| file.index);
+    flush_chunk_output(
+        files.into_iter().map(|file| file.output),
+        stats.bytes_printed,
     )
 }
 

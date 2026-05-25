@@ -13,7 +13,6 @@ use super::storage::postings::MappedPostings;
 use super::types::Trigram;
 
 use crate::index::CorpusKind;
-use crate::parallel::{ParallelWorkload, parallel_threshold};
 
 pub struct IndexTables {
     pub files: Vec<PathBuf>,
@@ -81,8 +80,7 @@ pub fn build_index_tables(config: &IndexBuildConfig<'_>) -> crate::Result<IndexT
     let mut paths = collect_paths(config)?;
     paths.sort_unstable();
 
-    let threshold = parallel_threshold(ParallelWorkload::IndexBuild);
-    let per_file = extract_trigrams_per_file(config.root, &paths, threshold)?;
+    let per_file = extract_trigrams_per_file(config.root, &paths)?;
     let rel_paths: Vec<PathBuf> = per_file.iter().map(|(p, _)| p.clone()).collect();
 
     let mut map: BTreeMap<Trigram, Vec<u32>> = BTreeMap::new();
@@ -135,17 +133,12 @@ pub fn build_index_tables(config: &IndexBuildConfig<'_>) -> crate::Result<IndexT
 fn extract_trigrams_per_file(
     root: &Path,
     paths: &[PathBuf],
-    threshold: usize,
 ) -> crate::Result<Vec<(PathBuf, Vec<Trigram>)>> {
     let op = |display: &PathBuf| {
         let path = root.join(display);
         unique_trigrams_for_file(&path).map(|tris| (display.clone(), tris))
     };
-    if paths.len() >= threshold {
-        paths.par_iter().map(op).collect()
-    } else {
-        paths.iter().map(op).collect()
-    }
+    paths.par_iter().map(op).collect()
 }
 
 fn compute_abs_paths(root: &Path, file_paths: &[PathBuf]) -> Vec<PathBuf> {

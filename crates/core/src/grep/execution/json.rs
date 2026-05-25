@@ -166,65 +166,28 @@ pub fn run_json_standard_with_info(
     candidates: &[CandidateInfo],
     matcher: &RegexMatcher,
     output: SearchOutput,
-    _parallel: bool,
     wall_start: Instant,
     stats: Option<&mut SearchStats>,
 ) -> crate::Result<bool> {
-    use crate::parallel::{ParallelWorkload, parallel_threshold};
-    let threshold = parallel_threshold(ParallelWorkload::CandidateScan);
-    let parallel = candidates.len() >= threshold;
-
-    if parallel {
-        let stop = AtomicBool::new(false);
-        let n = candidates.len();
-        let mut files = Vec::with_capacity(n);
-        candidates
-            .par_iter()
-            .enumerate()
-            .map_init(
-                || JsonWorker::new(search, matcher, output),
-                |worker: &mut JsonWorker<'_>,
-                 (result_index, candidate): (usize, &CandidateInfo)| {
-                    worker.search_candidate(candidate, result_index, &stop)
-                },
-            )
-            .collect_into_vec(&mut files);
-        files.sort_by_key(|file| file.index);
-        return finish_json_run(
-            files,
-            wall_start,
-            stats,
-            candidates.len(),
-            crate::grep::execution::format::sum_candidate_file_bytes(candidates),
-        );
-    }
-
-    run_json_capped_with_info(search, candidates, matcher, output, wall_start, stats)
-}
-
-pub fn run_json_capped_with_info(
-    search: &CompiledSearch,
-    candidates: &[CandidateInfo],
-    matcher: &RegexMatcher,
-    output: SearchOutput,
-    wall_start: Instant,
-    stats: Option<&mut SearchStats>,
-) -> crate::Result<bool> {
-    let bytes_searched_sum = crate::grep::execution::format::sum_candidate_file_bytes(candidates);
-    search.with_cached_searcher(true, search.opts.max_results, |searcher| {
-        let stop = AtomicBool::new(false);
-        let mut files = Vec::with_capacity(candidates.len());
-        for (i, candidate) in candidates.iter().enumerate() {
-            files.push(json_search_one(
-                searcher, matcher, output, candidate, i, &stop,
-            ));
-        }
-        finish_json_run(
-            files,
-            wall_start,
-            stats,
-            candidates.len(),
-            bytes_searched_sum,
+    let stop = AtomicBool::new(false);
+    let n = candidates.len();
+    let mut files = Vec::with_capacity(n);
+    candidates
+        .par_iter()
+        .enumerate()
+        .map_init(
+            || JsonWorker::new(search, matcher, output),
+            |worker: &mut JsonWorker<'_>, (result_index, candidate): (usize, &CandidateInfo)| {
+                worker.search_candidate(candidate, result_index, &stop)
+            },
         )
-    })
+        .collect_into_vec(&mut files);
+    files.sort_by_key(|file| file.index);
+    finish_json_run(
+        files,
+        wall_start,
+        stats,
+        candidates.len(),
+        crate::grep::execution::format::sum_candidate_file_bytes(candidates),
+    )
 }

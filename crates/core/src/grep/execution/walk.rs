@@ -63,42 +63,16 @@ pub fn collect_abs_paths_for_scopes(filter: &SearchFilter) -> crate::Result<Vec<
     Ok(out)
 }
 
-pub fn prepare_walk_candidates(
-    abs_paths: &[PathBuf],
-    filter: &SearchFilter,
-    threshold: usize,
-) -> Vec<CandidateInfo> {
+pub fn prepare_walk_candidates(abs_paths: &[PathBuf], filter: &SearchFilter) -> Vec<CandidateInfo> {
     let filter_root = filter
         .root()
         .canonicalize()
         .unwrap_or_else(|_| filter.root().to_path_buf());
-    let cap = abs_paths.len();
     let need_rel = filter.needs_rel_str_for_matching();
 
-    if abs_paths.len() >= threshold {
-        abs_paths
-            .par_iter()
-            .filter_map(|abs_path| {
-                let rel_path = abs_path
-                    .strip_prefix(&filter_root)
-                    .unwrap_or(abs_path.as_path())
-                    .to_path_buf();
-                let rel_str = if need_rel {
-                    rel_path.to_string_lossy().replace('\\', "/")
-                } else {
-                    String::new()
-                };
-                let info = CandidateInfo {
-                    rel_path,
-                    rel_str,
-                    abs_path: abs_path.clone(),
-                };
-                filter.is_candidate_info(&info).then_some(info)
-            })
-            .collect()
-    } else {
-        let mut out = Vec::with_capacity(cap);
-        for abs_path in abs_paths {
+    abs_paths
+        .par_iter()
+        .filter_map(|abs_path| {
             let rel_path = abs_path
                 .strip_prefix(&filter_root)
                 .unwrap_or(abs_path.as_path())
@@ -113,12 +87,9 @@ pub fn prepare_walk_candidates(
                 rel_str,
                 abs_path: abs_path.clone(),
             };
-            if filter.is_candidate_info(&info) {
-                out.push(info);
-            }
-        }
-        out
-    }
+            filter.is_candidate_info(&info).then_some(info)
+        })
+        .collect()
 }
 
 /// Discovers files under the given root matching the walk options.
