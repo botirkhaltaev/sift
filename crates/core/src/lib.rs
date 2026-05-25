@@ -8,12 +8,12 @@ pub(crate) mod query;
 
 pub use grep::{
     BinaryMode, CandidateInfo, CandidateSet, CaseMode, ColorChoice, ColumnLimit, ColumnOverflow,
-    CompiledSearch, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
-    PathDisplay, PatternCompiler, RecordTerminator, SearchError, SearchExecution, SearchFilter,
-    SearchFilterConfig, SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef,
-    VisibilityConfig, WalkOptions, ZeroCountMode, discover_files,
+    FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags,
+    LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode, PathDisplay,
+    PatternCompiler, RecordTerminator, SearchError, SearchFilter, SearchFilterConfig,
+    SearchLineStyle, SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput,
+    SearchOutputFormat, SearchQuery, SearchRecordStyle, SearchRequest, SearchSeparators,
+    SearchStats, TypeDef, VisibilityConfig, WalkOptions, ZeroCountMode, discover_files,
 };
 
 pub use ignore::{Walk, WalkBuilder};
@@ -92,7 +92,7 @@ mod tests {
         );
 
         let pat = vec![r"let\s+x".to_string()];
-        let q = CompiledSearch::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), 1);
         assert!(hits[0].file.ends_with("src/lib.rs"));
@@ -112,7 +112,7 @@ mod tests {
 
         let pat = vec!["beta".to_string()];
         let opts = SearchOptions::default();
-        let q = CompiledSearch::new(&pat, opts).expect("compile search");
+        let q = SearchQuery::new(&pat, opts).expect("compile search");
         let naive = q.collect_walk_matches(&corpus).expect("walk search");
         let hits = q.collect_index_matches(&index).expect("index search");
         assert_eq!(hits, naive);
@@ -141,7 +141,7 @@ mod tests {
         }
 
         let pat = vec!["needle".to_string()];
-        let q = CompiledSearch::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), n_files);
     }
@@ -160,7 +160,7 @@ mod tests {
         let index = build_index_in_tmp(&tmp, &corpus);
 
         let pat = vec![".*".to_string()];
-        let q = CompiledSearch::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
         let mut from_index = q.collect_index_matches(&index).expect("index search");
         let mut from_walk = q.collect_walk_matches(&corpus).expect("walk search");
         from_index.sort_by(|a, b| (&a.file, a.line, &a.text).cmp(&(&b.file, b.line, &b.text)));
@@ -178,7 +178,7 @@ mod tests {
         let index = build_index_in_tmp(&tmp, &corpus);
 
         let pat = vec!["hello".to_string(), "foo".to_string()];
-        let q = CompiledSearch::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), 2);
     }
@@ -197,7 +197,7 @@ mod tests {
             case_mode: CaseMode::Insensitive,
             ..SearchOptions::default()
         };
-        let q = CompiledSearch::new(&pat, opts).expect("compile search");
+        let q = SearchQuery::new(&pat, opts).expect("compile search");
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), 1);
     }

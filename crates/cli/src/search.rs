@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use sift_core::{
-    ColumnLimit, ColumnOverflow, CompiledSearch, CorpusKind, Indexes, RecordTerminator,
-    SearchFilter, SearchLineStyle, SearchMode, SearchRecordStyle, SearchStats,
+    ColumnLimit, ColumnOverflow, CorpusKind, Indexes, RecordTerminator, SearchFilter,
+    SearchLineStyle, SearchMode, SearchQuery, SearchRecordStyle, SearchRequest,
 };
 
 use crate::cli::Cli;
@@ -188,7 +188,7 @@ impl Cli {
         }
 
         let opts = self.build_search_opts(args, only_matching);
-        let query = CompiledSearch::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let query = SearchQuery::new(&patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
         let cwd = std::env::current_dir()?;
 
         let (out, filter) =
@@ -225,11 +225,7 @@ impl Cli {
         };
         let output = self.build_search_output(&out, filename_ctx);
 
-        if indexes.is_empty() {
-            self.execute_walk(&query, &ctx, &output, &out, filter)
-        } else {
-            self.execute_indexed(&query, &indexes, &ctx, &output, &out, filter)
-        }
+        self.execute_search(&query, &indexes, &ctx, &output, &out, filter)
     }
 
     fn build_search_output(
@@ -274,9 +270,9 @@ impl Cli {
         )
     }
 
-    fn execute_indexed(
+    fn execute_search(
         &self,
-        query: &CompiledSearch,
+        query: &SearchQuery,
         indexes: &Indexes,
         ctx: &SearchCtx,
         output: &sift_core::SearchOutput,
@@ -286,43 +282,16 @@ impl Cli {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
         let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        let mut stats = out.print_stats.then(SearchStats::default);
-        let ok = query.run_indexes(
+        let outcome = query.run(SearchRequest {
             indexes,
-            sift_core::SearchExecution {
-                filter: &search_filter,
-                output: *output,
-                separators: &out.separators,
-                stats: stats.as_mut(),
-            },
-        )?;
-        if let Some(s) = &stats {
-            write_search_stats(s);
-        }
-        Ok(ok)
-    }
-
-    fn execute_walk(
-        &self,
-        query: &CompiledSearch,
-        ctx: &SearchCtx,
-        output: &sift_core::SearchOutput,
-        out: &SearchOutputCtx,
-        filter: SearchFilterCtx,
-    ) -> anyhow::Result<bool> {
-        let filter_config =
-            self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
-        let search_filter = SearchFilter::new(&filter_config, &ctx.filter_root)?;
-        let mut stats = out.print_stats.then(SearchStats::default);
-        let ok = query.run_walk(sift_core::SearchExecution {
             filter: &search_filter,
             output: *output,
             separators: &out.separators,
-            stats: stats.as_mut(),
+            collect_stats: out.print_stats,
         })?;
-        if let Some(s) = &stats {
+        if let Some(s) = &outcome.stats {
             write_search_stats(s);
         }
-        Ok(ok)
+        Ok(outcome.matched)
     }
 }

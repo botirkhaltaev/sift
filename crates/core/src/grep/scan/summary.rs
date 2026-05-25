@@ -7,16 +7,16 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::execution::format::{
+use crate::grep::emit::format::{
     ANSI_PATH, ANSI_RESET, display_path_for_candidate, should_color, write_line_terminator,
 };
-use crate::grep::execution::standard::{ChunkOutput, FileResult, flush_chunk_output};
-use crate::grep::execution::stats::StatsCollection;
+use crate::grep::emit::result::{ChunkOutput, FileResult, flush_chunk_output};
+use crate::grep::emit::stats::StatsCollection;
 use crate::grep::filter::CandidateInfo;
 use crate::grep::output::SearchOutput;
 use crate::grep::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::grep::output::style::FilenameMode;
-use crate::grep::search::CompiledSearch;
+use crate::grep::query::SearchQuery;
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -189,7 +189,7 @@ pub struct SummaryWorker<'a> {
 
 impl<'a> SummaryWorker<'a> {
     pub fn new(
-        search: &CompiledSearch,
+        search: &SearchQuery,
         matcher: &'a RegexMatcher,
         max_results: Option<usize>,
         mode: SearchMode,
@@ -258,7 +258,7 @@ impl<'a> SummaryWorker<'a> {
 }
 
 pub fn run_summary_with_info(
-    search: &CompiledSearch,
+    search: &SearchQuery,
     candidates: &[CandidateInfo],
     matcher: &RegexMatcher,
     output: SearchOutput,

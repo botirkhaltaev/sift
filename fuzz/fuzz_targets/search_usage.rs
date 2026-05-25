@@ -2,8 +2,8 @@
 
 use libfuzzer_sys::fuzz_target;
 use sift_core::{
-    CompiledSearch, Indexes, PatternCompiler, SearchFilter, SearchFilterConfig, SearchOutput,
-    SearchOutputFormat, SearchSeparators, TrigramIndexBuilder,
+    Indexes, PatternCompiler, SearchFilter, SearchFilterConfig, SearchOutput, SearchOutputFormat,
+    SearchQuery, SearchRequest, SearchSeparators, TrigramIndexBuilder,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -59,23 +59,21 @@ fn opts_from_bytes(data: &[u8]) -> sift_core::SearchOptions {
 }
 
 fn run_search(indexes: &Indexes, patterns: &[String], opts: &sift_core::SearchOptions) {
-    let Ok(q) = CompiledSearch::new(patterns, opts.clone()) else {
+    let Ok(q) = SearchQuery::new(patterns, opts.clone()) else {
         return;
     };
     let filter = SearchFilter::new(&SearchFilterConfig::default(), indexes.root()).unwrap();
-    let _ = q.run_indexes(
+    let _ = q.run(SearchRequest {
         indexes,
-        sift_core::SearchExecution {
-            filter: &filter,
-            output: SearchOutput {
-                format: SearchOutputFormat::Text,
-                emission: sift_core::OutputEmission::Quiet,
-                ..SearchOutput::default()
-            },
-            separators: &SearchSeparators::default(),
-            stats: None,
+        filter: &filter,
+        output: SearchOutput {
+            format: SearchOutputFormat::Text,
+            emission: sift_core::OutputEmission::Quiet,
+            ..SearchOutput::default()
         },
-    );
+        separators: &SearchSeparators::default(),
+        collect_stats: false,
+    });
 }
 
 fuzz_target!(|data: &[u8]| {

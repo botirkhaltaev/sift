@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
-use crate::grep::execution::config::{LinkTraversal, WalkOptions};
 use crate::grep::filter::{CandidateInfo, SearchFilter};
+use crate::grep::request::{LinkTraversal, WalkOptions};
 
 pub fn walk_directory_files(root: &Path, filter: &SearchFilter) -> crate::Result<Vec<PathBuf>> {
     let root = root.canonicalize()?;

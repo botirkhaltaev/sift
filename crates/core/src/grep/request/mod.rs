@@ -1,7 +1,7 @@
-use crate::grep::execution::stats::SearchStats;
 use crate::grep::filter::SearchFilter;
 use crate::grep::output::SearchOutput;
 use crate::grep::output::style::SearchSeparators;
+use crate::index::Indexes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkTraversal {
@@ -28,9 +28,11 @@ impl Default for WalkOptions {
     }
 }
 
-pub struct SearchExecution<'a> {
+#[derive(Clone, Copy)]
+pub struct SearchRequest<'a> {
+    pub indexes: &'a Indexes,
     pub filter: &'a SearchFilter,
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
-    pub stats: Option<&'a mut SearchStats>,
+    pub collect_stats: bool,
 }

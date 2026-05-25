@@ -6,7 +6,7 @@ Core search engine: query planning, trigram index, grep-style execution, and par
 
 ## Public API
 
-Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `CompiledSearch`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `SearchIndex`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
+Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `SearchIndex`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
 
 ## Source Map
 
@@ -21,12 +21,15 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `Co
 | `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
 | `grep/mod.rs` | Module declarations, `SearchError` aggregate, public re-exports |
 | `grep/options/` | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
-| `grep/search/` | `CompiledSearch`, `Match` |
-| `grep/compile/` | `PatternCompiler` — composable regex builder |
-| `grep/matcher/` | `grep_regex`/`grep_searcher` integration, matcher/searcher cache |
+| `grep/query/` | `SearchQuery`, `Match` |
+| `grep/pattern/` | `PatternCompiler` — composable regex builder |
+| `grep/request/` | `SearchRequest`, `WalkOptions`, `LinkTraversal` |
+| `grep/candidates/` | Candidate resolution for indexed and walk paths |
+| `grep/scan/` | Text / summary / JSON scanning workers |
+| `grep/emit/` | Output formatting, result chunks, stats helpers |
 | `grep/filter/` | `SearchFilter`, `CandidateInfo`, config/ignore/type_filter |
 | `grep/output/` | `SearchOutput`, style/mode/format/passthru |
-| `grep/execution/` | `run_indexes`, `run_walk`, workers, sinks, stats, candidate prep |
+| `grep/` | `SearchQuery::run`, workers, sinks, candidate prep |
 | `bin/sift_profile/` | `sift-profile` — feature `profile` only |
 
 ## Error Ownership
@@ -35,15 +38,14 @@ Each grep sub-module defines its own error type; `grep/mod.rs` aggregates them i
 
 | Module | Error Type | Mapped To |
 |--------|-----------|-----------|
-| `compile/` | `CompileError` | `SearchError::RegexBuild` |
-| `matcher/` | `MatcherError` | `SearchError::RegexBuild` |
+| `pattern/` | `CompileError` | `SearchError::RegexBuild` |
 | `filter/` | `FilterError` | `SearchError::RegexBuild`, `SearchError::Ignore` |
 | `output/` | `OutputError` | `SearchError::JsonOutputIncompatibleMode`, `JsonSerialize`, `Io` |
-| `execution/` | `ExecutionError` | `SearchError::InvalidMaxCount`, `Io`, `Ignore` |
+| `emit/` | `ExecutionError` | `SearchError::InvalidMaxCount`, `Io`, `Ignore` |
 
 `SearchError` variants not owned by a sub-module (`EmptyPatterns`, `RegexBuild` direct) live in the aggregate. `crate::Error` aggregates `SearchError` as `Error::Search`.
 
-Public grep APIs (`CompiledSearch::new`, `run_indexes`, `run_walk`, `discover_files`) return `crate::Result<T>` and rely on `From<SearchError> for crate::Error`.
+Public grep APIs (`SearchQuery::new`, `SearchQuery::run`, `discover_files`) return `crate::Result<T>` and rely on `From<SearchError> for crate::Error`.
 
 ## Architecture
 
@@ -59,11 +61,9 @@ pub trait SearchIndex: Sync + Send {
 
 ### Search Flow
 ```text
-CompiledSearch::run_indexes(&[&dyn SearchIndex], ...)
+SearchQuery::run(SearchRequest { indexes: &[&dyn SearchIndex], ... })
   -> build QuerySpec from patterns + options
-  -> QueryPlanner::should_use_indexes(spec)
-  -> if false: enumerate all files from all indexes
-  -> if true: call index.candidates(spec) for each index
+  -> choose indexed candidates or walk candidates
   -> resolve paths, apply SearchFilter
   -> scan candidates with regex engine
 ```
@@ -96,9 +96,9 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 
 | File | Coverage |
 |------|----------|
-| `query.rs` | `QueryPlanner`, `PatternCompiler`, `CompiledSearch::new` |
+| `query.rs` | `QueryPlanner`, `PatternCompiler`, `SearchQuery::new` |
 | `index.rs` | `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, `SearchIndex` trait, candidates, explain, save/reopen |
-| `grep.rs` | `run_indexes`, `run_walk`, `SearchFilter`, output modes |
+| `grep.rs` | `SearchQuery::run`, `SearchFilter`, output modes |
 
 ### Conventions
 

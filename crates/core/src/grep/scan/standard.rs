@@ -1,21 +1,22 @@
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::{Captures, Matcher};
 use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::execution::format::{
+use crate::grep::emit::format::{
     ANSI_LINE, ANSI_PATH, ANSI_RESET, ColumnAction, check_max_columns, display_path_for_candidate,
     should_color, truncate_line, write_line_terminator,
 };
-use crate::grep::execution::stats::StatsCollection;
+use crate::grep::emit::result::{ChunkOutput, FileResult, flush_chunk_output};
+use crate::grep::emit::stats::StatsCollection;
 use crate::grep::filter::CandidateInfo;
 use crate::grep::output::SearchOutput;
 use crate::grep::output::mode::OutputEmission;
 use crate::grep::output::style::{LineStyleFlags, SearchSeparators};
-use crate::grep::search::CompiledSearch;
+use crate::grep::query::SearchQuery;
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -327,7 +328,7 @@ pub struct StandardWorker<'a> {
 
 impl<'a> StandardWorker<'a> {
     pub fn new(
-        search: &CompiledSearch,
+        search: &SearchQuery,
         matcher: &'a RegexMatcher,
         output: SearchOutput,
         separators: &'a SearchSeparators,
@@ -450,58 +451,8 @@ impl<'a> StandardWorker<'a> {
     }
 }
 
-pub struct FileResult {
-    pub index: usize,
-    pub output: ChunkOutput,
-    pub json_stats: Option<grep_printer::Stats>,
-}
-
-pub struct ChunkOutput {
-    pub bytes: Vec<u8>,
-    pub matched: bool,
-    pub heading: bool,
-}
-
-impl ChunkOutput {
-    pub const fn empty() -> Self {
-        Self {
-            bytes: Vec::new(),
-            matched: false,
-            heading: false,
-        }
-    }
-}
-
-pub fn flush_chunk_output(
-    outputs: impl IntoIterator<Item = ChunkOutput>,
-    bytes_printed: Option<&AtomicU64>,
-) -> crate::Result<bool> {
-    let mut stdout = io::stdout().lock();
-    let mut any_match = false;
-    let mut emitted = false;
-    for output in outputs {
-        any_match |= output.matched;
-        if output.bytes.is_empty() {
-            continue;
-        }
-        if output.heading && emitted {
-            stdout.write_all(b"\n")?;
-            if let Some(p) = bytes_printed {
-                p.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        let n = output.bytes.len() as u64;
-        if let Some(p) = bytes_printed {
-            p.fetch_add(n, Ordering::Relaxed);
-        }
-        stdout.write_all(&output.bytes)?;
-        emitted = true;
-    }
-    Ok(any_match)
-}
-
 pub fn run_standard_with_info(
-    search: &CompiledSearch,
+    search: &SearchQuery,
     candidates: &[CandidateInfo],
     matcher: &RegexMatcher,
     output: SearchOutput,

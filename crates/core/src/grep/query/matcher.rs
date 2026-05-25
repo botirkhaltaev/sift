@@ -1,14 +1,12 @@
-pub mod error;
-
 use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
+use super::SearchQuery;
 use crate::grep::SearchError;
 use crate::grep::options::BinaryMode;
-use crate::grep::search::CompiledSearch;
 
-impl CompiledSearch {
+impl SearchQuery {
     /// Builds a regex matcher from the compiled patterns and options.
     ///
     /// # Errors
@@ -67,7 +65,7 @@ impl CompiledSearch {
             .map_err(|e| SearchError::RegexBuild(e.to_string()))
     }
 
-    pub(super) fn build_searcher(
+    pub fn build_searcher(
         &self,
         line_number: bool,
         max_matches: Option<usize>,
@@ -104,11 +102,10 @@ impl CompiledSearch {
 mod tests {
     use super::*;
     use crate::grep::options::{SearchMatchFlags, SearchOptions};
-    use crate::grep::search::CompiledSearch;
 
-    fn make_search(patterns: &[&str], opts: SearchOptions) -> CompiledSearch {
+    fn make_search(patterns: &[&str], opts: SearchOptions) -> SearchQuery {
         let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
-        CompiledSearch::new(&patterns, opts).expect("compile search")
+        SearchQuery::new(&patterns, opts).expect("compile search")
     }
 
     struct CollectStringSink {
@@ -129,7 +126,7 @@ mod tests {
         }
     }
 
-    fn search_content(search: &CompiledSearch, content: &[u8]) -> Vec<String> {
+    fn search_content(search: &SearchQuery, content: &[u8]) -> Vec<String> {
         let matcher = search.build_matcher().expect("build matcher");
         let mut sink = CollectStringSink { hits: Vec::new() };
         let mut searcher = search.build_searcher(true, None, true);

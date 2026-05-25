@@ -39,7 +39,7 @@ p.assert_index_walk_same(["pattern"], "expected\n");
 
 - Global options (e.g. `--index`) must appear **before** `build` when indexing.
 - Search paths are resolved and must sit under the corpus root in the index metadata.
-- Extend flags by threading new `SearchMatchFlags`/`SearchOptions` fields through to `CompiledSearch::new` in core — do not duplicate regex logic here.
+- Extend flags by threading new `SearchMatchFlags`/`SearchOptions` fields through to `SearchQuery::new` in core — do not duplicate regex logic here.
 
 ## Testing
 

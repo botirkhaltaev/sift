@@ -7,21 +7,23 @@ Grep-style search execution built on the public grep crates (`grep_matcher`, `gr
 | Directory | Description |
 |-----------|-------------|
 | [`options/`](options/) | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
-| [`search/`](search/) | `CompiledSearch`, `Match` |
-| [`compile/`](compile/) | `PatternCompiler` — composable regex builder |
-| [`matcher/`](matcher/) | Regex matcher/searcher construction and cache |
+| [`pattern/`](pattern/) | `PatternCompiler` — composable regex builder |
+| [`query/`](query/) | `SearchQuery`, `Match` |
+| [`request/`](request/) | `SearchRequest`, `WalkOptions`, `LinkTraversal` |
 | [`filter/`](filter/) | `SearchFilter`, `CandidateInfo`, config/ignore/type_filter |
 | [`output/`](output/) | `SearchOutput`, style/mode/format/passthru |
-| [`execution/`](execution/) | `run_indexes`, `run_walk`, workers, sinks, stats |
+| [`candidates/`](candidates/) | Candidate resolution for indexed and walk paths |
+| [`scan/`](scan/) | Text / summary / JSON scanning workers |
+| [`emit/`](emit/) | Output formatting, result chunks, and stats helpers |
 | [`mod.rs`](mod.rs) | Module declarations, `SearchError` aggregate, public re-exports |
 
 ## API
 
 ```rust
-use sift_core::{CompiledSearch, SearchOptions, SearchFilter, SearchOutput};
+use sift_core::{SearchQuery, SearchRequest, SearchOptions, SearchFilter, SearchOutput};
 
-let search = CompiledSearch::new(&patterns, SearchOptions::default())?;
-search.run_indexes(&indexes, SearchExecution { filter, output, separators, stats: None })?;
+let search = SearchQuery::new(&patterns, SearchOptions::default())?;
+search.run(SearchRequest { indexes: &indexes, filter: &filter, output, separators: &separators, collect_stats: false })?;
 ```
 
-`CompiledSearch` compiles the regex once; repeated calls reuse the compiled matcher and searcher cache.
+`SearchQuery` compiles the regex once; repeated calls reuse the compiled matcher and searcher cache.

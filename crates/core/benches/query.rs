@@ -1,12 +1,12 @@
 //! Pattern-compilation and search-compilation benchmarks.
 //!
-//! Exercises public `PatternCompiler` and `CompiledSearch` APIs.
+//! Exercises public `PatternCompiler` and `SearchQuery` APIs.
 //! All benches operate on small inputs and measure only the compilation cost.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::{CaseMode, CompiledSearch, PatternCompiler, SearchOptions};
+use sift_core::{CaseMode, PatternCompiler, SearchOptions, SearchQuery};
 
 fn sift_criterion() -> Criterion {
     Criterion::default()
@@ -58,7 +58,7 @@ fn bench_pattern_compiler(c: &mut Criterion) {
     g.finish();
 }
 
-// ─── CompiledSearch::new benches ─────────────────────────────────────────────
+// ─── SearchQuery::new benches ───────────────────────────────────────────────
 
 fn bench_compiled_search_new(c: &mut Criterion) {
     let mut g = c.benchmark_group("compiled_search_new");
@@ -66,7 +66,7 @@ fn bench_compiled_search_new(c: &mut Criterion) {
     g.bench_function("one_pattern", |b| {
         let pats = vec!["hello".to_string()];
         b.iter(|| {
-            black_box(CompiledSearch::new(&pats, SearchOptions::default()).unwrap());
+            black_box(SearchQuery::new(&pats, SearchOptions::default()).unwrap());
         });
     });
 
@@ -78,7 +78,7 @@ fn bench_compiled_search_new(c: &mut Criterion) {
             "qux".to_string(),
         ];
         b.iter(|| {
-            black_box(CompiledSearch::new(&pats, SearchOptions::default()).unwrap());
+            black_box(SearchQuery::new(&pats, SearchOptions::default()).unwrap());
         });
     });
 
@@ -89,7 +89,7 @@ fn bench_compiled_search_new(c: &mut Criterion) {
             ..Default::default()
         };
         b.iter(|| {
-            black_box(CompiledSearch::new(&pats, opts.clone()).unwrap());
+            black_box(SearchQuery::new(&pats, opts.clone()).unwrap());
         });
     });
 

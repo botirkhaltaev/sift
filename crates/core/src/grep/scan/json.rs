@@ -7,12 +7,12 @@ use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use rayon::prelude::*;
 
-use crate::grep::execution::standard::{ChunkOutput, FileResult, flush_chunk_output};
-use crate::grep::execution::stats::{SearchStats, fill_json_search_stats};
+use crate::grep::emit::result::{ChunkOutput, FileResult, flush_chunk_output};
+use crate::grep::emit::stats::{SearchStats, fill_json_search_stats};
 use crate::grep::filter::CandidateInfo;
 use crate::grep::output::SearchOutput;
 use crate::grep::output::mode::OutputEmission;
-use crate::grep::search::CompiledSearch;
+use crate::grep::query::SearchQuery;
 
 struct NullWriter;
 
@@ -33,11 +33,7 @@ pub struct JsonWorker<'a> {
 }
 
 impl<'a> JsonWorker<'a> {
-    pub fn new(
-        search: &'a CompiledSearch,
-        matcher: &'a RegexMatcher,
-        output: SearchOutput,
-    ) -> Self {
+    pub fn new(search: &'a SearchQuery, matcher: &'a RegexMatcher, output: SearchOutput) -> Self {
         Self {
             searcher: search.build_searcher(true, search.opts.max_results, true),
             matcher,
@@ -162,7 +158,7 @@ pub fn finish_json_run(
 }
 
 pub fn run_json_standard_with_info(
-    search: &CompiledSearch,
+    search: &SearchQuery,
     candidates: &[CandidateInfo],
     matcher: &RegexMatcher,
     output: SearchOutput,
@@ -188,6 +184,6 @@ pub fn run_json_standard_with_info(
         wall_start,
         stats,
         candidates.len(),
-        crate::grep::execution::format::sum_candidate_file_bytes(candidates),
+        crate::grep::emit::format::sum_candidate_file_bytes(candidates),
     )
 }
