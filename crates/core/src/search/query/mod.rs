@@ -21,10 +21,10 @@ use crate::search::SearchOutcome;
 use crate::search::emit::format::sum_candidate_file_bytes;
 use crate::search::emit::stats::{SearchStats, TextStatsCounters};
 #[cfg(test)]
-use crate::search::filter::SearchFilter;
+use crate::search::filter::CandidateFilter;
 #[cfg(test)]
 use crate::search::filter::config::{
-    HiddenMode, IgnoreConfig, SearchFilterConfig, VisibilityConfig,
+    CandidateFilterConfig, HiddenMode, IgnoreConfig, VisibilityConfig,
 };
 use crate::search::options::SearchOptions;
 use crate::search::output::SearchOutputFormat;
@@ -194,14 +194,14 @@ impl SearchQuery {
         &self,
         index: &dyn crate::index::SearchIndex,
     ) -> crate::Result<Vec<crate::search::Match>> {
-        let config = SearchFilterConfig {
+        let config = CandidateFilterConfig {
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
                 ignore: IgnoreConfig::default(),
             },
-            ..SearchFilterConfig::default()
+            ..CandidateFilterConfig::default()
         };
-        let filter = SearchFilter::new(&config, index.root())?;
+        let filter = CandidateFilter::new(&config, index.root())?;
         let spec = self.build_query_spec();
         let candidates = index.candidates(&spec);
         self.collect_index_candidate_paths(&filter, &candidates)
@@ -240,18 +240,18 @@ impl SearchQuery {
     #[cfg(test)]
     fn collect_index_candidate_paths(
         &self,
-        filter: &SearchFilter,
+        filter: &CandidateFilter,
         candidates: &[Candidate],
     ) -> crate::Result<Vec<crate::search::Match>> {
         let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
         let mut out = Vec::new();
         let mut searcher = self.build_searcher(true, None, true);
         for candidate in candidates {
-            if !filter.is_candidate(&candidate.rel_path) {
+            if !candidate.matches(filter) {
                 continue;
             }
             let mut sink = CollectSink::new(
-                candidate.abs_path.clone(),
+                candidate.abs_path().to_path_buf(),
                 if self.opts.only_matching() {
                     MatchEmissionMode::OnlyMatching
                 } else {
@@ -259,7 +259,7 @@ impl SearchQuery {
                 },
                 matcher.clone(),
             );
-            let _ = searcher.search_path(matcher, &candidate.abs_path, &mut sink);
+            let _ = searcher.search_path(matcher, candidate.abs_path(), &mut sink);
             out.extend(sink.into_matches());
         }
         Ok(out)

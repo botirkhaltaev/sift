@@ -59,18 +59,18 @@ impl<'a> JsonWorker<'a> {
         }
         let (bytes, file_stats) = if quiet {
             let mut json = JSON::new(NullWriter);
-            let mut sink = json.sink_with_path(self.matcher, &candidate.abs_path);
+            let mut sink = json.sink_with_path(self.matcher, candidate.abs_path());
             let _ = self
                 .searcher
-                .search_path(self.matcher, &candidate.abs_path, &mut sink);
+                .search_path(self.matcher, candidate.abs_path(), &mut sink);
             (Vec::new(), sink.stats().clone())
         } else {
             let mut json = JSON::new(Vec::new());
             let file_stats = {
-                let mut sink = json.sink_with_path(self.matcher, &candidate.abs_path);
+                let mut sink = json.sink_with_path(self.matcher, candidate.abs_path());
                 let _ = self
                     .searcher
-                    .search_path(self.matcher, &candidate.abs_path, &mut sink);
+                    .search_path(self.matcher, candidate.abs_path(), &mut sink);
                 sink.stats().clone()
             };
             (json.into_inner(), file_stats)

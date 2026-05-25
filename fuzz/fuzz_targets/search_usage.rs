@@ -3,8 +3,8 @@
 use libfuzzer_sys::fuzz_target;
 use sift_core::grep::{GrepRequest, run as grep_run};
 use sift_core::{
-    Indexes, PatternCompiler, SearchFilter, SearchFilterConfig, SearchOutput, SearchOutputFormat,
-    SearchQuery, SearchSeparators, TrigramIndexBuilder,
+    Indexes, PatternCompiler, CandidateFilter, CandidateFilterConfig, SearchOutput,
+    SearchOutputFormat, SearchQuery, SearchSeparators, TrigramIndexBuilder,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -63,7 +63,7 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &sift_core::SearchOp
     let Ok(q) = SearchQuery::new(patterns, opts.clone()) else {
         return;
     };
-    let filter = SearchFilter::new(&SearchFilterConfig::default(), indexes.root()).unwrap();
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), indexes.root()).unwrap();
     let _ = grep_run(&q, &GrepRequest {
         indexes,
         filter: &filter,

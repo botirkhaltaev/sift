@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
 use sift_core::{
-    GlobConfig, HiddenMode, IgnoreConfig, SearchFilterConfig, TypeDef, VisibilityConfig,
+    CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, TypeDef, VisibilityConfig,
 };
 
 use crate::cli::Cli;
@@ -36,7 +36,7 @@ pub struct FilterDecl {
     pub sortr: Option<String>,
 }
 
-/// Resolved visibility, ignore sources, and glob case for [`SearchFilterConfig`].
+/// Resolved visibility, ignore sources, and glob case for [`CandidateFilterConfig`].
 #[derive(Clone, Copy)]
 pub struct SearchFilterCtx {
     pub hidden: bool,
@@ -275,7 +275,7 @@ impl Cli {
         filter: SearchFilterCtx,
         scopes: Vec<PathBuf>,
         exclude_paths: Vec<PathBuf>,
-    ) -> anyhow::Result<SearchFilterConfig> {
+    ) -> anyhow::Result<CandidateFilterConfig> {
         let max_filesize = self
             .filter_decl
             .max_filesize
@@ -300,7 +300,7 @@ impl Cli {
             Vec::new()
         };
 
-        Ok(SearchFilterConfig {
+        Ok(CandidateFilterConfig {
             scopes,
             exclude_paths,
             glob: GlobConfig {
@@ -340,7 +340,7 @@ pub fn build_search_filter_config(
     filter: SearchFilterCtx,
     scopes: Vec<PathBuf>,
     exclude_paths: Vec<PathBuf>,
-) -> anyhow::Result<SearchFilterConfig> {
+) -> anyhow::Result<CandidateFilterConfig> {
     let max_filesize = cli
         .filter_decl
         .max_filesize
@@ -371,7 +371,7 @@ pub fn build_search_filter_config(
         cli.filter_decl.ignore_file.clone()
     };
 
-    Ok(SearchFilterConfig {
+    Ok(CandidateFilterConfig {
         scopes,
         exclude_paths,
         glob: GlobConfig {

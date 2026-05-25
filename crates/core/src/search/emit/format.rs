@@ -6,6 +6,6 @@ pub const ANSI_LINE: &[u8] = b"\x1b[32m";
 
 pub fn sum_candidate_file_bytes(candidates: &[Candidate]) -> u64 {
     candidates.iter().fold(0u64, |acc, c| {
-        acc + std::fs::metadata(&c.abs_path).map_or(0, |m| m.len())
+        acc + std::fs::metadata(c.abs_path()).map_or(0, |m| m.len())
     })
 }

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::search::output::mode::CandidateCoverage;
+
 pub use trigram::TrigramIndex;
 pub use trigram::TrigramIndexError;
 
@@ -150,15 +152,28 @@ impl Indexes {
             let next: std::collections::HashSet<PathBuf> = index
                 .candidates(query)
                 .into_iter()
-                .map(|c| c.abs_path)
+                .map(|c| c.abs_path().to_path_buf())
                 .collect();
-            candidates.retain(|c| next.contains(&c.abs_path));
+            candidates.retain(|c| next.contains(c.abs_path()));
             if candidates.is_empty() {
                 break;
             }
         }
 
         candidates
+    }
+
+    /// Resolve candidates for a query, selecting narrowed or complete coverage.
+    #[must_use]
+    pub fn candidates(
+        &self,
+        query: &crate::query::QuerySpec<'_>,
+        coverage: CandidateCoverage,
+    ) -> Vec<crate::Candidate> {
+        match coverage {
+            CandidateCoverage::Narrowed => self.resolve_candidates(query),
+            CandidateCoverage::Complete => self.resolve_all_files(),
+        }
     }
 
     /// Return all indexed files across all registered indexes.
@@ -175,9 +190,12 @@ impl Indexes {
         let mut files = first.all_files();
 
         for index in iter {
-            let next: std::collections::HashSet<PathBuf> =
-                index.all_files().into_iter().map(|c| c.abs_path).collect();
-            files.retain(|c| next.contains(&c.abs_path));
+            let next: std::collections::HashSet<PathBuf> = index
+                .all_files()
+                .into_iter()
+                .map(|c| c.abs_path().to_path_buf())
+                .collect();
+            files.retain(|c| next.contains(c.abs_path()));
             if files.is_empty() {
                 break;
             }

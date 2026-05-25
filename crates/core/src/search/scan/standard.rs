@@ -416,7 +416,7 @@ impl<'a> StandardWorker<'a> {
             );
             let _ = self
                 .searcher
-                .search_path(self.matcher, &candidate.abs_path, &mut sink);
+                .search_path(self.matcher, candidate.abs_path(), &mut sink);
             let n = sink.match_count;
             if let Some(c) = self.match_counter {
                 c.fetch_add(n, Ordering::Relaxed);

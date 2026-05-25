@@ -44,7 +44,7 @@ pub struct TypeDef {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SearchFilterConfig {
+pub struct CandidateFilterConfig {
     pub scopes: Vec<PathBuf>,
     pub exclude_paths: Vec<PathBuf>,
     pub glob: GlobConfig,

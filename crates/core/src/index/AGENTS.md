@@ -9,7 +9,7 @@ Generic index trait (`SearchIndex`), shared types (`FileId`, `IndexId`, `FileCan
 - `SearchIndex` — trait for any indexed corpus (file access, candidate lookup, single-file detection).
 - `FileId` — type-safe file identifier within an index.
 - `IndexId` — type-safe index identifier in a multi-index search.
-- `FileCandidate` — resolved file with index_id, file_id, rel_path, abs_path.
+- `Candidate` — single file candidate with `rel_path`, `abs_path`, filtering methods.
 - `IndexMeta` — serialized metadata (`sift.meta` JSON) with root path and single-file corpus flag.
 - `TrigramIndex` — concrete trigram index implementation (in `trigram/`).
 - `TrigramIndexBuilder` — fluent builder for trigram corpus indexing.

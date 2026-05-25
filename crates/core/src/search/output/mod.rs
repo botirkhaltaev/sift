@@ -4,7 +4,7 @@ pub mod mode;
 pub mod passthru;
 pub mod style;
 
-use mode::{OutputEmission, SearchMode, ZeroCountMode};
+use mode::{CandidateCoverage, OutputEmission, SearchMode, ZeroCountMode};
 use passthru::PassthruMode;
 use style::{SearchLineStyle, SearchRecordStyle};
 
@@ -36,6 +36,23 @@ impl Default for SearchOutput {
             records: SearchRecordStyle::default(),
             passthru: PassthruMode::Disabled,
             include_zero: ZeroCountMode::Omit,
+        }
+    }
+}
+
+impl SearchOutput {
+    /// Whether the query planner should request all indexed files or narrowed candidates.
+    #[must_use]
+    pub(crate) const fn candidate_coverage(self) -> CandidateCoverage {
+        match self.mode {
+            SearchMode::Count | SearchMode::FilesWithoutMatch => CandidateCoverage::Complete,
+            SearchMode::CountMatches if matches!(self.include_zero, ZeroCountMode::Include) => {
+                CandidateCoverage::Complete
+            }
+            SearchMode::Standard
+            | SearchMode::OnlyMatching
+            | SearchMode::CountMatches
+            | SearchMode::FilesWithMatches => CandidateCoverage::Narrowed,
         }
     }
 }

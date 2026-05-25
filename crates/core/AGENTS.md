@@ -19,17 +19,18 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `Se
 | `index/trigram/builder.rs` | `TrigramIndexBuilder` — corpus walk, trigram extraction, table construction |
 | `index/trigram/file_table.rs` | `MappedFilesView` — file ID → relative path mapping |
 | `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
-| `grep/mod.rs` | Module declarations, `SearchError` aggregate, public re-exports |
-| `grep/options/` | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
-| `grep/query/` | `SearchQuery`, `Match` |
-| `grep/pattern/` | `PatternCompiler` — composable regex builder |
-| `grep/request/` | `SearchRequest`, `WalkOptions`, `LinkTraversal` |
-| `grep/candidates/` | Candidate resolution for indexed and walk paths |
-| `grep/scan/` | Text / summary / JSON scanning workers |
-| `grep/emit/` | Output formatting, result chunks, stats helpers |
-| `grep/filter/` | `SearchFilter`, `CandidateInfo`, config/ignore/type_filter |
-| `grep/output/` | `SearchOutput`, style/mode/format/passthru |
-| `grep/` | `SearchQuery::run`, workers, sinks, candidate prep |
+| `grep/mod.rs` | Pipeline orchestration — `GrepRequest`, `run()` |
+| `search/` | Regex execution (scan workers, output, pattern, filter) |
+| `search/options/` | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
+| `search/query/` | `SearchQuery`, `Match` |
+| `search/pattern/` | `PatternCompiler` — composable regex builder |
+| `search/request/` | `SearchExecution`, `WalkOptions`, `LinkTraversal` |
+| `search/candidates/` | Walk-based candidate collection |
+| `search/scan/` | Text / summary / JSON scanning workers |
+| `search/emit/` | Output formatting, result chunks, stats helpers |
+| `search/filter/` | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |
+| `search/output/` | `SearchOutput`, style/mode/format/passthru |
+| `candidate.rs` | `Candidate` — single file candidate with `rel_path`, `abs_path`, filtering |
 | `bin/sift_profile/` | `sift-profile` — feature `profile` only |
 
 ## Error Ownership

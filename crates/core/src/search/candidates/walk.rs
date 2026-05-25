@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::Candidate;
-use crate::search::filter::SearchFilter;
+use crate::search::filter::CandidateFilter;
 use crate::search::request::{LinkTraversal, WalkOptions};
 
-fn walk_directory_files(root: &Path, filter: &SearchFilter) -> crate::Result<Vec<Candidate>> {
+fn walk_directory_files(root: &Path, filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
     let root = root.canonicalize()?;
     let mut builder = ignore::WalkBuilder::new(&root);
     builder
@@ -48,7 +48,7 @@ fn walk_directory_files(root: &Path, filter: &SearchFilter) -> crate::Result<Vec
 }
 
 /// Collect candidate files across all scopes by walking the filesystem.
-pub fn collect_candidates(filter: &SearchFilter) -> crate::Result<Vec<Candidate>> {
+pub fn collect_candidates(filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
     let filter_root = filter
         .root()
         .canonicalize()
@@ -74,7 +74,7 @@ pub fn collect_candidates(filter: &SearchFilter) -> crate::Result<Vec<Candidate>
             out.extend(walk_directory_files(&path, filter)?);
         }
     }
-    out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    out.sort_by(|a, b| a.rel_path().cmp(b.rel_path()));
     out.dedup();
     Ok(out)
 }

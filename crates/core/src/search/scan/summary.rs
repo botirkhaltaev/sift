@@ -219,7 +219,7 @@ impl<'a> SummaryWorker<'a> {
             };
         }
 
-        let result = self.search_file(&candidate.abs_path);
+        let result = self.search_file(candidate.abs_path());
         if let Some(c) = self.summary_counter {
             c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
         }

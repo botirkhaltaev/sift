@@ -1,9 +1,10 @@
 //! Grep pipeline orchestration.
 //!
-//! Bridges the logical query, index planner, and search executor.
+//! Bridges the logical query, index planner, and candidate filter.
 //! This is the primary API the CLI calls.
 
-use crate::SearchFilter;
+use crate::Candidate;
+use crate::CandidateFilter;
 use crate::SearchOutput;
 use crate::SearchQuery;
 use crate::SearchSeparators;
@@ -12,13 +13,13 @@ use crate::index::Indexes;
 use crate::search::SearchError;
 use crate::search::SearchOutcome;
 use crate::search::candidates::walk;
-use crate::search::output::mode::CandidatePlan;
 use crate::search::request::SearchExecution;
+use rayon::prelude::*;
 
 /// User-facing request to the grep pipeline.
 pub struct GrepRequest<'a> {
     pub indexes: &'a Indexes,
-    pub filter: &'a SearchFilter,
+    pub filter: &'a CandidateFilter,
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
     pub collect_stats: bool,
@@ -37,16 +38,17 @@ pub fn run(query: &SearchQuery, request: &GrepRequest<'_>) -> crate::Result<Sear
     let spec = query.spec();
     let output = request.output;
 
-    let mut candidates = if request.indexes.is_empty() {
+    let raw = if request.indexes.is_empty() {
         walk::collect_candidates(request.filter)?
     } else {
-        match output.mode.candidate_plan() {
-            CandidatePlan::Narrowed => request.indexes.resolve_candidates(&spec),
-            CandidatePlan::AllFiles => request.indexes.resolve_all_files(),
-        }
+        let coverage = output.candidate_coverage();
+        request.indexes.candidates(&spec, coverage)
     };
 
-    candidates.retain(|c| request.filter.is_candidate_info(c));
+    let candidates: Vec<Candidate> = raw
+        .into_par_iter()
+        .filter(|c| c.matches(request.filter))
+        .collect();
 
     if candidates.is_empty() {
         return Ok(SearchOutcome {

@@ -81,8 +81,8 @@ impl From<ExecutionError> for SearchError {
 pub use candidates::walk::discover_files;
 pub use emit::stats::SearchStats;
 pub use filter::{
-    GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, SearchFilter, SearchFilterConfig, TypeDef,
-    VisibilityConfig,
+    CandidateFilter, CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    TypeDef, VisibilityConfig,
 };
 pub use options::{BinaryMode, CaseMode, SearchMatchFlags, SearchOptions};
 pub use output::format::{ColumnLimit, ColumnOverflow};

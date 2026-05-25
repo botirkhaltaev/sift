@@ -11,13 +11,13 @@ mod search;
 pub use candidate::Candidate;
 
 pub use search::{
-    BinaryMode, CaseMode, ColorChoice, ColumnLimit, ColumnOverflow, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, LinkTraversal, Match,
-    MatchEmissionMode, OutputEmission, PassthruMode, PathDisplay, PatternCompiler,
-    RecordTerminator, SearchError, SearchFilter, SearchFilterConfig, SearchLineStyle,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat,
-    SearchQuery, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig,
-    WalkOptions, ZeroCountMode, discover_files,
+    BinaryMode, CandidateFilter, CandidateFilterConfig, CaseMode, ColorChoice, ColumnLimit,
+    ColumnOverflow, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
+    PathDisplay, PatternCompiler, RecordTerminator, SearchError, SearchLineStyle, SearchMatchFlags,
+    SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat, SearchQuery,
+    SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig, WalkOptions,
+    ZeroCountMode, discover_files,
 };
 
 pub use ignore::{Walk, WalkBuilder};
