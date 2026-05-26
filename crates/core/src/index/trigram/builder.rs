@@ -1,11 +1,9 @@
 //! Walk corpus, extract trigrams, build in-memory index tables.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 use ignore::WalkBuilder;
 use rayon::prelude::*;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use super::file_table::FileFingerprint;
 use super::storage::lexicon::LexiconEntry;
@@ -71,12 +69,8 @@ impl<'a> IndexTableBuilder<'a> {
         } else {
             TrigramExtractor::fresh(self.config.root, &fingerprints)
         };
-        let file_trigrams_arc = extractor.extract()?;
-        let (lexicon, postings) = PostingAssembler::new(&file_trigrams_arc).assemble()?;
-        let file_trigrams: Vec<Vec<Trigram>> = file_trigrams_arc
-            .into_iter()
-            .map(|arc| Arc::try_unwrap(arc).unwrap_or_else(|shared| (*shared).clone()))
-            .collect();
+        let file_trigrams = extractor.extract()?;
+        let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
 
         Ok(IndexTables {
             fingerprints,
@@ -208,31 +202,27 @@ impl<'a> TrigramExtractor<'a> {
         }
     }
 
-    fn extract(&self) -> crate::Result<Vec<Arc<Vec<Trigram>>>> {
-        let cache = self.build_lookup();
-        let cached_trigrams: Vec<Arc<Vec<Trigram>>> = self
-            .prev_trigrams
-            .map(|prev| prev.iter().map(|tris| Arc::new(tris.clone())).collect())
-            .unwrap_or_default();
+    fn extract(&self) -> crate::Result<Vec<Vec<Trigram>>> {
+        let lookup = self.build_lookup();
+        let prev_tris = self.prev_trigrams.unwrap_or(&[]);
         self.fingerprints
             .par_iter()
             .map(|fp| {
-                if let Some(idx) = cache.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
-                    return Ok(Arc::clone(&cached_trigrams[*idx]));
+                if let Some(idx) = lookup.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
+                    return Ok(prev_tris[*idx].clone());
                 }
                 let abs = self.root.join(&fp.path);
                 let mmap = open_mmap(&abs).map_err(crate::Error::Io)?;
-                Ok(Arc::new(Trigram::unique_from_lossy_utf8(mmap.as_ref())))
+                Ok(Trigram::unique_from_lossy_utf8(mmap.as_ref()))
             })
             .collect()
     }
 
     fn build_lookup(&self) -> std::collections::HashMap<(&Path, i64, u64), usize> {
-        let (Some(prev_fps), Some(_prev_tris)) = (self.prev_fingerprints, self.prev_trigrams)
-        else {
+        let (Some(prev_fps), Some(prev_tris)) = (self.prev_fingerprints, self.prev_trigrams) else {
             return std::collections::HashMap::new();
         };
-        if prev_fps.len() != self.prev_trigrams.map_or(0, <[Vec<Trigram>]>::len) {
+        if prev_fps.len() != prev_tris.len() {
             return std::collections::HashMap::new();
         }
         prev_fps
@@ -245,11 +235,11 @@ impl<'a> TrigramExtractor<'a> {
 
 /// Assembles trigram → file ID posting lists from per-file trigram sets.
 struct PostingAssembler<'a> {
-    file_trigrams: &'a [Arc<Vec<Trigram>>],
+    file_trigrams: &'a [Vec<Trigram>],
 }
 
 impl<'a> PostingAssembler<'a> {
-    const fn new(file_trigrams: &'a [Arc<Vec<Trigram>>]) -> Self {
+    const fn new(file_trigrams: &'a [Vec<Trigram>]) -> Self {
         Self { file_trigrams }
     }
 
@@ -263,7 +253,7 @@ impl<'a> PostingAssembler<'a> {
                     "too many indexed files",
                 ))
             })?;
-            for tri in tris.iter() {
+            for tri in tris {
                 map.entry(*tri).or_default().push(id_u32);
             }
         }
