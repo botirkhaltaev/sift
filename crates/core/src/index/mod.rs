@@ -69,64 +69,131 @@ pub enum IndexError {
     },
 }
 
-/// A searchable index that can also be built and opened from disk.
-///
-/// Object-safe surface: [`root`](Index::root), [`corpus_kind`](Index::corpus_kind),
-/// [`candidates`](Index::candidates), [`all_files`](Index::all_files).
-///
-/// Lifecycle methods ([`kind_name`](Index::kind_name), [`build`](Index::build),
-/// [`open`](Index::open)) require `Self: Sized` and are only callable on
-/// concrete types or in generic contexts.
-pub trait Index: Sync + Send {
-    fn root(&self) -> &Path;
-    fn corpus_kind(&self) -> CorpusKind;
-    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate>;
-    fn all_files(&self) -> Vec<crate::Candidate>;
+/// Tag identifying an index kind for lifecycle dispatch (build, open, update).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IndexKind {
+    Trigram,
+}
 
-    /// Short identifier for the index kind (e.g. `"trigram"`).
-    fn kind_name() -> &'static str
-    where
-        Self: Sized;
+impl IndexKind {
+    pub const ALL: &[Self] = &[Self::Trigram];
 
-    /// Build a new index over the corpus described in `config`, writing
-    /// persistence files into `output_dir`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if corpus walking, extraction, or file I/O fails.
-    fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self>
-    where
-        Self: Sized;
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trigram => "trigram",
+        }
+    }
 
-    /// Open an index that was previously persisted to `index_dir`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if persistence files are missing or malformed.
-    fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self>
-    where
-        Self: Sized;
-
-    /// Incrementally update the index, rebuilding only if the corpus changed.
-    ///
-    /// Returns `Ok(Some(new_index))` if the index was rebuilt, or `Ok(None)`
-    /// if the corpus is unchanged and no rebuild was needed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if corpus walking or file I/O fails.
-    fn update(
-        &self,
+    pub(crate) fn build_to_dir(
+        self,
         config: &IndexBuildConfig<'_>,
         output_dir: &Path,
-    ) -> crate::Result<Option<Self>>
-    where
-        Self: Sized;
+    ) -> crate::Result<()> {
+        match self {
+            Self::Trigram => {
+                trigram::TrigramIndex::build(config, output_dir)?;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn open_from_dir(
+        self,
+        index_dir: &Path,
+        root: &Path,
+        corpus_kind: CorpusKind,
+    ) -> crate::Result<Index> {
+        match self {
+            Self::Trigram => Ok(Index::Trigram(trigram::TrigramIndex::open(
+                index_dir,
+                root,
+                corpus_kind,
+            )?)),
+        }
+    }
+
+    pub(crate) fn try_update(
+        self,
+        snapshot_dir: &Path,
+        config: &IndexBuildConfig<'_>,
+        output_dir: &Path,
+    ) -> crate::Result<bool> {
+        let existing_dir = snapshot_dir.join(self.as_str());
+        if !existing_dir.exists() {
+            self.build_to_dir(config, output_dir)?;
+            return Ok(true);
+        }
+        let root = config
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| config.root.to_path_buf());
+        match self {
+            Self::Trigram => {
+                let existing =
+                    trigram::TrigramIndex::open(&existing_dir, &root, config.corpus_kind)?;
+                Ok(existing.update(config, output_dir)?.is_some())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for IndexKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for IndexKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "trigram" => Ok(Self::Trigram),
+            other => Err(format!("unknown index kind: {other}")),
+        }
+    }
+}
+
+/// An opened index instance, used for search-time dispatch.
+pub enum Index {
+    Trigram(trigram::TrigramIndex),
+}
+
+impl Index {
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        match self {
+            Self::Trigram(idx) => idx.root(),
+        }
+    }
+
+    #[must_use]
+    pub const fn corpus_kind(&self) -> CorpusKind {
+        match self {
+            Self::Trigram(idx) => idx.corpus_kind(),
+        }
+    }
+
+    #[must_use]
+    pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
+        match self {
+            Self::Trigram(idx) => idx.candidates(query),
+        }
+    }
+
+    #[must_use]
+    pub fn all_files(&self) -> Vec<crate::Candidate> {
+        match self {
+            Self::Trigram(idx) => idx.all_files(),
+        }
+    }
 }
 
 /// Registry of opened indexes read from a snapshot store.
 pub struct Indexes {
-    inner: Vec<Box<dyn Index>>,
+    inner: Vec<Index>,
     root: PathBuf,
 }
 
@@ -135,9 +202,9 @@ impl Indexes {
     ///
     /// Useful for testing and benchmarking.
     #[must_use]
-    pub fn from_single(index: impl Index + 'static, root: PathBuf) -> Self {
+    pub fn from_single(index: Index, root: PathBuf) -> Self {
         Self {
-            inner: vec![Box::new(index)],
+            inner: vec![index],
             root,
         }
     }
@@ -175,16 +242,16 @@ impl Indexes {
             },
         })?;
 
-        let root = inner
-            .first()
-            .map(|idx| idx.root().to_path_buf())
+        let root = store::IndexStore::read_meta(sift_dir)
+            .ok()
+            .map(|m| m.root)
             .unwrap_or_default();
 
         Ok(Self { inner, root })
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
@@ -257,8 +324,8 @@ impl Indexes {
     }
 
     #[must_use]
-    pub fn first(&self) -> Option<&dyn Index> {
-        self.inner.first().map(AsRef::as_ref)
+    pub fn first(&self) -> Option<&Index> {
+        self.inner.first()
     }
 
     /// Returns the corpus kind if all indexes agree, or `None` for mixed/empty.
@@ -300,13 +367,6 @@ impl IndexId {
     pub const fn get(self) -> usize {
         self.0
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IndexMeta {
-    pub root: PathBuf,
-    #[serde(default)]
-    pub corpus_kind: CorpusKind,
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use sift_core::{
-    CorpusKind, Index, IndexBuildConfig, IndexStore, Indexes, QueryFlags, QuerySpec, TrigramIndex,
+    CorpusKind, IndexBuildConfig, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec,
 };
 
 mod common;
@@ -130,17 +130,25 @@ fn bench_indexes_open(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_parity_corpus(&corpus);
             let sift = tmp.path().join(".sift");
-            let mut store =
-                IndexStore::open_or_create(&sift, &corpus, CorpusKind::Directory, false)
-                    .expect("open store");
+            let mut store = IndexStore::open_or_create(
+                &sift,
+                &corpus,
+                CorpusKind::Directory,
+                false,
+                &[IndexKind::Trigram],
+            )
+            .expect("open store");
             store
-                .build::<TrigramIndex>(&IndexBuildConfig {
-                    root: &corpus,
-                    follow_links: false,
-                    exclude_paths: &[],
-                    include_paths: &[],
-                    corpus_kind: CorpusKind::Directory,
-                })
+                .build(
+                    &[IndexKind::Trigram],
+                    &IndexBuildConfig {
+                        root: &corpus,
+                        follow_links: false,
+                        exclude_paths: &[],
+                        include_paths: &[],
+                        corpus_kind: CorpusKind::Directory,
+                    },
+                )
                 .expect("build");
             drop(store);
             (tmp, sift)

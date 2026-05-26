@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
-use sift_core::{CorpusKind, IndexBuildConfig, IndexStore, TrigramIndex};
+use sift_core::{CorpusKind, IndexBuildConfig, IndexKind, IndexStore};
 
 use cli::{Cli, Commands};
 use ignore::{MessageFlags, resolve_visibility_and_ignore};
@@ -28,7 +28,7 @@ pub fn main_entry() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if let Some(Commands::Build { path }) = &cli.command {
+    if let Some(Commands::Build { path, indexes }) = &cli.command {
         let canonical = match path.canonicalize() {
             Ok(c) => c,
             Err(e) => {
@@ -48,10 +48,12 @@ pub fn main_entry() -> ExitCode {
         } else {
             (canonical, Vec::new(), CorpusKind::Directory)
         };
+        let kinds = indexes.as_deref().unwrap_or(IndexKind::ALL);
         let sift_dir = &cli.paths.sift_dir;
         let exclude_paths = excluded_search_paths(&root, sift_dir);
         let mut store =
-            match IndexStore::open_or_create(sift_dir, &root, corpus_kind, cli.paths.follow) {
+            match IndexStore::open_or_create(sift_dir, &root, corpus_kind, cli.paths.follow, kinds)
+            {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("sift: {e}");
@@ -65,7 +67,7 @@ pub fn main_entry() -> ExitCode {
             include_paths: &include_paths,
             corpus_kind,
         };
-        if let Err(e) = store.build::<TrigramIndex>(&config) {
+        if let Err(e) = store.build(kinds, &config) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }

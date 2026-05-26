@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use fslock::LockFile;
 use notify::{RecursiveMode, Watcher};
-use sift_core::{IndexBuildConfig, IndexStore, TrigramIndex};
+use sift_core::{IndexBuildConfig, IndexKind, IndexStore};
 
 const DEBOUNCE_MS: u64 = 250;
 
@@ -57,19 +57,25 @@ impl DaemonConfig {
             return Ok(());
         }
 
-        let (root, corpus_kind, follow_links) =
+        let (root, corpus_kind, follow_links, stored_kinds) =
             match (IndexStore::read_meta(sift_dir), &self.init_root) {
-                (Ok(meta), _) => (meta.root, meta.corpus_kind, meta.follow_links),
+                (Ok(meta), _) => (meta.root, meta.corpus_kind, meta.follow_links, meta.indexes),
                 (Err(_), Some(init_root)) => {
                     let root = init_root.canonicalize()?;
-                    (root, sift_core::CorpusKind::Directory, false)
+                    (root, sift_core::CorpusKind::Directory, false, Vec::new())
                 }
                 (Err(e), None) => {
                     anyhow::bail!("no store metadata: {e}");
                 }
             };
+        let kinds: &[IndexKind] = if stored_kinds.is_empty() {
+            IndexKind::ALL
+        } else {
+            &stored_kinds
+        };
 
-        let mut store = IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links)?;
+        let mut store =
+            IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links, kinds)?;
 
         if store.current_id().is_none() {
             let exclude = sift_dir
@@ -83,7 +89,7 @@ impl DaemonConfig {
                 include_paths: &[],
                 corpus_kind,
             };
-            store.build::<TrigramIndex>(&build_config)?;
+            store.build(kinds, &build_config)?;
         }
 
         let (tx, rx) = mpsc::channel();
@@ -110,7 +116,14 @@ impl DaemonConfig {
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if changed {
                         changed = false;
-                        Self::refresh(sift_dir);
+                        Self::refresh(
+                            &mut store,
+                            sift_dir,
+                            kinds,
+                            &root,
+                            corpus_kind,
+                            follow_links,
+                        );
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -128,36 +141,27 @@ impl DaemonConfig {
         }
     }
 
-    fn refresh(sift_dir: &Path) {
-        let meta = match IndexStore::read_meta(sift_dir) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("sift-daemon: read_meta: {e}");
-                return;
-            }
-        };
-
-        let mut store = match IndexStore::open(sift_dir) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("sift-daemon: open store: {e}");
-                return;
-            }
-        };
-
+    fn refresh(
+        store: &mut IndexStore,
+        sift_dir: &Path,
+        kinds: &[IndexKind],
+        root: &Path,
+        corpus_kind: sift_core::CorpusKind,
+        follow_links: bool,
+    ) {
         let exclude = sift_dir
-            .strip_prefix(&meta.root)
+            .strip_prefix(root)
             .unwrap_or(sift_dir)
             .to_path_buf();
         let build_config = IndexBuildConfig {
-            root: &meta.root,
-            follow_links: meta.follow_links,
+            root,
+            follow_links,
             exclude_paths: &[exclude],
             include_paths: &[],
-            corpus_kind: meta.corpus_kind,
+            corpus_kind,
         };
 
-        if let Err(e) = store.update::<TrigramIndex>(&build_config) {
+        if let Err(e) = store.update(kinds, &build_config) {
             eprintln!("sift-daemon: refresh failed: {e}");
         }
     }

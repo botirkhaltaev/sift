@@ -6,15 +6,16 @@ Core search engine: query planning, index-backed candidate narrowing, grep-style
 
 ## Public API
 
-Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
+Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `IndexKind`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
 
 ## Source Map
 
 | Module | Responsibility |
 |--------|----------------|
 | `query/` | Query description (`QuerySpec`), planning |
-| `index/mod.rs` | `Indexes` registry, `Index` trait, `IndexBuildConfig`, shared types (`FileId`, `IndexId`, `IndexMeta`), `IndexError` |
-| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, `Index` impl, `TrigramIndexError` |
+| `index/mod.rs` | `Indexes` registry, `Index` enum (runtime dispatch), `IndexKind` enum (lifecycle dispatch), `IndexBuildConfig`, shared types (`FileId`, `IndexId`), `IndexError` |
+| `index/store.rs` | `IndexStore`: snapshot management, `StoreMeta`, timestamp-based IDs, `gc_snapshots` |
+| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, inherent build/open/update/candidates methods, `TrigramIndexError` |
 | `index/trigram/builder.rs` | `IndexTableBuilder`: corpus walk, fingerprint collection, trigram extraction, table construction |
 | `index/trigram/file_table.rs` | `MappedFilesView`: file ID to relative path mapping with fingerprints |
 | `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
@@ -49,17 +50,28 @@ Public grep APIs (`SearchQuery::new`, `SearchQuery::run`, `discover_files`, `Ind
 
 ## Architecture
 
-### Index Trait
+### Index Enum (runtime dispatch)
 ```rust
-pub trait Index: Sync + Send {
-    fn root(&self) -> &Path;
-    fn corpus_kind(&self) -> CorpusKind;
-    fn candidates(&self, query: &QuerySpec<'_>) -> Vec<Candidate>;
-    fn all_files(&self) -> Vec<Candidate>;
+pub enum Index {
+    Trigram(TrigramIndex),
+}
+impl Index {
+    pub fn root(&self) -> &Path;
+    pub fn corpus_kind(&self) -> CorpusKind;
+    pub fn candidates(&self, query: &QuerySpec<'_>) -> Vec<Candidate>;
+    pub fn all_files(&self) -> Vec<Candidate>;
+}
+```
 
-    fn kind_name() -> &'static str where Self: Sized;
-    fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> Result<Self> where Self: Sized;
-    fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> Result<Self> where Self: Sized;
+### IndexKind Enum (lifecycle dispatch)
+```rust
+pub enum IndexKind { Trigram }
+impl IndexKind {
+    pub const ALL: &[Self];
+    pub fn as_str(self) -> &'static str;
+    pub(crate) fn build_to_dir(self, config, output_dir) -> Result<()>;
+    pub(crate) fn open_from_dir(self, index_dir, root, corpus_kind) -> Result<Index>;
+    pub(crate) fn try_update(self, snapshot_dir, config, output_dir) -> Result<bool>;
 }
 ```
 
@@ -77,6 +89,8 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect_stat
 
 ### Key Types
 - `Indexes`: registry of opened indexes; owns initialization via `Indexes::open(sift_dir)`
+- `IndexStore`: snapshot-based persistence for indexes, with non-generic `build`/`update` taking `&[IndexKind]`
+- `StoreMeta`: single source of truth for root, corpus_kind, follow_links, and index kinds
 - `FileId`: type-safe file identifier within an index
 - `IndexId`: type-safe index identifier in a multi-index search
 - `Candidate`: single file with rel_path, abs_path, filtering predicates
@@ -104,7 +118,7 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 | File | Coverage |
 |------|----------|
 | `query.rs` | `QueryPlanner`, `PatternCompiler`, `SearchQuery::new` |
-| `index.rs` | `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, `Index` trait, candidates, explain, save/reopen |
+| `index.rs` | `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, `Index` enum, candidates, explain, save/reopen |
 | `grep.rs` | `SearchQuery::run`, `CandidateFilter`, output modes |
 
 ### Conventions
@@ -130,6 +144,6 @@ See [`benches/README.md`](benches/README.md) for the full benchmark and profilin
 - Break the public API without updating the CLI crate.
 - Add `unsafe` outside `index/trigram/storage/mmap.rs`.
 - Use `#[allow(clippy::...)]` without a documented reason.
-- Have `grep/` import from `index::trigram`. Use `Index` trait only.
+- Have `grep/` import from `index::trigram`. Use `Index` enum only.
 - Add variants to `crate::Error`. Define them in the owning module's error type.
 - Expose internal APIs for benchmarking purposes.

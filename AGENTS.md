@@ -4,7 +4,7 @@ Guidelines for AI agents working on the sift codebase.
 
 ## Project Overview
 
-Sift is an indexed regex search engine for codebases, written in Rust. It builds on-disk indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine. The shipped index type is a trigram index, achieving up to 60x speedup over ripgrep on indexed queries. The `SearchIndex` trait makes the system pluggable: new index kinds can be added alongside the trigram index.
+Sift is an indexed regex search engine for codebases, written in Rust. It builds on-disk indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine. The shipped index type is a trigram index, achieving up to 60x speedup over ripgrep on indexed queries. The `IndexKind` enum and `Index` enum provide static dispatch; adding a new index kind means adding a variant to each.
 
 ## Build & Test
 
@@ -22,7 +22,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 |------|------|
 | `crates/core/` | `sift-core`: query planning, index-backed candidate narrowing, search engine |
 | `crates/core/src/query/` | Query description, planning, candidate plans |
-| `crates/core/src/index/` | Generic `SearchIndex` trait and concrete implementations |
+| `crates/core/src/index/` | `Index` enum, `IndexKind` enum, `IndexStore`, and `Indexes` registry |
 | `crates/core/src/index/trigram/` | Trigram index: build, storage, and search |
 | `crates/core/src/grep/` | Grep-style matching, scanning, output, filtering |
 | `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
@@ -53,7 +53,7 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`Indexes::open` loads all available indexes. `SearchQuery::new` compiles the regex. `SearchQuery::run(SearchExecution)` scans candidates. Currently the shipped index is the trigram index, built via `TrigramIndexBuilder::build`. See `crates/core/README.md`.
+`IndexStore::open_or_create` → `IndexStore::build(kinds, config)` → `Indexes::open` → `SearchQuery::new` → `SearchQuery::run(SearchExecution)`. The `--indexes` flag on `sift build` selects which `IndexKind` variants to build (defaults to all). See `crates/core/README.md`.
 
 ## Function Evolution
 

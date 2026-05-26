@@ -24,7 +24,7 @@ fn sift_criterion() -> Criterion {
 
 fn wrap_index(index: TrigramIndex) -> Indexes {
     let root = index.root().to_path_buf();
-    Indexes::from_single(index, root)
+    Indexes::from_single(Index::Trigram(index), root)
 }
 
 // ─── Indexed search benches ──────────────────────────────────────────────────

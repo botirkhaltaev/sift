@@ -25,7 +25,7 @@ pub use ignore::{Walk, WalkBuilder};
 pub use index::store::{IndexStore, StoreMeta};
 pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
 pub use index::{
-    CorpusKind, FileId, Index, IndexBuildConfig, IndexError, IndexId, IndexMeta, Indexes, PlanMode,
+    CorpusKind, FileId, Index, IndexBuildConfig, IndexError, IndexId, IndexKind, Indexes, PlanMode,
     QueryPlanOutput,
 };
 
@@ -72,13 +72,17 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn build_index_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> TrigramIndex {
+    fn build_trigram_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> TrigramIndex {
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
         TrigramIndexBuilder::new(corpus_path)
             .with_dir(&trigram_dir)
             .build()
             .expect("build index")
+    }
+
+    fn build_index_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> Index {
+        Index::Trigram(build_trigram_in_tmp(tmp, corpus_path))
     }
 
     #[test]
@@ -89,11 +93,12 @@ mod tests {
         fs::write(corpus.join("src/lib.rs"), "fn hello() {\n  let x = 1;\n}\n")
             .expect("write test file");
 
-        let index = build_index_in_tmp(&tmp, &corpus);
+        let tri = build_trigram_in_tmp(&tmp, &corpus);
         assert!(
-            index.file_path(FileId::new(0)).is_some(),
+            tri.file_path(FileId::new(0)).is_some(),
             "should have indexed files"
         );
+        let index = Index::Trigram(tri);
 
         let pat = vec![r"let\s+x".to_string()];
         let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
@@ -136,13 +141,14 @@ mod tests {
             .expect("write file");
         }
 
-        let index = build_index_in_tmp(&tmp, &corpus);
+        let tri = build_trigram_in_tmp(&tmp, &corpus);
         for i in 0..n_files {
             assert!(
-                index.file_path(FileId::new(i)).is_some(),
+                tri.file_path(FileId::new(i)).is_some(),
                 "file {i} should be indexed"
             );
         }
+        let index = Index::Trigram(tri);
 
         let pat = vec!["needle".to_string()];
         let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");

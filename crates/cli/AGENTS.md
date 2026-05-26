@@ -6,7 +6,8 @@ Thin CLI binary over `sift-core`. Parses flags with clap, maps them to `SearchOp
 
 ## Structure
 
-- **`src/lib.rs`**: `Cli` (clap Parser), `build` subcommand, search mode dispatch.
+- **`src/lib.rs`**: `main_entry`, `build` subcommand dispatch (with `--indexes` flag), search mode dispatch.
+- **`src/cli.rs`**: `Cli` (clap Parser), `Commands` enum with `Build { path, indexes }`.
 - **`src/main.rs`**: thin binary entrypoint calling `sift_cli::main()`.
 - **`tests/common/mod.rs`**: shared test helpers: `TestProject`, assertion helpers, path normalization.
 - **`tests/integration_*.rs`**: domain-focused integration tests spawning the real `sift` binary.

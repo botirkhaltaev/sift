@@ -1,6 +1,6 @@
 //! Walk corpus, extract trigrams, build in-memory index tables.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
@@ -245,7 +245,7 @@ impl<'a> PostingAssembler<'a> {
     }
 
     fn assemble(&self) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
-        let mut map: BTreeMap<Trigram, Vec<u32>> = BTreeMap::new();
+        let mut map: HashMap<Trigram, Vec<u32>> = HashMap::new();
 
         for (id, tris) in self.file_trigrams.iter().enumerate() {
             let id_u32: u32 = id.try_into().map_err(|_| {
@@ -259,10 +259,13 @@ impl<'a> PostingAssembler<'a> {
             }
         }
 
-        let total_u32s: usize = map.values().map(Vec::len).sum();
+        let mut entries: Vec<_> = map.into_iter().collect();
+        entries.sort_unstable_by_key(|(tri, _)| tri.to_bytes());
+
+        let total_u32s: usize = entries.iter().map(|(_, ids)| ids.len()).sum();
         let mut posting_bytes: Vec<u8> = Vec::with_capacity(total_u32s.saturating_mul(4));
-        let mut lex_entries: Vec<LexiconEntry> = Vec::with_capacity(map.len());
-        for (tri, ids) in map {
+        let mut lex_entries: Vec<LexiconEntry> = Vec::with_capacity(entries.len());
+        for (tri, ids) in entries {
             let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -394,7 +397,6 @@ impl<'a> TrigramIndexBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::Index;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;

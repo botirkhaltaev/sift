@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use sift_core::{
     CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, Index, LineStyleFlags, OutputEmission, PassthruMode,
+    HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, OutputEmission, PassthruMode,
     PathDisplay, RecordTerminator, SearchLineStyle, SearchMode, SearchOptions, SearchOutput,
     SearchOutputFormat, SearchQuery, SearchRecordStyle, SearchSeparators, TrigramIndex,
     TrigramIndexBuilder, VisibilityConfig, ZeroCountMode,

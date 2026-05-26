@@ -10,7 +10,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{CorpusKind, FileId, Index, IndexBuildConfig, PlanMode, QueryPlanOutput};
+use crate::index::{CorpusKind, FileId, IndexBuildConfig, PlanMode, QueryPlanOutput};
 use crate::query::QuerySpec;
 
 use self::builder::{IndexTableBuilder, IndexTables};
@@ -32,10 +32,8 @@ pub enum TrigramIndexError {
 #[derive(Debug)]
 pub struct TrigramIndex {
     root: PathBuf,
-    file_paths: Vec<PathBuf>,
-    abs_paths: Vec<PathBuf>,
     pub(crate) fingerprints: Vec<FileFingerprint>,
-    file_trigrams: Vec<Vec<Trigram>>,
+    trigram_sets: storage::trigram_sets::MappedTrigramSets,
     lexicon: storage::lexicon::MappedLexicon,
     postings: storage::postings::MappedPostings,
     corpus_kind: CorpusKind,
@@ -44,21 +42,15 @@ pub struct TrigramIndex {
 impl TrigramIndex {
     /// Construct from in-memory index tables.
     pub(crate) fn from_tables(tables: IndexTables, root: PathBuf, corpus_kind: CorpusKind) -> Self {
-        let file_paths: Vec<PathBuf> = tables
-            .fingerprints
-            .iter()
-            .map(|fp| fp.path.clone())
-            .collect();
-        let abs_paths: Vec<PathBuf> = file_paths.iter().map(|p| root.join(p)).collect();
         let lexicon = storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
         let postings = storage::postings::MappedPostings::from_bytes(&tables.postings);
+        let trigram_sets =
+            storage::trigram_sets::MappedTrigramSets::from_sets(&tables.file_trigrams);
 
         Self {
             root,
-            file_paths,
-            abs_paths,
             fingerprints: tables.fingerprints,
-            file_trigrams: tables.file_trigrams,
+            trigram_sets,
             lexicon,
             postings,
             corpus_kind,
@@ -80,22 +72,25 @@ impl TrigramIndex {
             .map_err(TrigramIndexError::Io)?;
         std::fs::write(dir.join(crate::POSTINGS_BIN), self.postings.backing_slice())
             .map_err(TrigramIndexError::Io)?;
-
-        let tri_sets = storage::trigram_sets::MappedTrigramSets::from_sets(&self.file_trigrams);
-        std::fs::write(dir.join(crate::TRIGRAMS_BIN), tri_sets.backing_slice())
-            .map_err(TrigramIndexError::Io)?;
+        std::fs::write(
+            dir.join(crate::TRIGRAMS_BIN),
+            self.trigram_sets.backing_slice(),
+        )
+        .map_err(TrigramIndexError::Io)?;
 
         Ok(())
     }
 
     #[must_use]
     pub fn file_path(&self, id: FileId) -> Option<&Path> {
-        self.file_paths.get(id.get()).map(PathBuf::as_path)
+        self.fingerprints.get(id.get()).map(|fp| fp.path.as_path())
     }
 
     #[must_use]
     pub fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
-        self.abs_paths.get(id.get()).cloned()
+        self.fingerprints
+            .get(id.get())
+            .map(|fp| self.root.join(&fp.path))
     }
 
     /// Returns an explanation of how a query would be handled.
@@ -109,6 +104,91 @@ impl TrigramIndex {
             pattern: query.patterns.to_vec().join("|"),
             mode,
         }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    #[must_use]
+    pub const fn corpus_kind(&self) -> CorpusKind {
+        self.corpus_kind
+    }
+
+    #[must_use]
+    pub fn candidates(&self, query: &QuerySpec<'_>) -> Vec<crate::Candidate> {
+        let ids = TrigramPlanner::build(query).map_or_else(
+            || self.all_file_ids(),
+            |plan| self.trigram_candidate_ids(&plan),
+        );
+        self.resolve_candidates(ids)
+    }
+
+    #[must_use]
+    pub fn all_files(&self) -> Vec<crate::Candidate> {
+        self.resolve_candidates(self.all_file_ids())
+    }
+
+    /// Build a new trigram index from the corpus described in `config`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if corpus walking, extraction, or file I/O fails.
+    pub fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
+        std::fs::create_dir_all(output_dir)?;
+
+        let tables = IndexTableBuilder::new(config).build()?;
+        let root = config.root.canonicalize()?;
+        let index = Self::from_tables(tables, root, config.corpus_kind);
+        index.save_to_dir(output_dir).map_err(|e| match e {
+            TrigramIndexError::Io(io) => crate::Error::Io(io),
+            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
+                format!("missing component: {}", p.display()),
+            )),
+        })?;
+        Ok(index)
+    }
+
+    /// Open a previously persisted trigram index from `index_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if persistence files are missing or malformed.
+    pub fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self> {
+        Ok(Self::open_tables(index_dir, root, corpus_kind)?)
+    }
+
+    /// Incrementally update the index, rebuilding only if the corpus changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if corpus walking or file I/O fails.
+    pub fn update(
+        &self,
+        config: &IndexBuildConfig<'_>,
+        output_dir: &Path,
+    ) -> crate::Result<Option<Self>> {
+        let file_trigrams = self.trigram_sets.to_sets().map_err(crate::Error::Io)?;
+
+        let tables = IndexTableBuilder::new(config)
+            .with_previous(&self.fingerprints, &file_trigrams)
+            .build()?;
+
+        if tables.fingerprints == self.fingerprints {
+            return Ok(None);
+        }
+
+        std::fs::create_dir_all(output_dir)?;
+        let root = config.root.canonicalize()?;
+        let index = Self::from_tables(tables, root, config.corpus_kind);
+        index.save_to_dir(output_dir).map_err(|e| match e {
+            TrigramIndexError::Io(io) => crate::Error::Io(io),
+            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
+                format!("missing component: {}", p.display()),
+            )),
+        })?;
+        Ok(Some(index))
     }
 
     fn posting_bytes_slice(&self, tri: Trigram) -> &[u8] {
@@ -166,14 +246,15 @@ impl TrigramIndex {
     }
 
     fn all_file_ids(&self) -> Vec<FileId> {
-        (0..self.file_paths.len()).map(FileId::new).collect()
+        (0..self.fingerprints.len()).map(FileId::new).collect()
     }
 
     fn resolve_candidates(&self, ids: impl IntoIterator<Item = FileId>) -> Vec<crate::Candidate> {
         ids.into_iter()
             .filter_map(|id| {
-                let rel_path = self.file_paths.get(id.get())?.clone();
-                let abs_path = self.abs_paths.get(id.get())?.clone();
+                let fp = self.fingerprints.get(id.get())?;
+                let rel_path = fp.path.clone();
+                let abs_path = self.root.join(&fp.path);
                 Some(crate::Candidate::new(rel_path, abs_path))
             })
             .collect()
@@ -199,24 +280,19 @@ impl TrigramIndex {
             file_table::MappedFilesView::open(&files_path).map_err(TrigramIndexError::Io)?;
         let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
         Self::validate_file_paths(&fingerprints, &files_path)?;
-        let file_paths: Vec<PathBuf> = fingerprints.iter().map(|fp| fp.path.clone()).collect();
-        let abs_paths: Vec<PathBuf> = file_paths.iter().map(|p| root.join(p)).collect();
 
         let lexicon =
             storage::lexicon::MappedLexicon::open(&lexicon_path).map_err(TrigramIndexError::Io)?;
         let postings = storage::postings::MappedPostings::open(&postings_path)
             .map_err(TrigramIndexError::Io)?;
 
-        let tri_sets = storage::trigram_sets::MappedTrigramSets::open(&trigrams_path)
+        let trigram_sets = storage::trigram_sets::MappedTrigramSets::open(&trigrams_path)
             .map_err(TrigramIndexError::Io)?;
-        let file_trigrams = tri_sets.to_sets().map_err(TrigramIndexError::Io)?;
 
         Ok(Self {
             root: root.to_path_buf(),
-            file_paths,
-            abs_paths,
             fingerprints,
-            file_trigrams,
+            trigram_sets,
             lexicon,
             postings,
             corpus_kind,
@@ -242,76 +318,6 @@ impl TrigramIndex {
             }
         }
         Ok(())
-    }
-}
-
-impl Index for TrigramIndex {
-    fn kind_name() -> &'static str {
-        "trigram"
-    }
-
-    fn root(&self) -> &Path {
-        &self.root
-    }
-
-    fn corpus_kind(&self) -> CorpusKind {
-        self.corpus_kind
-    }
-
-    fn candidates(&self, query: &QuerySpec<'_>) -> Vec<crate::Candidate> {
-        let ids = TrigramPlanner::build(query).map_or_else(
-            || self.all_file_ids(),
-            |plan| self.trigram_candidate_ids(&plan),
-        );
-        self.resolve_candidates(ids)
-    }
-
-    fn all_files(&self) -> Vec<crate::Candidate> {
-        self.resolve_candidates(self.all_file_ids())
-    }
-
-    fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
-        std::fs::create_dir_all(output_dir)?;
-
-        let tables = IndexTableBuilder::new(config).build()?;
-        let root = config.root.canonicalize()?;
-        let index = Self::from_tables(tables, root, config.corpus_kind);
-        index.save_to_dir(output_dir).map_err(|e| match e {
-            TrigramIndexError::Io(io) => crate::Error::Io(io),
-            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
-                format!("missing component: {}", p.display()),
-            )),
-        })?;
-        Ok(index)
-    }
-
-    fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self> {
-        Ok(Self::open_tables(index_dir, root, corpus_kind)?)
-    }
-
-    fn update(
-        &self,
-        config: &IndexBuildConfig<'_>,
-        output_dir: &Path,
-    ) -> crate::Result<Option<Self>> {
-        let tables = IndexTableBuilder::new(config)
-            .with_previous(&self.fingerprints, &self.file_trigrams)
-            .build()?;
-
-        if tables.fingerprints == self.fingerprints {
-            return Ok(None);
-        }
-
-        std::fs::create_dir_all(output_dir)?;
-        let root = config.root.canonicalize()?;
-        let index = Self::from_tables(tables, root, config.corpus_kind);
-        index.save_to_dir(output_dir).map_err(|e| match e {
-            TrigramIndexError::Io(io) => crate::Error::Io(io),
-            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
-                format!("missing component: {}", p.display()),
-            )),
-        })?;
-        Ok(Some(index))
     }
 }
 
@@ -343,7 +349,7 @@ impl PostingOps {
         let bn = b.len() / 4;
         let mut i = 0usize;
         let mut j = 0usize;
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(an.min(bn));
         while i < an && j < bn {
             let ai = u32::from_le_bytes(a[i * 4..i * 4 + 4].try_into().unwrap());
             let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
@@ -367,7 +373,7 @@ impl PostingOps {
         let bn = b.len() / 4;
         let mut i = 0usize;
         let mut j = 0usize;
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(cur.len().min(bn));
         while i < cur.len() && j < bn {
             let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
             match cur[i].cmp(&bj) {

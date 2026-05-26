@@ -97,13 +97,9 @@ impl TestProject {
     }
 
     /// Create a `Command` with the project root as the working directory.
-    ///
-    /// Sets `SIFT_NO_DAEMON=1` to prevent orphaned daemon processes during
-    /// test runs (avoids flaky CI on Windows/macOS).
     pub fn sift(&self) -> Command {
         let mut cmd = Command::new(exe());
         cmd.current_dir(&self.root);
-        cmd.env("SIFT_NO_DAEMON", "1");
         cmd
     }
 
