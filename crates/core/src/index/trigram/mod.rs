@@ -118,16 +118,15 @@ impl TrigramIndex {
 
     #[must_use]
     pub fn candidates(&self, query: &QuerySpec<'_>) -> Vec<crate::Candidate> {
-        let ids = TrigramPlanner::build(query).map_or_else(
-            || self.all_file_ids(),
-            |plan| self.trigram_candidate_ids(&plan),
-        );
-        self.resolve_candidates(ids)
+        TrigramPlanner::build(query).map_or_else(
+            || self.resolve_all_candidates(),
+            |plan| self.resolve_candidates(self.trigram_candidate_ids(&plan)),
+        )
     }
 
     #[must_use]
     pub fn all_files(&self) -> Vec<crate::Candidate> {
-        self.resolve_candidates(self.all_file_ids())
+        self.resolve_all_candidates()
     }
 
     /// Build a new trigram index from the corpus described in `config`.
@@ -245,10 +244,6 @@ impl TrigramIndex {
             .collect()
     }
 
-    fn all_file_ids(&self) -> Vec<FileId> {
-        (0..self.fingerprints.len()).map(FileId::new).collect()
-    }
-
     fn resolve_candidates(&self, ids: impl IntoIterator<Item = FileId>) -> Vec<crate::Candidate> {
         ids.into_iter()
             .filter_map(|id| {
@@ -256,6 +251,17 @@ impl TrigramIndex {
                 let rel_path = fp.path.clone();
                 let abs_path = self.root.join(&fp.path);
                 Some(crate::Candidate::new(rel_path, abs_path))
+            })
+            .collect()
+    }
+
+    fn resolve_all_candidates(&self) -> Vec<crate::Candidate> {
+        self.fingerprints
+            .iter()
+            .map(|fp| {
+                let rel_path = fp.path.clone();
+                let abs_path = self.root.join(&fp.path);
+                crate::Candidate::new(rel_path, abs_path)
             })
             .collect()
     }
