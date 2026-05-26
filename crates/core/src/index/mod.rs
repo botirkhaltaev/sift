@@ -3,6 +3,7 @@ mod snapshot;
 pub mod store;
 pub mod trigram;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -44,14 +45,6 @@ pub struct IndexBuildConfig<'a> {
     pub exclude_paths: &'a [PathBuf],
     pub include_paths: &'a [PathBuf],
     pub corpus_kind: CorpusKind,
-}
-
-fn candidate_rel_path_key(path: &std::path::Path) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    path.as_os_str().hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Errors specific to the index registry layer.
@@ -271,6 +264,10 @@ impl Indexes {
     }
 
     /// Resolve candidates for a query across all registered indexes.
+    ///
+    /// Conservative sets from each [`SearchIndex`] are intersected using
+    /// `Candidate::rel_path` equality (no hashing), so distinct paths are never
+    /// merged by accident.
     #[must_use]
     pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
         let mut iter = self.inner.iter();
@@ -281,12 +278,12 @@ impl Indexes {
         let mut candidates = first.candidates(query);
 
         for index in iter {
-            let next: std::collections::HashSet<u64> = index
+            let next: HashSet<PathBuf> = index
                 .candidates(query)
                 .into_iter()
-                .map(|c| candidate_rel_path_key(c.rel_path()))
+                .map(|c| c.rel_path().to_path_buf())
                 .collect();
-            candidates.retain(|c| next.contains(&candidate_rel_path_key(c.rel_path())));
+            candidates.retain(|c| next.contains(c.rel_path()));
             if candidates.is_empty() {
                 break;
             }
@@ -319,12 +316,12 @@ impl Indexes {
         let mut files = first.all_files();
 
         for index in iter {
-            let next: std::collections::HashSet<u64> = index
+            let next: HashSet<PathBuf> = index
                 .all_files()
                 .into_iter()
-                .map(|c| candidate_rel_path_key(c.rel_path()))
+                .map(|c| c.rel_path().to_path_buf())
                 .collect();
-            files.retain(|c| next.contains(&candidate_rel_path_key(c.rel_path())));
+            files.retain(|c| next.contains(c.rel_path()));
             if files.is_empty() {
                 break;
             }
