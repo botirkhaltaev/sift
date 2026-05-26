@@ -1,3 +1,5 @@
+pub mod meta;
+mod snapshot;
 pub mod store;
 pub mod trigram;
 
@@ -242,7 +244,7 @@ impl Indexes {
             },
         })?;
 
-        let root = store::IndexStore::read_meta(sift_dir)
+        let root = meta::StoreMeta::read(sift_dir)
             .ok()
             .map(|m| m.root)
             .unwrap_or_default();

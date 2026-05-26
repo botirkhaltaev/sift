@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use fslock::LockFile;
 use notify::{RecursiveMode, Watcher};
-use sift_core::{IndexBuildConfig, IndexKind, IndexStore};
+use sift_core::{IndexBuildConfig, IndexKind, IndexStore, StoreMeta};
 
 const DEBOUNCE_MS: u64 = 250;
 
@@ -52,7 +52,7 @@ impl DaemonConfig {
         }
 
         let (root, corpus_kind, follow_links, stored_kinds) =
-            match (IndexStore::read_meta(sift_dir), &self.init_root) {
+            match (StoreMeta::read(sift_dir), &self.init_root) {
                 (Ok(meta), _) => (meta.root, meta.corpus_kind, meta.follow_links, meta.indexes),
                 (Err(_), Some(init_root)) => {
                     let root = init_root.canonicalize()?;
