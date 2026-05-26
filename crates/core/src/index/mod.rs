@@ -3,6 +3,7 @@ mod snapshot;
 pub mod store;
 pub mod trigram;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -263,6 +264,10 @@ impl Indexes {
     }
 
     /// Resolve candidates for a query across all registered indexes.
+    ///
+    /// Conservative sets from each [`SearchIndex`] are intersected using
+    /// `Candidate::rel_path` equality (no hashing), so distinct paths are never
+    /// merged by accident.
     #[must_use]
     pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
         let mut iter = self.inner.iter();
@@ -273,12 +278,12 @@ impl Indexes {
         let mut candidates = first.candidates(query);
 
         for index in iter {
-            let next: std::collections::HashSet<PathBuf> = index
+            let next: HashSet<PathBuf> = index
                 .candidates(query)
                 .into_iter()
-                .map(|c| c.abs_path().to_path_buf())
+                .map(|c| c.rel_path().to_path_buf())
                 .collect();
-            candidates.retain(|c| next.contains(c.abs_path()));
+            candidates.retain(|c| next.contains(c.rel_path()));
             if candidates.is_empty() {
                 break;
             }
@@ -311,12 +316,12 @@ impl Indexes {
         let mut files = first.all_files();
 
         for index in iter {
-            let next: std::collections::HashSet<PathBuf> = index
+            let next: HashSet<PathBuf> = index
                 .all_files()
                 .into_iter()
-                .map(|c| c.abs_path().to_path_buf())
+                .map(|c| c.rel_path().to_path_buf())
                 .collect();
-            files.retain(|c| next.contains(c.abs_path()));
+            files.retain(|c| next.contains(c.rel_path()));
             if files.is_empty() {
                 break;
             }
