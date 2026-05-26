@@ -100,6 +100,7 @@ impl TestProject {
     pub fn sift(&self) -> Command {
         let mut cmd = Command::new(exe());
         cmd.current_dir(&self.root);
+        cmd.env("SIFT_NO_DAEMON", "1");
         cmd
     }
 

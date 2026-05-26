@@ -214,7 +214,7 @@ impl<'a> TrigramExtractor<'a> {
                 }
                 let abs = self.root.join(&fp.path);
                 let mmap = open_mmap(&abs).map_err(crate::Error::Io)?;
-                Ok(Trigram::unique_from_lossy_utf8(mmap.as_ref()))
+                Ok(Trigram::unique_from_bytes(mmap.as_ref()))
             })
             .collect()
     }
