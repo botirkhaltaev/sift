@@ -66,18 +66,35 @@ impl TrigramIndex {
         std::fs::create_dir_all(dir)?;
 
         let files = file_table::MappedFilesView::from_fingerprints(&self.fingerprints);
-        std::fs::write(dir.join(crate::FILES_BIN), files.backing_slice())
-            .map_err(TrigramIndexError::Io)?;
-        std::fs::write(dir.join(crate::LEXICON_BIN), self.lexicon.backing_slice())
-            .map_err(TrigramIndexError::Io)?;
-        std::fs::write(dir.join(crate::POSTINGS_BIN), self.postings.backing_slice())
-            .map_err(TrigramIndexError::Io)?;
-        std::fs::write(
-            dir.join(crate::TRIGRAMS_BIN),
-            self.trigram_sets.backing_slice(),
-        )
-        .map_err(TrigramIndexError::Io)?;
+        let files_path = dir.join(crate::FILES_BIN);
+        let lexicon_path = dir.join(crate::LEXICON_BIN);
+        let postings_path = dir.join(crate::POSTINGS_BIN);
+        let trigrams_path = dir.join(crate::TRIGRAMS_BIN);
 
+        let files_bytes = files.backing_slice();
+        let lexicon_bytes = self.lexicon.backing_slice();
+        let postings_bytes = self.postings.backing_slice();
+        let trigrams_bytes = self.trigram_sets.backing_slice();
+
+        let ((files_res, lexicon_res), (postings_res, trigrams_res)) = rayon::join(
+            || {
+                rayon::join(
+                    || std::fs::write(&files_path, files_bytes),
+                    || std::fs::write(&lexicon_path, lexicon_bytes),
+                )
+            },
+            || {
+                rayon::join(
+                    || std::fs::write(&postings_path, postings_bytes),
+                    || std::fs::write(&trigrams_path, trigrams_bytes),
+                )
+            },
+        );
+
+        files_res.map_err(TrigramIndexError::Io)?;
+        lexicon_res.map_err(TrigramIndexError::Io)?;
+        postings_res.map_err(TrigramIndexError::Io)?;
+        trigrams_res.map_err(TrigramIndexError::Io)?;
         Ok(())
     }
 
