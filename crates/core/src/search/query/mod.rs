@@ -192,7 +192,7 @@ impl SearchQuery {
     #[cfg(test)]
     pub(crate) fn collect_index_matches(
         &self,
-        index: &dyn crate::index::SearchIndex,
+        index: &crate::index::Index,
     ) -> crate::Result<Vec<crate::search::Match>> {
         let config = CandidateFilterConfig {
             visibility: VisibilityConfig {

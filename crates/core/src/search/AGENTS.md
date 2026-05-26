@@ -35,4 +35,4 @@ grep::run(query, GrepRequest{ indexes, filter, output, separators, collect_stats
 - Be aware of index internals. Callers provide candidates.
 - Break deterministic output ordering.
 - Bypass the matcher/searcher cache in `SearchQuery`.
-- Import from `crate::index::trigram`. Use `SearchIndex` trait only.
+- Import from `crate::index::trigram`. Use `Index` trait only.

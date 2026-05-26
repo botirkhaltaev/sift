@@ -21,11 +21,17 @@ path = "src/lib.rs"
 name = "sift"
 path = "src/main.rs"
 
+[[bin]]
+name = "sift-daemon"
+path = "src/bin/sift-daemon.rs"
+
 [dependencies]
 anyhow = "1"
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
+fslock = "0.2"
+notify = "9.0.0-rc.4"
 rayon = "1"
 sift-core = { path = "../core" }
 

@@ -6,7 +6,9 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use sift_core::grep::{GrepRequest, run as grep_run};
-use sift_core::{Indexes, SearchMatchFlags, SearchMode, SearchOptions, SearchQuery, TrigramIndex};
+use sift_core::{
+    Index, Indexes, SearchMatchFlags, SearchMode, SearchOptions, SearchQuery, TrigramIndex,
+};
 
 mod common;
 
@@ -22,7 +24,7 @@ fn sift_criterion() -> Criterion {
 
 fn wrap_index(index: TrigramIndex) -> Indexes {
     let root = index.root().to_path_buf();
-    Indexes::from_single(index, root)
+    Indexes::from_single(Index::Trigram(index), root)
 }
 
 // ─── Indexed search benches ──────────────────────────────────────────────────

@@ -1,3 +1,6 @@
+pub mod meta;
+mod snapshot;
+pub mod store;
 pub mod trigram;
 
 use std::path::{Path, PathBuf};
@@ -6,7 +9,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::search::output::mode::CandidateCoverage;
 
-pub use trigram::TrigramIndex;
 pub use trigram::TrigramIndexError;
 
 /// How an index query plan resolves candidates.
@@ -35,7 +37,14 @@ pub enum CorpusKind {
     SingleFile,
 }
 
-const INDEX_KINDS: &[&str] = &["trigram"];
+/// Configuration for building an index over a corpus.
+pub struct IndexBuildConfig<'a> {
+    pub root: &'a Path,
+    pub follow_links: bool,
+    pub exclude_paths: &'a [PathBuf],
+    pub include_paths: &'a [PathBuf],
+    pub corpus_kind: CorpusKind,
+}
 
 /// Errors specific to the index registry layer.
 #[derive(Debug, thiserror::Error)]
@@ -51,11 +60,142 @@ pub enum IndexError {
         path: PathBuf,
         source: std::io::Error,
     },
+
+    #[error("unknown index kind: {0}")]
+    UnknownIndexKind(String),
+
+    #[error("invalid snapshot manifest at {path}: {source}")]
+    InvalidManifest {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
 }
 
-/// Registry of opened indexes for a single `.sift` directory.
+/// Tag identifying an index kind for lifecycle dispatch (build, open, update).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IndexKind {
+    Trigram,
+}
+
+impl IndexKind {
+    pub const ALL: &[Self] = &[Self::Trigram];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trigram => "trigram",
+        }
+    }
+
+    pub(crate) fn build_to_dir(
+        self,
+        config: &IndexBuildConfig<'_>,
+        output_dir: &Path,
+    ) -> crate::Result<()> {
+        match self {
+            Self::Trigram => {
+                trigram::TrigramIndex::build(config, output_dir)?;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn open_from_dir(
+        self,
+        index_dir: &Path,
+        root: &Path,
+        corpus_kind: CorpusKind,
+    ) -> crate::Result<Index> {
+        match self {
+            Self::Trigram => Ok(Index::Trigram(trigram::TrigramIndex::open(
+                index_dir,
+                root,
+                corpus_kind,
+            )?)),
+        }
+    }
+
+    pub(crate) fn try_update(
+        self,
+        snapshot_dir: &Path,
+        config: &IndexBuildConfig<'_>,
+        output_dir: &Path,
+    ) -> crate::Result<bool> {
+        let existing_dir = snapshot_dir.join(self.as_str());
+        if !existing_dir.exists() {
+            self.build_to_dir(config, output_dir)?;
+            return Ok(true);
+        }
+        let root = config
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| config.root.to_path_buf());
+        match self {
+            Self::Trigram => {
+                let existing =
+                    trigram::TrigramIndex::open(&existing_dir, &root, config.corpus_kind)?;
+                Ok(existing.update(config, output_dir)?.is_some())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for IndexKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for IndexKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "trigram" => Ok(Self::Trigram),
+            other => Err(format!("unknown index kind: {other}")),
+        }
+    }
+}
+
+/// An opened index instance, used for search-time dispatch.
+pub enum Index {
+    Trigram(trigram::TrigramIndex),
+}
+
+impl Index {
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        match self {
+            Self::Trigram(idx) => idx.root(),
+        }
+    }
+
+    #[must_use]
+    pub const fn corpus_kind(&self) -> CorpusKind {
+        match self {
+            Self::Trigram(idx) => idx.corpus_kind(),
+        }
+    }
+
+    #[must_use]
+    pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
+        match self {
+            Self::Trigram(idx) => idx.candidates(query),
+        }
+    }
+
+    #[must_use]
+    pub fn all_files(&self) -> Vec<crate::Candidate> {
+        match self {
+            Self::Trigram(idx) => idx.all_files(),
+        }
+    }
+}
+
+/// Registry of opened indexes read from a snapshot store.
 pub struct Indexes {
-    inner: Vec<Box<dyn SearchIndex>>,
+    inner: Vec<Index>,
     root: PathBuf,
 }
 
@@ -64,9 +204,9 @@ impl Indexes {
     ///
     /// Useful for testing and benchmarking.
     #[must_use]
-    pub fn from_single(index: impl SearchIndex + 'static, root: PathBuf) -> Self {
+    pub fn from_single(index: Index, root: PathBuf) -> Self {
         Self {
-            inner: vec![Box::new(index)],
+            inner: vec![index],
             root,
         }
     }
@@ -75,54 +215,45 @@ impl Indexes {
     ///
     /// # Errors
     ///
-    /// Returns [`IndexError::InvalidLayout`] if a known index-kind path exists
-    /// but is not a directory, [`IndexError::Trigram`] if a concrete trigram
-    /// index is malformed, or [`IndexError::Io`] for filesystem inspection
-    /// failures.
+    /// Returns [`IndexError::InvalidManifest`] if a snapshot manifest is
+    /// malformed, or [`IndexError::Trigram`] if a trigram index is malformed.
     ///
-    /// Returns an empty registry if no index kind directory is found.
+    /// Returns an empty registry if no current snapshot exists (walk fallback).
     pub fn open(sift_dir: &Path) -> Result<Self, IndexError> {
-        let mut indexes: Vec<Box<dyn SearchIndex>> = Vec::new();
-        let mut root: Option<PathBuf> = None;
+        let store = store::IndexStore::open(sift_dir).map_err(|e| match e {
+            crate::Error::Index(ie) => ie,
+            crate::Error::Io(io) => IndexError::Io {
+                path: sift_dir.to_path_buf(),
+                source: io,
+            },
+            _ => IndexError::Io {
+                path: sift_dir.to_path_buf(),
+                source: std::io::Error::other(e.to_string()),
+            },
+        })?;
 
-        for kind in INDEX_KINDS {
-            let kind_dir = sift_dir.join(kind);
-            match std::fs::metadata(&kind_dir) {
-                Ok(meta) if meta.is_dir() => {}
-                Ok(_) => {
-                    return Err(IndexError::InvalidLayout { path: kind_dir });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    continue;
-                }
-                Err(e) => {
-                    return Err(IndexError::Io {
-                        path: kind_dir,
-                        source: e,
-                    });
-                }
-            }
+        let inner = store.open_current().map_err(|e| match e {
+            crate::Error::Index(ie) => ie,
+            crate::Error::Io(io) => IndexError::Io {
+                path: sift_dir.to_path_buf(),
+                source: io,
+            },
+            _ => IndexError::Io {
+                path: sift_dir.to_path_buf(),
+                source: std::io::Error::other(e.to_string()),
+            },
+        })?;
 
-            let index = TrigramIndex::open(&kind_dir).map_err(IndexError::Trigram)?;
-            let this_root = index.root().to_path_buf();
-            if let Some(existing_root) = &root {
-                if *existing_root != this_root {
-                    return Err(IndexError::InvalidLayout { path: kind_dir });
-                }
-            } else {
-                root = Some(this_root);
-            }
-            indexes.push(Box::new(index));
-        }
+        let root = meta::StoreMeta::read(sift_dir)
+            .ok()
+            .map(|m| m.root)
+            .unwrap_or_default();
 
-        Ok(Self {
-            inner: indexes,
-            root: root.unwrap_or_default(),
-        })
+        Ok(Self { inner, root })
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
@@ -132,13 +263,6 @@ impl Indexes {
     }
 
     /// Resolve candidates for a query across all registered indexes.
-    ///
-    /// Each index returns its candidate set; results are intersected by
-    /// absolute path across all indexes and returned as a flat list
-    /// ready for filtering and scanning.
-    ///
-    /// Multiple conservative indexes together produce a narrower candidate
-    /// set than any single index alone.
     #[must_use]
     pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
         let mut iter = self.inner.iter();
@@ -177,9 +301,6 @@ impl Indexes {
     }
 
     /// Return all indexed files across all registered indexes.
-    ///
-    /// Used for output modes that require scanning every file (e.g. `--count`,
-    /// `--files-without-match`). Intersected by absolute path across all indexes.
     #[must_use]
     pub fn resolve_all_files(&self) -> Vec<crate::Candidate> {
         let mut iter = self.inner.iter();
@@ -205,8 +326,8 @@ impl Indexes {
     }
 
     #[must_use]
-    pub fn first(&self) -> Option<&dyn SearchIndex> {
-        self.inner.first().map(AsRef::as_ref)
+    pub fn first(&self) -> Option<&Index> {
+        self.inner.first()
     }
 
     /// Returns the corpus kind if all indexes agree, or `None` for mixed/empty.
@@ -250,33 +371,6 @@ impl IndexId {
     }
 }
 
-/// An indexed search corpus that can return candidate files for a query.
-pub trait SearchIndex: Sync + Send {
-    fn root(&self) -> &Path;
-    fn corpus_kind(&self) -> CorpusKind;
-    fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate>;
-    fn all_files(&self) -> Vec<crate::Candidate>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IndexMeta {
-    pub root: PathBuf,
-    #[serde(default)]
-    pub corpus_kind: CorpusKind,
-}
-
-impl IndexMeta {
-    /// # Errors
-    ///
-    /// Returns `InvalidMeta` if `root` is not an absolute path.
-    pub fn validate(self, meta_path: &Path) -> Result<Self, TrigramIndexError> {
-        if !self.root.is_absolute() {
-            return Err(TrigramIndexError::InvalidMeta(meta_path.to_path_buf()));
-        }
-        Ok(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,46 +390,13 @@ mod tests {
     }
 
     #[test]
-    fn index_meta_validate_accepts_absolute_root() {
-        let abs = std::env::current_dir().unwrap();
-        let meta = IndexMeta {
-            root: abs,
-            corpus_kind: CorpusKind::Directory,
-        };
-        let result = meta.validate(Path::new("/fake/meta.json"));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn index_meta_validate_rejects_relative_root() {
-        let meta = IndexMeta {
-            root: PathBuf::from("relative/path"),
-            corpus_kind: CorpusKind::Directory,
-        };
-        let result = meta.validate(Path::new("/fake/meta.json"));
-        assert!(matches!(result, Err(TrigramIndexError::InvalidMeta(_))));
-    }
-
-    #[test]
-    fn indexes_open_empty_when_no_index_kind_exists() {
+    fn indexes_open_empty_when_no_current_file() {
         let tmp = TempDir::new().expect("create temp dir");
         let sift_dir = tmp.path().join(".sift");
         fs::create_dir_all(&sift_dir).expect("create sift dir");
         let indexes = Indexes::open(&sift_dir).expect("open indexes");
         assert!(indexes.is_empty());
         assert!(indexes.root().as_os_str().is_empty());
-    }
-
-    #[test]
-    fn indexes_open_invalid_layout_when_trigram_is_file() {
-        let tmp = TempDir::new().expect("create temp dir");
-        let sift_dir = tmp.path().join(".sift");
-        fs::create_dir_all(&sift_dir).expect("create sift dir");
-        let trigram_path = sift_dir.join("trigram");
-        fs::write(&trigram_path, "not a directory").expect("write file");
-
-        let result = Indexes::open(&sift_dir);
-        assert!(matches!(result, Err(IndexError::InvalidLayout { path }) if path == trigram_path));
     }
 
     #[test]

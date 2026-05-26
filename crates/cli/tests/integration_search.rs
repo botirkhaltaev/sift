@@ -201,7 +201,11 @@ fn partial_index_missing_component_errors() {
     p.write("found.txt", "unique_marker_partial_index\n");
     p.build_index();
 
-    let postings = p.root().join(".sift/trigram/.index/postings.bin");
+    let current = fs::read_to_string(p.root().join(".sift/CURRENT")).unwrap();
+    let snapshot = current.trim();
+    let postings = p
+        .root()
+        .join(format!(".sift/snapshots/{snapshot}/trigram/postings.bin"));
     fs::remove_file(&postings).unwrap();
 
     let out = p.index_output(["unique_marker_partial_index"]);
@@ -213,8 +217,8 @@ fn invalid_meta_errors() {
     let p = TestProject::new("search-invalid-meta-error");
     p.write("found.txt", "unique_marker_bad_meta\n");
 
-    fs::create_dir_all(p.root().join(".sift/trigram")).unwrap();
-    fs::write(p.root().join(".sift/trigram/sift.meta"), "not valid json\n").unwrap();
+    fs::create_dir_all(p.root().join(".sift")).unwrap();
+    fs::write(p.root().join(".sift/CURRENT"), "nonexistent-snapshot\n").unwrap();
 
     let out = p.index_output(["unique_marker_bad_meta"]);
     assert_exit_code(&out, 2);

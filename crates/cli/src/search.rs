@@ -200,6 +200,7 @@ impl Cli {
             let root = cwd.canonicalize().map_err(|e| anyhow::anyhow!("{e}"))?;
             let prefixes = walk_path_prefixes(&root, &self.search_scope.paths)?;
             let exclude_paths = excluded_search_paths(&root, &self.paths.sift_dir);
+
             SearchCtx {
                 filter_root: root,
                 prefixes,

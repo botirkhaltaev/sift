@@ -6,10 +6,10 @@ Trigram index construction and in-memory index handle. Walks the corpus, extract
 
 | File | Description |
 |------|-------------|
-| [`mod.rs`](mod.rs) | `TrigramIndex` struct, posting list intersection, `SearchIndex` impl |
-| [`builder.rs`](builder.rs) | `TrigramIndexBuilder`: corpus walk, trigram extraction, table construction |
-| [`file_table.rs`](file_table.rs) | `MappedFilesView`: file ID to relative path mapping |
-| [`storage/`](storage/) | Binary persistence format (lexicon, postings, mmap, format constants) |
+| [`mod.rs`](mod.rs) | `TrigramIndex` struct, posting list intersection, `Index` impl |
+| [`builder.rs`](builder.rs) | `IndexTableBuilder`: corpus walk, trigram extraction, incremental table construction |
+| [`file_table.rs`](file_table.rs) | `MappedFilesView`, `FileFingerprint`: file ID to relative path + fingerprint mapping |
+| [`storage/`](storage/) | Binary persistence format (lexicon, postings, trigram sets, mmap, format constants) |
 
 ## API
 
@@ -20,7 +20,7 @@ use sift_core::{TrigramIndex, TrigramIndexBuilder};
 let index = TrigramIndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?;
 
 // Open
-let index = TrigramIndex::open(&index_dir)?;
+let index = TrigramIndex::open(&index_dir, &root, corpus_kind)?;
 
 // Query
 let path = index.file_path(FileId::new(0));
@@ -32,8 +32,9 @@ Each table file starts with an 8-byte magic header:
 
 | File | Magic | Contents |
 |------|-------|----------|
-| `files.bin` | `SIFTFIL2` | Offset table + length-prefixed UTF-8 paths |
+| `files.bin` | `SIFTFIL1` | Offset table + length-prefixed UTF-8 paths with fingerprints (mtime, size) |
 | `lexicon.bin` | `SIFTLEX1` | Sorted trigram entries with postings offsets |
 | `postings.bin` | `SIFTPST1` | Flat array of `u32` file IDs referenced by lexicon |
+| `trigrams.bin` | `SIFTTRI1` | Per-file sorted unique trigram sets for incremental rebuild |
 
 All integers are little-endian.

@@ -4,3 +4,4 @@ pub mod format;
 pub mod lexicon;
 pub mod mmap;
 pub mod postings;
+pub mod trigram_sets;

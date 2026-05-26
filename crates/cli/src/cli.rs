@@ -101,6 +101,11 @@ pub enum Commands {
     Build {
         #[arg(default_value = ".")]
         path: PathBuf,
+
+        /// Comma-separated index kinds to build (default: all).
+        /// Available: trigram
+        #[arg(short, long, value_delimiter = ',')]
+        indexes: Option<Vec<sift_core::IndexKind>>,
     },
 }
 
@@ -138,7 +143,7 @@ mod tests {
     fn cli_parses_build_subcommand_with_path() {
         let cli = Cli::try_parse_from(["sift", "build", "/tmp"]).unwrap();
         match cli.command {
-            Some(Commands::Build { path }) => {
+            Some(Commands::Build { path, .. }) => {
                 assert_eq!(path, PathBuf::from("/tmp"));
             }
             _ => panic!("expected Build subcommand"),
