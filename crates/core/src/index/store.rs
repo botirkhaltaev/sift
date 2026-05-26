@@ -180,23 +180,23 @@ impl IndexStore {
         let id = Self::snapshot_id();
         let tmp_dir = snapshots_dir.join(format!("tmp-{id}"));
 
-        let mut any_changed = false;
-        for kind in kinds {
-            let index_dir = tmp_dir.join(kind.as_str());
-            let changed = kind.try_update(&current_snapshot, config, &index_dir)?;
-            if changed {
-                any_changed = true;
-            } else {
-                let src = current_snapshot.join(kind.as_str());
-                if src.exists() {
-                    copy_dir_contents(&src, &index_dir)?;
-                }
-            }
-        }
+        let changed: Vec<bool> = kinds
+            .iter()
+            .map(|kind| kind.try_update(&current_snapshot, config, &tmp_dir.join(kind.as_str())))
+            .collect::<crate::Result<_>>()?;
 
-        if !any_changed {
+        if !changed.iter().any(|&c| c) {
             let _ = std::fs::remove_dir_all(&tmp_dir);
             return Ok(false);
+        }
+
+        for (kind, did_change) in kinds.iter().zip(&changed) {
+            if !did_change {
+                let src = current_snapshot.join(kind.as_str());
+                if src.exists() {
+                    copy_dir_contents(&src, &tmp_dir.join(kind.as_str()))?;
+                }
+            }
         }
 
         let index_names: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
