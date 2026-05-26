@@ -46,6 +46,14 @@ pub struct IndexBuildConfig<'a> {
     pub corpus_kind: CorpusKind,
 }
 
+fn candidate_rel_path_key(path: &std::path::Path) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    path.as_os_str().hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Errors specific to the index registry layer.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
@@ -273,12 +281,12 @@ impl Indexes {
         let mut candidates = first.candidates(query);
 
         for index in iter {
-            let next: std::collections::HashSet<PathBuf> = index
+            let next: std::collections::HashSet<u64> = index
                 .candidates(query)
                 .into_iter()
-                .map(|c| c.abs_path().to_path_buf())
+                .map(|c| candidate_rel_path_key(c.rel_path()))
                 .collect();
-            candidates.retain(|c| next.contains(c.abs_path()));
+            candidates.retain(|c| next.contains(&candidate_rel_path_key(c.rel_path())));
             if candidates.is_empty() {
                 break;
             }
@@ -311,12 +319,12 @@ impl Indexes {
         let mut files = first.all_files();
 
         for index in iter {
-            let next: std::collections::HashSet<PathBuf> = index
+            let next: std::collections::HashSet<u64> = index
                 .all_files()
                 .into_iter()
-                .map(|c| c.abs_path().to_path_buf())
+                .map(|c| candidate_rel_path_key(c.rel_path()))
                 .collect();
-            files.retain(|c| next.contains(c.abs_path()));
+            files.retain(|c| next.contains(&candidate_rel_path_key(c.rel_path())));
             if files.is_empty() {
                 break;
             }
