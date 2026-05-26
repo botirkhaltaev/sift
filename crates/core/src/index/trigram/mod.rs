@@ -244,13 +244,18 @@ impl TrigramIndex {
             .collect()
     }
 
+    fn candidate_from_fingerprint(&self, fp: &FileFingerprint) -> crate::Candidate {
+        let rel_path = fp.path.clone();
+        let abs_path = self.root.join(&fp.path);
+        crate::Candidate::new(rel_path, abs_path)
+    }
+
     fn resolve_candidates(&self, ids: impl IntoIterator<Item = FileId>) -> Vec<crate::Candidate> {
         ids.into_iter()
             .filter_map(|id| {
-                let fp = self.fingerprints.get(id.get())?;
-                let rel_path = fp.path.clone();
-                let abs_path = self.root.join(&fp.path);
-                Some(crate::Candidate::new(rel_path, abs_path))
+                self.fingerprints
+                    .get(id.get())
+                    .map(|fp| self.candidate_from_fingerprint(fp))
             })
             .collect()
     }
@@ -258,11 +263,7 @@ impl TrigramIndex {
     fn resolve_all_candidates(&self) -> Vec<crate::Candidate> {
         self.fingerprints
             .iter()
-            .map(|fp| {
-                let rel_path = fp.path.clone();
-                let abs_path = self.root.join(&fp.path);
-                crate::Candidate::new(rel_path, abs_path)
-            })
+            .map(|fp| self.candidate_from_fingerprint(fp))
             .collect()
     }
 
