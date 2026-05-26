@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use ignore::{WalkBuilder, WalkState};
+use ignore::{
+    DirEntry, Error as IgnoreError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState,
+};
 use rayon::prelude::*;
 
 use super::file_table::FileFingerprint;
@@ -84,6 +86,89 @@ impl<'a> IndexTableBuilder<'a> {
     }
 }
 
+/// Per-thread collector for [`WalkParallel::visit`]. Each worker buffers relative paths
+/// without synchronization; on drop the buffer is merged into a shared list.
+struct CorpusPathCollector<'a> {
+    root: PathBuf,
+    exclude_paths: &'a [PathBuf],
+    include_paths: &'a [PathBuf],
+    thread_paths: Vec<PathBuf>,
+    walk_error: Arc<Mutex<Option<crate::Error>>>,
+    consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl Drop for CorpusPathCollector<'_> {
+    fn drop(&mut self) {
+        if self.thread_paths.is_empty() {
+            return;
+        }
+        let mut guard = self
+            .consolidated_paths
+            .lock()
+            .expect("consolidate corpus paths lock");
+        guard.append(&mut self.thread_paths);
+    }
+}
+
+impl ParallelVisitor for CorpusPathCollector<'_> {
+    fn visit(&mut self, entry: Result<DirEntry, IgnoreError>) -> WalkState {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                let mut guard = self.walk_error.lock().expect("walk error lock");
+                if guard.is_none() {
+                    *guard = Some(crate::Error::Ignore(err));
+                }
+                drop(guard);
+                return WalkState::Quit;
+            }
+        };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            return WalkState::Continue;
+        }
+        let path = entry.path();
+        let rel = path.strip_prefix(&self.root).unwrap_or(path).to_path_buf();
+        if self
+            .exclude_paths
+            .iter()
+            .any(|excluded| rel.starts_with(excluded))
+        {
+            return WalkState::Continue;
+        }
+        if !self.include_paths.is_empty()
+            && !self
+                .include_paths
+                .iter()
+                .any(|included| rel == *included || rel.starts_with(included))
+        {
+            return WalkState::Continue;
+        }
+        self.thread_paths.push(rel);
+        WalkState::Continue
+    }
+}
+
+struct CorpusPathCollectorBuilder<'a> {
+    root: PathBuf,
+    exclude_paths: &'a [PathBuf],
+    include_paths: &'a [PathBuf],
+    walk_error: Arc<Mutex<Option<crate::Error>>>,
+    consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl<'a> ParallelVisitorBuilder<'a> for CorpusPathCollectorBuilder<'a> {
+    fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
+        Box::new(CorpusPathCollector {
+            root: self.root.clone(),
+            exclude_paths: self.exclude_paths,
+            include_paths: self.include_paths,
+            thread_paths: Vec::new(),
+            walk_error: Arc::clone(&self.walk_error),
+            consolidated_paths: Arc::clone(&self.consolidated_paths),
+        })
+    }
+}
+
 /// Walks the corpus directory and collects sorted relative file paths.
 struct CorpusWalker<'a> {
     config: &'a IndexBuildConfig<'a>,
@@ -95,11 +180,15 @@ impl<'a> CorpusWalker<'a> {
     }
 
     fn collect(&self) -> crate::Result<Vec<PathBuf>> {
-        let paths: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
-        let walk_error: Mutex<Option<crate::Error>> = Mutex::new(None);
-        let root = self.config.root;
-        let exclude_paths = self.config.exclude_paths;
-        let include_paths = self.config.include_paths;
+        let walk_error = Arc::new(Mutex::new(None));
+        let consolidated_paths = Arc::new(Mutex::new(Vec::new()));
+        let mut builder = CorpusPathCollectorBuilder {
+            root: self.config.root.to_path_buf(),
+            exclude_paths: self.config.exclude_paths,
+            include_paths: self.config.include_paths,
+            walk_error: Arc::clone(&walk_error),
+            consolidated_paths: Arc::clone(&consolidated_paths),
+        };
 
         WalkBuilder::new(self.config.root)
             .follow_links(self.config.follow_links)
@@ -111,51 +200,21 @@ impl<'a> CorpusWalker<'a> {
             .git_exclude(false)
             .require_git(false)
             .build_parallel()
-            .run(|| {
-                let paths = &paths;
-                let walk_error = &walk_error;
-                Box::new(move |entry| {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(err) => {
-                            let mut guard = walk_error.lock().expect("walk error lock");
-                            if guard.is_none() {
-                                *guard = Some(crate::Error::Ignore(err));
-                            }
-                            drop(guard);
-                            return WalkState::Quit;
-                        }
-                    };
-                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-                        return WalkState::Continue;
-                    }
-                    let path = entry.path();
-                    let rel = path.strip_prefix(root).unwrap_or(path).to_path_buf();
-                    if exclude_paths
-                        .iter()
-                        .any(|excluded| rel.starts_with(excluded))
-                    {
-                        return WalkState::Continue;
-                    }
-                    if !include_paths.is_empty()
-                        && !include_paths
-                            .iter()
-                            .any(|included| rel == *included || rel.starts_with(included))
-                    {
-                        return WalkState::Continue;
-                    }
-                    paths.lock().expect("paths lock").push(rel);
-                    WalkState::Continue
-                })
-            });
+            .visit(&mut builder);
 
-        if let Some(err) = walk_error.into_inner().expect("walk error lock") {
-            return Err(err);
+        {
+            let mut err_slot = walk_error.lock().expect("walk error lock");
+            if let Some(err) = err_slot.take() {
+                return Err(err);
+            }
         }
 
-        let mut paths = paths.into_inner().expect("paths lock");
-        paths.sort_unstable();
-        Ok(paths)
+        let merged_paths = {
+            let mut guard = consolidated_paths.lock().expect("paths lock");
+            guard.sort_unstable();
+            std::mem::take(&mut *guard)
+        };
+        Ok(merged_paths)
     }
 }
 
