@@ -1,10 +1,9 @@
 //! Walk corpus, extract trigrams, build in-memory index tables.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
 use ignore::WalkBuilder;
 use rayon::prelude::*;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use super::file_table::FileFingerprint;
 use super::storage::lexicon::LexiconEntry;
@@ -71,7 +70,6 @@ impl<'a> IndexTableBuilder<'a> {
             TrigramExtractor::fresh(self.config.root, &fingerprints)
         };
         let file_trigrams = extractor.extract()?;
-
         let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
 
         Ok(IndexTables {
@@ -205,12 +203,13 @@ impl<'a> TrigramExtractor<'a> {
     }
 
     fn extract(&self) -> crate::Result<Vec<Vec<Trigram>>> {
-        let cache = self.build_lookup();
+        let lookup = self.build_lookup();
+        let prev_tris = self.prev_trigrams.unwrap_or(&[]);
         self.fingerprints
             .par_iter()
             .map(|fp| {
-                if let Some(tris) = cache.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
-                    return Ok(tris.to_vec());
+                if let Some(idx) = lookup.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
+                    return Ok(prev_tris[*idx].clone());
                 }
                 let abs = self.root.join(&fp.path);
                 let mmap = open_mmap(&abs).map_err(crate::Error::Io)?;
@@ -219,7 +218,7 @@ impl<'a> TrigramExtractor<'a> {
             .collect()
     }
 
-    fn build_lookup(&self) -> std::collections::HashMap<(&Path, i64, u64), &[Trigram]> {
+    fn build_lookup(&self) -> std::collections::HashMap<(&Path, i64, u64), usize> {
         let (Some(prev_fps), Some(prev_tris)) = (self.prev_fingerprints, self.prev_trigrams) else {
             return std::collections::HashMap::new();
         };
@@ -228,8 +227,8 @@ impl<'a> TrigramExtractor<'a> {
         }
         prev_fps
             .iter()
-            .zip(prev_tris.iter())
-            .map(|(fp, tris)| ((fp.path.as_path(), fp.mtime_secs, fp.size), tris.as_slice()))
+            .enumerate()
+            .map(|(idx, fp)| ((fp.path.as_path(), fp.mtime_secs, fp.size), idx))
             .collect()
     }
 }
