@@ -2,8 +2,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 use rayon::prelude::*;
 
 use super::file_table::FileFingerprint;
@@ -94,8 +95,13 @@ impl<'a> CorpusWalker<'a> {
     }
 
     fn collect(&self) -> crate::Result<Vec<PathBuf>> {
-        let mut paths: Vec<PathBuf> = Vec::new();
-        let walker = WalkBuilder::new(self.config.root)
+        let paths: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+        let walk_error: Mutex<Option<crate::Error>> = Mutex::new(None);
+        let root = self.config.root;
+        let exclude_paths = self.config.exclude_paths;
+        let include_paths = self.config.include_paths;
+
+        WalkBuilder::new(self.config.root)
             .follow_links(self.config.follow_links)
             .hidden(false)
             .parents(false)
@@ -104,36 +110,50 @@ impl<'a> CorpusWalker<'a> {
             .git_ignore(false)
             .git_exclude(false)
             .require_git(false)
-            .build();
-        for entry in walker {
-            let entry = entry.map_err(crate::Error::Ignore)?;
-            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-            let path = entry.path();
-            let rel = path
-                .strip_prefix(self.config.root)
-                .unwrap_or(path)
-                .to_path_buf();
-            if self
-                .config
-                .exclude_paths
-                .iter()
-                .any(|excluded| rel.starts_with(excluded))
-            {
-                continue;
-            }
-            if !self.config.include_paths.is_empty()
-                && !self
-                    .config
-                    .include_paths
-                    .iter()
-                    .any(|included| rel == *included || rel.starts_with(included))
-            {
-                continue;
-            }
-            paths.push(rel);
+            .build_parallel()
+            .run(|| {
+                let paths = &paths;
+                let walk_error = &walk_error;
+                Box::new(move |entry| {
+                    let entry = match entry {
+                        Ok(entry) => entry,
+                        Err(err) => {
+                            let mut guard = walk_error.lock().expect("walk error lock");
+                            if guard.is_none() {
+                                *guard = Some(crate::Error::Ignore(err));
+                            }
+                            drop(guard);
+                            return WalkState::Quit;
+                        }
+                    };
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        return WalkState::Continue;
+                    }
+                    let path = entry.path();
+                    let rel = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+                    if exclude_paths
+                        .iter()
+                        .any(|excluded| rel.starts_with(excluded))
+                    {
+                        return WalkState::Continue;
+                    }
+                    if !include_paths.is_empty()
+                        && !include_paths
+                            .iter()
+                            .any(|included| rel == *included || rel.starts_with(included))
+                    {
+                        return WalkState::Continue;
+                    }
+                    paths.lock().expect("paths lock").push(rel);
+                    WalkState::Continue
+                })
+            });
+
+        if let Some(err) = walk_error.into_inner().expect("walk error lock") {
+            return Err(err);
         }
+
+        let mut paths = paths.into_inner().expect("paths lock");
         paths.sort_unstable();
         Ok(paths)
     }
