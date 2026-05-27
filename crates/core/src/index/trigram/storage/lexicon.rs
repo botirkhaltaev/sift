@@ -119,9 +119,7 @@ impl Lexicon {
                 if tri <= prev_tri {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!(
-                            "lexicon trigram {tri:?} out of order (prev {prev_tri:?})",
-                        ),
+                        format!("lexicon trigram {tri:?} out of order (prev {prev_tri:?})",),
                     ));
                 }
                 let prev_posting_off = u64::from_le_bytes(

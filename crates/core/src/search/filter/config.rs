@@ -45,6 +45,15 @@ impl IgnoreConfig {
     }
 }
 
+impl Default for VisibilityConfig {
+    fn default() -> Self {
+        Self {
+            hidden: HiddenMode::Respect,
+            ignore: IgnoreConfig::standard(),
+        }
+    }
+}
+
 impl VisibilityConfig {
     /// Default sift visibility: respect hidden files and apply standard ignore rules.
     #[must_use]
