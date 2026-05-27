@@ -24,10 +24,10 @@ pub use ignore::{Walk, WalkBuilder};
 
 pub use index::meta::StoreMeta;
 pub use index::store::IndexStore;
-pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
+pub use index::trigram::{TrigramIndex, TrigramIndexError};
 pub use index::{
-    CorpusKind, FileId, Index, IndexBuildConfig, IndexError, IndexId, IndexKind, Indexes, PlanMode,
-    QueryPlanOutput,
+    CorpusKind, CorpusSpec, FileId, Index, IndexConfig, IndexError, IndexId, IndexKind, Indexes,
+    PlanMode, QueryPlanOutput,
 };
 
 pub use query::{QueryFlags, QuerySpec};
@@ -76,10 +76,17 @@ mod tests {
     fn build_trigram_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> TrigramIndex {
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
-        TrigramIndexBuilder::new(corpus_path)
-            .with_dir(&trigram_dir)
-            .build()
-            .expect("build index")
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: corpus_path,
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
+            visibility: VisibilityConfig::default(),
+        };
+        TrigramIndex::build(&config, &trigram_dir).expect("build index")
     }
 
     fn build_index_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> Index {
@@ -164,9 +171,6 @@ mod tests {
         fs::create_dir_all(corpus.join("keep")).expect("create keep dir");
         fs::write(corpus.join("keep/a.txt"), "one\ntwo beta\n").expect("write file a");
         fs::write(corpus.join("keep/b.txt"), "three\n").expect("write file b");
-        fs::write(corpus.join(".ignore"), "ignored\n").expect("write ignore");
-        fs::create_dir_all(corpus.join("ignored")).expect("create ignored dir");
-        fs::write(corpus.join("ignored/hidden.txt"), "beta skip\n").expect("write ignored file");
 
         let index = build_index_in_tmp(&tmp, &corpus);
 

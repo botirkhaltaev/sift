@@ -14,62 +14,50 @@ pub struct LexiconEntry {
     pub len: u32,
 }
 
-/// Memory-mapped lexicon view with owning storage.
+/// Memory-mapped lexicon.
 ///
 /// Binary search over on-disk sorted trigram table.
 #[derive(Debug)]
-pub struct MappedLexicon {
-    backing: Backing,
+pub struct Lexicon {
+    mmap: Mmap,
     count: usize,
 }
 
-#[derive(Debug)]
-enum Backing {
-    Mmap(Mmap),
-    Owned(Vec<u8>),
-}
-
-impl MappedLexicon {
+impl Lexicon {
     const ENTRY_SIZE: usize = 15;
 
-    fn bytes(&self) -> &[u8] {
-        match &self.backing {
-            Backing::Mmap(m) => m.as_ref(),
-            Backing::Owned(v) => v.as_slice(),
+    fn encode(entries: &[LexiconEntry]) -> std::io::Result<Vec<u8>> {
+        let mut data =
+            Vec::with_capacity(LEXICON_MAGIC.len() + 4 + entries.len() * Self::ENTRY_SIZE);
+        data.extend_from_slice(&LEXICON_MAGIC);
+        let count = u32::try_from(entries.len()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "lexicon entry count exceeds u32::MAX",
+            )
+        })?;
+        data.extend_from_slice(&count.to_le_bytes());
+        for e in entries {
+            data.extend_from_slice(&e.trigram);
+            data.extend_from_slice(&e.offset.to_le_bytes());
+            data.extend_from_slice(&e.len.to_le_bytes());
         }
+        Ok(data)
     }
 
-    /// Construct from a list of lexicon entries (used by the builder for in-memory index).
+    fn bytes(&self) -> &[u8] {
+        self.mmap.as_ref()
+    }
+
+    /// Write a lexicon file and return an mmap-backed instance.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `entries.len()` exceeds `u32::MAX`.
-    #[must_use]
-    pub fn from_entries(entries: &[LexiconEntry]) -> Self {
-        let count = entries.len();
-        let size = LEXICON_MAGIC.len() + 4 + count * Self::ENTRY_SIZE;
-        let mut data = vec![0u8; size];
-        let mut cursor = 0;
-
-        data[cursor..cursor + LEXICON_MAGIC.len()].copy_from_slice(&LEXICON_MAGIC);
-        cursor += LEXICON_MAGIC.len();
-
-        data[cursor..cursor + 4].copy_from_slice(&u32::try_from(count).unwrap().to_le_bytes());
-        cursor += 4;
-
-        for e in entries {
-            data[cursor..cursor + 3].copy_from_slice(&e.trigram);
-            cursor += 3;
-            data[cursor..cursor + 8].copy_from_slice(&e.offset.to_le_bytes());
-            cursor += 8;
-            data[cursor..cursor + 4].copy_from_slice(&e.len.to_le_bytes());
-            cursor += 4;
-        }
-
-        Self {
-            backing: Backing::Owned(data),
-            count,
-        }
+    /// Returns an error if the file cannot be written or reopened.
+    pub fn create(path: &Path, entries: &[LexiconEntry]) -> std::io::Result<Self> {
+        let data = Self::encode(entries)?;
+        std::fs::write(path, &data)?;
+        Self::open(path)
     }
 
     /// Open a lexicon from a memory-mapped file.
@@ -81,10 +69,7 @@ impl MappedLexicon {
         let mmap = open_mmap(path)?;
         let bytes = mmap.as_ref();
         let count = Self::validate(bytes)?;
-        Ok(Self {
-            backing: Backing::Mmap(mmap),
-            count,
-        })
+        Ok(Self { mmap, count })
     }
 
     fn validate(bytes: &[u8]) -> std::io::Result<usize> {
@@ -108,6 +93,29 @@ impl MappedLexicon {
                 std::io::ErrorKind::InvalidData,
                 "lexicon truncated",
             ));
+        }
+        let entries = &bytes[magic_len + 4..];
+        let mut prev: Option<([u8; 3], u64)> = None;
+        for chunk in entries.chunks_exact(Self::ENTRY_SIZE) {
+            let tri: [u8; 3] = chunk[..3].try_into().unwrap();
+            let posting_off = u64::from_le_bytes(chunk[3..11].try_into().unwrap());
+            if let Some((prev_tri, prev_off)) = prev {
+                if tri <= prev_tri {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("lexicon trigram {tri:?} out of order (prev {prev_tri:?})"),
+                    ));
+                }
+                if posting_off < prev_off {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "lexicon entry {tri:?} posting offset {posting_off} less than previous {prev_off}",
+                        ),
+                    ));
+                }
+            }
+            prev = Some((tri, posting_off));
         }
         Ok(n)
     }
@@ -163,38 +171,65 @@ impl MappedLexicon {
         None
     }
 
+    /// Byte offset in the postings payload where the list after `offset` ends.
     #[must_use]
-    pub const fn iter(&self) -> MappedLexiconIter<'_> {
-        MappedLexiconIter {
-            lexicon: self,
-            pos: 0,
+    pub fn posting_byte_end(&self, offset: u64, payload_len: usize) -> usize {
+        if self.count == 0 {
+            return payload_len;
+        }
+        let bytes = self.bytes();
+        let data_start = LEXICON_MAGIC.len() + 4;
+        let mut lo = 0usize;
+        let mut hi = self.count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let off = data_start + mid * Self::ENTRY_SIZE + 3;
+            let entry_off =
+                u64::from_le_bytes(bytes[off..off + 8].try_into().expect("entry offset"));
+            if entry_off <= offset {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo < self.count {
+            let off = data_start + lo * Self::ENTRY_SIZE + 3;
+            usize::try_from(u64::from_le_bytes(
+                bytes[off..off + 8].try_into().expect("entry offset"),
+            ))
+            .unwrap_or(payload_len)
+        } else {
+            payload_len
         }
     }
 
     #[must_use]
-    pub fn backing_slice(&self) -> &[u8] {
-        self.bytes()
+    pub const fn iter(&self) -> LexiconIter<'_> {
+        LexiconIter {
+            lexicon: self,
+            pos: 0,
+        }
     }
 }
 
-impl<'a> IntoIterator for &'a MappedLexicon {
+impl<'a> IntoIterator for &'a Lexicon {
     type Item = LexiconEntry;
-    type IntoIter = MappedLexiconIter<'a>;
+    type IntoIter = LexiconIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        MappedLexiconIter {
+        LexiconIter {
             lexicon: self,
             pos: 0,
         }
     }
 }
 
-pub struct MappedLexiconIter<'_a> {
-    lexicon: &'_a MappedLexicon,
+pub struct LexiconIter<'_a> {
+    lexicon: &'_a Lexicon,
     pos: usize,
 }
 
-impl Iterator for MappedLexiconIter<'_> {
+impl Iterator for LexiconIter<'_> {
     type Item = LexiconEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -203,7 +238,7 @@ impl Iterator for MappedLexiconIter<'_> {
         }
         let bytes = self.lexicon.bytes();
         let magic_len = LEXICON_MAGIC.len();
-        let offset = magic_len + 4 + self.pos * MappedLexicon::ENTRY_SIZE;
+        let offset = magic_len + 4 + self.pos * Lexicon::ENTRY_SIZE;
         let tri: [u8; 3] = bytes[offset..offset + 3].try_into().unwrap();
         let off = u64::from_le_bytes(bytes[offset + 3..offset + 11].try_into().unwrap());
         let len = u32::from_le_bytes(bytes[offset + 11..offset + 15].try_into().unwrap());
@@ -230,16 +265,22 @@ mod tests {
         }
     }
 
+    fn create_lexicon(entries: &[LexiconEntry]) -> Lexicon {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("lexicon.bin");
+        Lexicon::create(&path, entries).expect("create lexicon")
+    }
+
     #[test]
-    fn from_entries_sets_len() {
+    fn create_sets_len() {
         let entries = vec![make_entry(*b"abc", 0, 4), make_entry(*b"def", 4, 8)];
-        let lexicon = MappedLexicon::from_entries(&entries);
+        let lexicon = create_lexicon(&entries);
         assert_eq!(lexicon.len(), 2);
     }
 
     #[test]
     fn empty_lexicon_reports_is_empty() {
-        let lexicon = MappedLexicon::from_entries(&[]);
+        let lexicon = create_lexicon(&[]);
         assert!(lexicon.is_empty());
         assert_eq!(lexicon.len(), 0);
     }
@@ -251,7 +292,7 @@ mod tests {
             make_entry(*b"bbb", 4, 4),
             make_entry(*b"ccc", 8, 4),
         ];
-        let lexicon = MappedLexicon::from_entries(&entries);
+        let lexicon = create_lexicon(&entries);
         assert!(lexicon.get(*b"aaa").is_some());
         assert!(lexicon.get(*b"bbb").is_some());
         assert!(lexicon.get(*b"ccc").is_some());
@@ -260,14 +301,68 @@ mod tests {
     #[test]
     fn get_returns_none_for_absent_trigram() {
         let entries = vec![make_entry(*b"abc", 0, 4)];
-        let lexicon = MappedLexicon::from_entries(&entries);
+        let lexicon = create_lexicon(&entries);
         assert!(lexicon.get(*b"xyz").is_none());
     }
 
     #[test]
     fn get_returns_none_for_empty_lexicon() {
-        let lexicon = MappedLexicon::from_entries(&[]);
+        let lexicon = create_lexicon(&[]);
         assert!(lexicon.get(*b"abc").is_none());
+    }
+
+    #[test]
+    fn open_rejects_duplicate_trigrams() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("lexicon.bin");
+        // Manually write duplicate trigrams
+        let mut data = LEXICON_MAGIC.to_vec();
+        data.extend_from_slice(&2u32.to_le_bytes()); // count=2
+        data.extend_from_slice(b"aaa");
+        data.extend_from_slice(&0u64.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(b"aaa"); // same trigram
+        data.extend_from_slice(&1u64.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        std::fs::write(&path, &data).expect("write");
+        let result = Lexicon::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_out_of_order_trigrams() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("lexicon.bin");
+        let mut data = LEXICON_MAGIC.to_vec();
+        data.extend_from_slice(&2u32.to_le_bytes()); // count=2
+        data.extend_from_slice(b"bbb");
+        data.extend_from_slice(&0u64.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(b"aaa"); // out of order
+        data.extend_from_slice(&1u64.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        std::fs::write(&path, &data).expect("write");
+        let result = Lexicon::open(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_non_monotonic_posting_offsets() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("lexicon.bin");
+        let mut data = LEXICON_MAGIC.to_vec();
+        data.extend_from_slice(&2u32.to_le_bytes()); // count=2
+        // First entry: trigram "aaa", offset 10
+        data.extend_from_slice(b"aaa");
+        data.extend_from_slice(&10u64.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        // Second entry: trigram "bbb", offset 5 (less than 10)
+        data.extend_from_slice(b"bbb");
+        data.extend_from_slice(&5u64.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        std::fs::write(&path, &data).expect("write");
+        let result = Lexicon::open(&path);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -277,7 +372,7 @@ mod tests {
             make_entry(*b"bbb", 4, 4),
             make_entry(*b"ccc", 8, 4),
         ];
-        let lexicon = MappedLexicon::from_entries(&entries);
+        let lexicon = create_lexicon(&entries);
         let collected: Vec<_> = lexicon.iter().collect();
         assert_eq!(collected.len(), 3);
         assert_eq!(collected[0].trigram, *b"aaa");
@@ -288,17 +383,10 @@ mod tests {
     #[test]
     fn into_iterator_for_ref_works() {
         let entries = vec![make_entry(*b"abc", 0, 4)];
-        let lexicon = MappedLexicon::from_entries(&entries);
+        let lexicon = create_lexicon(&entries);
         let collected: Vec<_> = (&lexicon).into_iter().collect();
         assert_eq!(collected.len(), 1);
         assert_eq!(collected[0].trigram, *b"abc");
-    }
-
-    #[test]
-    fn backing_slice_starts_with_lexicon_magic() {
-        let lexicon = MappedLexicon::from_entries(&[]);
-        let slice = lexicon.backing_slice();
-        assert_eq!(&slice[..LEXICON_MAGIC.len()], LEXICON_MAGIC);
     }
 
     #[test]
@@ -309,7 +397,7 @@ mod tests {
         file.write_all(b"BADMAGIC").expect("write bad magic");
         file.write_all(&0u32.to_le_bytes()).expect("write count");
 
-        let result = MappedLexicon::open(&path);
+        let result = Lexicon::open(&path);
         assert!(result.is_err());
     }
 
@@ -322,7 +410,7 @@ mod tests {
         file.write_all(&1u32.to_le_bytes()).expect("write count 1");
         file.write_all(&[0u8; 8]).expect("write only 8 of 15 bytes");
 
-        let result = MappedLexicon::open(&path);
+        let result = Lexicon::open(&path);
         assert!(result.is_err());
     }
 
@@ -332,14 +420,14 @@ mod tests {
         let path = tmp.path().join("lexicon.bin");
         std::fs::write(&path, b"SHORT").expect("write short file");
 
-        let result = MappedLexicon::open(&path);
+        let result = Lexicon::open(&path);
         assert!(result.is_err());
     }
 
     #[test]
     fn get_returns_correct_offset_and_len() {
         let entries = vec![make_entry(*b"aaa", 100, 12), make_entry(*b"bbb", 200, 8)];
-        let lexicon = MappedLexicon::from_entries(&entries);
+        let lexicon = create_lexicon(&entries);
         let entry = lexicon.get(*b"aaa").expect("find aaa");
         assert_eq!(entry.offset, 100);
         assert_eq!(entry.len, 12);

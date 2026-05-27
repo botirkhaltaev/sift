@@ -11,6 +11,49 @@ bitflags::bitflags! {
     }
 }
 
+impl IgnoreSources {
+    /// Default ignore sources used by `sift build` and search.
+    #[must_use]
+    pub const fn defaults() -> Self {
+        Self::DOT
+            .union(Self::VCS)
+            .union(Self::EXCLUDE)
+            .union(Self::GLOBAL)
+            .union(Self::PARENT)
+    }
+}
+
+impl IgnoreConfig {
+    /// Standard ignore rules for corpus walks (`.gitignore`, global, etc.), without requiring a git repo.
+    #[must_use]
+    pub fn standard() -> Self {
+        Self {
+            sources: IgnoreSources::defaults(),
+            require_git: false,
+            ..Self::default()
+        }
+    }
+
+    /// Ignore rules disabled — every path is eligible unless filtered elsewhere.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            sources: IgnoreSources::empty(),
+            require_git: false,
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for VisibilityConfig {
+    fn default() -> Self {
+        Self {
+            hidden: HiddenMode::Respect,
+            ignore: IgnoreConfig::standard(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HiddenMode {
     #[default]
@@ -25,7 +68,7 @@ pub struct IgnoreConfig {
     pub require_git: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct VisibilityConfig {
     pub hidden: HiddenMode,
     pub ignore: IgnoreConfig,

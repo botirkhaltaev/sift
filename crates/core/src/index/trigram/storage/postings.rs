@@ -1,41 +1,105 @@
-//! Contiguous `u32` LE file-id payloads referenced by the lexicon.
+//! Contiguous delta-varint encoded file-id payloads referenced by the lexicon.
 
+use std::cmp::Ordering;
 use std::path::Path;
 
 use memmap2::Mmap;
 
+use super::delta::SortedDeltaCodec;
+use super::mmap::open_mmap;
 use crate::index::trigram::storage::format::POSTINGS_MAGIC;
-use crate::index::trigram::storage::mmap::open_mmap;
 
 #[derive(Debug)]
-pub struct MappedPostings {
-    backing: Backing,
+pub struct Postings {
+    mmap: Mmap,
+    payload_len: usize,
 }
 
-#[derive(Debug)]
-enum Backing {
-    Mmap(Mmap),
-    Owned(Vec<u8>),
-}
+struct PostingListCodec;
 
-impl MappedPostings {
-    fn bytes(&self) -> &[u8] {
-        match &self.backing {
-            Backing::Mmap(m) => m.as_ref(),
-            Backing::Owned(v) => v.as_slice(),
+impl SortedDeltaCodec for PostingListCodec {
+    type Item = u32;
+
+    fn encode_sorted(out: &mut Vec<u8>, values: &[u32]) -> std::io::Result<()> {
+        let mut prev = 0u64;
+        for (i, &value) in values.iter().enumerate() {
+            let raw = if i == 0 {
+                u64::from(value)
+            } else {
+                u64::from(value).checked_sub(prev).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "non-monotonic posting list",
+                    )
+                })?
+            };
+            let mut buf = unsigned_varint::encode::u64_buffer();
+            let encoded = unsigned_varint::encode::u64(raw, &mut buf);
+            out.extend_from_slice(encoded);
+            prev = u64::from(value);
         }
+        Ok(())
     }
 
-    #[must_use]
-    pub fn from_bytes(payload: &[u8]) -> Self {
+    fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        let mut prev = 0u64;
+        while pos < bytes.len() {
+            let (raw, remaining) = unsigned_varint::decode::u64(&bytes[pos..]).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "malformed varint in posting list",
+                )
+            })?;
+            let consumed = bytes[pos..].len().saturating_sub(remaining.len());
+            pos += consumed;
+            let value = if out.is_empty() {
+                raw
+            } else {
+                prev.checked_add(raw).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "delta overflow in posting list",
+                    )
+                })?
+            };
+            if value > u64::from(u32::MAX) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "posting value exceeds u32::MAX",
+                ));
+            }
+            out.push(u32::try_from(value).expect("value bounded above"));
+            prev = value;
+        }
+        Ok(out)
+    }
+}
+
+impl Postings {
+    fn bytes(&self) -> &[u8] {
+        self.mmap.as_ref()
+    }
+
+    /// Write a postings file and return an mmap-backed instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written or reopened.
+    pub fn create(path: &Path, payload: &[u8]) -> std::io::Result<Self> {
         let mut data = Vec::with_capacity(POSTINGS_MAGIC.len() + 4 + payload.len());
         data.extend_from_slice(&POSTINGS_MAGIC);
-        let plen = u32::try_from(payload.len()).unwrap_or(u32::MAX);
+        let plen = u32::try_from(payload.len()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "postings payload exceeds u32::MAX",
+            )
+        })?;
         data.extend_from_slice(&plen.to_le_bytes());
         data.extend_from_slice(payload);
-        Self {
-            backing: Backing::Owned(data),
-        }
+        std::fs::write(path, &data)?;
+        Self::open(path)
     }
 
     /// Open postings from a memory-mapped file.
@@ -46,13 +110,11 @@ impl MappedPostings {
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let mmap = open_mmap(path)?;
         let bytes = mmap.as_ref();
-        Self::validate(bytes)?;
-        Ok(Self {
-            backing: Backing::Mmap(mmap),
-        })
+        let payload_len = Self::validate(bytes)?;
+        Ok(Self { mmap, payload_len })
     }
 
-    fn validate(bytes: &[u8]) -> std::io::Result<()> {
+    fn validate(bytes: &[u8]) -> std::io::Result<usize> {
         let magic_len = POSTINGS_MAGIC.len();
         if bytes.len() < magic_len + 4 {
             return Err(std::io::Error::new(
@@ -73,7 +135,57 @@ impl MappedPostings {
                 "postings payload shorter than declared length",
             ));
         }
-        Ok(())
+        if bytes.len() > magic_len + 4 + plen {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "postings has trailing bytes after declared payload",
+            ));
+        }
+        Ok(plen)
+    }
+
+    /// Walk an individual delta-encoded posting list without allocating.
+    ///
+    /// Returns the count of decoded values.  Rejects malformed varints, non-monotonic
+    /// deltas, overflow, and values exceeding `u32::MAX`.
+    pub(crate) fn validate_list(bytes: &[u8]) -> std::io::Result<usize> {
+        let mut pos = 0usize;
+        let mut prev = 0u64;
+        let mut count = 0usize;
+        while pos < bytes.len() {
+            let (raw, remaining) = unsigned_varint::decode::u64(&bytes[pos..]).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "malformed varint in posting list",
+                )
+            })?;
+            let consumed = bytes[pos..].len().saturating_sub(remaining.len());
+            let value = if count == 0 {
+                raw
+            } else {
+                prev.checked_add(raw).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "delta overflow in posting list",
+                    )
+                })?
+            };
+            if value > u64::from(u32::MAX) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "posting value exceeds u32::MAX",
+                ));
+            }
+            prev = value;
+            pos += consumed;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    #[must_use]
+    pub const fn payload_len(&self) -> usize {
+        self.payload_len
     }
 
     #[must_use]
@@ -83,58 +195,66 @@ impl MappedPostings {
         self.bytes().get(start..start + len).unwrap_or(&[])
     }
 
-    #[must_use]
-    pub fn backing_slice(&self) -> &[u8] {
-        self.bytes()
+    pub(crate) fn encode_sorted(out: &mut Vec<u8>, values: &[u32]) -> std::io::Result<()> {
+        PostingListCodec::encode_sorted(out, values)
+    }
+
+    pub(crate) fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
+        PostingListCodec::decode_sorted(bytes)
+    }
+
+    pub(crate) fn intersect_sorted(ids: &[u32], encoded: &[u8]) -> std::io::Result<Vec<u32>> {
+        let decoded = PostingListCodec::decode_sorted(encoded)?;
+        let mut i = 0usize;
+        let mut j = 0usize;
+        let mut out = Vec::with_capacity(ids.len().min(decoded.len()));
+        while i < ids.len() && j < decoded.len() {
+            match ids[i].cmp(&decoded[j]) {
+                Ordering::Less => i += 1,
+                Ordering::Greater => j += 1,
+                Ordering::Equal => {
+                    out.push(ids[i]);
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::TempDir;
 
     #[test]
-    fn from_bytes_stores_payload_after_header() {
-        let payload = vec![1, 2, 3, 4, 5, 6, 7, 8];
-        let postings = MappedPostings::from_bytes(&payload);
+    fn create_and_open_roundtrips() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("postings.bin");
+        let payload = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let postings = Postings::create(&path, &payload).expect("create");
+        assert_eq!(postings.payload_len(), payload.len());
         let slice = postings.slice(0, payload.len());
         assert_eq!(slice, payload.as_slice());
     }
 
     #[test]
     fn slice_returns_requested_range() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("postings.bin");
         let payload: Vec<u8> = (0..16).collect();
-        let postings = MappedPostings::from_bytes(&payload);
+        let postings = Postings::create(&path, &payload).expect("create");
         let slice = postings.slice(4, 8);
         assert_eq!(slice, &payload[4..12]);
-    }
-
-    #[test]
-    fn slice_returns_empty_for_out_of_range() {
-        let payload = vec![1, 2, 3, 4];
-        let postings = MappedPostings::from_bytes(&payload);
-        let slice = postings.slice(100, 10);
-        assert!(slice.is_empty());
-    }
-
-    #[test]
-    fn backing_slice_starts_with_postings_magic() {
-        let postings = MappedPostings::from_bytes(&[0, 0, 0, 0]);
-        let slice = postings.backing_slice();
-        assert_eq!(&slice[..POSTINGS_MAGIC.len()], POSTINGS_MAGIC);
     }
 
     #[test]
     fn open_rejects_bad_magic() {
         let tmp = TempDir::new().expect("create temp dir");
         let path = tmp.path().join("postings.bin");
-        let mut file = std::fs::File::create(&path).expect("create file");
-        file.write_all(b"BADMAGIC").expect("write bad magic");
-        file.write_all(&0u32.to_le_bytes()).expect("write length");
-
-        let result = MappedPostings::open(&path);
+        std::fs::write(&path, b"BADMAGIC").expect("write");
+        let result = Postings::open(&path);
         assert!(result.is_err());
     }
 
@@ -142,23 +262,73 @@ mod tests {
     fn open_rejects_declared_payload_longer_than_file() {
         let tmp = TempDir::new().expect("create temp dir");
         let path = tmp.path().join("postings.bin");
-        let mut file = std::fs::File::create(&path).expect("create file");
-        file.write_all(&POSTINGS_MAGIC).expect("write magic");
-        file.write_all(&100u32.to_le_bytes())
-            .expect("write length 100");
-        file.write_all(&[0u8; 4]).expect("write only 4 bytes");
-
-        let result = MappedPostings::open(&path);
+        let mut data = POSTINGS_MAGIC.to_vec();
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.extend_from_slice(&[0u8; 4]);
+        std::fs::write(&path, &data).expect("write");
+        let result = Postings::open(&path);
         assert!(result.is_err());
     }
 
     #[test]
-    fn open_rejects_truncated_magic() {
+    fn encode_decode_roundtrips() {
+        let ids = vec![0u32, 1, 5, 100, 10_000];
+        let mut buf = Vec::new();
+        Postings::encode_sorted(&mut buf, &ids).expect("encode");
+        let decoded = Postings::decode_sorted(&buf).expect("decode");
+        assert_eq!(decoded, ids);
+    }
+
+    #[test]
+    fn intersect_works() {
+        let left = vec![1u32, 3, 5, 7];
+        let mut encoded = Vec::new();
+        Postings::encode_sorted(&mut encoded, &[2u32, 3, 6, 7]).expect("encode");
+        let result = Postings::intersect_sorted(&left, &encoded).expect("intersect");
+        assert_eq!(result, vec![3, 7]);
+    }
+
+    #[test]
+    fn decode_rejects_malformed_varint() {
+        let result = Postings::decode_sorted(&[0xff]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_rejects_trailing_bytes() {
         let tmp = TempDir::new().expect("create temp dir");
         let path = tmp.path().join("postings.bin");
-        std::fs::write(&path, b"SHORT").expect("write short file");
+        let mut data = POSTINGS_MAGIC.to_vec();
+        data.extend_from_slice(&4u32.to_le_bytes()); // declares payload length 4
+        data.extend_from_slice(b"abcd");
+        data.extend_from_slice(b"TRAILING"); // extra bytes
+        std::fs::write(&path, &data).expect("write");
+        let result = Postings::open(&path);
+        assert!(result.is_err());
+    }
 
-        let result = MappedPostings::open(&path);
+    #[test]
+    fn validate_list_rejects_truncated_varint() {
+        let result = Postings::validate_list(&[0x80, 0x80, 0x80]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_list_returns_count() {
+        let mut buf = Vec::new();
+        Postings::encode_sorted(&mut buf, &[0u32, 2, 5]).expect("encode");
+        let count = Postings::validate_list(&buf).expect("validate");
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn validate_list_rejects_value_exceeding_u32_max() {
+        // First value 0, then a delta that would produce value > u32::MAX.
+        let mut buf = vec![0u8]; // single-byte varint for 0
+        let mut buffer = unsigned_varint::encode::u64_buffer();
+        let encoded = unsigned_varint::encode::u64(u64::from(u32::MAX) + 1, &mut buffer);
+        buf.extend_from_slice(encoded);
+        let result = Postings::validate_list(&buf);
         assert!(result.is_err());
     }
 }

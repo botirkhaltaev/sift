@@ -12,7 +12,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
-use sift_core::{CorpusKind, IndexBuildConfig, IndexKind, IndexStore};
+use sift_core::{
+    CorpusKind, CorpusSpec, IgnoreConfig, IndexConfig, IndexKind, IndexStore, VisibilityConfig,
+};
 
 use cli::{Cli, Commands};
 use ignore::{MessageFlags, resolve_visibility_and_ignore};
@@ -51,6 +53,8 @@ pub fn main_entry() -> ExitCode {
         let kinds = indexes.as_deref().unwrap_or(IndexKind::ALL);
         let sift_dir = &cli.paths.sift_dir;
         let exclude_paths = excluded_search_paths(&root, sift_dir);
+        let args: Vec<String> = std::env::args().collect();
+        let ignore_res = resolve_visibility_and_ignore(&args);
         let mut store =
             match IndexStore::open_or_create(sift_dir, &root, corpus_kind, cli.paths.follow, kinds)
             {
@@ -60,12 +64,22 @@ pub fn main_entry() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-        let config = IndexBuildConfig {
-            root: &root,
-            follow_links: cli.paths.follow,
-            exclude_paths: &exclude_paths,
-            include_paths: &include_paths,
-            corpus_kind,
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &root,
+                kind: corpus_kind,
+                follow_links: cli.paths.follow,
+                include_paths: &include_paths,
+                exclude_paths: &exclude_paths,
+            },
+            visibility: VisibilityConfig {
+                hidden: ignore_res.hidden_mode(),
+                ignore: IgnoreConfig {
+                    sources: ignore_res.sources,
+                    require_git: false,
+                    ..IgnoreConfig::default()
+                },
+            },
         };
         if let Err(e) = store.build(kinds, &config) {
             eprintln!("sift: {e}");

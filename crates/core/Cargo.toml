@@ -31,6 +31,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 termcolor = "1"
 thiserror = "2"
+unsigned-varint = "0.8"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
@@ -47,3 +48,19 @@ harness = false
 [[bench]]
 name = "grep"
 harness = false
+
+[[test]]
+name = "index"
+path = "tests/index/main.rs"
+
+[[test]]
+name = "search"
+path = "tests/search/main.rs"
+
+[[test]]
+name = "query"
+path = "tests/query/main.rs"
+
+[[test]]
+name = "grep"
+path = "tests/grep/main.rs"

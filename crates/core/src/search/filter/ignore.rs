@@ -5,6 +5,11 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use super::config::IgnoreConfig;
 use super::error::FilterError;
 
+/// Build a gitignore matcher for `root` from the given ignore configuration.
+///
+/// # Errors
+///
+/// Returns [`FilterError::Ignore`] if ignore rules cannot be compiled.
 pub fn build_gitignore_matcher(
     root: &Path,
     ignore_config: &IgnoreConfig,

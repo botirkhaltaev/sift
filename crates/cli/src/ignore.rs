@@ -13,9 +13,20 @@ bitflags::bitflags! {
 /// Resolved visibility / ignore state from argv.
 pub struct IgnoreResolution {
     pub hidden: bool,
-    pub sources: IgnoreSources,
+    pub sources: sift_core::IgnoreSources,
     pub require_git: bool,
     pub msg_flags: MessageFlags,
+}
+
+impl IgnoreResolution {
+    #[must_use]
+    pub const fn hidden_mode(&self) -> sift_core::HiddenMode {
+        if self.hidden {
+            sift_core::HiddenMode::Include
+        } else {
+            sift_core::HiddenMode::Respect
+        }
+    }
 }
 
 /// Hidden files, ignore rules, and `require_git` — processed in argv order (ripgrep-style).

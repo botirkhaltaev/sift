@@ -3,8 +3,9 @@
 use libfuzzer_sys::fuzz_target;
 use sift_core::grep::{GrepRequest, run as grep_run};
 use sift_core::{
-    Indexes, PatternCompiler, CandidateFilter, CandidateFilterConfig, SearchOutput,
-    SearchOutputFormat, SearchQuery, SearchSeparators, TrigramIndexBuilder,
+    CandidateFilter, CandidateFilterConfig, CorpusKind, CorpusSpec, IndexConfig, Indexes,
+    PatternCompiler, SearchOutput, SearchOutputFormat, SearchQuery, SearchSeparators, TrigramIndex,
+    VisibilityConfig,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -28,11 +29,17 @@ fn indexed() -> &'static Indexes {
             fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
             let sift_dir = tmp.path().join(".sift");
             let trigram_dir = sift_dir.join("trigram");
-            let index = TrigramIndexBuilder::new(&corpus)
-                .with_dir(&trigram_dir)
-                .build()
-                .expect("build_index");
-            index.save_to_dir(&trigram_dir).expect("save_index");
+            let config = IndexConfig {
+                corpus: CorpusSpec {
+                    root: &corpus,
+                    kind: CorpusKind::Directory,
+                    follow_links: false,
+                    include_paths: &[],
+                    exclude_paths: &[],
+                },
+                visibility: VisibilityConfig::default(),
+            };
+            TrigramIndex::build(&config, &trigram_dir).expect("build_index");
             let indexes = Indexes::open(&sift_dir).expect("open_index");
             IndexHolder { _tmp: tmp, indexes }
         })

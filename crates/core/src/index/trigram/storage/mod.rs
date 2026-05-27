@@ -1,5 +1,6 @@
 //! On-disk tables for the trigram index.
 
+pub(super) mod delta;
 pub mod format;
 pub mod lexicon;
 pub mod mmap;

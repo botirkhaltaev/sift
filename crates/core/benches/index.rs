@@ -7,7 +7,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use sift_core::{
-    CorpusKind, IndexBuildConfig, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec,
+    CorpusKind, CorpusSpec, IndexConfig, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec,
+    VisibilityConfig,
 };
 
 mod common;
@@ -33,7 +34,7 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_single_file_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -43,7 +44,17 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_parity_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
+        });
+    });
+
+    g.bench_function("filter_corpus", |b| {
+        b.iter(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let corpus = tmp.path().join("corpus");
+            common::make_filter_corpus(&corpus);
+            let idx = tmp.path().join(".sift");
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -53,7 +64,7 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_many_files_corpus(&corpus, 1_000);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -63,7 +74,7 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::materialize_monorepo_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -141,12 +152,15 @@ fn bench_indexes_open(c: &mut Criterion) {
             store
                 .build(
                     &[IndexKind::Trigram],
-                    &IndexBuildConfig {
-                        root: &corpus,
-                        follow_links: false,
-                        exclude_paths: &[],
-                        include_paths: &[],
-                        corpus_kind: CorpusKind::Directory,
+                    &IndexConfig {
+                        corpus: CorpusSpec {
+                            root: &corpus,
+                            kind: CorpusKind::Directory,
+                            follow_links: false,
+                            include_paths: &[],
+                            exclude_paths: &[],
+                        },
+                        visibility: VisibilityConfig::default(),
                     },
                 )
                 .expect("build");
@@ -166,15 +180,17 @@ fn bench_indexes_open(c: &mut Criterion) {
 fn bench_index_save_reopen(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_save_reopen");
 
-    g.bench_function("save_and_reopen", |b| {
-        let (_tmp, index) = common::open_parity_index();
+    g.bench_function("reopen", |b| {
+        let tmp = tempfile::tempdir().unwrap();
+        let corpus = tmp.path().join("corpus");
+        common::make_parity_corpus(&corpus);
+        let idx_dir = tmp.path().join(".sift");
+        let index = common::build_index(&corpus, &idx_dir);
         let root = index.root().to_path_buf();
-        let corpus_kind = index.corpus_kind();
+        let kind = index.corpus_kind();
+        drop(index);
         b.iter(|| {
-            let tmp2 = tempfile::tempdir().unwrap();
-            let save_dir = tmp2.path().join("saved_index");
-            index.save_to_dir(&save_dir).unwrap();
-            black_box(common::open_index(&save_dir, &root, corpus_kind));
+            black_box(common::open_index(&idx_dir, &root, kind));
         });
     });
 
