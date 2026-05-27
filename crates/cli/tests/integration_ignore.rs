@@ -1,6 +1,7 @@
 mod common;
 
 use std::ffi::OsString;
+use std::path::Path;
 use std::process::Command;
 
 use common::{TestProject, assert_success, normalize_stdout, rel_match};
@@ -53,8 +54,8 @@ fn no_require_git_loads_gitignore_without_dot_git() {
 }
 
 #[test]
-fn require_git_skips_gitignore_when_no_git_dir() {
-    let p = TestProject::new("ignore-require-git-no-repo");
+fn gitignore_applies_at_build_without_git_dir() {
+    let p = TestProject::new("ignore-no-git-repo-build");
     p.write(".gitignore", "*.log\n");
     p.write("keep.txt", "needle\n");
     p.write("skip.log", "needle\n");
@@ -67,8 +68,8 @@ fn require_git_skips_gitignore_when_no_git_dir() {
     let stdout = normalize_stdout(&out);
     assert!(stdout.contains(&rel_match("keep.txt", "needle")));
     assert!(
-        stdout.contains(&rel_match("skip.log", "needle")),
-        "without .git, default require_git skips loading .gitignore: {stdout}"
+        !stdout.contains("skip.log"),
+        "gitignored files should be excluded at build time: {stdout}"
     );
 }
 
@@ -85,7 +86,7 @@ fn no_ignore_disables_gitignore() {
         .expect("git");
     assert!(status.success());
 
-    p.build_index_at(p.root());
+    p.build_index_with(p.root(), false, ["--no-ignore"]);
 
     let out = p.index_output(["--no-ignore", "needle"]);
     assert_success(&out);
@@ -175,7 +176,7 @@ fn no_ignore_exclude_index() {
     p.write(".git/info/exclude", "*.bak\n");
     p.write("file.bak", "findme in bak\n");
     p.write("file.txt", "findme in txt\n");
-    p.build_index();
+    p.build_index_with(Path::new("."), false, ["--no-ignore-exclude"]);
 
     let out = p.index_output(["--no-ignore-exclude", "findme"]);
     assert_success(&out);

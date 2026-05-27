@@ -205,6 +205,7 @@ impl IndexStore {
 mod tests {
     use super::*;
     use crate::index::{CorpusKind, IndexBuildConfig, IndexKind};
+    use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
 
@@ -234,6 +235,7 @@ mod tests {
                     exclude_paths: &[],
                     include_paths: &[],
                     corpus_kind: CorpusKind::Directory,
+                    visibility: VisibilityConfig::standard(),
                 },
             )
             .expect("build");
@@ -279,6 +281,7 @@ mod tests {
                     exclude_paths: &[],
                     include_paths: &[],
                     corpus_kind: CorpusKind::Directory,
+                    visibility: VisibilityConfig::standard(),
                 },
             )
             .expect("build");
@@ -324,6 +327,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::standard(),
         };
 
         let mut store = IndexStore::open_or_create(
@@ -359,6 +363,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::standard(),
         };
 
         let mut store = IndexStore::open_or_create(
@@ -396,6 +401,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::standard(),
         };
 
         let mut store = IndexStore::open_or_create(

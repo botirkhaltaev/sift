@@ -5,7 +5,6 @@ pub mod types;
 
 mod planner;
 
-use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
@@ -212,9 +211,9 @@ impl TrigramIndex {
             return &[];
         };
         let start = usize::try_from(entry.offset).unwrap_or(usize::MAX);
-        let n = usize::try_from(entry.len).unwrap_or(usize::MAX);
-        let nbytes = n.saturating_mul(4);
-        self.postings.slice(start, nbytes)
+        let payload_len = self.postings.payload_len();
+        let end = self.lexicon.posting_byte_end(entry.offset, payload_len);
+        self.postings.slice(start, end.saturating_sub(start))
     }
 
     fn candidate_file_ids(&self, arms: &[Vec<u8>]) -> Vec<u32> {
@@ -353,74 +352,18 @@ impl PostingOps {
             return Vec::new();
         }
         if slices.len() == 1 {
-            return Self::u32_vec_from_le_bytes(slices[0]);
+            return storage::varint::decode_sorted_deltas::<u32>(slices[0]);
         }
-        let mut cur = Self::intersect_two_byte_slices(slices[0], slices[1]);
-        for s in &slices[2..] {
-            cur = Self::intersect_vec_with_bytes(&cur, s);
+        let mut ordered: Vec<&[u8]> = slices.to_vec();
+        ordered.sort_unstable_by_key(|slice| slice.len());
+        let mut cur = storage::varint::decode_sorted_deltas::<u32>(ordered[0]);
+        for s in &ordered[1..] {
+            cur = storage::varint::intersect_sorted(&cur, s);
             if cur.is_empty() {
                 break;
             }
         }
         cur
-    }
-
-    fn intersect_two_byte_slices(a: &[u8], b: &[u8]) -> Vec<u32> {
-        if !a.len().is_multiple_of(4) || !b.len().is_multiple_of(4) {
-            return Vec::new();
-        }
-        let an = a.len() / 4;
-        let bn = b.len() / 4;
-        let mut i = 0usize;
-        let mut j = 0usize;
-        let mut out = Vec::with_capacity(an.min(bn));
-        while i < an && j < bn {
-            let ai = u32::from_le_bytes(a[i * 4..i * 4 + 4].try_into().unwrap());
-            let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
-            match ai.cmp(&bj) {
-                Ordering::Less => i += 1,
-                Ordering::Greater => j += 1,
-                Ordering::Equal => {
-                    out.push(ai);
-                    i += 1;
-                    j += 1;
-                }
-            }
-        }
-        out
-    }
-
-    fn intersect_vec_with_bytes(cur: &[u32], b: &[u8]) -> Vec<u32> {
-        if !b.len().is_multiple_of(4) {
-            return Vec::new();
-        }
-        let bn = b.len() / 4;
-        let mut i = 0usize;
-        let mut j = 0usize;
-        let mut out = Vec::with_capacity(cur.len().min(bn));
-        while i < cur.len() && j < bn {
-            let bj = u32::from_le_bytes(b[j * 4..j * 4 + 4].try_into().unwrap());
-            match cur[i].cmp(&bj) {
-                Ordering::Less => i += 1,
-                Ordering::Greater => j += 1,
-                Ordering::Equal => {
-                    out.push(cur[i]);
-                    i += 1;
-                    j += 1;
-                }
-            }
-        }
-        out
-    }
-
-    fn u32_vec_from_le_bytes(slice: &[u8]) -> Vec<u32> {
-        if !slice.len().is_multiple_of(4) {
-            return Vec::new();
-        }
-        slice
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
-            .collect()
     }
 
     fn merge_sorted_runs(lists: Vec<Vec<u32>>) -> Vec<u32> {
@@ -463,8 +406,10 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn bytes(ids: &[u32]) -> Vec<u8> {
-        ids.iter().flat_map(|id| id.to_le_bytes()).collect()
+    fn encode(ids: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        storage::varint::encode_sorted_deltas(&mut buf, ids);
+        buf
     }
 
     #[test]
@@ -476,9 +421,9 @@ mod tests {
 
     #[test]
     fn intersect_sorted_posting_byte_slices_handles_smallest_first_order() {
-        let a = bytes(&[1, 3, 5, 7, 9]);
-        let b = bytes(&[3, 7]);
-        let c = bytes(&[0, 3, 4, 7, 8]);
+        let a = encode(&[1, 3, 5, 7, 9]);
+        let b = encode(&[3, 7]);
+        let c = encode(&[0, 3, 4, 7, 8]);
         let slices = vec![a.as_slice(), b.as_slice(), c.as_slice()];
         let ids = PostingOps::intersect_sorted_slices(&slices);
         assert_eq!(ids, vec![3, 7]);
@@ -510,22 +455,22 @@ mod tests {
 
     #[test]
     fn intersect_sorted_slices_single_returns_decoded_ids() {
-        let a = bytes(&[1, 3, 5]);
+        let a = encode(&[1, 3, 5]);
         let ids = PostingOps::intersect_sorted_slices(&[a.as_slice()]);
         assert_eq!(ids, vec![1, 3, 5]);
     }
 
     #[test]
-    fn intersect_sorted_slices_non_multiple_of_four_returns_empty() {
-        let a = &[1, 2, 3];
+    fn intersect_sorted_slices_invalid_varint_returns_empty() {
+        let a = &[0xff];
         let ids = PostingOps::intersect_sorted_slices(&[a]);
         assert!(ids.is_empty());
     }
 
     #[test]
     fn intersect_sorted_slices_no_overlap_returns_empty() {
-        let a = bytes(&[1, 2, 3]);
-        let b = bytes(&[4, 5, 6]);
+        let a = encode(&[1, 2, 3]);
+        let b = encode(&[4, 5, 6]);
         let ids = PostingOps::intersect_sorted_slices(&[a.as_slice(), b.as_slice()]);
         assert!(ids.is_empty());
     }

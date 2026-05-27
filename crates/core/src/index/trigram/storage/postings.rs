@@ -77,6 +77,12 @@ impl MappedPostings {
     }
 
     #[must_use]
+    pub fn payload_len(&self) -> usize {
+        let payload_start = POSTINGS_MAGIC.len() + 4;
+        self.bytes().len().saturating_sub(payload_start)
+    }
+
+    #[must_use]
     pub fn slice(&self, start: usize, len: usize) -> &[u8] {
         let payload_start = POSTINGS_MAGIC.len() + 4;
         let start = payload_start + start;

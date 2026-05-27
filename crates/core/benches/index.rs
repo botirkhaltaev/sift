@@ -8,6 +8,7 @@ use std::hint::black_box;
 
 use sift_core::{
     CorpusKind, IndexBuildConfig, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec,
+    VisibilityConfig,
 };
 
 mod common;
@@ -33,7 +34,7 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_single_file_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -43,7 +44,17 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_parity_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
+        });
+    });
+
+    g.bench_function("filter_corpus", |b| {
+        b.iter(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let corpus = tmp.path().join("corpus");
+            common::make_filter_corpus(&corpus);
+            let idx = tmp.path().join(".sift");
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -53,7 +64,7 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_many_files_corpus(&corpus, 1_000);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -63,7 +74,7 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::materialize_monorepo_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
-            common::build_index(&corpus, &idx);
+            common::build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -147,6 +158,7 @@ fn bench_indexes_open(c: &mut Criterion) {
                         exclude_paths: &[],
                         include_paths: &[],
                         corpus_kind: CorpusKind::Directory,
+                        visibility: VisibilityConfig::standard(),
                     },
                 )
                 .expect("build");

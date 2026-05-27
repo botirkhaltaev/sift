@@ -163,6 +163,38 @@ impl MappedLexicon {
         None
     }
 
+    /// Byte offset in the postings payload where the list after `offset` ends.
+    #[must_use]
+    pub fn posting_byte_end(&self, offset: u64, payload_len: usize) -> usize {
+        if self.count == 0 {
+            return payload_len;
+        }
+        let bytes = self.bytes();
+        let data_start = LEXICON_MAGIC.len() + 4;
+        let mut lo = 0usize;
+        let mut hi = self.count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let off = data_start + mid * Self::ENTRY_SIZE + 3;
+            let entry_off =
+                u64::from_le_bytes(bytes[off..off + 8].try_into().expect("entry offset"));
+            if entry_off <= offset {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo < self.count {
+            let off = data_start + lo * Self::ENTRY_SIZE + 3;
+            usize::try_from(u64::from_le_bytes(
+                bytes[off..off + 8].try_into().expect("entry offset"),
+            ))
+            .unwrap_or(payload_len)
+        } else {
+            payload_len
+        }
+    }
+
     #[must_use]
     pub const fn iter(&self) -> MappedLexiconIter<'_> {
         MappedLexiconIter {

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::search::filter::VisibilityConfig;
 use crate::search::output::mode::CandidateCoverage;
 
 pub use trigram::TrigramIndexError;
@@ -45,6 +46,8 @@ pub struct IndexBuildConfig<'a> {
     pub exclude_paths: &'a [PathBuf],
     pub include_paths: &'a [PathBuf],
     pub corpus_kind: CorpusKind,
+    /// Hidden-file and ignore-rule policy for the corpus walk.
+    pub visibility: VisibilityConfig,
 }
 
 /// Errors specific to the index registry layer.

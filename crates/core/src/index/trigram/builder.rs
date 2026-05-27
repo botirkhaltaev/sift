@@ -1,6 +1,5 @@
 //! Walk corpus, extract trigrams, build in-memory index tables.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -12,9 +11,12 @@ use rayon::prelude::*;
 use super::file_table::FileFingerprint;
 use super::storage::lexicon::LexiconEntry;
 use super::storage::mmap::open_mmap;
-use super::types::Trigram;
+use super::storage::varint;
+use super::types::{Trigram, TrigramDeduper};
 
 use crate::index::{CorpusKind, IndexBuildConfig};
+use crate::search::filter::{HiddenMode, IgnoreSources, VisibilityConfig};
+use crate::search::filter::ignore::build_gitignore_matcher;
 
 /// Collected index data ready for persistence.
 pub struct IndexTables {
@@ -66,13 +68,12 @@ impl<'a> IndexTableBuilder<'a> {
         let paths = CorpusWalker::new(self.config).collect()?;
         let fingerprints = FingerprintCollector::new(self.config.root, &paths).collect()?;
 
-        let extractor = if let (Some(prev_fps), Some(prev_tris)) =
-            (self.prev_fingerprints, self.prev_trigrams)
-        {
-            TrigramExtractor::incremental(self.config.root, &fingerprints, prev_fps, prev_tris)
-        } else {
-            TrigramExtractor::fresh(self.config.root, &fingerprints)
-        };
+        let extractor = TrigramExtractor::new(
+            self.config.root,
+            &fingerprints,
+            self.prev_fingerprints,
+            self.prev_trigrams,
+        );
         let file_trigrams = extractor.extract()?;
 
         let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
@@ -92,6 +93,7 @@ struct CorpusPathCollector<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
+    gitignore: Option<Arc<ignore::gitignore::Gitignore>>,
     thread_paths: Vec<PathBuf>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
@@ -128,12 +130,21 @@ impl ParallelVisitor for CorpusPathCollector<'_> {
         }
         let path = entry.path();
         let rel = path.strip_prefix(&self.root).unwrap_or(path).to_path_buf();
+        if self.accepts_relative_path(&rel) {
+            self.thread_paths.push(rel);
+        }
+        WalkState::Continue
+    }
+}
+
+impl CorpusPathCollector<'_> {
+    fn accepts_relative_path(&self, rel: &Path) -> bool {
         if self
             .exclude_paths
             .iter()
             .any(|excluded| rel.starts_with(excluded))
         {
-            return WalkState::Continue;
+            return false;
         }
         if !self.include_paths.is_empty()
             && !self
@@ -141,10 +152,18 @@ impl ParallelVisitor for CorpusPathCollector<'_> {
                 .iter()
                 .any(|included| rel == *included || rel.starts_with(included))
         {
-            return WalkState::Continue;
+            return false;
         }
-        self.thread_paths.push(rel);
-        WalkState::Continue
+        if let Some(ref matcher) = self.gitignore {
+            let rel_normalized = rel.to_string_lossy().replace('\\', "/");
+            if matcher
+                .matched(Path::new(&rel_normalized), false)
+                .is_ignore()
+            {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -152,6 +171,7 @@ struct CorpusPathCollectorBuilder<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
+    gitignore: Option<Arc<ignore::gitignore::Gitignore>>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
 }
@@ -162,6 +182,7 @@ impl<'a> ParallelVisitorBuilder<'a> for CorpusPathCollectorBuilder<'a> {
             root: self.root.clone(),
             exclude_paths: self.exclude_paths,
             include_paths: self.include_paths,
+            gitignore: self.gitignore.clone(),
             thread_paths: Vec::new(),
             walk_error: Arc::clone(&self.walk_error),
             consolidated_paths: Arc::clone(&self.consolidated_paths),
@@ -179,28 +200,61 @@ impl<'a> CorpusWalker<'a> {
         Self { config }
     }
 
+    /// Parallel directory walk with `WalkBuilder` ignore readers disabled.
+    ///
+    /// Pattern rules (`.gitignore`, `.ignore`, exclude, global) come only from
+    /// [`Self::corpus_matcher`] and are applied in [`CorpusPathCollector::accepts_relative_path`],
+    /// matching [`crate::CandidateFilter`]. `WalkBuilder`'s `ignore`/`git_*` flags must stay off
+    /// or rules would be applied twice with different semantics.
+    fn walk_builder(&self) -> WalkBuilder {
+        let mut wb = WalkBuilder::new(self.config.root);
+        wb.follow_links(self.config.follow_links)
+            .hidden(matches!(
+                self.config.visibility.hidden,
+                HiddenMode::Respect
+            ))
+            .parents(
+                self.config
+                    .visibility
+                    .ignore
+                    .sources
+                    .contains(IgnoreSources::PARENT),
+            )
+            .ignore(false)
+            .git_ignore(false)
+            .git_exclude(false)
+            .git_global(false)
+            .require_git(false);
+        wb
+    }
+
+    fn corpus_matcher(&self) -> crate::Result<Option<Arc<ignore::gitignore::Gitignore>>> {
+        if self.config.visibility.ignore.sources.is_empty()
+            && self.config.visibility.ignore.custom_files.is_empty()
+        {
+            return Ok(None);
+        }
+        build_gitignore_matcher(self.config.root, &self.config.visibility.ignore)
+            .map_err(|e| crate::Error::Search(e.into()))
+            .map(|matcher| matcher.map(Arc::new))
+    }
+
     fn collect(&self) -> crate::Result<Vec<PathBuf>> {
         let walk_error = Arc::new(Mutex::new(None));
         let consolidated_paths = Arc::new(Mutex::new(Vec::new()));
+
+        let gitignore = self.corpus_matcher()?;
+
         let mut builder = CorpusPathCollectorBuilder {
             root: self.config.root.to_path_buf(),
             exclude_paths: self.config.exclude_paths,
             include_paths: self.config.include_paths,
+            gitignore,
             walk_error: Arc::clone(&walk_error),
             consolidated_paths: Arc::clone(&consolidated_paths),
         };
 
-        WalkBuilder::new(self.config.root)
-            .follow_links(self.config.follow_links)
-            .hidden(false)
-            .parents(false)
-            .ignore(false)
-            .git_global(false)
-            .git_ignore(false)
-            .git_exclude(false)
-            .require_git(false)
-            .build_parallel()
-            .visit(&mut builder);
+        self.walk_builder().build_parallel().visit(&mut builder);
 
         {
             let mut err_slot = walk_error.lock().expect("walk error lock");
@@ -260,26 +314,17 @@ struct TrigramExtractor<'a> {
 }
 
 impl<'a> TrigramExtractor<'a> {
-    const fn fresh(root: &'a Path, fingerprints: &'a [FileFingerprint]) -> Self {
-        Self {
-            root,
-            fingerprints,
-            prev_fingerprints: None,
-            prev_trigrams: None,
-        }
-    }
-
-    const fn incremental(
+    const fn new(
         root: &'a Path,
         fingerprints: &'a [FileFingerprint],
-        prev_fingerprints: &'a [FileFingerprint],
-        prev_trigrams: &'a [Vec<Trigram>],
+        prev_fingerprints: Option<&'a [FileFingerprint]>,
+        prev_trigrams: Option<&'a [Vec<Trigram>]>,
     ) -> Self {
         Self {
             root,
             fingerprints,
-            prev_fingerprints: Some(prev_fingerprints),
-            prev_trigrams: Some(prev_trigrams),
+            prev_fingerprints,
+            prev_trigrams,
         }
     }
 
@@ -287,13 +332,13 @@ impl<'a> TrigramExtractor<'a> {
         let cache = self.build_lookup();
         self.fingerprints
             .par_iter()
-            .map(|fp| {
+            .map_init(TrigramDeduper::new, |deduper, fp| {
                 if let Some(tris) = cache.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
                     return Ok(tris.to_vec());
                 }
                 let abs = self.root.join(&fp.path);
                 let mmap = open_mmap(&abs).map_err(crate::Error::Io)?;
-                Ok(Trigram::unique_from_bytes(mmap.as_ref()))
+                Ok(deduper.collect_unique(mmap.as_ref()))
             })
             .collect()
     }
@@ -324,8 +369,7 @@ impl<'a> PostingAssembler<'a> {
     }
 
     fn assemble(&self) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
-        let mut map: HashMap<Trigram, Vec<u32>> = HashMap::new();
-
+        let mut pairs: Vec<(Trigram, u32)> = Vec::new();
         for (id, tris) in self.file_trigrams.iter().enumerate() {
             let id_u32: u32 = id.try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
@@ -334,32 +378,34 @@ impl<'a> PostingAssembler<'a> {
                 ))
             })?;
             for tri in tris {
-                map.entry(*tri).or_default().push(id_u32);
+                pairs.push((*tri, id_u32));
             }
         }
+        pairs.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
-        let mut entries: Vec<_> = map.into_iter().collect();
-        entries.sort_unstable_by_key(|(tri, _)| tri.to_bytes());
-
-        let total_u32s: usize = entries.iter().map(|(_, ids)| ids.len()).sum();
-        let mut posting_bytes: Vec<u8> = Vec::with_capacity(total_u32s.saturating_mul(4));
-        let mut lex_entries: Vec<LexiconEntry> = Vec::with_capacity(entries.len());
-        for (tri, ids) in entries {
+        let mut posting_bytes: Vec<u8> = Vec::new();
+        let mut lex_entries: Vec<LexiconEntry> = Vec::new();
+        let mut i = 0;
+        while i < pairs.len() {
+            let tri = pairs[i].0;
             let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "postings offset overflow",
                 ))
             })?;
+            let mut ids = Vec::new();
+            while i < pairs.len() && pairs[i].0 == tri {
+                ids.push(pairs[i].1);
+                i += 1;
+            }
             let len: u32 = ids.len().try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "posting list too long",
                 ))
             })?;
-            for fid in &ids {
-                posting_bytes.extend_from_slice(&fid.to_le_bytes());
-            }
+            varint::encode_sorted_deltas(&mut posting_bytes, &ids);
             lex_entries.push(LexiconEntry {
                 trigram: tri.to_bytes(),
                 offset,
@@ -461,6 +507,7 @@ impl<'a> TrigramIndexBuilder<'a> {
             exclude_paths: &exclude_paths,
             include_paths: &include_paths,
             corpus_kind: kind,
+            visibility: VisibilityConfig::standard(),
         };
 
         let tables = IndexTableBuilder::new(&config).build()?;
@@ -476,21 +523,101 @@ impl<'a> TrigramIndexBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn build_tables(tmp: &TempDir) -> IndexTables {
-        let config = IndexBuildConfig {
-            root: tmp.path(),
-            follow_links: false,
-            exclude_paths: &[],
-            include_paths: &[],
-            corpus_kind: CorpusKind::Directory,
-        };
-        IndexTableBuilder::new(&config)
-            .build()
-            .expect("build tables")
+    struct TablesFixture;
+
+    impl TablesFixture {
+        fn no_ignore_config(root: &Path) -> IndexBuildConfig<'_> {
+            IndexBuildConfig {
+                root,
+                follow_links: false,
+                exclude_paths: &[],
+                include_paths: &[],
+                corpus_kind: CorpusKind::Directory,
+                visibility: VisibilityConfig::ignores_disabled(),
+            }
+        }
+
+        fn build(root: &Path) -> IndexTables {
+            IndexTableBuilder::new(&Self::no_ignore_config(root))
+                .build()
+                .expect("build tables")
+        }
+    }
+
+    struct PostingCounts;
+
+    impl PostingCounts {
+        fn file_occurrences(postings: &[u8], lexicon: &[LexiconEntry], file_id: u32) -> usize {
+            lexicon
+                .iter()
+                .map(|entry| {
+                    let start = usize::try_from(entry.offset).unwrap_or(usize::MAX);
+                    let end = lexicon
+                        .iter()
+                        .find(|e| e.offset > entry.offset)
+                        .map_or(postings.len(), |e| {
+                            usize::try_from(e.offset).unwrap_or(usize::MAX)
+                        });
+                    let slice = &postings[start..end];
+                    varint::decode_sorted_deltas::<u32>(slice)
+                        .into_iter()
+                        .filter(|&id| id == file_id)
+                        .count()
+                })
+                .sum()
+        }
+    }
+
+    struct FilterCorpus;
+
+    impl FilterCorpus {
+        fn write(root: &Path) {
+            fs::create_dir_all(root.join("skip")).expect("mkdir skip");
+            fs::create_dir_all(root.join("also_skip")).expect("mkdir also_skip");
+            fs::write(root.join("keep.txt"), "beta\n").expect("write keep");
+            fs::write(root.join("skip/ignored.txt"), "beta\n").expect("write skip");
+            fs::write(root.join("also_skip/omit.txt"), "beta\n").expect("write omit");
+            fs::write(root.join(".gitignore"), "skip/**\n").expect("write gitignore");
+            fs::write(root.join(".ignore"), "also_skip/**\n").expect("write ignore");
+        }
+    }
+
+    struct FilterParity;
+
+    impl FilterParity {
+        fn filter_config(build: &IndexBuildConfig<'_>) -> CandidateFilterConfig {
+            CandidateFilterConfig {
+                exclude_paths: build.exclude_paths.to_vec(),
+                visibility: build.visibility.clone(),
+                follow_links: build.follow_links,
+                ..CandidateFilterConfig::default()
+            }
+        }
+
+        fn all_corpus_files(root: &Path) -> Vec<PathBuf> {
+            let mut files = Vec::new();
+            Self::collect_files_recursive(root, root, &mut files);
+            files.sort_unstable();
+            files
+        }
+
+        fn collect_files_recursive(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+            let entries = fs::read_dir(dir).expect("read dir");
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    Self::collect_files_recursive(root, &path, out);
+                } else if path.is_file() {
+                    let rel = path.strip_prefix(root).expect("under root").to_path_buf();
+                    out.push(rel);
+                }
+            }
+        }
     }
 
     #[test]
@@ -500,7 +627,7 @@ mod tests {
         fs::write(tmp.path().join("a.txt"), "world\n").expect("write a");
         fs::write(tmp.path().join("m.txt"), "test\n").expect("write m");
 
-        let tables = build_tables(&tmp);
+        let tables = TablesFixture::build(tmp.path());
         let paths: Vec<PathBuf> = tables
             .fingerprints
             .iter()
@@ -528,6 +655,7 @@ mod tests {
             exclude_paths: &[PathBuf::from("excluded")],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::ignores_disabled(),
         };
         let tables = IndexTableBuilder::new(&config)
             .build()
@@ -542,35 +670,82 @@ mod tests {
         fs::write(tmp.path().join("a.txt"), "ababab\n").expect("write file");
         fs::write(tmp.path().join("b.txt"), "ababab\n").expect("write file");
 
-        let tables = build_tables(&tmp);
+        let tables = TablesFixture::build(tmp.path());
         assert_eq!(tables.fingerprints.len(), 2);
-        let file_id_0: u32 = 0;
-        let file_id_1: u32 = 1;
-        let occurrences_0 = tables
-            .postings
-            .chunks_exact(4)
-            .filter(|chunk| {
-                let bytes: [u8; 4] = (*chunk).try_into().unwrap();
-                u32::from_le_bytes(bytes) == file_id_0
-            })
-            .count();
-        let occurrences_1 = tables
-            .postings
-            .chunks_exact(4)
-            .filter(|chunk| {
-                let bytes: [u8; 4] = (*chunk).try_into().unwrap();
-                u32::from_le_bytes(bytes) == file_id_1
-            })
-            .count();
+
         let unique_trigrams = 3;
         assert_eq!(
-            occurrences_0, unique_trigrams,
-            "file 0 ID should appear once per unique trigram"
+            PostingCounts::file_occurrences(&tables.postings, &tables.lexicon, 0),
+            unique_trigrams
         );
         assert_eq!(
-            occurrences_1, unique_trigrams,
-            "file 1 ID should appear once per unique trigram"
+            PostingCounts::file_occurrences(&tables.postings, &tables.lexicon, 1),
+            unique_trigrams
         );
+    }
+
+    #[test]
+    fn corpus_walk_excludes_gitignored_paths_without_git_repo() {
+        let tmp = TempDir::new().expect("create temp dir");
+        FilterCorpus::write(tmp.path());
+
+        let config = IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::standard(),
+        };
+        let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
+        assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
+        assert!(!paths.iter().any(|p| p.starts_with("skip")));
+        assert!(!paths.iter().any(|p| p.starts_with("also_skip")));
+    }
+
+    #[test]
+    fn corpus_walk_with_empty_ignore_sources_includes_gitignored() {
+        let tmp = TempDir::new().expect("create temp dir");
+        FilterCorpus::write(tmp.path());
+
+        let config = IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::ignores_disabled(),
+        };
+        let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
+        assert!(paths.iter().any(|p| p.starts_with("skip")));
+        assert!(paths.iter().any(|p| p.starts_with("also_skip")));
+    }
+
+    #[test]
+    fn corpus_walk_agrees_with_candidate_filter() {
+        let tmp = TempDir::new().expect("create temp dir");
+        FilterCorpus::write(tmp.path());
+
+        let config = IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::standard(),
+        };
+        let indexed = CorpusWalker::new(&config).collect().expect("walk corpus");
+        let filter = CandidateFilter::new(&FilterParity::filter_config(&config), tmp.path())
+            .expect("filter");
+
+        for rel in FilterParity::all_corpus_files(tmp.path()) {
+            let should_index = filter.matches_path(&rel);
+            let is_indexed = indexed.iter().any(|p| p == &rel);
+            assert_eq!(
+                is_indexed, should_index,
+                "path {rel:?}: indexed={is_indexed} filter={should_index}"
+            );
+        }
     }
 
     #[test]
@@ -578,7 +753,7 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         fs::write(tmp.path().join("test.txt"), "ababab\n").expect("write file");
 
-        let tables = build_tables(&tmp);
+        let tables = TablesFixture::build(tmp.path());
         assert_eq!(tables.file_trigrams.len(), 1);
         let tris = &tables.file_trigrams[0];
         assert_eq!(tris.len(), 3);
@@ -599,6 +774,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[PathBuf::from("keep.txt")],
             corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::ignores_disabled(),
         };
         let tables = IndexTableBuilder::new(&config)
             .build()
@@ -631,11 +807,40 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         fs::write(tmp.path().join("a.txt"), "hello world\n").expect("write file");
 
-        let tables = build_tables(&tmp);
+        let tables = TablesFixture::build(tmp.path());
         assert_eq!(tables.fingerprints.len(), 1);
         assert!(
             tables.fingerprints[0].size > 0,
             "fingerprint should capture file size"
+        );
+    }
+
+    #[test]
+    fn build_respects_gitignore_by_default() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::write(tmp.path().join(".gitignore"), "*.ignored\n").expect("write gitignore");
+        fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
+        fs::write(tmp.path().join("skip.ignored"), "secret\n").expect("write ignored");
+
+        let config = IndexBuildConfig {
+            root: tmp.path(),
+            follow_links: false,
+            exclude_paths: &[],
+            include_paths: &[],
+            corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::standard(),
+        };
+        let tables = IndexTableBuilder::new(&config)
+            .build()
+            .expect("build tables");
+        let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
+        assert!(
+            !paths.iter().any(|p| p == "skip.ignored"),
+            "gitignored file must not be indexed, got {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "keep.txt"),
+            "keep.txt must be indexed, got {paths:?}"
         );
     }
 
@@ -651,6 +856,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
+            visibility: VisibilityConfig::ignores_disabled(),
         };
 
         let tables1 = IndexTableBuilder::new(&config)

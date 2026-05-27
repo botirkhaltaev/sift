@@ -47,3 +47,19 @@ harness = false
 [[bench]]
 name = "grep"
 harness = false
+
+[[test]]
+name = "index"
+path = "tests/index/main.rs"
+
+[[test]]
+name = "search"
+path = "tests/search/main.rs"
+
+[[test]]
+name = "query"
+path = "tests/query/main.rs"
+
+[[test]]
+name = "grep"
+path = "tests/grep/main.rs"

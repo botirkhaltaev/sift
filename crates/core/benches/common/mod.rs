@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 use sift_core::{
     CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, LineStyleFlags, OutputEmission, PassthruMode,
-    PathDisplay, RecordTerminator, SearchLineStyle, SearchMode, SearchOptions, SearchOutput,
-    SearchOutputFormat, SearchQuery, SearchRecordStyle, SearchSeparators, TrigramIndex,
-    TrigramIndexBuilder, VisibilityConfig, ZeroCountMode,
+    HiddenMode, IgnoreConfig, IgnoreSources, IndexBuildConfig, IndexKind, IndexStore,
+    LineStyleFlags, OutputEmission, PassthruMode, PathDisplay, RecordTerminator, SearchLineStyle,
+    SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchQuery, SearchRecordStyle,
+    SearchSeparators, TrigramIndex, TrigramIndexBuilder, VisibilityConfig, ZeroCountMode,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -45,8 +45,8 @@ pub fn make_filter_corpus(root: &Path) {
     fs::write(root.join("also_skip/omit.txt"), "beta in .ignore\n").unwrap();
     fs::write(root.join("keep.txt"), "beta outside ignore rules\n").unwrap();
 
-    fs::write(root.join(".gitignore"), "skip/\n").unwrap();
-    fs::write(root.join(".ignore"), "also_skip/\n").unwrap();
+    fs::write(root.join(".gitignore"), "skip/**\n").unwrap();
+    fs::write(root.join(".ignore"), "also_skip/**\n").unwrap();
 }
 
 pub fn make_single_file_corpus(root: &Path) {
@@ -117,6 +117,35 @@ pub fn materialize_monorepo_corpus(
 
 // ─── Index helpers ───────────────────────────────────────────────────────────
 
+pub fn standard_build_config<'a>(
+    root: &'a Path,
+    exclude_paths: &'a [PathBuf],
+) -> IndexBuildConfig<'a> {
+    IndexBuildConfig {
+        root,
+        follow_links: false,
+        exclude_paths,
+        include_paths: &[],
+        corpus_kind: CorpusKind::Directory,
+        visibility: VisibilityConfig::standard(),
+    }
+}
+
+/// Full `sift build` path via [`IndexStore`] (production defaults).
+pub fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
+    let mut store = IndexStore::open_or_create(
+        sift_dir,
+        corpus,
+        CorpusKind::Directory,
+        false,
+        &[IndexKind::Trigram],
+    )
+    .unwrap();
+    let config = standard_build_config(corpus, &[]);
+    store.build(&[IndexKind::Trigram], &config).unwrap();
+}
+
+/// Trigram tables written directly under `idx_dir` (for open/candidate benches).
 pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
     TrigramIndexBuilder::new(corpus)
         .with_dir(idx_dir)

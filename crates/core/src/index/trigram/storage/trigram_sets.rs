@@ -1,12 +1,10 @@
-//! Per-file trigram sets: file id → sorted unique trigrams.
+//! Per-file trigram sets: file id → sorted unique trigrams (delta-varint encoded).
 //!
-//! Format (SIFTTRI1):
+//! Format (SIFTTRI2):
 //!   magic (8) | count (4) | offsets[count] (8*count) | blob
 //!
 //! Each entry in the blob:
-//!   `num_trigrams` (4) | `trigram_bytes` (3 * `num_trigrams`)
-//!
-//! Trigram bytes are the 3-byte big-endian encoding of each `Trigram`.
+//!   delta-varint encoded sorted 24-bit trigram values
 
 use std::path::Path;
 
@@ -14,6 +12,7 @@ use memmap2::Mmap;
 
 use super::format::TRIGRAMS_MAGIC;
 use super::mmap::open_mmap;
+use super::varint;
 use crate::index::trigram::types::Trigram;
 
 /// Memory-mapped view of per-file trigram sets.
@@ -60,11 +59,8 @@ impl MappedTrigramSets {
         for tris in sets {
             let abs_off = u64::try_from(blob_start + blob.len()).unwrap_or(u64::MAX);
             offsets.push(abs_off);
-            let num = u32::try_from(tris.len()).unwrap_or(u32::MAX);
-            blob.extend_from_slice(&num.to_le_bytes());
-            for tri in tris {
-                blob.extend_from_slice(&tri.to_bytes());
-            }
+            let values: Vec<u32> = tris.iter().map(|t| t.as_u24()).collect();
+            varint::encode_sorted_deltas(&mut blob, &values);
         }
 
         let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
@@ -109,6 +105,19 @@ impl MappedTrigramSets {
         Ok((count, offset_table_start))
     }
 
+    fn blob_end(&self, id: usize) -> usize {
+        let bytes = self.bytes();
+        if id + 1 < self.count {
+            let off_start = self.offset_table_start + (id + 1) * 8;
+            usize::try_from(u64::from_le_bytes(
+                bytes[off_start..off_start + 8].try_into().unwrap(),
+            ))
+            .unwrap_or(bytes.len())
+        } else {
+            bytes.len()
+        }
+    }
+
     pub fn to_sets(&self) -> std::io::Result<Vec<Vec<Trigram>>> {
         let mut out = Vec::with_capacity(self.count);
         let bytes = self.bytes();
@@ -123,30 +132,22 @@ impl MappedTrigramSets {
                     format!("trigram set {id} offset exceeds address space"),
                 )
             })?;
-            if off + 4 > bytes.len() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("trigram set {id} header extends past end"),
-                ));
-            }
-            let num = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
-            let data_start = off + 4;
-            let data_end = data_start + num * 3;
-            if data_end > bytes.len() {
+            let end = self.blob_end(id);
+            if off > end || end > bytes.len() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("trigram set {id} data extends past end"),
                 ));
             }
-            let mut tris = Vec::with_capacity(num);
-            for i in 0..num {
-                let base = data_start + i * 3;
-                tris.push(Trigram::from_bytes([
-                    bytes[base],
-                    bytes[base + 1],
-                    bytes[base + 2],
-                ]));
-            }
+            let slice = &bytes[off..end];
+            let values = varint::decode_sorted_deltas::<u32>(slice);
+            let tris: Vec<Trigram> = values
+                .into_iter()
+                .map(|v| {
+                    let b = v.to_be_bytes();
+                    Trigram::from_bytes([b[1], b[2], b[3]])
+                })
+                .collect();
             out.push(tris);
         }
         Ok(out)

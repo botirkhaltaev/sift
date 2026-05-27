@@ -27,21 +27,71 @@ impl Trigram {
         TrigramWindows { bytes, offset: 0 }
     }
 
-    /// Extract unique trigrams from raw `bytes`.
-    ///
-    /// Returns a sorted, deduplicated `Vec<Trigram>`.
+    /// 24-bit integer key used for dedup bitsets.
+    #[inline]
     #[must_use]
-    pub fn unique_from_bytes(bytes: &[u8]) -> Vec<Self> {
-        if bytes.len() < 3 {
-            return Vec::new();
+    pub const fn as_u24(self) -> u32 {
+        self.0
+    }
+}
+
+/// Reusable deduper for per-file unique trigram extraction.
+pub struct TrigramDeduper {
+    seen: Box<[u64]>,
+    touched: Vec<Trigram>,
+}
+
+const SEEN_WORDS: usize = 262_144;
+
+impl TrigramDeduper {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            seen: vec![0; SEEN_WORDS].into_boxed_slice(),
+            touched: Vec::new(),
         }
-        let mut out = Vec::with_capacity(bytes.len() - 2);
-        for i in 0..=bytes.len() - 3 {
-            out.push(Self::from_bytes([bytes[i], bytes[i + 1], bytes[i + 2]]));
+    }
+
+    fn reset(&mut self) {
+        for tri in self.touched.drain(..) {
+            let key = tri.as_u24() as usize;
+            let word = key >> 6;
+            let bit = 1u64 << (key & 63);
+            self.seen[word] &= !bit;
         }
-        out.sort_unstable();
-        out.dedup();
-        out
+    }
+
+    fn mark(&mut self, tri: Trigram) -> bool {
+        let key = tri.as_u24() as usize;
+        let word = key >> 6;
+        let bit = 1u64 << (key & 63);
+        let slot = &mut self.seen[word];
+        if *slot & bit != 0 {
+            return false;
+        }
+        *slot |= bit;
+        self.touched.push(tri);
+        true
+    }
+
+    /// Collect unique trigrams from `bytes`, returning a sorted deduplicated vec.
+    #[must_use]
+    pub fn collect_unique(&mut self, bytes: &[u8]) -> Vec<Trigram> {
+        self.reset();
+        if bytes.len() >= 3 {
+            for i in 0..=bytes.len() - 3 {
+                let tri = Trigram::from_bytes([bytes[i], bytes[i + 1], bytes[i + 2]]);
+                let _ = self.mark(tri);
+            }
+        }
+        self.touched.sort_unstable();
+        std::mem::take(&mut self.touched)
+    }
+}
+
+impl Default for TrigramDeduper {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -116,7 +166,7 @@ mod tests {
 
     #[test]
     fn unique_from_bytes_sorts_and_deduplicates() {
-        let tris = Trigram::unique_from_bytes(b"ababa");
+        let tris = TrigramDeduper::new().collect_unique(b"ababa");
         assert_eq!(tris.len(), 2);
         assert!(tris.contains(&Trigram::from_bytes(*b"aba")));
         assert!(tris.contains(&Trigram::from_bytes(*b"bab")));
@@ -124,14 +174,16 @@ mod tests {
 
     #[test]
     fn unique_from_bytes_short_returns_empty() {
-        assert!(Trigram::unique_from_bytes(b"").is_empty());
-        assert!(Trigram::unique_from_bytes(b"ab").is_empty());
+        let mut deduper = TrigramDeduper::new();
+        assert!(deduper.collect_unique(b"").is_empty());
+        assert!(deduper.collect_unique(b"ab").is_empty());
     }
 
     #[test]
     fn unique_from_bytes_matches_raw_windows_valid_ascii() {
         let b = b"hello world";
-        let unique: Vec<[u8; 3]> = Trigram::unique_from_bytes(b)
+        let unique: Vec<[u8; 3]> = TrigramDeduper::new()
+            .collect_unique(b)
             .into_iter()
             .map(Trigram::to_bytes)
             .collect();
@@ -144,7 +196,8 @@ mod tests {
     #[test]
     fn unique_from_bytes_matches_raw_windows_multibyte() {
         let b = "café résumé 日本語".as_bytes();
-        let unique: Vec<[u8; 3]> = Trigram::unique_from_bytes(b)
+        let unique: Vec<[u8; 3]> = TrigramDeduper::new()
+            .collect_unique(b)
             .into_iter()
             .map(Trigram::to_bytes)
             .collect();
@@ -157,7 +210,8 @@ mod tests {
     #[test]
     fn unique_from_bytes_uses_raw_windows_for_invalid_utf8() {
         let b: Vec<u8> = [b"ok", &[0xff, 0xfe][..], b" trail"].concat();
-        let unique: Vec<[u8; 3]> = Trigram::unique_from_bytes(&b)
+        let unique: Vec<[u8; 3]> = TrigramDeduper::new()
+            .collect_unique(&b)
             .into_iter()
             .map(Trigram::to_bytes)
             .collect();
@@ -170,7 +224,7 @@ mod tests {
     #[test]
     fn unique_from_bytes_does_not_allocate_lossy_replacement_trigrams() {
         let b = &[0xff, 0xfe, 0xfd];
-        let unique = Trigram::unique_from_bytes(b);
+        let unique = TrigramDeduper::new().collect_unique(b);
         assert_eq!(unique.len(), 1);
         assert_eq!(unique[0].to_bytes(), *b);
     }

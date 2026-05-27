@@ -11,6 +11,20 @@ use common::{
 };
 
 #[test]
+fn build_respects_gitignore() {
+    let p = TestProject::new("build-gitignore");
+    p.write(".gitignore", "ignored.txt\n");
+    p.write("keep.txt", "needle\n");
+    p.write("ignored.txt", "needle\n");
+    p.build_index();
+
+    let out = p.index_output(["needle"]);
+    assert_success(&out);
+    assert_stdout_contains(&out, &rel_match("keep.txt", ""));
+    assert_stdout_not_contains(&out, "ignored.txt");
+}
+
+#[test]
 fn build_then_search_finds_line() {
     let p = TestProject::new("search-line");
     p.mkdir("src");

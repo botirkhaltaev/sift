@@ -82,11 +82,20 @@ impl TestProject {
     }
 
     fn build_index_opts(&self, corpus: &Path, follow: bool) -> &Self {
+        self.build_index_with(corpus, follow, std::iter::empty::<&str>())
+    }
+
+    pub fn build_index_with<I, S>(&self, corpus: &Path, follow: bool, extra_args: I) -> &Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let mut cmd = self.sift();
         cmd.arg("--sift-dir").arg(&self.sift_dir);
         if follow {
             cmd.arg("--follow");
         }
+        cmd.args(extra_args);
         let status = cmd.arg("build").arg(corpus).status().unwrap();
         assert!(
             status.success(),

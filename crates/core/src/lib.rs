@@ -164,9 +164,6 @@ mod tests {
         fs::create_dir_all(corpus.join("keep")).expect("create keep dir");
         fs::write(corpus.join("keep/a.txt"), "one\ntwo beta\n").expect("write file a");
         fs::write(corpus.join("keep/b.txt"), "three\n").expect("write file b");
-        fs::write(corpus.join(".ignore"), "ignored\n").expect("write ignore");
-        fs::create_dir_all(corpus.join("ignored")).expect("create ignored dir");
-        fs::write(corpus.join("ignored/hidden.txt"), "beta skip\n").expect("write ignored file");
 
         let index = build_index_in_tmp(&tmp, &corpus);
 
