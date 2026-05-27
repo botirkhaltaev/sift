@@ -39,15 +39,19 @@ pub enum CorpusKind {
     SingleFile,
 }
 
-/// Configuration for building an index over a corpus.
-pub struct IndexBuildConfig<'a> {
-    pub root: &'a Path,
-    pub follow_links: bool,
-    pub exclude_paths: &'a [PathBuf],
-    pub include_paths: &'a [PathBuf],
-    pub corpus_kind: CorpusKind,
-    /// Hidden-file and ignore-rule policy for the corpus walk.
+/// Configuration for building or updating an index over a corpus.
+pub struct IndexConfig<'a> {
+    pub corpus: CorpusSpec<'a>,
     pub visibility: VisibilityConfig,
+}
+
+/// Description of a corpus to index.
+pub struct CorpusSpec<'a> {
+    pub root: &'a Path,
+    pub kind: CorpusKind,
+    pub follow_links: bool,
+    pub include_paths: &'a [PathBuf],
+    pub exclude_paths: &'a [PathBuf],
 }
 
 /// Errors specific to the index registry layer.
@@ -92,11 +96,7 @@ impl IndexKind {
         }
     }
 
-    pub(crate) fn build_to_dir(
-        self,
-        config: &IndexBuildConfig<'_>,
-        output_dir: &Path,
-    ) -> crate::Result<()> {
+    pub(crate) fn build(self, config: &IndexConfig<'_>, output_dir: &Path) -> crate::Result<()> {
         match self {
             Self::Trigram => {
                 trigram::TrigramIndex::build(config, output_dir)?;
@@ -120,25 +120,27 @@ impl IndexKind {
         }
     }
 
-    pub(crate) fn try_update(
+    /// Returns `true` if a new index was written.
+    pub(crate) fn update(
         self,
         snapshot_dir: &Path,
-        config: &IndexBuildConfig<'_>,
+        config: &IndexConfig<'_>,
         output_dir: &Path,
     ) -> crate::Result<bool> {
         let existing_dir = snapshot_dir.join(self.as_str());
         if !existing_dir.exists() {
-            self.build_to_dir(config, output_dir)?;
+            self.build(config, output_dir)?;
             return Ok(true);
         }
         let root = config
+            .corpus
             .root
             .canonicalize()
-            .unwrap_or_else(|_| config.root.to_path_buf());
+            .unwrap_or_else(|_| config.corpus.root.to_path_buf());
         match self {
             Self::Trigram => {
                 let existing =
-                    trigram::TrigramIndex::open(&existing_dir, &root, config.corpus_kind)?;
+                    trigram::TrigramIndex::open(&existing_dir, &root, config.corpus.kind)?;
                 Ok(existing.update(config, output_dir)?.is_some())
             }
         }

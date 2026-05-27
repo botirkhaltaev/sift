@@ -11,11 +11,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, FilenameMode, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, IndexBuildConfig, IndexKind, IndexStore,
+    CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, CorpusSpec, FilenameMode,
+    GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, IndexConfig, IndexKind, IndexStore,
     LineStyleFlags, OutputEmission, PassthruMode, PathDisplay, RecordTerminator, SearchLineStyle,
     SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchQuery, SearchRecordStyle,
-    SearchSeparators, TrigramIndex, TrigramIndexBuilder, VisibilityConfig, ZeroCountMode,
+    SearchSeparators, TrigramIndex, VisibilityConfig, ZeroCountMode,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -117,16 +117,15 @@ pub fn materialize_monorepo_corpus(
 
 // ─── Index helpers ───────────────────────────────────────────────────────────
 
-pub fn standard_build_config<'a>(
-    root: &'a Path,
-    exclude_paths: &'a [PathBuf],
-) -> IndexBuildConfig<'a> {
-    IndexBuildConfig {
-        root,
-        follow_links: false,
-        exclude_paths,
-        include_paths: &[],
-        corpus_kind: CorpusKind::Directory,
+pub fn standard_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -> IndexConfig<'a> {
+    IndexConfig {
+        corpus: CorpusSpec {
+            root,
+            kind: CorpusKind::Directory,
+            follow_links: false,
+            include_paths: &[],
+            exclude_paths,
+        },
         visibility: VisibilityConfig::default(),
     }
 }
@@ -147,10 +146,24 @@ pub fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
 
 /// Trigram tables written directly under `idx_dir` (for open/candidate benches).
 pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
-    TrigramIndexBuilder::new(corpus)
-        .with_dir(idx_dir)
-        .build()
-        .unwrap()
+    let (root, kind, include_paths) = if corpus.is_file() {
+        let parent = corpus.parent().unwrap_or(corpus);
+        let filename = corpus.file_name().map(PathBuf::from).unwrap_or_default();
+        (parent, CorpusKind::SingleFile, vec![filename])
+    } else {
+        (corpus, CorpusKind::Directory, vec![])
+    };
+    let config = IndexConfig {
+        corpus: CorpusSpec {
+            root,
+            kind,
+            follow_links: false,
+            include_paths: &include_paths,
+            exclude_paths: &[],
+        },
+        visibility: VisibilityConfig::default(),
+    };
+    TrigramIndex::build(&config, idx_dir).unwrap()
 }
 
 pub fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> TrigramIndex {

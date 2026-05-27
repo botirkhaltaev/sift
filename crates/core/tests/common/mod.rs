@@ -6,8 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    CorpusKind, IgnoreConfig, IndexBuildConfig, IndexKind, IndexStore, Indexes, TrigramIndex,
-    TrigramIndexBuilder, VisibilityConfig,
+    CorpusKind, CorpusSpec, IgnoreConfig, IndexConfig, IndexKind, IndexStore, Indexes,
+    TrigramIndex, VisibilityConfig,
 };
 
 pub struct IndexedPaths;
@@ -51,30 +51,28 @@ pub fn make_filter_corpus(root: &Path) {
     fs::write(root.join(".ignore"), "also_skip/**\n").expect("write ignore");
 }
 
-pub fn standard_build_config<'a>(
-    root: &'a Path,
-    exclude_paths: &'a [PathBuf],
-) -> IndexBuildConfig<'a> {
-    IndexBuildConfig {
-        root,
-        follow_links: false,
-        exclude_paths,
-        include_paths: &[],
-        corpus_kind: CorpusKind::Directory,
+pub fn standard_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -> IndexConfig<'a> {
+    IndexConfig {
+        corpus: CorpusSpec {
+            root,
+            kind: CorpusKind::Directory,
+            follow_links: false,
+            include_paths: &[],
+            exclude_paths,
+        },
         visibility: VisibilityConfig::default(),
     }
 }
 
-pub fn no_ignore_build_config<'a>(
-    root: &'a Path,
-    exclude_paths: &'a [PathBuf],
-) -> IndexBuildConfig<'a> {
-    IndexBuildConfig {
-        root,
-        follow_links: false,
-        exclude_paths,
-        include_paths: &[],
-        corpus_kind: CorpusKind::Directory,
+pub fn no_ignore_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -> IndexConfig<'a> {
+    IndexConfig {
+        corpus: CorpusSpec {
+            root,
+            kind: CorpusKind::Directory,
+            follow_links: false,
+            include_paths: &[],
+            exclude_paths,
+        },
         visibility: VisibilityConfig {
             ignore: IgnoreConfig::disabled(),
             ..Default::default()
@@ -103,10 +101,24 @@ pub fn open_indexes(sift_dir: &Path) -> Indexes {
 }
 
 pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> TrigramIndex {
-    TrigramIndexBuilder::new(corpus)
-        .with_dir(trigram_dir)
-        .build()
-        .expect("build trigram index")
+    let (root, kind, include_paths) = if corpus.is_file() {
+        let parent = corpus.parent().unwrap_or(corpus);
+        let filename = corpus.file_name().map(PathBuf::from).unwrap_or_default();
+        (parent, CorpusKind::SingleFile, vec![filename])
+    } else {
+        (corpus, CorpusKind::Directory, vec![])
+    };
+    let config = IndexConfig {
+        corpus: CorpusSpec {
+            root,
+            kind,
+            follow_links: false,
+            include_paths: &include_paths,
+            exclude_paths: &[],
+        },
+        visibility: VisibilityConfig::default(),
+    };
+    TrigramIndex::build(&config, trigram_dir).expect("build trigram index")
 }
 
 pub fn dir_size(path: &Path) -> u64 {

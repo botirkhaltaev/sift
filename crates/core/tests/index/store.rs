@@ -45,6 +45,6 @@ fn update_skips_rebuild_when_unchanged() {
     let changed = store
         .update(&[IndexKind::Trigram], &config)
         .expect("update");
-    assert!(!changed);
+    assert_eq!(changed, None, "expected no rebuild when corpus unchanged");
     assert_eq!(store.current_id().unwrap(), id);
 }

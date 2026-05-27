@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use sift_core::{
-    CorpusKind, IgnoreConfig, IndexBuildConfig, IndexKind, IndexStore, VisibilityConfig,
+    CorpusKind, CorpusSpec, IgnoreConfig, IndexConfig, IndexKind, IndexStore, VisibilityConfig,
 };
 
 use cli::{Cli, Commands};
@@ -64,12 +64,14 @@ pub fn main_entry() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-        let config = IndexBuildConfig {
-            root: &root,
-            follow_links: cli.paths.follow,
-            exclude_paths: &exclude_paths,
-            include_paths: &include_paths,
-            corpus_kind,
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &root,
+                kind: corpus_kind,
+                follow_links: cli.paths.follow,
+                include_paths: &include_paths,
+                exclude_paths: &exclude_paths,
+            },
             visibility: VisibilityConfig {
                 hidden: ignore_res.hidden_mode(),
                 ignore: IgnoreConfig {

@@ -1,6 +1,6 @@
 use std::fs;
 
-use sift_core::{CorpusKind, FileId, TrigramIndex, TrigramIndexBuilder};
+use sift_core::{CorpusKind, CorpusSpec, FileId, IndexConfig, TrigramIndex, VisibilityConfig};
 use tempfile::TempDir;
 
 #[test]
@@ -13,10 +13,17 @@ fn persisted_index_reopens_with_same_files() {
 
     let trigram_dir = tmp.path().join("trigram");
     let root = corpus.canonicalize().expect("canonicalize");
-    TrigramIndexBuilder::new(&corpus)
-        .with_dir(&trigram_dir)
-        .build()
-        .expect("build");
+    let config = IndexConfig {
+        corpus: CorpusSpec {
+            root: &corpus,
+            kind: CorpusKind::Directory,
+            follow_links: false,
+            include_paths: &[],
+            exclude_paths: &[],
+        },
+        visibility: VisibilityConfig::default(),
+    };
+    TrigramIndex::build(&config, &trigram_dir).expect("build");
 
     let reopened = TrigramIndex::open(&trigram_dir, &root, CorpusKind::Directory).expect("reopen");
     assert!(reopened.file_path(FileId::new(0)).is_some());

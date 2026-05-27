@@ -24,10 +24,10 @@ pub use ignore::{Walk, WalkBuilder};
 
 pub use index::meta::StoreMeta;
 pub use index::store::IndexStore;
-pub use index::trigram::{TrigramIndex, TrigramIndexBuilder, TrigramIndexError};
+pub use index::trigram::{TrigramIndex, TrigramIndexError};
 pub use index::{
-    CorpusKind, FileId, Index, IndexBuildConfig, IndexError, IndexId, IndexKind, Indexes, PlanMode,
-    QueryPlanOutput,
+    CorpusKind, CorpusSpec, FileId, Index, IndexConfig, IndexError, IndexId, IndexKind, Indexes,
+    PlanMode, QueryPlanOutput,
 };
 
 pub use query::{QueryFlags, QuerySpec};
@@ -38,6 +38,7 @@ pub const SIFT_DIR: &str = ".sift";
 pub const FILES_BIN: &str = "files.bin";
 pub const LEXICON_BIN: &str = "lexicon.bin";
 pub const POSTINGS_BIN: &str = "postings.bin";
+pub const TRIGRAMS_BIN: &str = "trigrams.bin";
 
 /// Top-level umbrella error for all core operations.
 #[derive(Debug, Error)]
@@ -75,10 +76,17 @@ mod tests {
     fn build_trigram_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> TrigramIndex {
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
-        TrigramIndexBuilder::new(corpus_path)
-            .with_dir(&trigram_dir)
-            .build()
-            .expect("build index")
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: corpus_path,
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
+            visibility: VisibilityConfig::default(),
+        };
+        TrigramIndex::build(&config, &trigram_dir).expect("build index")
     }
 
     fn build_index_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> Index {

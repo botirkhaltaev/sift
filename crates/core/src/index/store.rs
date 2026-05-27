@@ -79,6 +79,8 @@ impl IndexStore {
 
     /// Build a new snapshot using the given index kinds.
     ///
+    /// Returns the snapshot id.
+    ///
     /// # Errors
     ///
     /// Returns an error if the index build fails, the manifest cannot be
@@ -86,26 +88,27 @@ impl IndexStore {
     pub fn build(
         &mut self,
         kinds: &[super::IndexKind],
-        config: &super::IndexBuildConfig<'_>,
-    ) -> crate::Result<()> {
+        config: &super::IndexConfig<'_>,
+    ) -> crate::Result<String> {
         let snapshot = self.snapshots.begin()?;
 
         for kind in kinds {
             let index_dir = snapshot.dir().join(kind.as_str());
             std::fs::create_dir_all(&index_dir)?;
-            kind.build_to_dir(config, &index_dir)?;
+            kind.build(config, &index_dir)?;
         }
 
         Self::write_manifest(&snapshot, kinds)?;
+        let id = snapshot.id().to_string();
         self.snapshots.commit(snapshot)?;
-        Ok(())
+        Ok(id)
     }
 
     /// Update the current snapshot, rebuilding only indexes whose corpus
     /// changed.
     ///
-    /// Returns `true` if a new snapshot was published, `false` if the corpus
-    /// was unchanged.
+    /// Returns the snapshot id if a new snapshot was published, or `None` if
+    /// no index changed.
     ///
     /// # Errors
     ///
@@ -114,22 +117,22 @@ impl IndexStore {
     pub fn update(
         &mut self,
         kinds: &[super::IndexKind],
-        config: &super::IndexBuildConfig<'_>,
-    ) -> crate::Result<bool> {
+        config: &super::IndexConfig<'_>,
+    ) -> crate::Result<Option<String>> {
         let Some(current_dir) = self.snapshots.current_dir() else {
-            self.build(kinds, config)?;
-            return Ok(true);
+            let id = self.build(kinds, config)?;
+            return Ok(Some(id));
         };
 
         let snapshot = self.snapshots.begin()?;
 
         let changed: Vec<bool> = kinds
             .iter()
-            .map(|kind| kind.try_update(&current_dir, config, &snapshot.dir().join(kind.as_str())))
+            .map(|kind| kind.update(&current_dir, config, &snapshot.dir().join(kind.as_str())))
             .collect::<crate::Result<_>>()?;
 
         if !changed.iter().any(|&c| c) {
-            return Ok(false);
+            return Ok(None);
         }
 
         for (kind, did_change) in kinds.iter().zip(&changed) {
@@ -142,8 +145,9 @@ impl IndexStore {
         }
 
         Self::write_manifest(&snapshot, kinds)?;
+        let id = snapshot.id().to_string();
         self.snapshots.commit(snapshot)?;
-        Ok(true)
+        Ok(Some(id))
     }
 
     /// Open all indexes in the current snapshot.
@@ -204,7 +208,7 @@ impl IndexStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{CorpusKind, IndexBuildConfig, IndexKind};
+    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexKind};
     use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
@@ -229,12 +233,14 @@ mod tests {
         store
             .build(
                 &[IndexKind::Trigram],
-                &IndexBuildConfig {
-                    root: &corpus,
-                    follow_links: false,
-                    exclude_paths: &[],
-                    include_paths: &[],
-                    corpus_kind: CorpusKind::Directory,
+                &IndexConfig {
+                    corpus: CorpusSpec {
+                        root: &corpus,
+                        kind: CorpusKind::Directory,
+                        follow_links: false,
+                        include_paths: &[],
+                        exclude_paths: &[],
+                    },
                     visibility: VisibilityConfig::default(),
                 },
             )
@@ -250,6 +256,7 @@ mod tests {
         assert!(snapshot_dir.join("trigram").join("files.bin").exists());
         assert!(snapshot_dir.join("trigram").join("lexicon.bin").exists());
         assert!(snapshot_dir.join("trigram").join("postings.bin").exists());
+        assert!(snapshot_dir.join("trigram").join("trigrams.bin").exists());
 
         assert!(!id.is_empty());
     }
@@ -274,12 +281,14 @@ mod tests {
         store
             .build(
                 &[IndexKind::Trigram],
-                &IndexBuildConfig {
-                    root: &corpus,
-                    follow_links: false,
-                    exclude_paths: &[],
-                    include_paths: &[],
-                    corpus_kind: CorpusKind::Directory,
+                &IndexConfig {
+                    corpus: CorpusSpec {
+                        root: &corpus,
+                        kind: CorpusKind::Directory,
+                        follow_links: false,
+                        include_paths: &[],
+                        exclude_paths: &[],
+                    },
                     visibility: VisibilityConfig::default(),
                 },
             )
@@ -320,12 +329,14 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexBuildConfig {
-            root: &corpus,
-            follow_links: false,
-            exclude_paths: &[],
-            include_paths: &[],
-            corpus_kind: CorpusKind::Directory,
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &corpus,
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
             visibility: VisibilityConfig::default(),
         };
 
@@ -344,7 +355,7 @@ mod tests {
         let changed = store
             .update(&[IndexKind::Trigram], &config)
             .expect("update");
-        assert!(!changed, "expected no rebuild when corpus unchanged");
+        assert_eq!(changed, None, "expected no rebuild when corpus unchanged");
         assert_eq!(store.current_id().unwrap(), id_after_build);
     }
 
@@ -356,12 +367,14 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexBuildConfig {
-            root: &corpus,
-            follow_links: false,
-            exclude_paths: &[],
-            include_paths: &[],
-            corpus_kind: CorpusKind::Directory,
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &corpus,
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
             visibility: VisibilityConfig::default(),
         };
 
@@ -382,7 +395,7 @@ mod tests {
         let changed = store
             .update(&[IndexKind::Trigram], &config)
             .expect("update");
-        assert!(changed, "expected rebuild when file added");
+        assert!(changed.is_some(), "expected rebuild when file added");
         assert_ne!(store.current_id().unwrap(), id_after_build);
     }
 
@@ -394,12 +407,14 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexBuildConfig {
-            root: &corpus,
-            follow_links: false,
-            exclude_paths: &[],
-            include_paths: &[],
-            corpus_kind: CorpusKind::Directory,
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &corpus,
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
             visibility: VisibilityConfig::default(),
         };
 
@@ -415,7 +430,7 @@ mod tests {
         let changed = store
             .update(&[IndexKind::Trigram], &config)
             .expect("update");
-        assert!(changed, "expected build when no snapshot exists");
+        assert!(changed.is_some(), "expected build when no snapshot exists");
         assert!(store.current_id().is_some());
     }
 }

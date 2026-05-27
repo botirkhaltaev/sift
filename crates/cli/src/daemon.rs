@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use fslock::LockFile;
 use notify::{RecursiveMode, Watcher};
-use sift_core::{IndexBuildConfig, IndexKind, IndexStore, StoreMeta, VisibilityConfig};
+use sift_core::{CorpusSpec, IndexConfig, IndexKind, IndexStore, StoreMeta, VisibilityConfig};
 
 const DEBOUNCE_MS: u64 = 250;
 
@@ -79,12 +79,14 @@ impl DaemonConfig {
                 .strip_prefix(&root)
                 .unwrap_or(sift_dir)
                 .to_path_buf();
-            let build_config = IndexBuildConfig {
-                root: &root,
-                follow_links,
-                exclude_paths: &[exclude],
-                include_paths: &[],
-                corpus_kind,
+            let build_config = IndexConfig {
+                corpus: CorpusSpec {
+                    root: &root,
+                    kind: corpus_kind,
+                    follow_links,
+                    include_paths: &[],
+                    exclude_paths: &[exclude],
+                },
                 visibility: VisibilityConfig::default(),
             };
             store.build(kinds, &build_config)?;
@@ -151,12 +153,14 @@ impl DaemonConfig {
             .strip_prefix(root)
             .unwrap_or(sift_dir)
             .to_path_buf();
-        let build_config = IndexBuildConfig {
-            root,
-            follow_links,
-            exclude_paths: &[exclude],
-            include_paths: &[],
-            corpus_kind,
+        let build_config = IndexConfig {
+            corpus: CorpusSpec {
+                root,
+                kind: corpus_kind,
+                follow_links,
+                include_paths: &[],
+                exclude_paths: &[exclude],
+            },
             visibility: VisibilityConfig::default(),
         };
 

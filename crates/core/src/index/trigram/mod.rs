@@ -9,13 +9,12 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{CorpusKind, FileId, IndexBuildConfig, PlanMode, QueryPlanOutput};
+use crate::index::{CorpusKind, FileId, IndexConfig, PlanMode, QueryPlanOutput};
 use crate::query::QuerySpec;
 
-use self::builder::{IndexTableBuilder, IndexTables};
+use self::builder::{IndexTables, build_tables};
 use self::file_table::FileFingerprint;
 use self::planner::{TrigramCandidatePlan, TrigramPlanner};
-pub use builder::TrigramIndexBuilder;
 pub use key::Trigram;
 
 /// Errors specific to opening or persisting a trigram index.
@@ -32,6 +31,7 @@ pub enum TrigramIndexError {
 pub struct TrigramIndex {
     root: PathBuf,
     pub(crate) fingerprints: Vec<FileFingerprint>,
+    trigram_sets: storage::trigram_sets::TrigramSets,
     lexicon: storage::lexicon::Lexicon,
     postings: storage::postings::Postings,
     corpus_kind: CorpusKind,
@@ -50,20 +50,32 @@ impl TrigramIndex {
         let files_path = dir.join(crate::FILES_BIN);
         let lexicon_path = dir.join(crate::LEXICON_BIN);
         let postings_path = dir.join(crate::POSTINGS_BIN);
+        let trigrams_path = dir.join(crate::TRIGRAMS_BIN);
 
-        let (files_result, (lexicon_result, postings_result)) = rayon::join(
-            || file_table::FileTable::create(&files_path, &tables.fingerprints),
+        let ((fr, lr), (pr, tr)) = rayon::join(
             || {
                 rayon::join(
+                    || file_table::FileTable::create(&files_path, &tables.fingerprints),
                     || storage::lexicon::Lexicon::create(&lexicon_path, &tables.lexicon),
+                )
+            },
+            || {
+                rayon::join(
                     || storage::postings::Postings::create(&postings_path, &tables.postings),
+                    || {
+                        storage::trigram_sets::TrigramSets::create(
+                            &trigrams_path,
+                            &tables.file_trigrams,
+                        )
+                    },
                 )
             },
         );
 
-        files_result.map_err(crate::Error::Io)?;
-        lexicon_result.map_err(crate::Error::Io)?;
-        postings_result.map_err(crate::Error::Io)?;
+        fr.map_err(crate::Error::Io)?;
+        lr.map_err(crate::Error::Io)?;
+        pr.map_err(crate::Error::Io)?;
+        tr.map_err(crate::Error::Io)?;
 
         Self::open(dir, root, corpus_kind)
     }
@@ -121,10 +133,10 @@ impl TrigramIndex {
     /// # Errors
     ///
     /// Returns an error if corpus walking, extraction, or file I/O fails.
-    pub fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
-        let tables = IndexTableBuilder::new(config).build()?;
-        let root = config.root.canonicalize()?;
-        Self::create_in_dir(&tables, &root, config.corpus_kind, output_dir)
+    pub fn build(config: &IndexConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
+        let tables = build_tables(config)?;
+        let root = config.corpus.root.canonicalize()?;
+        Self::create_in_dir(&tables, &root, config.corpus.kind, output_dir)
     }
 
     /// Open a previously persisted trigram index from `index_dir`.
@@ -136,26 +148,64 @@ impl TrigramIndex {
         Ok(Self::open_tables(index_dir, root, corpus_kind)?)
     }
 
-    /// Rebuild the index from the current corpus.
+    /// Update the index from the current corpus, reusing per-file trigram sets
+    /// for unchanged files.
     ///
-    /// Returns `None` if the corpus has not changed since the last build.
+    /// Returns `Ok(Some(index))` if a new snapshot was written, or `Ok(None)`
+    /// if no files changed.
     ///
     /// # Errors
     ///
-    /// Returns an error if corpus walking or file I/O fails.
+    /// Returns an error if corpus walking, extraction, or file I/O fails.
     pub fn update(
         &self,
-        config: &IndexBuildConfig<'_>,
+        config: &IndexConfig<'_>,
         output_dir: &Path,
     ) -> crate::Result<Option<Self>> {
-        let tables = IndexTableBuilder::new(config).build()?;
+        use rayon::prelude::*;
+        use std::collections::HashMap;
 
-        if tables.fingerprints == self.fingerprints {
+        let paths = crate::index::trigram::builder::CorpusWalker::new(config).collect()?;
+        let fingerprints =
+            crate::index::trigram::builder::FingerprintCollector::new(config.corpus.root, &paths)
+                .collect()?;
+
+        if fingerprints == self.fingerprints {
             return Ok(None);
         }
 
-        let root = config.root.canonicalize()?;
-        let index = Self::create_in_dir(&tables, &root, config.corpus_kind, output_dir)?;
+        let previous_sets = self.trigram_sets.to_vec().map_err(crate::Error::Io)?;
+
+        let lookup: HashMap<(&Path, i64, u64), &storage::trigram_sets::TrigramSet> = self
+            .fingerprints
+            .iter()
+            .zip(previous_sets.iter())
+            .map(|(fp, set)| ((fp.path.as_path(), fp.mtime_secs, fp.size), set))
+            .collect();
+
+        let file_trigrams: Vec<storage::trigram_sets::TrigramSet> = fingerprints
+            .par_iter()
+            .map(|fp| {
+                if let Some(set) = lookup.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
+                    return Ok((*set).clone());
+                }
+                let abs = config.corpus.root.join(&fp.path);
+                storage::trigram_sets::TrigramSet::from_file(&abs).map_err(crate::Error::Io)
+            })
+            .collect::<crate::Result<_>>()?;
+
+        let (lexicon, postings) =
+            crate::index::trigram::builder::PostingAssembler::new(&file_trigrams).assemble()?;
+
+        let tables = IndexTables {
+            fingerprints,
+            file_trigrams,
+            lexicon,
+            postings,
+        };
+
+        let root = config.corpus.root.canonicalize()?;
+        let index = Self::create_in_dir(&tables, &root, config.corpus.kind, output_dir)?;
         Ok(Some(index))
     }
 
@@ -244,8 +294,9 @@ impl TrigramIndex {
         let files_path = dir.join(crate::FILES_BIN);
         let lexicon_path = dir.join(crate::LEXICON_BIN);
         let postings_path = dir.join(crate::POSTINGS_BIN);
+        let trigrams_path = dir.join(crate::TRIGRAMS_BIN);
 
-        for p in [&files_path, &lexicon_path, &postings_path] {
+        for p in [&files_path, &lexicon_path, &postings_path, &trigrams_path] {
             if !p.is_file() {
                 return Err(TrigramIndexError::MissingComponent(p.clone()));
             }
@@ -301,9 +352,13 @@ impl TrigramIndex {
             }
         }
 
+        let trigram_sets = storage::trigram_sets::TrigramSets::open(&trigrams_path)
+            .map_err(TrigramIndexError::Io)?;
+
         Ok(Self {
             root: root.to_path_buf(),
             fingerprints,
+            trigram_sets,
             lexicon,
             postings,
             corpus_kind,
@@ -468,7 +523,9 @@ mod tests {
 
     #[test]
     fn open_tables_rejects_count_mismatch() {
-        use crate::index::trigram::storage::format::{FILES_MAGIC, LEXICON_MAGIC, POSTINGS_MAGIC};
+        use crate::index::trigram::storage::format::{
+            FILES_MAGIC, LEXICON_MAGIC, POSTINGS_MAGIC, TRIGRAMS_MAGIC,
+        };
         use tempfile::TempDir;
         let tmp = TempDir::new().expect("create temp dir");
         let dir = tmp.path().join("index");
@@ -497,6 +554,11 @@ mod tests {
         pb.extend_from_slice(&u32::try_from(posting_payload.len()).unwrap().to_le_bytes());
         pb.extend_from_slice(&posting_payload);
         std::fs::write(dir.join("postings.bin"), &pb).expect("write postings");
+
+        // trigrams.bin: empty
+        let mut tri = TRIGRAMS_MAGIC.to_vec();
+        tri.extend_from_slice(&0u32.to_le_bytes());
+        std::fs::write(dir.join("trigrams.bin"), &tri).expect("write trigrams");
 
         let result = TrigramIndex::open_tables(
             &dir,
