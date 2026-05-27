@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    CorpusKind, IndexBuildConfig, IndexKind, IndexStore, Indexes, TrigramIndex,
+    CorpusKind, IgnoreConfig, IndexBuildConfig, IndexKind, IndexStore, Indexes, TrigramIndex,
     TrigramIndexBuilder, VisibilityConfig,
 };
 
@@ -61,7 +61,7 @@ pub fn standard_build_config<'a>(
         exclude_paths,
         include_paths: &[],
         corpus_kind: CorpusKind::Directory,
-        visibility: VisibilityConfig::standard(),
+        visibility: VisibilityConfig::default(),
     }
 }
 
@@ -75,7 +75,10 @@ pub fn no_ignore_build_config<'a>(
         exclude_paths,
         include_paths: &[],
         corpus_kind: CorpusKind::Directory,
-        visibility: VisibilityConfig::ignores_disabled(),
+        visibility: VisibilityConfig {
+            ignore: IgnoreConfig::disabled(),
+            ..Default::default()
+        },
     }
 }
 

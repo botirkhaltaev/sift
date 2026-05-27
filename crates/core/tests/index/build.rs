@@ -94,7 +94,7 @@ fn indexed_paths_match_candidate_filter() {
 
     let filter = CandidateFilter::new(
         &CandidateFilterConfig {
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
             ..CandidateFilterConfig::default()
         },
         corpus.path(),

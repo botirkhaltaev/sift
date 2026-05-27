@@ -54,26 +54,6 @@ impl Default for VisibilityConfig {
     }
 }
 
-impl VisibilityConfig {
-    /// Default sift visibility: respect hidden files and apply standard ignore rules.
-    #[must_use]
-    pub fn standard() -> Self {
-        Self {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig::standard(),
-        }
-    }
-
-    /// Respect hidden files but do not apply ignore files.
-    #[must_use]
-    pub fn ignores_disabled() -> Self {
-        Self {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig::disabled(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HiddenMode {
     #[default]
@@ -88,7 +68,7 @@ pub struct IgnoreConfig {
     pub require_git: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct VisibilityConfig {
     pub hidden: HiddenMode,
     pub ignore: IgnoreConfig,

@@ -85,7 +85,7 @@ impl DaemonConfig {
                 exclude_paths: &[exclude],
                 include_paths: &[],
                 corpus_kind,
-                visibility: VisibilityConfig::standard(),
+                visibility: VisibilityConfig::default(),
             };
             store.build(kinds, &build_config)?;
         }
@@ -157,7 +157,7 @@ impl DaemonConfig {
             exclude_paths: &[exclude],
             include_paths: &[],
             corpus_kind,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
 
         if let Err(e) = store.update(kinds, &build_config) {

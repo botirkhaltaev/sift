@@ -127,7 +127,7 @@ pub fn standard_build_config<'a>(
         exclude_paths,
         include_paths: &[],
         corpus_kind: CorpusKind::Directory,
-        visibility: VisibilityConfig::standard(),
+        visibility: VisibilityConfig::default(),
     }
 }
 

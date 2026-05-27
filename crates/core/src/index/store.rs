@@ -235,7 +235,7 @@ mod tests {
                     exclude_paths: &[],
                     include_paths: &[],
                     corpus_kind: CorpusKind::Directory,
-                    visibility: VisibilityConfig::standard(),
+                    visibility: VisibilityConfig::default(),
                 },
             )
             .expect("build");
@@ -250,7 +250,6 @@ mod tests {
         assert!(snapshot_dir.join("trigram").join("files.bin").exists());
         assert!(snapshot_dir.join("trigram").join("lexicon.bin").exists());
         assert!(snapshot_dir.join("trigram").join("postings.bin").exists());
-        assert!(snapshot_dir.join("trigram").join("trigrams.bin").exists());
 
         assert!(!id.is_empty());
     }
@@ -281,7 +280,7 @@ mod tests {
                     exclude_paths: &[],
                     include_paths: &[],
                     corpus_kind: CorpusKind::Directory,
-                    visibility: VisibilityConfig::standard(),
+                    visibility: VisibilityConfig::default(),
                 },
             )
             .expect("build");
@@ -327,7 +326,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
 
         let mut store = IndexStore::open_or_create(
@@ -363,7 +362,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
 
         let mut store = IndexStore::open_or_create(
@@ -401,7 +400,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
 
         let mut store = IndexStore::open_or_create(

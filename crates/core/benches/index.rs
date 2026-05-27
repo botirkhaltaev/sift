@@ -158,7 +158,7 @@ fn bench_indexes_open(c: &mut Criterion) {
                         exclude_paths: &[],
                         include_paths: &[],
                         corpus_kind: CorpusKind::Directory,
-                        visibility: VisibilityConfig::standard(),
+                        visibility: VisibilityConfig::default(),
                     },
                 )
                 .expect("build");

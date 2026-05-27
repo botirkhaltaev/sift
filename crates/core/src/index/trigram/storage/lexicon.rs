@@ -23,40 +23,27 @@ pub struct Lexicon {
     count: usize,
 }
 
-fn build_lexicon_bytes(entries: &[LexiconEntry]) -> std::io::Result<Vec<u8>> {
-    let count = entries.len();
-    let size = LEXICON_MAGIC.len() + 4 + count * Lexicon::ENTRY_SIZE;
-    let mut data = vec![0u8; size];
-    let mut cursor = 0;
-
-    data[cursor..cursor + LEXICON_MAGIC.len()].copy_from_slice(&LEXICON_MAGIC);
-    cursor += LEXICON_MAGIC.len();
-
-    data[cursor..cursor + 4].copy_from_slice(
-        &u32::try_from(count)
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "lexicon entry count exceeds u32::MAX",
-                )
-            })?
-            .to_le_bytes(),
-    );
-    cursor += 4;
-
-    for e in entries {
-        data[cursor..cursor + 3].copy_from_slice(&e.trigram);
-        cursor += 3;
-        data[cursor..cursor + 8].copy_from_slice(&e.offset.to_le_bytes());
-        cursor += 8;
-        data[cursor..cursor + 4].copy_from_slice(&e.len.to_le_bytes());
-        cursor += 4;
-    }
-    Ok(data)
-}
-
 impl Lexicon {
     const ENTRY_SIZE: usize = 15;
+
+    fn encode(entries: &[LexiconEntry]) -> std::io::Result<Vec<u8>> {
+        let mut data =
+            Vec::with_capacity(LEXICON_MAGIC.len() + 4 + entries.len() * Self::ENTRY_SIZE);
+        data.extend_from_slice(&LEXICON_MAGIC);
+        let count = u32::try_from(entries.len()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "lexicon entry count exceeds u32::MAX",
+            )
+        })?;
+        data.extend_from_slice(&count.to_le_bytes());
+        for e in entries {
+            data.extend_from_slice(&e.trigram);
+            data.extend_from_slice(&e.offset.to_le_bytes());
+            data.extend_from_slice(&e.len.to_le_bytes());
+        }
+        Ok(data)
+    }
 
     fn bytes(&self) -> &[u8] {
         self.mmap.as_ref()
@@ -68,7 +55,7 @@ impl Lexicon {
     ///
     /// Returns an error if the file cannot be written or reopened.
     pub fn create(path: &Path, entries: &[LexiconEntry]) -> std::io::Result<Self> {
-        let data = build_lexicon_bytes(entries)?;
+        let data = Self::encode(entries)?;
         std::fs::write(path, &data)?;
         Self::open(path)
     }
@@ -107,33 +94,28 @@ impl Lexicon {
                 "lexicon truncated",
             ));
         }
-        let data_start = magic_len + 4;
-        for i in 0..n {
-            let offset = data_start + i * Self::ENTRY_SIZE;
-            let tri: [u8; 3] = bytes[offset..offset + 3].try_into().unwrap();
-            let posting_off =
-                u64::from_le_bytes(bytes[offset + 3..offset + 11].try_into().unwrap());
-            if i > 0 {
-                let prev_offset = data_start + (i - 1) * Self::ENTRY_SIZE;
-                let prev_tri: [u8; 3] = bytes[prev_offset..prev_offset + 3].try_into().unwrap();
+        let entries = &bytes[magic_len + 4..];
+        let mut prev: Option<([u8; 3], u64)> = None;
+        for chunk in entries.chunks_exact(Self::ENTRY_SIZE) {
+            let tri: [u8; 3] = chunk[..3].try_into().unwrap();
+            let posting_off = u64::from_le_bytes(chunk[3..11].try_into().unwrap());
+            if let Some((prev_tri, prev_off)) = prev {
                 if tri <= prev_tri {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("lexicon trigram {tri:?} out of order (prev {prev_tri:?})",),
+                        format!("lexicon trigram {tri:?} out of order (prev {prev_tri:?})"),
                     ));
                 }
-                let prev_posting_off = u64::from_le_bytes(
-                    bytes[prev_offset + 3..prev_offset + 11].try_into().unwrap(),
-                );
-                if posting_off < prev_posting_off {
+                if posting_off < prev_off {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!(
-                            "lexicon entry {tri:?} posting offset {posting_off} less than previous {prev_posting_off}",
+                            "lexicon entry {tri:?} posting offset {posting_off} less than previous {prev_off}",
                         ),
                     ));
                 }
             }
+            prev = Some((tri, posting_off));
         }
         Ok(n)
     }

@@ -30,57 +30,54 @@ pub struct FileTable {
     offset_table_start: usize,
 }
 
-fn build_files_bytes(fingerprints: &[FileFingerprint]) -> std::io::Result<Vec<u8>> {
-    let count = fingerprints.len();
-    let offset_table_start = FILES_MAGIC.len() + 4;
-    let blob_start = offset_table_start + count * 4;
-
-    let mut offsets = Vec::<u32>::with_capacity(count);
-    let mut blob = Vec::<u8>::new();
-
-    for fp in fingerprints {
-        let s = fp.path.to_string_lossy();
-        let path_bytes = s.as_bytes();
-        let path_len = u32::try_from(path_bytes.len()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "file path exceeds u32::MAX",
-            )
-        })?;
-        let abs_off = u32::try_from(blob_start + blob.len()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "files blob offset exceeds u32::MAX",
-            )
-        })?;
-        offsets.push(abs_off);
-        blob.extend_from_slice(&path_len.to_le_bytes());
-        blob.extend_from_slice(path_bytes);
-        blob.extend_from_slice(&fp.mtime_secs.to_le_bytes());
-        blob.extend_from_slice(&fp.size.to_le_bytes());
-    }
-
-    let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
-    file_bytes.extend_from_slice(&FILES_MAGIC);
-    file_bytes.extend_from_slice(
-        &u32::try_from(count)
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "files count exceeds u32::MAX",
-                )
-            })?
-            .to_le_bytes(),
-    );
-    for off in &offsets {
-        file_bytes.extend_from_slice(&off.to_le_bytes());
-    }
-    file_bytes.extend_from_slice(&blob);
-    Ok(file_bytes)
-}
-
 impl FileTable {
     const FINGERPRINT_LEN: usize = 16;
+
+    fn encode(fingerprints: &[FileFingerprint]) -> std::io::Result<Vec<u8>> {
+        let count = fingerprints.len();
+        let offset_table_start = FILES_MAGIC.len() + 4;
+        let blob_start = offset_table_start + count * 4;
+
+        let mut offsets = Vec::<u32>::with_capacity(count);
+        let mut blob = Vec::<u8>::new();
+
+        for fp in fingerprints {
+            let path_bytes = fp.path.to_string_lossy();
+            let path_bytes = path_bytes.as_bytes();
+            let path_len = u32::try_from(path_bytes.len()).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "file path exceeds u32::MAX",
+                )
+            })?;
+            let abs_off = u32::try_from(blob_start + blob.len()).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "files blob offset exceeds u32::MAX",
+                )
+            })?;
+            offsets.push(abs_off);
+            blob.extend_from_slice(&path_len.to_le_bytes());
+            blob.extend_from_slice(path_bytes);
+            blob.extend_from_slice(&fp.mtime_secs.to_le_bytes());
+            blob.extend_from_slice(&fp.size.to_le_bytes());
+        }
+
+        let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
+        file_bytes.extend_from_slice(&FILES_MAGIC);
+        let count = u32::try_from(count).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "files count exceeds u32::MAX",
+            )
+        })?;
+        file_bytes.extend_from_slice(&count.to_le_bytes());
+        for off in &offsets {
+            file_bytes.extend_from_slice(&off.to_le_bytes());
+        }
+        file_bytes.extend_from_slice(&blob);
+        Ok(file_bytes)
+    }
 
     fn bytes(&self) -> &[u8] {
         self.mmap.as_ref()
@@ -92,7 +89,7 @@ impl FileTable {
     ///
     /// Returns an error if the file cannot be written or reopened.
     pub fn create(path: &Path, fingerprints: &[FileFingerprint]) -> std::io::Result<Self> {
-        let data = build_files_bytes(fingerprints)?;
+        let data = Self::encode(fingerprints)?;
         std::fs::write(path, &data)?;
         Self::open(path)
     }

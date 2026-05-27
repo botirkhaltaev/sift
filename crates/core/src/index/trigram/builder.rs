@@ -12,6 +12,7 @@ use super::Trigram;
 use super::file_table::FileFingerprint;
 use super::storage::lexicon::LexiconEntry;
 use super::storage::mmap::open_mmap;
+use super::storage::trigram_sets::TrigramSet;
 
 use crate::index::{CorpusKind, IndexBuildConfig};
 use crate::search::filter::ignore::build_gitignore_matcher;
@@ -20,45 +21,22 @@ use crate::search::filter::{HiddenMode, IgnoreSources, VisibilityConfig};
 /// Collected index data ready for persistence.
 pub struct IndexTables {
     pub fingerprints: Vec<FileFingerprint>,
-    pub file_trigrams: Vec<Vec<Trigram>>,
     pub lexicon: Vec<LexiconEntry>,
     pub postings: Vec<u8>,
 }
 
-/// Walks a corpus and builds index tables, optionally reusing cached data
-/// from a previous index for files that have not changed.
+/// Walks a corpus and builds index tables.
 pub struct IndexTableBuilder<'a> {
     config: &'a IndexBuildConfig<'a>,
-    prev_fingerprints: Option<&'a [FileFingerprint]>,
-    prev_trigrams: Option<&'a [Vec<Trigram>]>,
 }
 
 impl<'a> IndexTableBuilder<'a> {
     #[must_use]
     pub const fn new(config: &'a IndexBuildConfig<'a>) -> Self {
-        Self {
-            config,
-            prev_fingerprints: None,
-            prev_trigrams: None,
-        }
-    }
-
-    #[must_use]
-    pub const fn with_previous(
-        mut self,
-        fingerprints: &'a [FileFingerprint],
-        trigrams: &'a [Vec<Trigram>],
-    ) -> Self {
-        self.prev_fingerprints = Some(fingerprints);
-        self.prev_trigrams = Some(trigrams);
-        self
+        Self { config }
     }
 
     /// Build the index tables.
-    ///
-    /// When previous data is provided via [`with_previous`](Self::with_previous),
-    /// files whose fingerprint matches the previous index skip trigram
-    /// extraction entirely.
     ///
     /// # Errors
     ///
@@ -67,19 +45,13 @@ impl<'a> IndexTableBuilder<'a> {
         let paths = CorpusWalker::new(self.config).collect()?;
         let fingerprints = FingerprintCollector::new(self.config.root, &paths).collect()?;
 
-        let extractor = TrigramExtractor::new(
-            self.config.root,
-            &fingerprints,
-            self.prev_fingerprints,
-            self.prev_trigrams,
-        );
+        let extractor = TrigramExtractor::new(self.config.root, &fingerprints);
         let file_trigrams = extractor.extract()?;
 
         let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
 
         Ok(IndexTables {
             fingerprints,
-            file_trigrams,
             lexicon,
             postings,
         })
@@ -360,79 +332,55 @@ impl TrigramDeduper {
     }
 }
 
-/// Extracts unique trigrams per file, reusing cached trigrams for unchanged files.
+/// Extracts unique trigrams per file.
 struct TrigramExtractor<'a> {
     root: &'a Path,
     fingerprints: &'a [FileFingerprint],
-    prev_fingerprints: Option<&'a [FileFingerprint]>,
-    prev_trigrams: Option<&'a [Vec<Trigram>]>,
 }
 
 impl<'a> TrigramExtractor<'a> {
-    const fn new(
-        root: &'a Path,
-        fingerprints: &'a [FileFingerprint],
-        prev_fingerprints: Option<&'a [FileFingerprint]>,
-        prev_trigrams: Option<&'a [Vec<Trigram>]>,
-    ) -> Self {
-        Self {
-            root,
-            fingerprints,
-            prev_fingerprints,
-            prev_trigrams,
-        }
+    const fn new(root: &'a Path, fingerprints: &'a [FileFingerprint]) -> Self {
+        Self { root, fingerprints }
     }
 
-    fn extract(&self) -> crate::Result<Vec<Vec<Trigram>>> {
-        let cache = self.build_lookup();
+    fn extract(&self) -> crate::Result<Vec<TrigramSet>> {
         self.fingerprints
             .par_iter()
             .map_init(TrigramDeduper::new, |deduper, fp| {
-                if let Some(tris) = cache.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
-                    return Ok(tris.to_vec());
-                }
                 let abs = self.root.join(&fp.path);
                 let mmap = open_mmap(&abs).map_err(crate::Error::Io)?;
-                Ok(deduper.collect_unique(mmap.as_ref()))
+                let unique = deduper.collect_unique(mmap.as_ref());
+                TrigramSet::new(unique).map_err(|_| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "trigram set rejected unsorted/duplicate trigrams",
+                    ))
+                })
             })
-            .collect()
-    }
-
-    fn build_lookup(&self) -> std::collections::HashMap<(&Path, i64, u64), &[Trigram]> {
-        let (Some(prev_fps), Some(prev_tris)) = (self.prev_fingerprints, self.prev_trigrams) else {
-            return std::collections::HashMap::new();
-        };
-        if prev_fps.len() != prev_tris.len() {
-            return std::collections::HashMap::new();
-        }
-        prev_fps
-            .iter()
-            .zip(prev_tris.iter())
-            .map(|(fp, tris)| ((fp.path.as_path(), fp.mtime_secs, fp.size), tris.as_slice()))
             .collect()
     }
 }
 
 /// Assembles trigram → file ID posting lists from per-file trigram sets.
 struct PostingAssembler<'a> {
-    file_trigrams: &'a [Vec<Trigram>],
+    file_trigrams: &'a [TrigramSet],
 }
 
 impl<'a> PostingAssembler<'a> {
-    const fn new(file_trigrams: &'a [Vec<Trigram>]) -> Self {
+    const fn new(file_trigrams: &'a [TrigramSet]) -> Self {
         Self { file_trigrams }
     }
 
     fn assemble(&self) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
         let mut pairs: Vec<(Trigram, u32)> = Vec::new();
-        for (id, tris) in self.file_trigrams.iter().enumerate() {
+        for (id, set) in self.file_trigrams.iter().enumerate() {
             let id_u32: u32 = id.try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "too many indexed files",
                 ))
             })?;
-            for tri in tris {
+            for tri in set.as_slice() {
                 pairs.push((*tri, id_u32));
             }
         }
@@ -565,7 +513,7 @@ impl<'a> TrigramIndexBuilder<'a> {
             exclude_paths: &exclude_paths,
             include_paths: &include_paths,
             corpus_kind: kind,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
 
         let dir = self.dir.ok_or_else::<crate::Error, _>(|| {
@@ -582,6 +530,7 @@ impl<'a> TrigramIndexBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::filter::IgnoreConfig;
     use crate::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
     use std::fs;
     use std::path::PathBuf;
@@ -597,7 +546,10 @@ mod tests {
                 exclude_paths: &[],
                 include_paths: &[],
                 corpus_kind: CorpusKind::Directory,
-                visibility: VisibilityConfig::ignores_disabled(),
+                visibility: VisibilityConfig {
+                    ignore: IgnoreConfig::disabled(),
+                    ..Default::default()
+                },
             }
         }
 
@@ -715,7 +667,10 @@ mod tests {
             exclude_paths: &[PathBuf::from("excluded")],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::ignores_disabled(),
+            visibility: VisibilityConfig {
+                ignore: IgnoreConfig::disabled(),
+                ..Default::default()
+            },
         };
         let tables = IndexTableBuilder::new(&config)
             .build()
@@ -755,7 +710,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
         let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
         assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
@@ -774,7 +729,10 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::ignores_disabled(),
+            visibility: VisibilityConfig {
+                ignore: IgnoreConfig::disabled(),
+                ..Default::default()
+            },
         };
         let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
         assert!(paths.iter().any(|p| p.starts_with("skip")));
@@ -792,7 +750,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
         let indexed = CorpusWalker::new(&config).collect().expect("walk corpus");
         let filter = CandidateFilter::new(&FilterParity::filter_config(&config), tmp.path())
@@ -809,20 +767,6 @@ mod tests {
     }
 
     #[test]
-    fn trigram_extraction_returns_sorted_deduped_keys() {
-        let tmp = TempDir::new().expect("create temp dir");
-        fs::write(tmp.path().join("test.txt"), "ababab\n").expect("write file");
-
-        let tables = TablesFixture::build(tmp.path());
-        assert_eq!(tables.file_trigrams.len(), 1);
-        let tris = &tables.file_trigrams[0];
-        assert_eq!(tris.len(), 3);
-        for i in 0..tris.len() - 1 {
-            assert!(tris[i] <= tris[i + 1]);
-        }
-    }
-
-    #[test]
     fn build_index_tables_include_paths_filters_to_single_file() {
         let tmp = TempDir::new().expect("create temp dir");
         fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
@@ -834,7 +778,10 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[PathBuf::from("keep.txt")],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::ignores_disabled(),
+            visibility: VisibilityConfig {
+                ignore: IgnoreConfig::disabled(),
+                ..Default::default()
+            },
         };
         let tables = IndexTableBuilder::new(&config)
             .build()
@@ -889,7 +836,7 @@ mod tests {
             exclude_paths: &[],
             include_paths: &[],
             corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::standard(),
+            visibility: VisibilityConfig::default(),
         };
         let tables = IndexTableBuilder::new(&config)
             .build()
@@ -903,35 +850,6 @@ mod tests {
             paths.iter().any(|p| p == "keep.txt"),
             "keep.txt must be indexed, got {paths:?}"
         );
-    }
-
-    #[test]
-    fn incremental_build_reuses_cached_trigrams() {
-        let tmp = TempDir::new().expect("create temp dir");
-        fs::write(tmp.path().join("a.txt"), "hello\n").expect("write a");
-        fs::write(tmp.path().join("b.txt"), "world\n").expect("write b");
-
-        let config = IndexBuildConfig {
-            root: tmp.path(),
-            follow_links: false,
-            exclude_paths: &[],
-            include_paths: &[],
-            corpus_kind: CorpusKind::Directory,
-            visibility: VisibilityConfig::ignores_disabled(),
-        };
-
-        let tables1 = IndexTableBuilder::new(&config)
-            .build()
-            .expect("first build");
-
-        let tables2 = IndexTableBuilder::new(&config)
-            .with_previous(&tables1.fingerprints, &tables1.file_trigrams)
-            .build()
-            .expect("incremental build");
-
-        assert_eq!(tables1.file_trigrams, tables2.file_trigrams);
-        assert_eq!(tables1.lexicon, tables2.lexicon);
-        assert_eq!(tables1.postings, tables2.postings);
     }
 
     mod deduper {
