@@ -15,8 +15,8 @@ use super::storage::varint;
 use super::types::{Trigram, TrigramDeduper};
 
 use crate::index::{CorpusKind, IndexBuildConfig};
-use crate::search::filter::{HiddenMode, IgnoreSources, VisibilityConfig};
 use crate::search::filter::ignore::build_gitignore_matcher;
+use crate::search::filter::{HiddenMode, IgnoreSources, VisibilityConfig};
 
 /// Collected index data ready for persistence.
 pub struct IndexTables {
@@ -209,10 +209,7 @@ impl<'a> CorpusWalker<'a> {
     fn walk_builder(&self) -> WalkBuilder {
         let mut wb = WalkBuilder::new(self.config.root);
         wb.follow_links(self.config.follow_links)
-            .hidden(matches!(
-                self.config.visibility.hidden,
-                HiddenMode::Respect
-            ))
+            .hidden(matches!(self.config.visibility.hidden, HiddenMode::Respect))
             .parents(
                 self.config
                     .visibility
