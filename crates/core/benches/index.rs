@@ -178,15 +178,17 @@ fn bench_indexes_open(c: &mut Criterion) {
 fn bench_index_save_reopen(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_save_reopen");
 
-    g.bench_function("save_and_reopen", |b| {
-        let (_tmp, index) = common::open_parity_index();
+    g.bench_function("reopen", |b| {
+        let tmp = tempfile::tempdir().unwrap();
+        let corpus = tmp.path().join("corpus");
+        common::make_parity_corpus(&corpus);
+        let idx_dir = tmp.path().join(".sift");
+        let index = common::build_index(&corpus, &idx_dir);
         let root = index.root().to_path_buf();
-        let corpus_kind = index.corpus_kind();
+        let kind = index.corpus_kind();
+        drop(index);
         b.iter(|| {
-            let tmp2 = tempfile::tempdir().unwrap();
-            let save_dir = tmp2.path().join("saved_index");
-            index.save_to_dir(&save_dir).unwrap();
-            black_box(common::open_index(&save_dir, &root, corpus_kind));
+            black_box(common::open_index(&idx_dir, &root, kind));
         });
     });
 

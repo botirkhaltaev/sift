@@ -8,11 +8,10 @@ use ignore::{
 };
 use rayon::prelude::*;
 
+use super::Trigram;
 use super::file_table::FileFingerprint;
 use super::storage::lexicon::LexiconEntry;
 use super::storage::mmap::open_mmap;
-use super::storage::varint;
-use super::types::{Trigram, TrigramDeduper};
 
 use crate::index::{CorpusKind, IndexBuildConfig};
 use crate::search::filter::ignore::build_gitignore_matcher;
@@ -302,6 +301,65 @@ impl<'a> FingerprintCollector<'a> {
     }
 }
 
+/// Reusable bitset deduper for per-file unique trigram extraction.
+struct TrigramDeduper {
+    seen: Box<[u64]>,
+    touched: Vec<Trigram>,
+}
+
+const SEEN_WORDS: usize = 262_144;
+
+impl TrigramDeduper {
+    fn new() -> Self {
+        Self {
+            seen: vec![0; SEEN_WORDS].into_boxed_slice(),
+            touched: Vec::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        for tri in self.touched.drain(..) {
+            let key = tri.as_u24() as usize;
+            let word = key >> 6;
+            let bit = 1u64 << (key & 63);
+            self.seen[word] &= !bit;
+        }
+    }
+
+    fn mark(&mut self, tri: Trigram) -> bool {
+        let key = tri.as_u24() as usize;
+        let word = key >> 6;
+        let bit = 1u64 << (key & 63);
+        let slot = &mut self.seen[word];
+        if *slot & bit != 0 {
+            return false;
+        }
+        *slot |= bit;
+        self.touched.push(tri);
+        true
+    }
+
+    /// Collect unique trigrams from `bytes`, returning a sorted deduplicated vec.
+    fn collect_unique(&mut self, bytes: &[u8]) -> Vec<Trigram> {
+        self.reset();
+        if bytes.len() >= 3 {
+            for i in 0..=bytes.len() - 3 {
+                let tri = Trigram::from_bytes([bytes[i], bytes[i + 1], bytes[i + 2]]);
+                let _ = self.mark(tri);
+            }
+        }
+        self.touched.sort_unstable();
+        let result = std::mem::take(&mut self.touched);
+        for tri in &result {
+            let key = tri.as_u24() as usize;
+            let word = key >> 6;
+            let bit = 1u64 << (key & 63);
+            self.seen[word] &= !bit;
+        }
+        result
+    }
+}
+
 /// Extracts unique trigrams per file, reusing cached trigrams for unchanged files.
 struct TrigramExtractor<'a> {
     root: &'a Path,
@@ -402,7 +460,8 @@ impl<'a> PostingAssembler<'a> {
                     "posting list too long",
                 ))
             })?;
-            varint::encode_sorted_deltas(&mut posting_bytes, &ids);
+            super::storage::postings::Postings::encode_sorted(&mut posting_bytes, &ids)
+                .map_err(crate::Error::Io)?;
             lex_entries.push(LexiconEntry {
                 trigram: tri.to_bytes(),
                 offset,
@@ -467,12 +526,14 @@ impl<'a> TrigramIndexBuilder<'a> {
         }
     }
 
-    /// Walk `root`, extract trigrams, and return an in-memory [`TrigramIndex`].
+    /// Walk `root`, extract trigrams, and write the index to the configured output directory.
+    ///
+    /// Returns an mmap-backed [`TrigramIndex`] over the written files.
     ///
     /// # Errors
     ///
-    /// Propagates IO errors from walking, reading files, or writing persistence files
-    /// (if `with_dir` was called).
+    /// Propagates IO errors from walking, reading files, or writing persistence files.
+    /// Returns an error if `with_dir` was not called before `build`.
     pub fn build(self) -> crate::Result<super::TrigramIndex> {
         let canonical = self.root.canonicalize()?;
 
@@ -507,13 +568,14 @@ impl<'a> TrigramIndexBuilder<'a> {
             visibility: VisibilityConfig::standard(),
         };
 
+        let dir = self.dir.ok_or_else::<crate::Error, _>(|| {
+            crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "output directory is required; use .with_dir() before .build()",
+            ))
+        })?;
         let tables = IndexTableBuilder::new(&config).build()?;
-        let index = super::TrigramIndex::from_tables(tables, root, kind);
-
-        if let Some(dir) = self.dir {
-            index.save_to_dir(&dir)?;
-        }
-        Ok(index)
+        super::TrigramIndex::create_in_dir(&tables, &root, kind, &dir)
     }
 }
 
@@ -561,7 +623,8 @@ mod tests {
                             usize::try_from(e.offset).unwrap_or(usize::MAX)
                         });
                     let slice = &postings[start..end];
-                    varint::decode_sorted_deltas::<u32>(slice)
+                    crate::index::trigram::storage::postings::Postings::decode_sorted(slice)
+                        .unwrap_or_default()
                         .into_iter()
                         .filter(|&id| id == file_id)
                         .count()
@@ -788,6 +851,7 @@ mod tests {
         fs::write(tmp.path().join("other.txt"), "haystack\n").expect("write other");
 
         let index = TrigramIndexBuilder::new(&file)
+            .with_dir(tmp.path().join(".sift"))
             .build()
             .expect("build index");
         assert_eq!(index.corpus_kind(), CorpusKind::SingleFile);
@@ -868,5 +932,110 @@ mod tests {
         assert_eq!(tables1.file_trigrams, tables2.file_trigrams);
         assert_eq!(tables1.lexicon, tables2.lexicon);
         assert_eq!(tables1.postings, tables2.postings);
+    }
+
+    mod deduper {
+        use super::*;
+
+        #[test]
+        fn sorts_and_deduplicates() {
+            let tris = TrigramDeduper::new().collect_unique(b"ababa");
+            assert_eq!(tris.len(), 2);
+            assert!(tris.contains(&Trigram::from_bytes(*b"aba")));
+            assert!(tris.contains(&Trigram::from_bytes(*b"bab")));
+        }
+
+        #[test]
+        fn short_input_returns_empty() {
+            let mut deduper = TrigramDeduper::new();
+            assert!(deduper.collect_unique(b"").is_empty());
+            assert!(deduper.collect_unique(b"ab").is_empty());
+        }
+
+        #[test]
+        fn matches_raw_windows_valid_ascii() {
+            let b = b"hello world";
+            let unique: Vec<[u8; 3]> = TrigramDeduper::new()
+                .collect_unique(b)
+                .into_iter()
+                .map(Trigram::to_bytes)
+                .collect();
+            let mut ref_set: Vec<[u8; 3]> = Trigram::windows(b).map(Trigram::to_bytes).collect();
+            ref_set.sort_unstable();
+            ref_set.dedup();
+            assert_eq!(unique, ref_set);
+        }
+
+        #[test]
+        fn matches_raw_windows_multibyte() {
+            let b = "café résumé 日本語".as_bytes();
+            let unique: Vec<[u8; 3]> = TrigramDeduper::new()
+                .collect_unique(b)
+                .into_iter()
+                .map(Trigram::to_bytes)
+                .collect();
+            let mut ref_set: Vec<[u8; 3]> = Trigram::windows(b).map(Trigram::to_bytes).collect();
+            ref_set.sort_unstable();
+            ref_set.dedup();
+            assert_eq!(unique, ref_set);
+        }
+
+        #[test]
+        fn uses_raw_windows_for_invalid_utf8() {
+            let b: Vec<u8> = [b"ok", &[0xff, 0xfe][..], b" trail"].concat();
+            let unique: Vec<[u8; 3]> = TrigramDeduper::new()
+                .collect_unique(&b)
+                .into_iter()
+                .map(Trigram::to_bytes)
+                .collect();
+            let mut ref_set: Vec<[u8; 3]> = Trigram::windows(&b).map(Trigram::to_bytes).collect();
+            ref_set.sort_unstable();
+            ref_set.dedup();
+            assert_eq!(unique, ref_set);
+        }
+
+        #[test]
+        fn does_not_allocate_lossy_replacement_trigrams() {
+            let b = &[0xff, 0xfe, 0xfd];
+            let unique = TrigramDeduper::new().collect_unique(b);
+            assert_eq!(unique.len(), 1);
+            assert_eq!(unique[0].to_bytes(), *b);
+        }
+
+        #[test]
+        fn reused_deduper_does_not_drop_overlapping_trigrams() {
+            let mut deduper = TrigramDeduper::new();
+            let first = deduper.collect_unique(b"abcxxx");
+            assert!(first.contains(&Trigram::from_bytes(*b"abc")));
+
+            let second = deduper.collect_unique(b"abczzz");
+            assert!(
+                second.contains(&Trigram::from_bytes(*b"abc")),
+                "abc should appear in second call; got {second:?}"
+            );
+        }
+
+        #[test]
+        fn reused_deduper_three_times_no_loss() {
+            let mut deduper = TrigramDeduper::new();
+            let _ = deduper.collect_unique(b"aaaaaa");
+            let _ = deduper.collect_unique(b"bbbbbb");
+            let third = deduper.collect_unique(b"abcabc");
+            assert!(
+                third.contains(&Trigram::from_bytes(*b"abc")),
+                "abc must be present"
+            );
+        }
+
+        #[test]
+        fn reused_deduper_preserves_independence() {
+            let mut deduper = TrigramDeduper::new();
+            let a = deduper.collect_unique(b"aaa");
+            let b = deduper.collect_unique(b"bbb");
+            let c = deduper.collect_unique(b"ccc");
+            assert_eq!(a.len(), 1);
+            assert_eq!(b.len(), 1);
+            assert_eq!(c.len(), 1);
+        }
     }
 }

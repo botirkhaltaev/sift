@@ -28,11 +28,10 @@ fn indexed() -> &'static Indexes {
             fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
             let sift_dir = tmp.path().join(".sift");
             let trigram_dir = sift_dir.join("trigram");
-            let index = TrigramIndexBuilder::new(&corpus)
+            TrigramIndexBuilder::new(&corpus)
                 .with_dir(&trigram_dir)
                 .build()
                 .expect("build_index");
-            index.save_to_dir(&trigram_dir).expect("save_index");
             let indexes = Indexes::open(&sift_dir).expect("open_index");
             IndexHolder { _tmp: tmp, indexes }
         })

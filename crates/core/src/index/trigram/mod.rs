@@ -1,7 +1,7 @@
 pub mod builder;
 pub mod file_table;
+pub mod key;
 pub mod storage;
-pub mod types;
 
 mod planner;
 
@@ -16,7 +16,7 @@ use self::builder::{IndexTableBuilder, IndexTables};
 use self::file_table::FileFingerprint;
 use self::planner::{TrigramCandidatePlan, TrigramPlanner};
 pub use builder::TrigramIndexBuilder;
-pub use types::Trigram;
+pub use key::Trigram;
 
 /// Errors specific to opening or persisting a trigram index.
 #[derive(Debug, thiserror::Error)]
@@ -32,69 +32,53 @@ pub enum TrigramIndexError {
 pub struct TrigramIndex {
     root: PathBuf,
     pub(crate) fingerprints: Vec<FileFingerprint>,
-    trigram_sets: storage::trigram_sets::MappedTrigramSets,
-    lexicon: storage::lexicon::MappedLexicon,
-    postings: storage::postings::MappedPostings,
+    trigram_sets: storage::trigram_sets::TrigramSets,
+    lexicon: storage::lexicon::Lexicon,
+    postings: storage::postings::Postings,
     corpus_kind: CorpusKind,
 }
 
 impl TrigramIndex {
-    /// Construct from in-memory index tables.
-    pub(crate) fn from_tables(tables: IndexTables, root: PathBuf, corpus_kind: CorpusKind) -> Self {
-        let lexicon = storage::lexicon::MappedLexicon::from_entries(&tables.lexicon);
-        let postings = storage::postings::MappedPostings::from_bytes(&tables.postings);
-        let trigram_sets =
-            storage::trigram_sets::MappedTrigramSets::from_sets(&tables.file_trigrams);
-
-        Self {
-            root,
-            fingerprints: tables.fingerprints,
-            trigram_sets,
-            lexicon,
-            postings,
-            corpus_kind,
-        }
-    }
-
-    /// Persist the in-memory index to `dir`.
-    ///
-    /// # Errors
-    ///
-    /// Propagates IO errors from creating directories or writing files.
-    pub fn save_to_dir(&self, dir: &Path) -> Result<(), TrigramIndexError> {
+    /// Write tables to `dir` as persistence files and return an mmap-backed index.
+    pub(crate) fn create_in_dir(
+        tables: &IndexTables,
+        root: &Path,
+        corpus_kind: CorpusKind,
+        dir: &Path,
+    ) -> crate::Result<Self> {
         std::fs::create_dir_all(dir)?;
 
-        let files = file_table::MappedFilesView::from_fingerprints(&self.fingerprints);
         let files_path = dir.join(crate::FILES_BIN);
         let lexicon_path = dir.join(crate::LEXICON_BIN);
         let postings_path = dir.join(crate::POSTINGS_BIN);
         let trigrams_path = dir.join(crate::TRIGRAMS_BIN);
 
-        let files_bytes = files.backing_slice();
-        let lexicon_bytes = self.lexicon.backing_slice();
-        let postings_bytes = self.postings.backing_slice();
-        let trigrams_bytes = self.trigram_sets.backing_slice();
-
-        let ((files_res, lexicon_res), (postings_res, trigrams_res)) = rayon::join(
+        let ((fr, lr), (pr, tr)) = rayon::join(
             || {
                 rayon::join(
-                    || std::fs::write(&files_path, files_bytes),
-                    || std::fs::write(&lexicon_path, lexicon_bytes),
+                    || file_table::FileTable::create(&files_path, &tables.fingerprints),
+                    || storage::lexicon::Lexicon::create(&lexicon_path, &tables.lexicon),
                 )
             },
             || {
                 rayon::join(
-                    || std::fs::write(&postings_path, postings_bytes),
-                    || std::fs::write(&trigrams_path, trigrams_bytes),
+                    || storage::postings::Postings::create(&postings_path, &tables.postings),
+                    || {
+                        storage::trigram_sets::TrigramSets::create(
+                            &trigrams_path,
+                            &tables.file_trigrams,
+                        )
+                    },
                 )
             },
         );
 
-        files_res.map_err(TrigramIndexError::Io)?;
-        lexicon_res.map_err(TrigramIndexError::Io)?;
-        postings_res.map_err(TrigramIndexError::Io)?;
-        trigrams_res.map_err(TrigramIndexError::Io)?;
-        Ok(())
+        fr.map_err(crate::Error::Io)?;
+        lr.map_err(crate::Error::Io)?;
+        pr.map_err(crate::Error::Io)?;
+        tr.map_err(crate::Error::Io)?;
+
+        Self::open(dir, root, corpus_kind)
     }
 
     #[must_use]
@@ -151,18 +135,9 @@ impl TrigramIndex {
     ///
     /// Returns an error if corpus walking, extraction, or file I/O fails.
     pub fn build(config: &IndexBuildConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
-        std::fs::create_dir_all(output_dir)?;
-
         let tables = IndexTableBuilder::new(config).build()?;
         let root = config.root.canonicalize()?;
-        let index = Self::from_tables(tables, root, config.corpus_kind);
-        index.save_to_dir(output_dir).map_err(|e| match e {
-            TrigramIndexError::Io(io) => crate::Error::Io(io),
-            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
-                format!("missing component: {}", p.display()),
-            )),
-        })?;
-        Ok(index)
+        Self::create_in_dir(&tables, &root, config.corpus_kind, output_dir)
     }
 
     /// Open a previously persisted trigram index from `index_dir`.
@@ -194,15 +169,8 @@ impl TrigramIndex {
             return Ok(None);
         }
 
-        std::fs::create_dir_all(output_dir)?;
         let root = config.root.canonicalize()?;
-        let index = Self::from_tables(tables, root, config.corpus_kind);
-        index.save_to_dir(output_dir).map_err(|e| match e {
-            TrigramIndexError::Io(io) => crate::Error::Io(io),
-            TrigramIndexError::MissingComponent(p) => crate::Error::Io(std::io::Error::other(
-                format!("missing component: {}", p.display()),
-            )),
-        })?;
+        let index = Self::create_in_dir(&tables, &root, config.corpus_kind, output_dir)?;
         Ok(Some(index))
     }
 
@@ -299,17 +267,57 @@ impl TrigramIndex {
             }
         }
 
-        let files =
-            file_table::MappedFilesView::open(&files_path).map_err(TrigramIndexError::Io)?;
+        let files = file_table::FileTable::open(&files_path).map_err(TrigramIndexError::Io)?;
         let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
         Self::validate_file_paths(&fingerprints, &files_path)?;
 
         let lexicon =
-            storage::lexicon::MappedLexicon::open(&lexicon_path).map_err(TrigramIndexError::Io)?;
-        let postings = storage::postings::MappedPostings::open(&postings_path)
-            .map_err(TrigramIndexError::Io)?;
+            storage::lexicon::Lexicon::open(&lexicon_path).map_err(TrigramIndexError::Io)?;
+        let postings =
+            storage::postings::Postings::open(&postings_path).map_err(TrigramIndexError::Io)?;
 
-        let trigram_sets = storage::trigram_sets::MappedTrigramSets::open(&trigrams_path)
+        // Cross-file validation: every lexicon entry must reference a valid posting range
+        // and the decoded list must match entry.len.
+        let payload_len = postings.payload_len();
+        for entry in &lexicon {
+            let start = usize::try_from(entry.offset).map_err(|_| {
+                TrigramIndexError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "lexicon entry {:?} offset {} exceeds usize",
+                        entry.trigram, entry.offset,
+                    ),
+                ))
+            })?;
+            let end = lexicon.posting_byte_end(entry.offset, payload_len);
+            if start > end || end > payload_len {
+                return Err(TrigramIndexError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "lexicon entry {:?} posting range [{start},{end}) exceeds payload_len {payload_len}",
+                        entry.trigram,
+                    ),
+                )));
+            }
+            let slice = postings.slice(start, end.saturating_sub(start));
+            let decoded_count = storage::postings::Postings::validate_list(slice).map_err(|e| {
+                TrigramIndexError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("posting list for trigram {:?}: {e}", entry.trigram),
+                ))
+            })?;
+            if decoded_count != entry.len as usize {
+                return Err(TrigramIndexError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "lexicon entry {:?} claims len {} but posting list has {decoded_count} entries",
+                        entry.trigram, entry.len,
+                    ),
+                )));
+            }
+        }
+
+        let trigram_sets = storage::trigram_sets::TrigramSets::open(&trigrams_path)
             .map_err(TrigramIndexError::Io)?;
 
         Ok(Self {
@@ -352,13 +360,16 @@ impl PostingOps {
             return Vec::new();
         }
         if slices.len() == 1 {
-            return storage::varint::decode_sorted_deltas::<u32>(slices[0]);
+            return storage::postings::Postings::decode_sorted(slices[0])
+                .expect("postings validated at open");
         }
         let mut ordered: Vec<&[u8]> = slices.to_vec();
         ordered.sort_unstable_by_key(|slice| slice.len());
-        let mut cur = storage::varint::decode_sorted_deltas::<u32>(ordered[0]);
+        let mut cur = storage::postings::Postings::decode_sorted(ordered[0])
+            .expect("postings validated at open");
         for s in &ordered[1..] {
-            cur = storage::varint::intersect_sorted(&cur, s);
+            cur = storage::postings::Postings::intersect_sorted(&cur, s)
+                .expect("postings validated at open");
             if cur.is_empty() {
                 break;
             }
@@ -408,7 +419,7 @@ mod tests {
 
     fn encode(ids: &[u32]) -> Vec<u8> {
         let mut buf = Vec::new();
-        storage::varint::encode_sorted_deltas(&mut buf, ids);
+        storage::postings::Postings::encode_sorted(&mut buf, ids).expect("encode");
         buf
     }
 
@@ -461,10 +472,10 @@ mod tests {
     }
 
     #[test]
-    fn intersect_sorted_slices_invalid_varint_returns_empty() {
+    #[should_panic(expected = "postings validated at open")]
+    fn intersect_sorted_slices_invalid_varint_panics() {
         let a = &[0xff];
-        let ids = PostingOps::intersect_sorted_slices(&[a]);
-        assert!(ids.is_empty());
+        let _ids = PostingOps::intersect_sorted_slices(&[a]);
     }
 
     #[test]
@@ -473,6 +484,58 @@ mod tests {
         let b = encode(&[4, 5, 6]);
         let ids = PostingOps::intersect_sorted_slices(&[a.as_slice(), b.as_slice()]);
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn open_tables_rejects_count_mismatch() {
+        use crate::index::trigram::storage::format::{
+            FILES_MAGIC, LEXICON_MAGIC, POSTINGS_MAGIC, TRIGRAMS_MAGIC,
+        };
+        use tempfile::TempDir;
+        let tmp = TempDir::new().expect("create temp dir");
+        let dir = tmp.path().join("index");
+        std::fs::create_dir(&dir).expect("create index dir");
+
+        // files.bin: empty
+        let mut files = FILES_MAGIC.to_vec();
+        files.extend_from_slice(&0u32.to_le_bytes());
+        std::fs::write(dir.join("files.bin"), &files).expect("write files");
+
+        // lexicon.bin: one entry, trigram "abc", offset=0, len=3
+        let mut lex = LEXICON_MAGIC.to_vec();
+        lex.extend_from_slice(&1u32.to_le_bytes()); // count=1
+        lex.extend_from_slice(b"abc");
+        lex.extend_from_slice(&0u64.to_le_bytes()); // offset=0
+        lex.extend_from_slice(&3u32.to_le_bytes()); // len=3 — claims 3 entries
+        std::fs::write(dir.join("lexicon.bin"), &lex).expect("write lexicon");
+
+        // postings.bin: only 2 encoded entries (lexicon claims 3)
+        let mut posting_payload = Vec::new();
+        let mut buf = unsigned_varint::encode::u64_buffer();
+        posting_payload.extend_from_slice(unsigned_varint::encode::u64(0, &mut buf));
+        let mut buf2 = unsigned_varint::encode::u64_buffer();
+        posting_payload.extend_from_slice(unsigned_varint::encode::u64(1, &mut buf2));
+        let mut pb = POSTINGS_MAGIC.to_vec();
+        pb.extend_from_slice(&u32::try_from(posting_payload.len()).unwrap().to_le_bytes());
+        pb.extend_from_slice(&posting_payload);
+        std::fs::write(dir.join("postings.bin"), &pb).expect("write postings");
+
+        // trigrams.bin: empty
+        let mut tri = TRIGRAMS_MAGIC.to_vec();
+        tri.extend_from_slice(&0u32.to_le_bytes());
+        std::fs::write(dir.join("trigrams.bin"), &tri).expect("write trigrams");
+
+        let result = TrigramIndex::open_tables(
+            &dir,
+            Path::new("/root"),
+            crate::index::CorpusKind::Directory,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("claims len") || err.contains("entries"),
+            "expected count mismatch error, got: {err}",
+        );
     }
 
     #[test]

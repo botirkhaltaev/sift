@@ -24,26 +24,77 @@ pub struct FileFingerprint {
 }
 
 #[derive(Debug)]
-pub struct MappedFilesView {
-    backing: Backing,
+pub struct FileTable {
+    mmap: Mmap,
     count: usize,
     offset_table_start: usize,
 }
 
-#[derive(Debug)]
-enum Backing {
-    Mmap(Mmap),
-    Owned(Vec<u8>),
+fn build_files_bytes(fingerprints: &[FileFingerprint]) -> std::io::Result<Vec<u8>> {
+    let count = fingerprints.len();
+    let offset_table_start = FILES_MAGIC.len() + 4;
+    let blob_start = offset_table_start + count * 4;
+
+    let mut offsets = Vec::<u32>::with_capacity(count);
+    let mut blob = Vec::<u8>::new();
+
+    for fp in fingerprints {
+        let s = fp.path.to_string_lossy();
+        let path_bytes = s.as_bytes();
+        let path_len = u32::try_from(path_bytes.len()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "file path exceeds u32::MAX",
+            )
+        })?;
+        let abs_off = u32::try_from(blob_start + blob.len()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "files blob offset exceeds u32::MAX",
+            )
+        })?;
+        offsets.push(abs_off);
+        blob.extend_from_slice(&path_len.to_le_bytes());
+        blob.extend_from_slice(path_bytes);
+        blob.extend_from_slice(&fp.mtime_secs.to_le_bytes());
+        blob.extend_from_slice(&fp.size.to_le_bytes());
+    }
+
+    let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
+    file_bytes.extend_from_slice(&FILES_MAGIC);
+    file_bytes.extend_from_slice(
+        &u32::try_from(count)
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "files count exceeds u32::MAX",
+                )
+            })?
+            .to_le_bytes(),
+    );
+    for off in &offsets {
+        file_bytes.extend_from_slice(&off.to_le_bytes());
+    }
+    file_bytes.extend_from_slice(&blob);
+    Ok(file_bytes)
 }
 
-impl MappedFilesView {
-    const FINGERPRINT_LEN: usize = 16; // i64 mtime + u64 size
+impl FileTable {
+    const FINGERPRINT_LEN: usize = 16;
 
     fn bytes(&self) -> &[u8] {
-        match &self.backing {
-            Backing::Mmap(m) => m.as_ref(),
-            Backing::Owned(v) => v.as_slice(),
-        }
+        self.mmap.as_ref()
+    }
+
+    /// Write a file table and return an mmap-backed instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written or reopened.
+    pub fn create(path: &Path, fingerprints: &[FileFingerprint]) -> std::io::Result<Self> {
+        let data = build_files_bytes(fingerprints)?;
+        std::fs::write(path, &data)?;
+        Self::open(path)
     }
 
     pub fn open(path: &Path) -> std::io::Result<Self> {
@@ -51,45 +102,10 @@ impl MappedFilesView {
         let bytes = mmap.as_ref();
         let (count, offset_table_start) = Self::validate(bytes)?;
         Ok(Self {
-            backing: Backing::Mmap(mmap),
+            mmap,
             count,
             offset_table_start,
         })
-    }
-
-    pub fn from_fingerprints(fingerprints: &[FileFingerprint]) -> Self {
-        let count = fingerprints.len();
-        let offset_table_start = FILES_MAGIC.len() + 4;
-        let blob_start = offset_table_start + count * 4;
-
-        let mut offsets = Vec::<u32>::with_capacity(count);
-        let mut blob = Vec::<u8>::new();
-
-        for fp in fingerprints {
-            let s = fp.path.to_string_lossy();
-            let path_bytes = s.as_bytes();
-            let path_len = u32::try_from(path_bytes.len()).unwrap_or(u32::MAX);
-            let abs_off = u32::try_from(blob_start + blob.len()).unwrap_or(u32::MAX);
-            offsets.push(abs_off);
-            blob.extend_from_slice(&path_len.to_le_bytes());
-            blob.extend_from_slice(path_bytes);
-            blob.extend_from_slice(&fp.mtime_secs.to_le_bytes());
-            blob.extend_from_slice(&fp.size.to_le_bytes());
-        }
-
-        let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
-        file_bytes.extend_from_slice(&FILES_MAGIC);
-        file_bytes.extend_from_slice(&u32::try_from(count).unwrap().to_le_bytes());
-        for off in &offsets {
-            file_bytes.extend_from_slice(&off.to_le_bytes());
-        }
-        file_bytes.extend_from_slice(&blob);
-
-        Self {
-            backing: Backing::Owned(file_bytes),
-            count,
-            offset_table_start,
-        }
     }
 
     fn validate(bytes: &[u8]) -> std::io::Result<(usize, usize)> {
@@ -188,17 +204,12 @@ impl MappedFilesView {
         }
         Ok(out)
     }
-
-    pub fn backing_slice(&self) -> &[u8] {
-        self.bytes()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn sample_fingerprints() -> Vec<FileFingerprint> {
@@ -223,15 +234,19 @@ mod tests {
 
     #[test]
     fn from_fingerprints_round_trips() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("files.bin");
         let fps = sample_fingerprints();
-        let table = MappedFilesView::from_fingerprints(&fps);
+        let table = FileTable::create(&path, &fps).expect("create");
         let round_tripped = table.to_fingerprints().expect("decode fingerprints");
         assert_eq!(round_tripped, fps);
     }
 
     #[test]
     fn empty_fingerprint_list_round_trips() {
-        let table = MappedFilesView::from_fingerprints(&[]);
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("files.bin");
+        let table = FileTable::create(&path, &[]).expect("create");
         assert_eq!(table.len(), 0);
         let round_tripped = table.to_fingerprints().expect("decode fingerprints");
         assert!(round_tripped.is_empty());
@@ -239,6 +254,8 @@ mod tests {
 
     #[test]
     fn len_returns_count() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("files.bin");
         let fps = vec![
             FileFingerprint {
                 path: PathBuf::from("a.txt"),
@@ -251,21 +268,8 @@ mod tests {
                 size: 0,
             },
         ];
-        let table = MappedFilesView::from_fingerprints(&fps);
+        let table = FileTable::create(&path, &fps).expect("create");
         assert_eq!(table.len(), 2);
-    }
-
-    #[test]
-    fn backing_slice_starts_with_file_magic() {
-        use crate::index::trigram::storage::format::FILES_MAGIC;
-        let fp = FileFingerprint {
-            path: PathBuf::from("a.txt"),
-            mtime_secs: 0,
-            size: 0,
-        };
-        let table = MappedFilesView::from_fingerprints(&[fp]);
-        let slice = table.backing_slice();
-        assert_eq!(&slice[..FILES_MAGIC.len()], FILES_MAGIC);
     }
 
     #[test]
@@ -276,7 +280,7 @@ mod tests {
         file.write_all(b"BADMAGIC").expect("write bad magic");
         file.write_all(&0u32.to_le_bytes()).expect("write count");
 
-        let result = MappedFilesView::open(&path);
+        let result = FileTable::open(&path);
         assert!(result.is_err());
     }
 
@@ -290,7 +294,7 @@ mod tests {
         file.write_all(&[0u8; 2])
             .expect("write only 2 of 4 offset bytes");
 
-        let result = MappedFilesView::open(&path);
+        let result = FileTable::open(&path);
         assert!(result.is_err());
     }
 
@@ -306,7 +310,7 @@ mod tests {
         file.write_all(&100u32.to_le_bytes())
             .expect("write path_len 100 but no data");
 
-        let result = MappedFilesView::open(&path);
+        let result = FileTable::open(&path);
         assert!(result.is_err());
     }
 
@@ -316,7 +320,7 @@ mod tests {
         let path = tmp.path().join("files.bin");
         std::fs::write(&path, b"SHORT").expect("write short file");
 
-        let result = MappedFilesView::open(&path);
+        let result = FileTable::open(&path);
         assert!(result.is_err());
     }
 }
