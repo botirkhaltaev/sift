@@ -351,10 +351,6 @@ impl<'a> PostingAssembler<'a> {
     }
 
     fn sort_pairs(pairs: &mut Vec<PackedPosting>) {
-        Self::lazy_radix_sort(pairs);
-    }
-
-    fn lazy_radix_sort(pairs: &mut Vec<PackedPosting>) {
         let len = pairs.len();
         if len < 2 {
             return;
