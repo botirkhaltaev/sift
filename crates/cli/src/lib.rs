@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod config;
 pub mod daemon;
 pub mod engine;
 pub mod filter;
@@ -8,17 +9,14 @@ pub mod paths;
 pub mod pattern;
 pub mod search;
 
-use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
-use sift_core::{
-    CorpusKind, CorpusSpec, IgnoreConfig, IndexConfig, IndexKind, IndexStore, VisibilityConfig,
-};
+use sift_core::{CorpusSpec, IgnoreConfig, IndexConfig, IndexStore, VisibilityConfig};
 
-use cli::{Cli, Commands};
+use cli::Cli;
+use config::CliConfig;
 use ignore::{MessageFlags, resolve_visibility_and_ignore};
-use paths::excluded_search_paths;
 use search::{run_files_mode, run_type_list};
 
 #[must_use]
@@ -30,47 +28,37 @@ pub fn main_entry() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if let Some(Commands::Build { path, indexes }) = &cli.command {
-        let canonical = match path.canonicalize() {
-            Ok(c) => c,
+    let cfg = match CliConfig::from_cli(&cli) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("sift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if let Some(build) = &cfg.build {
+        let args: Vec<String> = std::env::args().collect();
+        let ignore_res = resolve_visibility_and_ignore(&args);
+        let mut store = match IndexStore::open_or_create(
+            &build.sift_dir,
+            &build.root,
+            build.corpus_kind,
+            build.follow_links,
+            &build.indexes,
+        ) {
+            Ok(s) => s,
             Err(e) => {
                 eprintln!("sift: {e}");
                 return ExitCode::from(2);
             }
         };
-        let (root, include_paths, corpus_kind) = if canonical.is_file() {
-            let parent = if let Some(p) = canonical.parent() {
-                p.to_path_buf()
-            } else {
-                eprintln!("sift: corpus root must have a parent directory");
-                return ExitCode::from(2);
-            };
-            let filename = Path::new(canonical.file_name().unwrap_or_default()).to_path_buf();
-            (parent, vec![filename], CorpusKind::SingleFile)
-        } else {
-            (canonical, Vec::new(), CorpusKind::Directory)
-        };
-        let kinds = indexes.as_deref().unwrap_or(IndexKind::ALL);
-        let sift_dir = &cli.paths.sift_dir;
-        let exclude_paths = excluded_search_paths(&root, sift_dir);
-        let args: Vec<String> = std::env::args().collect();
-        let ignore_res = resolve_visibility_and_ignore(&args);
-        let mut store =
-            match IndexStore::open_or_create(sift_dir, &root, corpus_kind, cli.paths.follow, kinds)
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("sift: {e}");
-                    return ExitCode::from(2);
-                }
-            };
-        let config = IndexConfig {
+        let index_cfg = IndexConfig {
             corpus: CorpusSpec {
-                root: &root,
-                kind: corpus_kind,
-                follow_links: cli.paths.follow,
-                include_paths: &include_paths,
-                exclude_paths: &exclude_paths,
+                root: &build.root,
+                kind: build.corpus_kind,
+                follow_links: build.follow_links,
+                include_paths: &build.include_paths,
+                exclude_paths: &build.exclude_paths,
             },
             visibility: VisibilityConfig {
                 hidden: ignore_res.hidden_mode(),
@@ -81,22 +69,24 @@ pub fn main_entry() -> ExitCode {
                 },
             },
         };
-        if let Err(e) = store.build(kinds, &config) {
+        if let Err(e) = store.build(&build.indexes, &index_cfg) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
-        daemon::DaemonConfig::spawn(sift_dir, None);
+        if let Err(e) = daemon::DaemonSupervisor::new_process().spawn(&cfg.daemon.spawn) {
+            eprintln!("sift: warning: daemon not started: {e}");
+        }
         eprintln!(
             "indexed corpus {} → {}",
-            path.display(),
-            cli.paths.sift_dir.display()
+            build.root.display(),
+            build.sift_dir.display()
         );
         return ExitCode::SUCCESS;
     }
 
     let args: Vec<String> = std::env::args().collect();
 
-    if cli.filter_decl.files {
+    if cfg.files_mode {
         return match run_files_mode(&cli, &args) {
             Ok(true) => ExitCode::SUCCESS,
             Ok(false) => ExitCode::from(1),

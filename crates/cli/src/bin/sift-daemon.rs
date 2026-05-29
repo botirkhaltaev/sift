@@ -10,15 +10,25 @@ struct DaemonArgs {
 
     #[arg(long)]
     init_root: Option<PathBuf>,
+
+    /// Build or update once, then exit instead of watching for changes.
+    #[arg(long)]
+    once: bool,
 }
 
 fn main() {
     let args = DaemonArgs::parse();
-    let config = sift_cli::daemon::DaemonConfig {
+    let config = sift_cli::daemon::DaemonRunConfig {
         sift_dir: args.sift_dir,
         init_root: args.init_root,
     };
-    if let Err(e) = config.run() {
+    let runner = sift_cli::daemon::DaemonRunner::new(config);
+    let result = if args.once {
+        runner.run_once()
+    } else {
+        runner.run()
+    };
+    if let Err(e) = result {
         eprintln!("sift-daemon: {e}");
         std::process::exit(1);
     }
