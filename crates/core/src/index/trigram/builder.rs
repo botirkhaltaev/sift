@@ -16,7 +16,6 @@ use super::storage::lexicon::LexiconEntry;
 use super::storage::trigram_sets::TrigramSet;
 
 use crate::index::{CorpusKind, IndexConfig};
-use crate::search::filter::ignore::build_gitignore_matcher;
 use crate::search::filter::{HiddenMode, IgnoreSources};
 
 /// Collected index data ready for persistence.
@@ -36,7 +35,6 @@ struct CorpusPathCollector<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
-    gitignore: Option<Arc<ignore::gitignore::Gitignore>>,
     thread_paths: Vec<PathBuf>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
@@ -68,45 +66,47 @@ impl ParallelVisitor for CorpusPathCollector<'_> {
                 return WalkState::Quit;
             }
         };
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+        let path = entry.path();
+        let rel = path.strip_prefix(&self.root).unwrap_or(path);
+
+        // Skip excluded directories before descent.
+        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+            if self.is_excluded(rel) {
+                return WalkState::Skip;
+            }
             return WalkState::Continue;
         }
-        let path = entry.path();
-        let rel = path.strip_prefix(&self.root).unwrap_or(path).to_path_buf();
-        if self.accepts_relative_path(&rel) {
-            self.thread_paths.push(rel);
+
+        if entry.file_type().is_some_and(|ft| ft.is_file()) && !self.is_excluded(rel) {
+            self.thread_paths.push(rel.to_path_buf());
         }
         WalkState::Continue
     }
 }
 
 impl CorpusPathCollector<'_> {
-    fn accepts_relative_path(&self, rel: &Path) -> bool {
+    /// True when the path matches an explicit exclude rule or falls outside
+    /// the explicit include set.
+    ///
+    /// For directories this accepts the path if *any* included path lies
+    /// under it, so that directory pruning does not skip an ancestor of a
+    /// wanted file.
+    fn is_excluded(&self, rel: &Path) -> bool {
         if self
             .exclude_paths
             .iter()
             .any(|excluded| rel.starts_with(excluded))
         {
-            return false;
+            return true;
         }
         if !self.include_paths.is_empty()
-            && !self
-                .include_paths
-                .iter()
-                .any(|included| rel == *included || rel.starts_with(included))
+            && !self.include_paths.iter().any(|included| {
+                rel == *included || included.starts_with(rel) || rel.starts_with(included)
+            })
         {
-            return false;
+            return true;
         }
-        if let Some(ref matcher) = self.gitignore {
-            let rel_normalized = rel.to_string_lossy().replace('\\', "/");
-            if matcher
-                .matched(Path::new(&rel_normalized), false)
-                .is_ignore()
-            {
-                return false;
-            }
-        }
-        true
+        false
     }
 }
 
@@ -114,7 +114,6 @@ struct CorpusPathCollectorBuilder<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
-    gitignore: Option<Arc<ignore::gitignore::Gitignore>>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
 }
@@ -125,7 +124,6 @@ impl<'a> ParallelVisitorBuilder<'a> for CorpusPathCollectorBuilder<'a> {
             root: self.root.clone(),
             exclude_paths: self.exclude_paths,
             include_paths: self.include_paths,
-            gitignore: self.gitignore.clone(),
             thread_paths: Vec::new(),
             walk_error: Arc::clone(&self.walk_error),
             consolidated_paths: Arc::clone(&self.consolidated_paths),
@@ -144,46 +142,27 @@ impl<'a> CorpusWalker<'a> {
     }
 
     fn walk_builder(&self) -> WalkBuilder {
+        let sources = self.config.visibility.ignore.sources;
         let mut wb = WalkBuilder::new(self.config.corpus.root);
         wb.follow_links(self.config.corpus.follow_links)
             .hidden(matches!(self.config.visibility.hidden, HiddenMode::Respect))
-            .parents(
-                self.config
-                    .visibility
-                    .ignore
-                    .sources
-                    .contains(IgnoreSources::PARENT),
-            )
-            .ignore(false)
-            .git_ignore(false)
-            .git_exclude(false)
-            .git_global(false)
-            .require_git(false);
+            .parents(sources.contains(IgnoreSources::PARENT))
+            .ignore(sources.contains(IgnoreSources::DOT))
+            .git_ignore(sources.contains(IgnoreSources::VCS))
+            .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
+            .git_global(sources.contains(IgnoreSources::GLOBAL))
+            .require_git(self.config.visibility.ignore.require_git);
         wb
-    }
-
-    fn corpus_matcher(&self) -> crate::Result<Option<Arc<ignore::gitignore::Gitignore>>> {
-        if self.config.visibility.ignore.sources.is_empty()
-            && self.config.visibility.ignore.custom_files.is_empty()
-        {
-            return Ok(None);
-        }
-        build_gitignore_matcher(self.config.corpus.root, &self.config.visibility.ignore)
-            .map_err(|e| crate::Error::Search(e.into()))
-            .map(|matcher| matcher.map(Arc::new))
     }
 
     pub fn collect(&self) -> crate::Result<Vec<PathBuf>> {
         let walk_error = Arc::new(Mutex::new(None));
         let consolidated_paths = Arc::new(Mutex::new(Vec::new()));
 
-        let gitignore = self.corpus_matcher()?;
-
         let mut builder = CorpusPathCollectorBuilder {
             root: self.config.corpus.root.to_path_buf(),
             exclude_paths: self.config.corpus.exclude_paths,
             include_paths: self.config.corpus.include_paths,
-            gitignore,
             walk_error: Arc::clone(&walk_error),
             consolidated_paths: Arc::clone(&consolidated_paths),
         };
@@ -825,6 +804,37 @@ mod tests {
         assert!(
             paths.iter().any(|p| p == "keep.txt"),
             "keep.txt must be indexed, got {paths:?}"
+        );
+    }
+
+    #[test]
+    fn build_prunes_gitignored_directory() {
+        let tmp = TempDir::new().expect("create temp dir");
+        fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
+        fs::create_dir_all(tmp.path().join("target")).expect("mkdir target");
+        fs::write(tmp.path().join(".gitignore"), "/target\n").expect("write gitignore");
+        fs::write(tmp.path().join("src/keep.txt"), "needle\n").expect("write keep");
+        fs::write(tmp.path().join("target/ignored.txt"), "secret\n").expect("write ignored");
+
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: tmp.path(),
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
+            visibility: VisibilityConfig::default(),
+        };
+        let tables = build_tables(&config).expect("build tables");
+        let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
+        assert!(
+            paths.iter().any(|p| p == Path::new("src/keep.txt")),
+            "keep must be indexed, got {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.starts_with("target")),
+            "target/ must not be indexed, got {paths:?}"
         );
     }
 
