@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fslock::LockFile;
 use notify::{RecursiveMode, Watcher};
@@ -136,6 +136,55 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
         self.spawner.spawn(&request)?;
 
         Ok(SpawnOutcome::Spawned)
+    }
+}
+
+/// Debounce state for the file-watcher event loop.
+enum RefreshState {
+    Idle,
+    Pending { deadline: Instant },
+}
+
+impl RefreshState {
+    /// Process an incoming filesystem event and update the debounce state.
+    fn observe(&mut self, event: &notify::Event, sift_dir: &Path, debounce: Duration) {
+        match event.kind {
+            notify::EventKind::Access(_) => {}
+            _ if event.paths.iter().any(|p| p.starts_with(sift_dir)) => {}
+            _ => {
+                *self = Self::Pending {
+                    deadline: Instant::now() + debounce,
+                };
+            }
+        }
+    }
+
+    /// Timeout to pass to `recv_timeout`.  When idle the default interval is
+    /// used; when a refresh is pending the remaining wall time until the
+    /// deadline.
+    fn timeout(&self, default: Duration) -> Duration {
+        match self {
+            Self::Idle => default,
+            Self::Pending { deadline } => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    Duration::ZERO
+                } else {
+                    remaining
+                }
+            }
+        }
+    }
+
+    /// Transition to idle and return `true` when a pending refresh is due.
+    const fn take_due(&mut self) -> bool {
+        match self {
+            Self::Pending { .. } => {
+                *self = Self::Idle;
+                true
+            }
+            Self::Idle => false,
+        }
     }
 }
 
@@ -286,34 +335,31 @@ impl DaemonRunner {
         }
 
         let (tx, rx) = mpsc::channel();
-        let watcher = notify::recommended_watcher(move |res| {
-            if let Ok(event) = res {
-                let _ = tx.send(event);
-            }
-        })?;
+        let watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            })?;
         let mut watcher = watcher;
         watcher.watch(&root, RecursiveMode::Recursive)?;
 
-        let mut changed = false;
+        let debounce = Duration::from_millis(DEBOUNCE_MS);
+        let mut refresh_state = RefreshState::Idle;
         loop {
             if shutdown.load(Ordering::Relaxed) {
                 return Ok(());
             }
 
-            match rx.recv_timeout(Duration::from_millis(DEBOUNCE_MS)) {
+            match rx.recv_timeout(refresh_state.timeout(debounce)) {
                 Ok(event) => {
-                    if Self::is_relevant_event(&event, sift_dir) {
-                        changed = true;
-                    }
+                    refresh_state.observe(&event, sift_dir, debounce);
                     while let Ok(event) = rx.try_recv() {
-                        if Self::is_relevant_event(&event, sift_dir) {
-                            changed = true;
-                        }
+                        refresh_state.observe(&event, sift_dir, debounce);
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if changed {
-                        changed = false;
+                    if refresh_state.take_due() {
                         Self::refresh(
                             &mut store,
                             sift_dir,
@@ -326,14 +372,6 @@ impl DaemonRunner {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             }
-        }
-    }
-
-    fn is_relevant_event(event: &notify::Event, sift_dir: &Path) -> bool {
-        use notify::EventKind;
-        match event.kind {
-            EventKind::Access(_) => false,
-            _ => !event.paths.iter().any(|p| p.starts_with(sift_dir)),
         }
     }
 
