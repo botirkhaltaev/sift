@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -6,56 +7,248 @@ use fslock::LockFile;
 use notify::{RecursiveMode, Watcher};
 use sift_core::{CorpusSpec, IndexConfig, IndexKind, IndexStore, StoreMeta, VisibilityConfig};
 
-const DEBOUNCE_MS: u64 = 250;
+use crate::config::DaemonSpawnConfig;
 
-pub struct DaemonConfig {
-    pub sift_dir: std::path::PathBuf,
-    pub init_root: Option<std::path::PathBuf>,
+const DEBOUNCE_MS: u64 = 250;
+const SPAWN_LOCK: &str = "daemon-spawn.lock";
+const DAEMON_LOCK: &str = "lock";
+
+// ---------------------------------------------------------------------------
+// Spawn types
+// ---------------------------------------------------------------------------
+
+/// Outcome of a daemon spawn attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnOutcome {
+    Disabled,
+    AlreadyRunning,
+    Spawned,
 }
 
-impl DaemonConfig {
-    /// Best-effort spawn `sift-daemon` in the background.
-    pub fn spawn(sift_dir: &Path, init_root: Option<&Path>) {
-        if std::env::var_os("SIFT_NO_DAEMON").is_some() {
-            return;
-        }
-        let exe = match std::env::current_exe() {
-            Ok(p) => p.with_file_name("sift-daemon"),
-            Err(_) => return,
-        };
+/// Parameters for launching a daemon child process.
+#[derive(Debug, Clone)]
+pub struct SpawnRequest {
+    pub exe: PathBuf,
+    pub sift_dir: PathBuf,
+    pub init_root: Option<PathBuf>,
+}
 
-        let mut cmd = std::process::Command::new(&exe);
-        cmd.arg("--sift-dir").arg(sift_dir);
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-        cmd.stdin(std::process::Stdio::null());
-
-        if let Some(root) = init_root {
-            cmd.arg("--init-root").arg(root);
-        }
-
-        let _ = cmd.spawn();
-    }
-
-    /// Run the daemon: acquire lock, build initial snapshot if needed, watch
-    /// root, debounce file events, and refresh the index.
+/// Abstraction over process spawning for testability.
+pub trait DaemonSpawner {
+    /// Spawn a daemon process.
     ///
     /// # Errors
     ///
-    /// Returns an error if the lock cannot be acquired (other than contention),
-    /// metadata is malformed, or the watcher fails to start.
-    pub fn run(&self) -> anyhow::Result<()> {
-        let sift_dir = &self.sift_dir;
+    /// Returns an error if the process cannot be launched.
+    fn spawn(&self, request: &SpawnRequest) -> anyhow::Result<()>;
+}
+
+/// Real spawner using `std::process::Command`.
+#[derive(Debug, Default)]
+pub struct ProcessDaemonSpawner;
+
+impl DaemonSpawner for ProcessDaemonSpawner {
+    fn spawn(&self, request: &SpawnRequest) -> anyhow::Result<()> {
+        let mut cmd = std::process::Command::new(&request.exe);
+        cmd.arg("--sift-dir")
+            .arg(&request.sift_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::null());
+        if let Some(root) = &request.init_root {
+            cmd.arg("--init-root").arg(root);
+        }
+        cmd.spawn()?;
+        Ok(())
+    }
+}
+
+/// Lock-based gate for daemon spawn decisions.
+///
+/// Uses a spawn coordination lock to serialise concurrent parent processes and
+/// checks the daemon lock to detect an already-running daemon.
+pub struct DaemonSupervisor<S = ProcessDaemonSpawner> {
+    spawner: S,
+}
+
+impl DaemonSupervisor {
+    /// Convenience constructor using the real process spawner.
+    #[must_use]
+    pub const fn new_process() -> Self {
+        Self {
+            spawner: ProcessDaemonSpawner,
+        }
+    }
+}
+
+impl<S> DaemonSupervisor<S> {
+    #[must_use]
+    pub const fn new(spawner: S) -> Self {
+        Self { spawner }
+    }
+}
+
+impl<S: DaemonSpawner> DaemonSupervisor<S> {
+    /// Attempt to spawn the daemon according to `config`.
+    ///
+    /// Returns [`SpawnOutcome::Disabled`] when config has spawning disabled.
+    /// Returns [`SpawnOutcome::AlreadyRunning`] when the spawn coordination
+    /// lock or the daemon lock is already held.
+    /// Returns [`SpawnOutcome::Spawned`] on successful launch.
+    ///
+    /// # Errors
+    ///
+    /// Propagates lock-acquisition and process-spawn errors.
+    pub fn spawn(&self, config: &DaemonSpawnConfig) -> anyhow::Result<SpawnOutcome> {
+        if !config.enabled {
+            return Ok(SpawnOutcome::Disabled);
+        }
+
+        let exe = std::env::current_exe()
+            .map(|p| p.with_file_name("sift-daemon"))
+            .map_err(|e| anyhow::anyhow!("cannot resolve current executable path: {e}"))?;
+
+        let sift_dir = &config.sift_dir;
         std::fs::create_dir_all(sift_dir)?;
 
-        let lock_path = sift_dir.join("lock");
+        // Acquire spawn coordination lock to prevent concurrent spawn attempts.
+        let spawn_lock_path = sift_dir.join(SPAWN_LOCK);
+        let mut spawn_lock = LockFile::open(&spawn_lock_path)?;
+        if !spawn_lock.try_lock()? {
+            return Ok(SpawnOutcome::AlreadyRunning);
+        }
+
+        // Check whether the daemon lock is already held (another daemon is running).
+        // Release it before spawning so the child can acquire it.
+        {
+            let daemon_lock_path = sift_dir.join(DAEMON_LOCK);
+            let mut daemon_lock = LockFile::open(&daemon_lock_path)?;
+            if !daemon_lock.try_lock()? {
+                return Ok(SpawnOutcome::AlreadyRunning);
+            }
+        }
+
+        let request = SpawnRequest {
+            exe,
+            sift_dir: sift_dir.clone(),
+            init_root: config.init_root.clone(),
+        };
+        self.spawner.spawn(&request)?;
+
+        Ok(SpawnOutcome::Spawned)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Daemon runner
+// ---------------------------------------------------------------------------
+
+/// Configuration for the long-running daemon process.
+#[derive(Debug, Clone)]
+pub struct DaemonRunConfig {
+    pub sift_dir: PathBuf,
+    pub init_root: Option<PathBuf>,
+}
+
+/// The long-running daemon event loop with stoppable support for testing.
+pub struct DaemonRunner {
+    config: DaemonRunConfig,
+}
+
+impl DaemonRunner {
+    #[must_use]
+    pub const fn new(config: DaemonRunConfig) -> Self {
+        Self { config }
+    }
+
+    /// Run a single build or update, then exit.
+    ///
+    /// Acquires the daemon lock, loads metadata, and builds the initial
+    /// snapshot if none exists.  Returns without entering the watch loop.
+    ///
+    /// # Errors
+    ///
+    /// Propagates lock-acquisition, metadata, and build errors.
+    pub fn run_once(&self) -> anyhow::Result<()> {
+        let sift_dir = &self.config.sift_dir;
+        std::fs::create_dir_all(sift_dir)?;
+
+        let lock_path = sift_dir.join(DAEMON_LOCK);
         let mut lock_file = LockFile::open(&lock_path)?;
         if !lock_file.try_lock()? {
             return Ok(());
         }
 
         let (root, corpus_kind, follow_links, stored_kinds) =
-            match (StoreMeta::read(sift_dir), &self.init_root) {
+            match (StoreMeta::read(sift_dir), &self.config.init_root) {
+                (Ok(meta), _) => (meta.root, meta.corpus_kind, meta.follow_links, meta.indexes),
+                (Err(_), Some(init_root)) => {
+                    let root = init_root.canonicalize()?;
+                    (root, sift_core::CorpusKind::Directory, false, Vec::new())
+                }
+                (Err(e), None) => {
+                    anyhow::bail!("no store metadata: {e}");
+                }
+            };
+        let kinds: &[IndexKind] = if stored_kinds.is_empty() {
+            IndexKind::ALL
+        } else {
+            &stored_kinds
+        };
+
+        let mut store =
+            IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links, kinds)?;
+
+        let exclude = sift_dir
+            .strip_prefix(&root)
+            .unwrap_or(sift_dir)
+            .to_path_buf();
+        let build_config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &root,
+                kind: corpus_kind,
+                follow_links,
+                include_paths: &[],
+                exclude_paths: &[exclude],
+            },
+            visibility: VisibilityConfig::default(),
+        };
+
+        if store.current_id().is_none() {
+            store.build(kinds, &build_config)?;
+        } else {
+            store.update(kinds, &build_config)?;
+        }
+
+        Ok(())
+    }
+
+    /// Run the daemon forever (production use).
+    ///
+    /// # Errors
+    ///
+    /// Propagates lock-acquisition, metadata, watcher, and build errors.
+    pub fn run(&self) -> anyhow::Result<()> {
+        self.run_until(&AtomicBool::new(false))
+    }
+
+    /// Run the daemon until `shutdown` becomes `true`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates lock-acquisition, metadata, watcher, and build errors.
+    pub fn run_until(&self, shutdown: &AtomicBool) -> anyhow::Result<()> {
+        let sift_dir = &self.config.sift_dir;
+        std::fs::create_dir_all(sift_dir)?;
+
+        let lock_path = sift_dir.join(DAEMON_LOCK);
+        let mut lock_file = LockFile::open(&lock_path)?;
+        if !lock_file.try_lock()? {
+            return Ok(());
+        }
+
+        let (root, corpus_kind, follow_links, stored_kinds) =
+            match (StoreMeta::read(sift_dir), &self.config.init_root) {
                 (Ok(meta), _) => (meta.root, meta.corpus_kind, meta.follow_links, meta.indexes),
                 (Err(_), Some(init_root)) => {
                     let root = init_root.canonicalize()?;
@@ -93,15 +286,20 @@ impl DaemonConfig {
         }
 
         let (tx, rx) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |res| {
+        let watcher = notify::recommended_watcher(move |res| {
             if let Ok(event) = res {
                 let _ = tx.send(event);
             }
         })?;
+        let mut watcher = watcher;
         watcher.watch(&root, RecursiveMode::Recursive)?;
 
         let mut changed = false;
         loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+
             match rx.recv_timeout(Duration::from_millis(DEBOUNCE_MS)) {
                 Ok(event) => {
                     if Self::is_relevant_event(&event, sift_dir) {
@@ -126,11 +324,9 @@ impl DaemonConfig {
                         );
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             }
         }
-
-        Ok(())
     }
 
     fn is_relevant_event(event: &notify::Event, sift_dir: &Path) -> bool {
@@ -167,5 +363,191 @@ impl DaemonConfig {
         if let Err(e) = store.update(kinds, &build_config) {
             eprintln!("sift-daemon: refresh failed: {e}");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sift_core::CorpusKind;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use tempfile::TempDir;
+
+    /// A fake spawner that records calls.
+    #[derive(Clone, Default)]
+    struct FakeSpawner {
+        calls: Arc<AtomicUsize>,
+        last_request: Arc<std::sync::Mutex<Option<SpawnRequest>>>,
+    }
+
+    impl FakeSpawner {
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+
+        fn last_request(&self) -> Option<SpawnRequest> {
+            self.last_request.lock().unwrap().clone()
+        }
+    }
+
+    impl DaemonSpawner for FakeSpawner {
+        fn spawn(&self, request: &SpawnRequest) -> anyhow::Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.last_request.lock().unwrap() = Some(request.clone());
+            Ok(())
+        }
+    }
+
+    fn fake_spawner() -> FakeSpawner {
+        FakeSpawner::default()
+    }
+
+    fn supervisor(s: FakeSpawner) -> DaemonSupervisor<FakeSpawner> {
+        DaemonSupervisor::new(s)
+    }
+
+    fn spawn_config(enabled: bool, sift_dir: PathBuf) -> DaemonSpawnConfig {
+        DaemonSpawnConfig {
+            enabled,
+            sift_dir,
+            init_root: None,
+        }
+    }
+
+    #[test]
+    fn spawn_returns_disabled_from_config() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(fake_spawner());
+        let config = spawn_config(false, dir.path().to_path_buf());
+        let outcome = sup.spawn(&config).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Disabled);
+    }
+
+    #[test]
+    fn spawn_invokes_spawner_when_lock_free() {
+        let dir = TempDir::new().unwrap();
+        let spawner = fake_spawner();
+        let sup = supervisor(spawner.clone());
+        let config = spawn_config(true, dir.path().to_path_buf());
+        let outcome = sup.spawn(&config).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+        assert_eq!(spawner.call_count(), 1);
+    }
+
+    #[test]
+    fn spawn_returns_already_running_when_daemon_lock_held() {
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join(DAEMON_LOCK);
+        let mut lock = LockFile::open(&lock_path).unwrap();
+        lock.try_lock().unwrap();
+
+        let spawner = fake_spawner();
+        let sup = supervisor(spawner.clone());
+        let config = spawn_config(true, dir.path().to_path_buf());
+        let outcome = sup.spawn(&config).unwrap();
+        assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
+        assert_eq!(spawner.call_count(), 0);
+    }
+
+    #[test]
+    fn spawn_returns_already_running_when_spawn_lock_held() {
+        let dir = TempDir::new().unwrap();
+        let spawn_lock_path = dir.path().join(SPAWN_LOCK);
+        let mut spawn_lock = LockFile::open(&spawn_lock_path).unwrap();
+        spawn_lock.try_lock().unwrap();
+
+        let spawner = fake_spawner();
+        let sup = supervisor(spawner.clone());
+        let config = spawn_config(true, dir.path().to_path_buf());
+        let outcome = sup.spawn(&config).unwrap();
+        assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
+        assert_eq!(spawner.call_count(), 0);
+    }
+
+    #[test]
+    fn spawn_passes_sift_dir_and_init_root() {
+        let dir = TempDir::new().unwrap();
+        let init_root = Some(PathBuf::from("/tmp/init"));
+        let spawner = fake_spawner();
+        let sup = supervisor(spawner.clone());
+        let config = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: dir.path().to_path_buf(),
+            init_root,
+        };
+        sup.spawn(&config).unwrap();
+
+        let req = spawner.last_request().unwrap();
+        assert_eq!(req.sift_dir, config.sift_dir);
+        assert_eq!(req.init_root, config.init_root);
+    }
+
+    #[test]
+    fn spawn_lock_prevents_concurrent_attempts() {
+        let dir = TempDir::new().unwrap();
+        let spawner = fake_spawner();
+        let sup = supervisor(spawner.clone());
+
+        let spawn_lock_path = dir.path().join(SPAWN_LOCK);
+        let mut spawn_lock = LockFile::open(&spawn_lock_path).unwrap();
+        spawn_lock.try_lock().unwrap();
+
+        let config = spawn_config(true, dir.path().to_path_buf());
+        let outcome = sup.spawn(&config).unwrap();
+        assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
+        assert_eq!(spawner.call_count(), 0);
+    }
+
+    #[test]
+    fn run_until_stops_on_shutdown() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+
+        let meta = sift_core::StoreMeta::new(
+            dir.path().to_path_buf(),
+            CorpusKind::Directory,
+            false,
+            vec![IndexKind::Trigram],
+        );
+        std::fs::create_dir_all(&sift_dir).unwrap();
+        sift_core::StoreMeta::write(&meta, &sift_dir).unwrap();
+
+        let config = DaemonRunConfig {
+            sift_dir,
+            init_root: None,
+        };
+        let runner = DaemonRunner::new(config);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let s = Arc::clone(&shutdown);
+
+        let handle = std::thread::spawn(move || {
+            runner.run_until(&s).unwrap();
+        });
+
+        std::thread::sleep(Duration::from_millis(100));
+        shutdown.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn run_until_returns_early_when_lock_held() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+        std::fs::create_dir_all(&sift_dir).unwrap();
+        let lock_path = sift_dir.join(DAEMON_LOCK);
+        let mut lock = LockFile::open(&lock_path).unwrap();
+        lock.try_lock().unwrap();
+
+        let config = DaemonRunConfig {
+            sift_dir,
+            init_root: None,
+        };
+        let runner = DaemonRunner::new(config);
+        runner.run_until(&AtomicBool::new(false)).unwrap();
     }
 }
