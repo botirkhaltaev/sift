@@ -248,6 +248,75 @@ impl<'a> FingerprintCollector<'a> {
 // Posting assembly
 // ---------------------------------------------------------------------------
 
+/// A packed (`trigram_key` << 32) | `file_id`, enabling sort-by-trigram-then-file-id on raw u64 ordering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PackedPosting(u64);
+
+impl PackedPosting {
+    fn new(trigram: Trigram, file_id: u32) -> Self {
+        Self((u64::from(trigram.as_u24()) << 32) | u64::from(file_id))
+    }
+
+    const fn trigram_key(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+
+    const fn file_id(self) -> u32 {
+        (self.0 & 0xFFFF_FFFF) as u32
+    }
+}
+
+/// A single contiguous posting list for one trigram, yielded by [`PostingRuns`].
+struct PostingRun<'a> {
+    trigram_key: u32,
+    pairs: &'a [PackedPosting],
+}
+
+impl PostingRun<'_> {
+    const fn trigram_bytes(&self) -> [u8; 3] {
+        Trigram::from_u24(self.trigram_key).to_bytes()
+    }
+
+    const fn len(&self) -> usize {
+        self.pairs.len()
+    }
+
+    fn file_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.pairs.iter().map(|p| p.file_id())
+    }
+}
+
+/// Iterator over contiguous trigram runs in sorted packed-posting order.
+struct PostingRuns<'a> {
+    pairs: &'a [PackedPosting],
+    pos: usize,
+}
+
+impl<'a> PostingRuns<'a> {
+    const fn new(pairs: &'a [PackedPosting]) -> Self {
+        Self { pairs, pos: 0 }
+    }
+}
+
+impl<'a> Iterator for PostingRuns<'a> {
+    type Item = PostingRun<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.pairs.len() {
+            return None;
+        }
+        let trigram_key = self.pairs[self.pos].trigram_key();
+        let start = self.pos;
+        while self.pos < self.pairs.len() && self.pairs[self.pos].trigram_key() == trigram_key {
+            self.pos += 1;
+        }
+        Some(PostingRun {
+            trigram_key,
+            pairs: &self.pairs[start..self.pos],
+        })
+    }
+}
+
 /// Assembles trigram → file ID posting lists from per-file trigram sets.
 pub struct PostingAssembler<'a> {
     file_trigrams: &'a [TrigramSet],
@@ -259,7 +328,14 @@ impl<'a> PostingAssembler<'a> {
     }
 
     pub fn assemble(&self) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
-        let mut pairs: Vec<(Trigram, u32)> = Vec::new();
+        let mut pairs = self.collect_pairs()?;
+        Self::sort_pairs(&mut pairs);
+        Self::encode_runs(&pairs)
+    }
+
+    fn collect_pairs(&self) -> crate::Result<Vec<PackedPosting>> {
+        let total: usize = self.file_trigrams.iter().map(|s| s.as_slice().len()).sum();
+        let mut pairs = Vec::with_capacity(total);
         for (id, set) in self.file_trigrams.iter().enumerate() {
             let id_u32: u32 = id.try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
@@ -268,43 +344,99 @@ impl<'a> PostingAssembler<'a> {
                 ))
             })?;
             for tri in set.as_slice() {
-                pairs.push((*tri, id_u32));
+                pairs.push(PackedPosting::new(*tri, id_u32));
             }
         }
-        pairs.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        Ok(pairs)
+    }
 
-        let mut posting_bytes: Vec<u8> = Vec::new();
-        let mut lex_entries: Vec<LexiconEntry> = Vec::new();
-        let mut i = 0;
-        while i < pairs.len() {
-            let tri = pairs[i].0;
+    fn sort_pairs(pairs: &mut Vec<PackedPosting>) {
+        let len = pairs.len();
+        if len < 2 {
+            return;
+        }
+
+        let mut scratch = vec![PackedPosting(0); len];
+        let mut count = vec![0usize; 65_536];
+
+        for pass in 0..4 {
+            let shift = pass * 16;
+
+            for &p in pairs.iter() {
+                count[((p.0 >> shift) & 0xFFFF) as usize] += 1;
+            }
+
+            let mut total = 0usize;
+            for c in &mut count {
+                let tmp = *c + total;
+                *c = total;
+                total = tmp;
+            }
+
+            for &p in pairs.iter() {
+                let byte = ((p.0 >> shift) & 0xFFFF) as usize;
+                let pos = &mut count[byte];
+                scratch[*pos] = p;
+                *pos += 1;
+            }
+
+            std::mem::swap(pairs, &mut scratch);
+
+            count.fill(0);
+        }
+    }
+
+    fn encode_runs(pairs: &[PackedPosting]) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
+        let mut posting_bytes = Vec::with_capacity(pairs.len() * 3);
+        let mut lex_entries = Vec::new();
+
+        for run in PostingRuns::new(pairs) {
             let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "postings offset overflow",
                 ))
             })?;
-            let mut ids = Vec::new();
-            while i < pairs.len() && pairs[i].0 == tri {
-                ids.push(pairs[i].1);
-                i += 1;
-            }
-            let len: u32 = ids.len().try_into().map_err(|_| {
+
+            let len = u32::try_from(run.len()).map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "posting list too long",
                 ))
             })?;
-            super::storage::postings::Postings::encode_sorted(&mut posting_bytes, &ids)
-                .map_err(crate::Error::Io)?;
+
+            let tri_bytes = run.trigram_bytes();
+            Self::encode_run(&run, &mut posting_bytes)?;
+
             lex_entries.push(LexiconEntry {
-                trigram: tri.to_bytes(),
+                trigram: tri_bytes,
                 offset,
                 len,
             });
         }
 
         Ok((lex_entries, posting_bytes))
+    }
+
+    fn encode_run(run: &PostingRun<'_>, out: &mut Vec<u8>) -> crate::Result<()> {
+        let mut prev = 0u64;
+        for (j, id) in run.file_ids().enumerate() {
+            let raw = if j == 0 {
+                u64::from(id)
+            } else {
+                u64::from(id).checked_sub(prev).ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "non-monotonic posting list",
+                    ))
+                })?
+            };
+            let mut buf = unsigned_varint::encode::u64_buffer();
+            let encoded = unsigned_varint::encode::u64(raw, &mut buf);
+            out.extend_from_slice(encoded);
+            prev = u64::from(id);
+        }
+        Ok(())
     }
 }
 
@@ -694,5 +826,40 @@ mod tests {
             paths.iter().any(|p| p == "keep.txt"),
             "keep.txt must be indexed, got {paths:?}"
         );
+    }
+
+    #[test]
+    fn sort_pairs_matches_std_order() {
+        let cases: &[(u32, u32)] = &[
+            (0x00_0000, 0),
+            (0x00_0001, 0),
+            (0x00_0000, 1),
+            (0x00_FFFF, 0),
+            (0x01_0000, 0),
+            (0x00_FFFF, 0xFFFF),
+            (0x01_0000, 0x0000),
+            (0x00_FEFF, 0xFFFF),
+            (0x00_FF00, 0x1_0000),
+            (0x00_4567, 0x89AB),
+            (0x00_ABCD, 0x0123),
+            (0x00_FFFF, 0xABCD),
+            (0x00_89AB, 0xCDEF),
+            (0x00_0000, 0xFFFF_FFFE),
+            (0x00_0000, 0xFFFF_FFFF),
+            (0x00_FFFF, 0xFFFF_FFFF),
+            (0x00_ABCD, 0xFFFF_FFFE),
+        ];
+
+        let mut sorted_a: Vec<PackedPosting> = cases
+            .iter()
+            .map(|&(tri, fid)| PackedPosting::new(Trigram::from_u24(tri), fid))
+            .collect();
+        let mut sorted_b = sorted_a.clone();
+
+        PostingAssembler::sort_pairs(&mut sorted_a);
+        sorted_b.sort_unstable();
+
+        assert_eq!(sorted_a, sorted_b);
+        assert!(sorted_a.windows(2).all(|w| w[0] <= w[1]));
     }
 }

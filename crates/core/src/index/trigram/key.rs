@@ -27,6 +27,14 @@ impl Trigram {
         TrigramWindows { bytes, offset: 0 }
     }
 
+    /// Construct from a pre-encoded 24-bit u32 key (high 8 bits must be zero).
+    #[inline]
+    #[must_use]
+    pub(crate) const fn from_u24(key: u32) -> Self {
+        debug_assert!(key <= 0x00FF_FFFF);
+        Self(key)
+    }
+
     /// 24-bit integer key used for dedup bitsets.
     #[inline]
     #[must_use]

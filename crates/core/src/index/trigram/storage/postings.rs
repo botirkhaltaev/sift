@@ -5,7 +5,6 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use super::delta::SortedDeltaCodec;
 use super::mmap::open_mmap;
 use crate::index::trigram::storage::format::POSTINGS_MAGIC;
 
@@ -13,68 +12,6 @@ use crate::index::trigram::storage::format::POSTINGS_MAGIC;
 pub struct Postings {
     mmap: Mmap,
     payload_len: usize,
-}
-
-struct PostingListCodec;
-
-impl SortedDeltaCodec for PostingListCodec {
-    type Item = u32;
-
-    fn encode_sorted(out: &mut Vec<u8>, values: &[u32]) -> std::io::Result<()> {
-        let mut prev = 0u64;
-        for (i, &value) in values.iter().enumerate() {
-            let raw = if i == 0 {
-                u64::from(value)
-            } else {
-                u64::from(value).checked_sub(prev).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "non-monotonic posting list",
-                    )
-                })?
-            };
-            let mut buf = unsigned_varint::encode::u64_buffer();
-            let encoded = unsigned_varint::encode::u64(raw, &mut buf);
-            out.extend_from_slice(encoded);
-            prev = u64::from(value);
-        }
-        Ok(())
-    }
-
-    fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
-        let mut out = Vec::new();
-        let mut pos = 0usize;
-        let mut prev = 0u64;
-        while pos < bytes.len() {
-            let (raw, remaining) = unsigned_varint::decode::u64(&bytes[pos..]).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "malformed varint in posting list",
-                )
-            })?;
-            let consumed = bytes[pos..].len().saturating_sub(remaining.len());
-            pos += consumed;
-            let value = if out.is_empty() {
-                raw
-            } else {
-                prev.checked_add(raw).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "delta overflow in posting list",
-                    )
-                })?
-            };
-            if value > u64::from(u32::MAX) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "posting value exceeds u32::MAX",
-                ));
-            }
-            out.push(u32::try_from(value).expect("value bounded above"));
-            prev = value;
-        }
-        Ok(out)
-    }
 }
 
 impl Postings {
@@ -195,16 +132,43 @@ impl Postings {
         self.bytes().get(start..start + len).unwrap_or(&[])
     }
 
-    pub(crate) fn encode_sorted(out: &mut Vec<u8>, values: &[u32]) -> std::io::Result<()> {
-        PostingListCodec::encode_sorted(out, values)
-    }
-
     pub(crate) fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
-        PostingListCodec::decode_sorted(bytes)
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        let mut prev = 0u64;
+        while pos < bytes.len() {
+            let (raw, remaining) = unsigned_varint::decode::u64(&bytes[pos..]).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "malformed varint in posting list",
+                )
+            })?;
+            let consumed = bytes[pos..].len().saturating_sub(remaining.len());
+            pos += consumed;
+            let value = if out.is_empty() {
+                raw
+            } else {
+                prev.checked_add(raw).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "delta overflow in posting list",
+                    )
+                })?
+            };
+            if value > u64::from(u32::MAX) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "posting value exceeds u32::MAX",
+                ));
+            }
+            out.push(u32::try_from(value).expect("value bounded above"));
+            prev = value;
+        }
+        Ok(out)
     }
 
     pub(crate) fn intersect_sorted(ids: &[u32], encoded: &[u8]) -> std::io::Result<Vec<u32>> {
-        let decoded = PostingListCodec::decode_sorted(encoded)?;
+        let decoded = Self::decode_sorted(encoded)?;
         let mut i = 0usize;
         let mut j = 0usize;
         let mut out = Vec::with_capacity(ids.len().min(decoded.len()));
@@ -227,6 +191,23 @@ impl Postings {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn encode_sorted(values: &[u32]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut prev = 0u64;
+        for (i, &value) in values.iter().enumerate() {
+            let raw = if i == 0 {
+                u64::from(value)
+            } else {
+                u64::from(value) - prev
+            };
+            let mut buf = unsigned_varint::encode::u64_buffer();
+            let encoded = unsigned_varint::encode::u64(raw, &mut buf);
+            out.extend_from_slice(encoded);
+            prev = u64::from(value);
+        }
+        out
+    }
 
     #[test]
     fn create_and_open_roundtrips() {
@@ -273,17 +254,15 @@ mod tests {
     #[test]
     fn encode_decode_roundtrips() {
         let ids = vec![0u32, 1, 5, 100, 10_000];
-        let mut buf = Vec::new();
-        Postings::encode_sorted(&mut buf, &ids).expect("encode");
-        let decoded = Postings::decode_sorted(&buf).expect("decode");
+        let encoded = encode_sorted(&ids);
+        let decoded = Postings::decode_sorted(&encoded).expect("decode");
         assert_eq!(decoded, ids);
     }
 
     #[test]
     fn intersect_works() {
         let left = vec![1u32, 3, 5, 7];
-        let mut encoded = Vec::new();
-        Postings::encode_sorted(&mut encoded, &[2u32, 3, 6, 7]).expect("encode");
+        let encoded = encode_sorted(&[2u32, 3, 6, 7]);
         let result = Postings::intersect_sorted(&left, &encoded).expect("intersect");
         assert_eq!(result, vec![3, 7]);
     }
@@ -315,8 +294,7 @@ mod tests {
 
     #[test]
     fn validate_list_returns_count() {
-        let mut buf = Vec::new();
-        Postings::encode_sorted(&mut buf, &[0u32, 2, 5]).expect("encode");
+        let buf = encode_sorted(&[0u32, 2, 5]);
         let count = Postings::validate_list(&buf).expect("validate");
         assert_eq!(count, 3);
     }

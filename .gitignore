@@ -12,6 +12,7 @@ benchsuite/*.sift/
 ripgrep/
 *.data
 *.data.*
+flamegraph_*.svg
 __pycache__/
 # Local Linux kernel clone for demos (large).
 demo/linux-kernel/

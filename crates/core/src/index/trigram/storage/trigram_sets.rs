@@ -37,25 +37,38 @@ impl TrigramSet {
         Ok(Self { trigrams })
     }
 
-    /// Extract sorted unique trigrams from file bytes.
-    pub fn from_bytes(bytes: &[u8]) -> std::io::Result<Self> {
-        let unique = collect_unique(bytes);
-        Self::new(unique)
+    /// Extract sorted unique trigrams from file bytes using rolling key + Vec dedup.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
+        if bytes.len() < 3 {
+            return Self {
+                trigrams: Vec::new(),
+            };
+        }
+        let mut trigrams = Vec::with_capacity(bytes.len() - 2);
+        let mut key =
+            (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+        trigrams.push(Trigram::from_u24(key));
+        for &b in &bytes[3..] {
+            key = ((key & 0x0000_FFFF) << 8) | u32::from(b);
+            trigrams.push(Trigram::from_u24(key));
+        }
+        trigrams.sort_unstable();
+        trigrams.dedup();
+        Self { trigrams }
     }
 
     /// Extract sorted unique trigrams from a file on disk.
-    pub fn from_file(path: &Path) -> std::io::Result<Self> {
+    pub(crate) fn from_file(path: &Path) -> std::io::Result<Self> {
         let mmap = open_mmap(path)?;
-        Self::from_bytes(mmap.as_ref())
+        Ok(Self::from_bytes(mmap.as_ref()))
     }
 
     pub fn as_slice(&self) -> &[Trigram] {
         &self.trigrams
     }
 
-    /// Encode this set as delta-varint bytes.
-    pub fn encode(&self) -> std::io::Result<Vec<u8>> {
-        let mut out = Vec::new();
+    /// Encode into an existing vec, avoiding a temporary allocation.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) -> std::io::Result<()> {
         let mut prev = 0u64;
         for (i, tri) in self.trigrams.iter().enumerate() {
             let val = u64::from(tri.as_u24());
@@ -74,7 +87,7 @@ impl TrigramSet {
             out.extend_from_slice(encoded);
             prev = val;
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Decode a delta-varint encoded trigram set.
@@ -157,70 +170,6 @@ impl TrigramSet {
     }
 }
 
-/// Reusable bitset deduper for per-file unique trigram extraction.
-struct TrigramDeduper {
-    seen: Box<[u64]>,
-    touched: Vec<Trigram>,
-}
-
-const SEEN_WORDS: usize = 262_144;
-
-impl TrigramDeduper {
-    fn new() -> Self {
-        Self {
-            seen: vec![0; SEEN_WORDS].into_boxed_slice(),
-            touched: Vec::new(),
-        }
-    }
-
-    fn reset(&mut self) {
-        for tri in self.touched.drain(..) {
-            let key = tri.as_u24() as usize;
-            let word = key >> 6;
-            let bit = 1u64 << (key & 63);
-            self.seen[word] &= !bit;
-        }
-    }
-
-    fn mark(&mut self, tri: Trigram) -> bool {
-        let key = tri.as_u24() as usize;
-        let word = key >> 6;
-        let bit = 1u64 << (key & 63);
-        let slot = &mut self.seen[word];
-        if *slot & bit != 0 {
-            return false;
-        }
-        *slot |= bit;
-        self.touched.push(tri);
-        true
-    }
-
-    /// Collect unique trigrams from `bytes`, returning a sorted deduplicated vec.
-    fn collect_unique(&mut self, bytes: &[u8]) -> Vec<Trigram> {
-        self.reset();
-        if bytes.len() >= 3 {
-            for i in 0..=bytes.len() - 3 {
-                let tri = Trigram::from_bytes([bytes[i], bytes[i + 1], bytes[i + 2]]);
-                let _ = self.mark(tri);
-            }
-        }
-        self.touched.sort_unstable();
-        let result = std::mem::take(&mut self.touched);
-        for tri in &result {
-            let key = tri.as_u24() as usize;
-            let word = key >> 6;
-            let bit = 1u64 << (key & 63);
-            self.seen[word] &= !bit;
-        }
-        result
-    }
-}
-
-fn collect_unique(bytes: &[u8]) -> Vec<Trigram> {
-    let mut deduper = TrigramDeduper::new();
-    deduper.collect_unique(bytes)
-}
-
 /// Memory-mapped view of per-file trigram sets.
 #[derive(Debug)]
 pub struct TrigramSets {
@@ -246,8 +195,10 @@ impl TrigramSets {
                 )
             })?;
             offsets.push(abs_off);
-            let encoded = set.encode()?;
-            blob.extend_from_slice(&encoded);
+            let blob_len = blob.len();
+            set.encode_into(&mut blob).inspect_err(|_| {
+                blob.truncate(blob_len);
+            })?;
         }
 
         let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
@@ -447,7 +398,8 @@ mod tests {
             Trigram::from_bytes(*b"xyz"),
         ])
         .expect("set");
-        let encoded = set.encode().expect("encode");
+        let mut encoded = Vec::new();
+        set.encode_into(&mut encoded).expect("encode");
         let decoded = TrigramSet::decode(&encoded).expect("decode");
         assert_eq!(set, decoded);
     }
@@ -583,7 +535,7 @@ mod tests {
 
     #[test]
     fn from_bytes_sorts_and_deduplicates() {
-        let set = TrigramSet::from_bytes(b"ababa").expect("from_bytes");
+        let set = TrigramSet::from_bytes(b"ababa");
         let tris = set.as_slice();
         assert_eq!(tris.len(), 2);
         assert!(tris.contains(&Trigram::from_bytes(*b"aba")));
