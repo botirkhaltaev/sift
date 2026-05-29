@@ -1,10 +1,13 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
-## [Unreleased]
+## [0.2.0](https://github.com/botirk38/sift/releases/tag/v0.2.0) — 2026-05-29
 
 ### Bug Fixes
 
+- prune gitignored directories during index build (#58)
+- redesign daemon event loop with RefreshState, remove is_relevant_event (#57)
+- optimize index build with varint postings and unified visibility (#54)
 - eliminate #[allow], split benchmarks per module, add profiling (#22)
 - rustfmt import formatting
 - remove unused rel_match_context helper, use string literals
@@ -12,6 +15,7 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
+- rewrite READMEs and AGENTS.md for clarity and index generality (#32)
 - mark no-op flags (line-buffered, block-buffered, mmap, no-mmap) explicitly
 - rewrite READMEs and add AGENTS.md to all projects and modules (#18)
 - update Linux benchsuite snapshot with fresh results and chart
@@ -20,6 +24,8 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- redesign daemon architecture with explicit config, spawn lock, and --once mode (#56)
+- unified Index trait, auto-init, incremental updates with fingerprint-based change detection (#31)
 - modular public-API-only benchmarks (#26)
 - comprehensive unit and integration test coverage for sift-core (#25)
 - add --no-config, --unicode/--no-unicode, --colors, --regex-size-limit, --dfa-size-limit, -M/--max-columns, --max-columns-preview flags
@@ -47,6 +53,10 @@ All notable changes to this project will be documented in this file.
 
 ### Miscellaneous
 
+- bump softprops/action-gh-release from 2 to 3 (#34)
+- bump actions/upload-artifact from 4 to 7 (#35)
+- bump actions/download-artifact from 4 to 8 (#36)
+- add release infrastructure — changelog, release script, ARM64, checksums, dependabot (#33)
 - remove sift-profile binary from core crate (#23)
 - fix pre-existing clippy lints (map_or, is_ok_and, byte str literals) (#17)
 - remove fff.nvim
@@ -55,6 +65,12 @@ All notable changes to this project will be documented in this file.
 
 ### Performance
 
+- optimized trigram index build with packed sort and codec removal (#55)
+- parallel corpus walk with WalkBuilder::build_parallel() (#47)
+- extract trigrams from raw bytes instead of lossy UTF-8 (#48)
+- reduce PathBuf allocations in resolve_candidates (#49)
+- parallelize save_to_dir index file writes (#50)
+- avoid materializing Vec in all_file_ids (#51)
 - sift-profile revamp, matcher/searcher caches, parallel and index tuning
 
 ### Refactor
@@ -73,6 +89,13 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - add 200 inline unit tests, convert CLI to lib+bin layout (#20)
+
+### Deps
+
+- bump clap from 4.6.0 to 4.6.1 (#37)
+- bump serde_json from 1.0.149 to 1.0.150 (#38)
+- bump rayon from 1.11.0 to 1.12.0 (#39)
+- bump bitflags from 2.11.0 to 2.11.1 (#40)
 
 ## [0.1.2](https://github.com/botirk38/sift/releases/tag/v0.1.2) — 2026-04-02
 

@@ -7,7 +7,7 @@ Indexed grep for codebases. Build an index once, then search with a grep-like CL
 ### Install (GitHub Release)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/botirk38/sift/v0.1.2/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/botirk38/sift/v0.2.0/scripts/install.sh | sh
 ```
 
 Installs to `$HOME/.local/bin/sift`. Override with `PREFIX=/usr/local`.
