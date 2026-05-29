@@ -31,6 +31,7 @@ impl Trigram {
     #[inline]
     #[must_use]
     pub(crate) const fn from_u24(key: u32) -> Self {
+        debug_assert!(key <= 0x00FF_FFFF);
         Self(key)
     }
 

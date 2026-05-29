@@ -249,7 +249,7 @@ impl<'a> FingerprintCollector<'a> {
 // ---------------------------------------------------------------------------
 
 /// A packed (`trigram_key` << 32) | `file_id`, enabling sort-by-trigram-then-file-id on raw u64 ordering.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct PackedPosting(u64);
 
 impl PackedPosting {
@@ -826,5 +826,40 @@ mod tests {
             paths.iter().any(|p| p == "keep.txt"),
             "keep.txt must be indexed, got {paths:?}"
         );
+    }
+
+    #[test]
+    fn sort_pairs_matches_std_order() {
+        let cases: &[(u32, u32)] = &[
+            (0x00_0000, 0),
+            (0x00_0001, 0),
+            (0x00_0000, 1),
+            (0x00_FFFF, 0),
+            (0x01_0000, 0),
+            (0x00_FFFF, 0xFFFF),
+            (0x01_0000, 0x0000),
+            (0x00_FEFF, 0xFFFF),
+            (0x00_FF00, 0x1_0000),
+            (0x00_4567, 0x89AB),
+            (0x00_ABCD, 0x0123),
+            (0x00_FFFF, 0xABCD),
+            (0x00_89AB, 0xCDEF),
+            (0x00_0000, 0xFFFF_FFFE),
+            (0x00_0000, 0xFFFF_FFFF),
+            (0x00_FFFF, 0xFFFF_FFFF),
+            (0x00_ABCD, 0xFFFF_FFFE),
+        ];
+
+        let mut sorted_a: Vec<PackedPosting> = cases
+            .iter()
+            .map(|&(tri, fid)| PackedPosting::new(Trigram::from_u24(tri), fid))
+            .collect();
+        let mut sorted_b = sorted_a.clone();
+
+        PostingAssembler::sort_pairs(&mut sorted_a);
+        sorted_b.sort_unstable();
+
+        assert_eq!(sorted_a, sorted_b);
+        assert!(sorted_a.windows(2).all(|w| w[0] <= w[1]));
     }
 }

@@ -72,13 +72,13 @@ impl TrigramIndex {
             },
         );
 
-        let _files = fr.map_err(crate::Error::Io)?;
+        let files = fr.map_err(crate::Error::Io)?;
         let lexicon = lr.map_err(crate::Error::Io)?;
         let postings = pr.map_err(crate::Error::Io)?;
         let trigram_sets = tr.map_err(crate::Error::Io)?;
 
         let root = root.to_path_buf();
-        let fingerprints = tables.fingerprints.clone();
+        let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
         Self::validate_file_paths(&fingerprints, &files_path)?;
 
         Self::validate_lexicon_postings(&lexicon, &postings)?;
