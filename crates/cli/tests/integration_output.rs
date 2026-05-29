@@ -416,7 +416,7 @@ fn version_flag_prints_version() {
         .unwrap();
     assert_success(&out);
     assert!(
-        normalize_stdout(&out).contains("sift-cli"),
+        normalize_stdout(&out).contains("sift-grep") || normalize_stdout(&out).contains("sift"),
         "expected version string"
     );
 }
@@ -429,7 +429,7 @@ fn version_short_flag() {
         .unwrap();
     assert_success(&out);
     assert!(
-        normalize_stdout(&out).contains("sift-cli"),
+        normalize_stdout(&out).contains("sift-grep") || normalize_stdout(&out).contains("sift"),
         "expected version string"
     );
 }

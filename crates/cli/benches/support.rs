@@ -5,7 +5,7 @@ use std::time::Duration;
 use clap::Parser;
 use criterion::Criterion;
 
-use sift_cli::cli::Cli;
+use sift_grep::cli::Cli;
 
 pub fn exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_sift"))

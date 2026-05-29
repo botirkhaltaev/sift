@@ -1,7 +1,7 @@
 use criterion::Criterion;
 use std::hint::black_box;
 
-use sift_cli::ignore::resolve_visibility_and_ignore;
+use sift_grep::ignore::resolve_visibility_and_ignore;
 
 use crate::support::args;
 

@@ -223,11 +223,11 @@ fn daemon_reindexes_on_file_changes() {
     let s = Arc::clone(&shutdown);
 
     let handle = std::thread::spawn(move || {
-        let config = sift_cli::daemon::DaemonRunConfig {
+        let config = sift_grep::daemon::DaemonRunConfig {
             sift_dir: daemon_sift_dir,
             init_root: None,
         };
-        let runner = sift_cli::daemon::DaemonRunner::new(config);
+        let runner = sift_grep::daemon::DaemonRunner::new(config);
         runner.run_until(&s).unwrap();
     });
 

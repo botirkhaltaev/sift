@@ -1,7 +1,7 @@
 use criterion::{BatchSize, Criterion};
 use std::hint::black_box;
 
-use sift_cli::pattern::{
+use sift_grep::pattern::{
     resolve_case_mode_from_args, resolve_invert_match_from_args, resolve_output_mode,
     resolve_patterns,
 };

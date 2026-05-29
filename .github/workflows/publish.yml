@@ -50,7 +50,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   publish_cli:
-    name: crates.io — sift-cli
+    name: crates.io — sift-grep
     needs: [version_check, publish_core]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -59,11 +59,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo package (dry run)
-        run: cargo package -p sift-cli --allow-dirty
+        run: cargo package -p sift-grep --allow-dirty
         env:
           CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-      - name: publish sift-cli
-        run: cargo publish -p sift-cli
+      - name: publish sift-grep
+        run: cargo publish -p sift-grep
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -104,7 +104,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: build
-        run: cargo build --release -p sift-cli --target ${{ matrix.target }}
+        run: cargo build --release -p sift-grep --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross && 'aarch64-linux-gnu-gcc' || '' }}
 

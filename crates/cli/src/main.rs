@@ -1,3 +1,3 @@
 fn main() -> std::process::ExitCode {
-    sift_cli::main_entry()
+    sift_grep::main_entry()
 }

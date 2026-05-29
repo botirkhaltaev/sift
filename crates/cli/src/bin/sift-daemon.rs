@@ -18,11 +18,11 @@ struct DaemonArgs {
 
 fn main() {
     let args = DaemonArgs::parse();
-    let config = sift_cli::daemon::DaemonRunConfig {
+    let config = sift_grep::daemon::DaemonRunConfig {
         sift_dir: args.sift_dir,
         init_root: args.init_root,
     };
-    let runner = sift_cli::daemon::DaemonRunner::new(config);
+    let runner = sift_grep::daemon::DaemonRunner::new(config);
     let result = if args.once {
         runner.run_once()
     } else {

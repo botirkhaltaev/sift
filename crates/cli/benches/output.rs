@@ -1,13 +1,13 @@
 use criterion::{BenchmarkId, Criterion, measurement::WallTime};
 use std::hint::black_box;
 
-use sift_cli::output::{
+use sift_core::SearchMode;
+use sift_grep::output::{
     build_line_style_flags, parse_color_when, parse_usize_token, resolve_color_from_args,
     resolve_context_from_args, resolve_glob_case_insensitive_from_args, resolve_heading_from_args,
     resolve_json_from_args, resolve_line_number_from_args, resolve_null_from_args,
     resolve_stats_from_args, resolve_with_filename_from_args, unescape_separator,
 };
-use sift_core::SearchMode;
 
 use crate::support::{args, parse_cli};
 

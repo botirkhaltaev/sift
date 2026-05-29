@@ -900,22 +900,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
-name = "sift-cli"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "bitflags",
- "clap",
- "criterion",
- "fslock",
- "ignore",
- "notify",
- "rayon",
- "sift-core",
- "tempfile",
-]
-
-[[package]]
 name = "sift-core"
 version = "0.2.0"
 dependencies = [
@@ -940,6 +924,22 @@ dependencies = [
  "termcolor",
  "thiserror",
  "unsigned-varint",
+]
+
+[[package]]
+name = "sift-grep"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "bitflags",
+ "clap",
+ "criterion",
+ "fslock",
+ "ignore",
+ "notify",
+ "rayon",
+ "sift-core",
+ "tempfile",
 ]
 
 [[package]]

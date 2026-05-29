@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, measurement::WallTime};
 use std::hint::black_box;
 
-use sift_cli::filter::{
+use sift_core::IgnoreSources;
+use sift_grep::filter::{
     FilterDecl, SearchFilterCtx, build_search_filter_config, builtin_type_defs, parse_size_suffix,
     resolve_type_defs,
 };
-use sift_cli::ignore::MessageFlags;
-use sift_core::IgnoreSources;
+use sift_grep::ignore::MessageFlags;
 
 use crate::support::parse_cli;
 

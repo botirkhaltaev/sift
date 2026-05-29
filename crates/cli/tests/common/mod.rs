@@ -38,7 +38,7 @@ impl TestProject {
     pub fn new(name: &str) -> Self {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "sift-cli-integration-{name}-{}-{id}",
+            "sift-grep-integration-{name}-{}-{id}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);

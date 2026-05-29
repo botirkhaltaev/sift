@@ -1,5 +1,5 @@
 [package]
-name = "sift-cli"
+name = "sift-grep"
 version.workspace = true
 edition.workspace = true
 description = "Grep-like CLI for sift-core"
@@ -14,7 +14,7 @@ autobenches = false
 workspace = true
 
 [lib]
-name = "sift_cli"
+name = "sift_grep"
 path = "src/lib.rs"
 
 [[bin]]

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use criterion::{BenchmarkId, Criterion};
 use std::hint::black_box;
 
-use sift_cli::paths::{
+use sift_grep::paths::{
     corpus_path_prefixes, effective_path_display, excluded_search_paths, walk_path_prefixes,
 };
 
