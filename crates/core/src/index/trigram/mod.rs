@@ -72,12 +72,25 @@ impl TrigramIndex {
             },
         );
 
-        fr.map_err(crate::Error::Io)?;
-        lr.map_err(crate::Error::Io)?;
-        pr.map_err(crate::Error::Io)?;
-        tr.map_err(crate::Error::Io)?;
+        let _files = fr.map_err(crate::Error::Io)?;
+        let lexicon = lr.map_err(crate::Error::Io)?;
+        let postings = pr.map_err(crate::Error::Io)?;
+        let trigram_sets = tr.map_err(crate::Error::Io)?;
 
-        Self::open(dir, root, corpus_kind)
+        let root = root.to_path_buf();
+        let fingerprints = tables.fingerprints.clone();
+        Self::validate_file_paths(&fingerprints, &files_path)?;
+
+        Self::validate_lexicon_postings(&lexicon, &postings)?;
+
+        Ok(Self {
+            root,
+            fingerprints,
+            trigram_sets,
+            lexicon,
+            postings,
+            corpus_kind,
+        })
     }
 
     #[must_use]
@@ -311,10 +324,27 @@ impl TrigramIndex {
         let postings =
             storage::postings::Postings::open(&postings_path).map_err(TrigramIndexError::Io)?;
 
-        // Cross-file validation: every lexicon entry must reference a valid posting range
-        // and the decoded list must match entry.len.
+        Self::validate_lexicon_postings(&lexicon, &postings)?;
+
+        let trigram_sets = storage::trigram_sets::TrigramSets::open(&trigrams_path)
+            .map_err(TrigramIndexError::Io)?;
+
+        Ok(Self {
+            root: root.to_path_buf(),
+            fingerprints,
+            trigram_sets,
+            lexicon,
+            postings,
+            corpus_kind,
+        })
+    }
+
+    fn validate_lexicon_postings(
+        lexicon: &storage::lexicon::Lexicon,
+        postings: &storage::postings::Postings,
+    ) -> Result<(), TrigramIndexError> {
         let payload_len = postings.payload_len();
-        for entry in &lexicon {
+        for entry in lexicon {
             let start = usize::try_from(entry.offset).map_err(|_| {
                 TrigramIndexError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -351,18 +381,7 @@ impl TrigramIndex {
                 )));
             }
         }
-
-        let trigram_sets = storage::trigram_sets::TrigramSets::open(&trigrams_path)
-            .map_err(TrigramIndexError::Io)?;
-
-        Ok(Self {
-            root: root.to_path_buf(),
-            fingerprints,
-            trigram_sets,
-            lexicon,
-            postings,
-            corpus_kind,
-        })
+        Ok(())
     }
 
     fn validate_file_paths(
@@ -454,7 +473,18 @@ mod tests {
 
     fn encode(ids: &[u32]) -> Vec<u8> {
         let mut buf = Vec::new();
-        storage::postings::Postings::encode_sorted(&mut buf, ids).expect("encode");
+        let mut prev = 0u64;
+        for (i, &value) in ids.iter().enumerate() {
+            let raw = if i == 0 {
+                u64::from(value)
+            } else {
+                u64::from(value) - prev
+            };
+            let mut varint_buf = unsigned_varint::encode::u64_buffer();
+            let encoded = unsigned_varint::encode::u64(raw, &mut varint_buf);
+            buf.extend_from_slice(encoded);
+            prev = u64::from(value);
+        }
         buf
     }
 
