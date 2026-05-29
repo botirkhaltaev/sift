@@ -104,33 +104,29 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
             return Ok(SpawnOutcome::Disabled);
         }
 
-        let exe = match std::env::current_exe() {
-            Ok(p) => p.with_file_name("sift-daemon"),
-            Err(e) => anyhow::bail!("cannot resolve current executable path: {e}"),
-        };
+        let exe = std::env::current_exe()
+            .map(|p| p.with_file_name("sift-daemon"))
+            .map_err(|e| anyhow::anyhow!("cannot resolve current executable path: {e}"))?;
 
         let sift_dir = &config.sift_dir;
         std::fs::create_dir_all(sift_dir)?;
 
-        // Acquire spawn coordination lock — prevents concurrent spawns.
+        // Acquire spawn coordination lock to prevent concurrent spawn attempts.
         let spawn_lock_path = sift_dir.join(SPAWN_LOCK);
         let mut spawn_lock = LockFile::open(&spawn_lock_path)?;
         if !spawn_lock.try_lock()? {
             return Ok(SpawnOutcome::AlreadyRunning);
         }
 
-        // Check whether the daemon lock is already held.
-        let daemon_lock_path = sift_dir.join(DAEMON_LOCK);
-        let mut daemon_lock = LockFile::open(&daemon_lock_path)?;
-        if !daemon_lock.try_lock()? {
-            drop(daemon_lock);
-            drop(spawn_lock);
-            return Ok(SpawnOutcome::AlreadyRunning);
+        // Check whether the daemon lock is already held (another daemon is running).
+        // Release it before spawning so the child can acquire it.
+        {
+            let daemon_lock_path = sift_dir.join(DAEMON_LOCK);
+            let mut daemon_lock = LockFile::open(&daemon_lock_path)?;
+            if !daemon_lock.try_lock()? {
+                return Ok(SpawnOutcome::AlreadyRunning);
+            }
         }
-
-        // We briefly held the daemon lock to confirm it is free; release it
-        // now so the child process can acquire it after fork.
-        drop(daemon_lock);
 
         let request = SpawnRequest {
             exe,
@@ -139,7 +135,6 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
         };
         self.spawner.spawn(&request)?;
 
-        drop(spawn_lock);
         Ok(SpawnOutcome::Spawned)
     }
 }
