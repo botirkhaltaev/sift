@@ -204,22 +204,25 @@ impl DaemonRunner {
         let mut store =
             IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links, kinds)?;
 
+        let exclude = sift_dir
+            .strip_prefix(&root)
+            .unwrap_or(sift_dir)
+            .to_path_buf();
+        let build_config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &root,
+                kind: corpus_kind,
+                follow_links,
+                include_paths: &[],
+                exclude_paths: &[exclude],
+            },
+            visibility: VisibilityConfig::default(),
+        };
+
         if store.current_id().is_none() {
-            let exclude = sift_dir
-                .strip_prefix(&root)
-                .unwrap_or(sift_dir)
-                .to_path_buf();
-            let build_config = IndexConfig {
-                corpus: CorpusSpec {
-                    root: &root,
-                    kind: corpus_kind,
-                    follow_links,
-                    include_paths: &[],
-                    exclude_paths: &[exclude],
-                },
-                visibility: VisibilityConfig::default(),
-            };
             store.build(kinds, &build_config)?;
+        } else {
+            store.update(kinds, &build_config)?;
         }
 
         Ok(())
@@ -485,8 +488,8 @@ mod tests {
         sup.spawn(&config).unwrap();
 
         let req = spawner.last_request().unwrap();
-        assert_eq!(req.sift_dir, dir.path().canonicalize().unwrap());
-        assert_eq!(req.init_root, Some(PathBuf::from("/tmp/init")));
+        assert_eq!(req.sift_dir, config.sift_dir);
+        assert_eq!(req.init_root, config.init_root);
     }
 
     #[test]

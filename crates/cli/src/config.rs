@@ -32,7 +32,6 @@ pub struct BuildConfig {
 /// Resolved search configuration.
 pub struct SearchConfig {
     pub sift_dir: PathBuf,
-    pub args: Vec<String>,
 }
 
 /// Daemon configuration containing both spawn policy and run config.
@@ -92,7 +91,6 @@ impl CliConfig {
 
         let search = SearchConfig {
             sift_dir: cli.paths.sift_dir.clone(),
-            args: std::env::args().collect(),
         };
 
         let daemon_spawn = DaemonSpawnConfig {

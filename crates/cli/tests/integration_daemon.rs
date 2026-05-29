@@ -70,7 +70,6 @@ fn daemon_once_builds_initial_index() {
     let dir = fresh_dir("once-build");
     let sift_dir = dir.path().join(".sift");
 
-    // Write store metadata so the daemon can initialise.
     let meta = StoreMeta::new(
         dir.path().to_path_buf(),
         CorpusKind::Directory,
@@ -90,5 +89,40 @@ fn daemon_once_builds_initial_index() {
         .output()
         .unwrap();
 
+    assert_exit_code(&out, 0);
+}
+
+#[test]
+fn daemon_once_updates_existing_index() {
+    let dir = fresh_dir("once-update");
+    let sift_dir = dir.path().join(".sift");
+
+    let meta = StoreMeta::new(
+        dir.path().to_path_buf(),
+        CorpusKind::Directory,
+        false,
+        vec![IndexKind::Trigram],
+    );
+    std::fs::create_dir_all(&sift_dir).unwrap();
+    StoreMeta::write(&meta, &sift_dir).unwrap();
+
+    // Write a file and build the initial index.
+    fs::write(dir.path().join("a.txt"), "hello world\n").unwrap();
+    let out = daemon_bin()
+        .arg("--once")
+        .arg("--sift-dir")
+        .arg(&sift_dir)
+        .output()
+        .unwrap();
+    assert_exit_code(&out, 0);
+
+    // Add a new file and update.
+    fs::write(dir.path().join("b.txt"), "goodbye world\n").unwrap();
+    let out = daemon_bin()
+        .arg("--once")
+        .arg("--sift-dir")
+        .arg(&sift_dir)
+        .output()
+        .unwrap();
     assert_exit_code(&out, 0);
 }
