@@ -90,6 +90,12 @@ pub fn build_gitignore_matcher(
     }
 
     let matcher = builder.build().map_err(FilterError::Ignore)?;
+    // A matcher with zero globs never matches any path, so represent it as the
+    // absence of a matcher. This lets the filter skip the per-candidate
+    // `rel_str` allocation and `Gitignore::matched` path-component walk.
+    if matcher.is_empty() {
+        return Ok(None);
+    }
     Ok(Some(matcher))
 }
 
