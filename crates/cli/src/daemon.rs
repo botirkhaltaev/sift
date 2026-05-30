@@ -229,13 +229,17 @@ impl DaemonRunner {
         let mut store =
             IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links, kinds)?;
 
+        let exclude = sift_dir
+            .strip_prefix(&root)
+            .unwrap_or(sift_dir)
+            .to_path_buf();
         let build_config = IndexConfig {
             corpus: CorpusSpec {
                 root: &root,
                 kind: corpus_kind,
                 follow_links,
                 include_paths: &[],
-                exclude_paths: &[],
+                exclude_paths: &[exclude],
             },
             visibility: VisibilityConfig::default(),
         };
@@ -362,6 +366,17 @@ impl DaemonRunner {
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
+                // Let any active refresh worker finish before releasing the
+                // daemon lock so we don't orphan a long-running refresh.
+                while matches!(state, CoordinatorState::Refreshing { .. }) {
+                    match rx.recv_timeout(Duration::from_secs(1)) {
+                        Ok(CoordinatorEvent::RefreshComplete) => {
+                            state = CoordinatorState::Idle;
+                        }
+                        Ok(CoordinatorEvent::Fs(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
                 return Ok(());
             }
 

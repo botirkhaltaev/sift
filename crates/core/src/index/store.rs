@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::meta::StoreMeta;
-use super::snapshot::{FileLease, SnapshotStore, SnapshotTransaction};
+use super::snapshot::{SnapshotLease, SnapshotStore, SnapshotTransaction};
 use super::{CorpusKind, IndexError};
 
 const MANIFEST_FILE: &str = "manifest.json";
@@ -54,9 +54,15 @@ impl IndexStore {
         std::fs::create_dir_all(sift_dir)?;
 
         if !StoreMeta::path(sift_dir).exists() {
-            let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-            let meta = StoreMeta::new(canonical_root, corpus_kind, follow_links, indexes.to_vec());
-            meta.write(sift_dir)?;
+            // Serialize store initialization with the writer lock so that
+            // concurrent processes initialize the same store atomically.
+            let _guard = acquire_write_lock(sift_dir)?;
+            if !StoreMeta::path(sift_dir).exists() {
+                let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+                let meta =
+                    StoreMeta::new(canonical_root, corpus_kind, follow_links, indexes.to_vec());
+                meta.write(sift_dir)?;
+            }
         }
 
         Self::open(sift_dir)
@@ -192,19 +198,22 @@ impl IndexStore {
     /// Returns an error if the manifest is malformed, an index kind is
     /// unknown, or the snapshot could not be opened after retry.
     pub(crate) fn open_current(&self) -> crate::Result<super::snapshot::Snapshot> {
-        let meta = StoreMeta::read(&self.sift_dir).ok();
-        let root = meta.as_ref().map_or_else(PathBuf::new, |m| m.root.clone());
+        // If no CURRENT file exists, return an empty snapshot (no metadata needed).
+        let Some(current_id) = SnapshotStore::read_current_id(&self.sift_dir)? else {
+            return Ok(super::snapshot::Snapshot::empty(PathBuf::new()));
+        };
+
+        // CURRENT exists — metadata is required to interpret the snapshot.
+        let meta = StoreMeta::read(&self.sift_dir)?;
+        let root = meta.root;
+        let corpus_kind = meta.corpus_kind;
 
         for attempt in 0..2 {
-            let Some(current_id) = SnapshotStore::read_current_id(&self.sift_dir)? else {
-                return Ok(super::snapshot::Snapshot::empty(root));
-            };
-
             let snapshots_dir = self.sift_dir.join("snapshots");
             let snap_dir = snapshots_dir.join(&current_id);
 
             // Create lease before verifying snapshot exists.
-            let lease = FileLease::create(&self.sift_dir, &current_id)?;
+            let lease = SnapshotLease::create_file(&self.sift_dir, &current_id)?;
 
             if !snap_dir.exists() {
                 drop(lease);
@@ -228,10 +237,6 @@ impl IndexStore {
                 })
             })?;
 
-            let corpus_kind = meta
-                .as_ref()
-                .map_or(CorpusKind::Directory, |m| m.corpus_kind);
-
             let mut indexes = Vec::new();
             for name in &manifest.indexes {
                 let kind: super::IndexKind = name
@@ -242,7 +247,7 @@ impl IndexStore {
             }
 
             return Ok(super::snapshot::Snapshot::current_with_lease(
-                root, current_id, indexes, lease,
+                root, indexes, lease,
             ));
         }
 
@@ -261,10 +266,7 @@ impl IndexStore {
     /// The lock lives at `<sift_dir>/write.lock` and is released when the
     /// returned guard is dropped.
     fn acquire_write_lock(&self) -> crate::Result<WriteLockGuard> {
-        let lock_path = self.sift_dir.join("write.lock");
-        let mut lock_file = fslock::LockFile::open(&lock_path)?;
-        lock_file.lock()?;
-        Ok(WriteLockGuard { _file: lock_file })
+        acquire_write_lock(&self.sift_dir)
     }
 
     /// Reload the in-memory snapshot state from disk, picking up any changes
@@ -288,6 +290,14 @@ impl IndexStore {
         std::fs::write(txn.dir().join(MANIFEST_FILE), json)?;
         Ok(())
     }
+}
+
+/// Acquire the write lock for a store directory.
+fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {
+    let lock_path = sift_dir.join("write.lock");
+    let mut lock_file = fslock::LockFile::open(&lock_path)?;
+    lock_file.lock()?;
+    Ok(WriteLockGuard { _file: lock_file })
 }
 
 /// Guard that releases the write lock when dropped.

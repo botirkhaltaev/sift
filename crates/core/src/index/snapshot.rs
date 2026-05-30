@@ -44,29 +44,15 @@ impl Drop for SnapshotTransaction {
 // ---------------------------------------------------------------------------
 
 /// A lease that prevents a snapshot from being garbage-collected.
-///
-/// Exists publicly so `Indexes::from_single` can pass a no-op variant.
-pub trait Lease: std::fmt::Debug + Send + Sync {
-    /// Called when the snapshot is dropped — the lease should be released.
-    fn release(&self);
+pub(super) enum SnapshotLease {
+    /// On-disk lease file in the leases directory.
+    File { path: PathBuf },
+    /// In-memory snapshot without a backing store (testing/benchmarking).
+    InMemory,
 }
 
-/// A no-op lease used for in-memory snapshots without a backing store.
-#[derive(Debug)]
-pub struct NoopLease;
-
-impl Lease for NoopLease {
-    fn release(&self) {}
-}
-
-/// On-disk lease that prevents a snapshot from being garbage-collected.
-#[derive(Debug)]
-pub struct FileLease {
-    path: PathBuf,
-}
-
-impl FileLease {
-    pub(crate) fn create(sift_dir: &Path, snapshot_id: &str) -> crate::Result<Box<dyn Lease>> {
+impl SnapshotLease {
+    pub(super) fn create_file(sift_dir: &Path, snapshot_id: &str) -> crate::Result<Self> {
         let leases_dir = sift_dir.join(LEASES_DIR);
         std::fs::create_dir_all(&leases_dir)?;
         let pid = std::process::id();
@@ -76,19 +62,15 @@ impl FileLease {
             .as_nanos();
         let lease_path = leases_dir.join(format!("{pid}-{now}"));
         std::fs::write(&lease_path, snapshot_id)?;
-        Ok(Box::new(Self { path: lease_path }))
+        Ok(Self::File { path: lease_path })
     }
 }
 
-impl Lease for FileLease {
-    fn release(&self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-impl Drop for FileLease {
+impl Drop for SnapshotLease {
     fn drop(&mut self) {
-        self.release();
+        if let Self::File { path } = self {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -104,10 +86,8 @@ enum SnapshotState {
 }
 
 struct CurrentSnapshot {
-    #[allow(dead_code)]
-    id: String,
     indexes: Vec<super::kinds::Index>,
-    _lease: Box<dyn Lease>,
+    _lease: SnapshotLease,
 }
 
 impl Snapshot {
@@ -124,29 +104,26 @@ impl Snapshot {
     /// backing store. Useful for testing and benchmarking where indexes
     /// are kept alive by the caller.
     #[must_use]
-    pub fn from_indexes(root: PathBuf, indexes: Vec<super::kinds::Index>) -> Self {
+    pub const fn from_indexes(root: PathBuf, indexes: Vec<super::kinds::Index>) -> Self {
         Self {
             root,
             state: SnapshotState::Current(CurrentSnapshot {
-                id: String::new(),
                 indexes,
-                _lease: Box::new(NoopLease),
+                _lease: SnapshotLease::InMemory,
             }),
         }
     }
 
     /// Create a current snapshot with opened indexes, backed by an on-disk
     /// lease that prevents GC from collecting the snapshot.
-    pub(crate) fn current_with_lease(
+    pub(super) const fn current_with_lease(
         root: PathBuf,
-        id: String,
         indexes: Vec<super::kinds::Index>,
-        lease: Box<dyn Lease>,
+        lease: SnapshotLease,
     ) -> Self {
         Self {
             root,
             state: SnapshotState::Current(CurrentSnapshot {
-                id,
                 indexes,
                 _lease: lease,
             }),
@@ -300,16 +277,8 @@ impl SnapshotStore {
             keep.push(old_id.clone());
         }
 
-        // Include any snapshot held by reader leases.
-        if let Ok(leased) = Self::active_lease_ids(&self.dir) {
-            for id in leased {
-                if !keep.contains(&id) {
-                    keep.push(id);
-                }
-            }
-        }
-
-        Self::gc(&snapshots_dir, &keep)?;
+        let leases_dir = Self::leases_dir(&self.dir);
+        Self::gc(&snapshots_dir, &leases_dir, &keep)?;
 
         Ok(())
     }
@@ -353,7 +322,7 @@ impl SnapshotStore {
         Ok(())
     }
 
-    fn gc(snapshots_dir: &Path, keep: &[String]) -> crate::Result<()> {
+    fn gc(snapshots_dir: &Path, leases_dir: &Path, keep: &[String]) -> crate::Result<()> {
         let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
             return Ok(());
         };
@@ -361,9 +330,23 @@ impl SnapshotStore {
             let entry = entry?;
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with("tmp-") || !keep.iter().any(|k| *k == name_str.as_ref()) {
+            if name_str.starts_with("tmp-") {
                 let _ = std::fs::remove_dir_all(entry.path());
+                continue;
             }
+            // Skip snapshots in the explicit keep set (current, previous).
+            if keep.iter().any(|k| *k == name_str.as_ref()) {
+                continue;
+            }
+            // Re-read leases just before deletion so a lease created between
+            // our initial lease scan and this deletion is still respected.
+            let store_dir = snapshots_dir.parent().unwrap_or(leases_dir);
+            if let Ok(leased) = Self::active_lease_ids(store_dir)
+                && leased.iter().any(|id| id == name_str.as_ref())
+            {
+                continue;
+            }
+            let _ = std::fs::remove_dir_all(entry.path());
         }
         Ok(())
     }
@@ -411,7 +394,13 @@ mod tests {
         std::fs::create_dir_all(snapshots_dir.join("tmp-stale")).expect("create stale tmp");
         std::fs::create_dir_all(snapshots_dir.join("0000000000000001")).expect("create snapshot");
 
-        SnapshotStore::gc(&snapshots_dir, &["0000000000000001".to_string()]).expect("gc");
+        let leases_dir = tmp.path().join("leases");
+        SnapshotStore::gc(
+            &snapshots_dir,
+            &leases_dir,
+            &["0000000000000001".to_string()],
+        )
+        .expect("gc");
 
         assert!(!snapshots_dir.join("tmp-stale").exists());
         assert!(snapshots_dir.join("0000000000000001").exists());
@@ -456,7 +445,7 @@ mod tests {
         store.commit(t1).expect("commit");
 
         // Lease on id1 stays alive during the second commit.
-        let lease = FileLease::create(tmp.path(), &id1).expect("create lease");
+        let lease = SnapshotLease::create_file(tmp.path(), &id1).expect("create lease");
 
         let t2 = store.begin().expect("begin");
         store.commit(t2).expect("commit");
