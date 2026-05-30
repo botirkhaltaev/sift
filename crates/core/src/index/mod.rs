@@ -189,6 +189,13 @@ impl Index {
             Self::Trigram(idx) => idx.candidates(query),
         }
     }
+
+    #[must_use]
+    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
+        match self {
+            Self::Trigram(idx) => idx.all_files(),
+        }
+    }
 }
 
 /// Registry of opened indexes read from a snapshot store.
@@ -260,12 +267,49 @@ impl Indexes {
         &self.root
     }
 
-    /// Produce candidates from all indexes that can narrow the query.
+    /// Produce narrowed candidates from all indexes that can narrow the query.
     ///
     /// Returns `None` if no index could narrow. When at least one index
     /// narrows, all narrowed candidate sets are intersected.
     #[must_use]
     pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+        match self.inner.len() {
+            0 => None,
+            1 => self.inner[0].candidates(query),
+            _ => self.candidates_multi(query),
+        }
+    }
+
+    /// Return all indexed candidates across all registered indexes.
+    #[must_use]
+    pub(crate) fn complete_candidates(&self) -> Vec<crate::Candidate> {
+        let mut iter = self.inner.iter();
+        let Some(first) = iter.next() else {
+            return Vec::new();
+        };
+
+        let mut files = first.all_files();
+
+        for index in iter {
+            let next: HashSet<PathBuf> = index
+                .all_files()
+                .into_iter()
+                .map(|c| c.rel_path().to_path_buf())
+                .collect();
+            files.retain(|c| next.contains(c.rel_path()));
+            if files.is_empty() {
+                break;
+            }
+        }
+
+        files
+    }
+
+    /// Intersect candidates from multiple indexes.
+    fn candidates_multi(
+        &self,
+        query: &crate::query::QuerySpec<'_>,
+    ) -> Option<Vec<crate::Candidate>> {
         use rayon::prelude::*;
 
         let sets: Vec<Vec<crate::Candidate>> = self
@@ -281,26 +325,14 @@ impl Indexes {
         let mut result = sets.into_iter();
         let mut current = result.next()?;
 
-        current.sort_unstable_by(|a, b| a.rel_path().cmp(b.rel_path()));
-        current.dedup();
-
         for next in result {
-            let mut next_sorted: Vec<_> = next
-                .into_iter()
-                .map(|c| c.rel_path().to_path_buf())
-                .collect();
-            next_sorted.sort_unstable();
-            next_sorted.dedup();
-
-            let lookup: HashSet<&Path> = next_sorted.iter().map(PathBuf::as_path).collect();
+            let lookup: HashSet<&Path> = next.iter().map(crate::Candidate::rel_path).collect();
             current.retain(|c| lookup.contains(c.rel_path()));
-
             if current.is_empty() {
                 break;
             }
         }
 
-        current.sort_unstable_by(|a, b| a.rel_path().cmp(b.rel_path()));
         Some(current)
     }
 

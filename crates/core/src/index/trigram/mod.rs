@@ -137,10 +137,21 @@ impl TrigramIndex {
                 .filter_map(|id| {
                     let fid = FileId::new(usize::try_from(id).ok()?);
                     let fp = self.fingerprints.get(fid.get())?;
-                    Some(crate::Candidate::new(fp.path.clone(), self.root.join(&fp.path)))
+                    Some(crate::Candidate::new(
+                        fp.path.clone(),
+                        self.root.join(&fp.path),
+                    ))
                 })
                 .collect(),
         )
+    }
+
+    #[must_use]
+    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
+        self.fingerprints
+            .iter()
+            .map(|fp| crate::Candidate::new(fp.path.clone(), self.root.join(&fp.path)))
+            .collect()
     }
 
     /// Build a new trigram index from the corpus described in `config`.
