@@ -8,26 +8,83 @@ use crate::Candidate;
 use crate::search::filter::{CandidateFilter, HiddenMode, IgnoreSources};
 use crate::search::request::{LinkTraversal, WalkOptions};
 
-fn configure_walker<'a>(filter: &'a CandidateFilter, root: &'a Path) -> WalkBuilder {
-    let visibility = filter.visibility();
-    let sources = visibility.ignore.sources;
-    let mut builder = WalkBuilder::new(root);
-    builder
-        .follow_links(filter.follow_links())
-        .same_file_system(filter.one_file_system())
-        .hidden(matches!(visibility.hidden, HiddenMode::Respect))
-        .parents(sources.contains(IgnoreSources::PARENT))
-        .ignore(sources.contains(IgnoreSources::DOT))
-        .git_ignore(sources.contains(IgnoreSources::VCS))
-        .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
-        .git_global(sources.contains(IgnoreSources::GLOBAL))
-        .require_git(visibility.ignore.require_git);
-    if let Some(d) = filter.max_depth() {
-        builder.max_depth(Some(d + 1));
-    }
-    builder
+/// Per-scope parallel walk that produces candidates.
+///
+/// Also serves as [`ignore::ParallelVisitorBuilder`] — each worker thread
+/// receives a thread-local [`CandidateCollector`].
+struct CandidateWalk<'a> {
+    filter: &'a CandidateFilter,
+    root: PathBuf,
+    filter_root: PathBuf,
+    walk_error: Arc<Mutex<Option<crate::Error>>>,
+    consolidated: Arc<Mutex<Vec<Candidate>>>,
 }
 
+impl<'a> CandidateWalk<'a> {
+    fn new(root: &Path, filter: &'a CandidateFilter) -> crate::Result<Self> {
+        let root = root.canonicalize()?;
+        let filter_root = filter
+            .root()
+            .canonicalize()
+            .unwrap_or_else(|_| filter.root().to_path_buf());
+        Ok(Self {
+            filter,
+            root,
+            filter_root,
+            walk_error: Arc::new(Mutex::new(None)),
+            consolidated: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    fn walk_builder(&self) -> WalkBuilder {
+        let visibility = self.filter.visibility();
+        let sources = visibility.ignore.sources;
+        let mut builder = WalkBuilder::new(&self.root);
+        builder
+            .follow_links(self.filter.follow_links())
+            .same_file_system(self.filter.one_file_system())
+            .hidden(matches!(visibility.hidden, HiddenMode::Respect))
+            .parents(sources.contains(IgnoreSources::PARENT))
+            .ignore(sources.contains(IgnoreSources::DOT))
+            .git_ignore(sources.contains(IgnoreSources::VCS))
+            .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
+            .git_global(sources.contains(IgnoreSources::GLOBAL))
+            .require_git(visibility.ignore.require_git);
+        if let Some(d) = self.filter.max_depth() {
+            builder.max_depth(Some(d + 1));
+        }
+        builder
+    }
+
+    fn collect(&mut self) -> crate::Result<Vec<Candidate>> {
+        self.walk_builder().build_parallel().visit(self);
+
+        {
+            let mut guard = self.walk_error.lock().expect("walk error lock");
+            if let Some(err) = guard.take() {
+                return Err(err);
+            }
+        }
+
+        Ok(std::mem::take(
+            &mut *self.consolidated.lock().expect("candidate lock"),
+        ))
+    }
+}
+
+impl<'a> ignore::ParallelVisitorBuilder<'a> for CandidateWalk<'_> {
+    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
+        Box::new(CandidateCollector {
+            filter_root: self.filter_root.clone(),
+            max_filesize: self.filter.max_filesize(),
+            thread_candidates: Vec::new(),
+            walk_error: Arc::clone(&self.walk_error),
+            consolidated: Arc::clone(&self.consolidated),
+        })
+    }
+}
+
+/// Per-thread collector for the parallel walk.
 struct CandidateCollector {
     filter_root: PathBuf,
     max_filesize: Option<u64>,
@@ -78,57 +135,6 @@ impl ignore::ParallelVisitor for CandidateCollector {
     }
 }
 
-struct CandidateCollectorBuilder {
-    filter_root: PathBuf,
-    max_filesize: Option<u64>,
-    walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated: Arc<Mutex<Vec<Candidate>>>,
-}
-
-impl<'a> ignore::ParallelVisitorBuilder<'a> for CandidateCollectorBuilder {
-    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
-        Box::new(CandidateCollector {
-            filter_root: self.filter_root.clone(),
-            max_filesize: self.max_filesize,
-            thread_candidates: Vec::new(),
-            walk_error: Arc::clone(&self.walk_error),
-            consolidated: Arc::clone(&self.consolidated),
-        })
-    }
-}
-
-fn walk_directory_files(root: &Path, filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
-    let root = root.canonicalize()?;
-    let filter_root = filter
-        .root()
-        .canonicalize()
-        .unwrap_or_else(|_| filter.root().to_path_buf());
-
-    let walk_error: Arc<Mutex<Option<crate::Error>>> = Arc::new(Mutex::new(None));
-    let consolidated: Arc<Mutex<Vec<Candidate>>> = Arc::new(Mutex::new(Vec::new()));
-
-    let mut builder = CandidateCollectorBuilder {
-        filter_root,
-        max_filesize: filter.max_filesize(),
-        walk_error: Arc::clone(&walk_error),
-        consolidated: Arc::clone(&consolidated),
-    };
-
-    configure_walker(filter, &root)
-        .build_parallel()
-        .visit(&mut builder);
-
-    {
-        let mut guard = walk_error.lock().expect("walk error lock");
-        if let Some(err) = guard.take() {
-            return Err(err);
-        }
-    }
-
-    let results = std::mem::take(&mut *consolidated.lock().expect("candidate lock"));
-    Ok(results)
-}
-
 /// Collect candidate files across all scopes by walking the filesystem.
 pub fn collect_candidates(filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
     let filter_root = filter
@@ -153,7 +159,8 @@ pub fn collect_candidates(filter: &CandidateFilter) -> crate::Result<Vec<Candida
                 .to_path_buf();
             out.push(Candidate::new(rel_path, path));
         } else if path.is_dir() {
-            out.extend(walk_directory_files(&path, filter)?);
+            let mut walk = CandidateWalk::new(&path, filter)?;
+            out.extend(walk.collect()?);
         }
     }
     out.sort_by(|a, b| a.rel_path().cmp(b.rel_path()));
