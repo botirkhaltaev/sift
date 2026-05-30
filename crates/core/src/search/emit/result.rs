@@ -2,7 +2,6 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct FileResult {
-    pub index: usize,
     pub output: ChunkOutput,
     pub json_stats: Option<grep_printer::Stats>,
 }

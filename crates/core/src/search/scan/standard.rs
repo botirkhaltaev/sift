@@ -382,16 +382,10 @@ impl<'a> StandardWorker<'a> {
         }
     }
 
-    fn search_candidate(
-        &mut self,
-        candidate: &Candidate,
-        result_index: usize,
-        stop: &AtomicBool,
-    ) -> FileResult {
+    fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
         self.bytes.clear();
         if stop.load(Ordering::SeqCst) {
             return FileResult {
-                index: result_index,
                 output: ChunkOutput::empty(),
                 json_stats: None,
             };
@@ -434,7 +428,6 @@ impl<'a> StandardWorker<'a> {
         }
 
         FileResult {
-            index: result_index,
             output: ChunkOutput {
                 bytes: if matched
                     && self.lines_flags.contains(LineStyleFlags::HEADING)
@@ -498,16 +491,13 @@ impl<'a> StandardScan<'a> {
         let mut files = Vec::with_capacity(n);
         candidates
             .par_iter()
-            .enumerate()
             .map_init(
                 || StandardWorker::new(self),
-                |worker: &mut StandardWorker<'_>,
-                 (result_index, candidate): (usize, &Candidate)| {
-                    worker.search_candidate(candidate, result_index, &stop)
+                |worker: &mut StandardWorker<'_>, candidate: &Candidate| {
+                    worker.search_candidate(candidate, &stop)
                 },
             )
             .collect_into_vec(&mut files);
-        files.sort_by_key(|file| file.index);
         ChunkOutput::flush_all(
             files.into_iter().map(|file| file.output),
             self.counters.bytes_printed(),
