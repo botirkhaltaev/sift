@@ -24,7 +24,7 @@ pub struct CandidateFilter {
     root: PathBuf,
     scopes: Vec<PathBuf>,
     exclude_paths: Vec<PathBuf>,
-    hidden: crate::search::filter::config::HiddenMode,
+    visibility: VisibilityConfig,
     gitignore: Option<Gitignore>,
     glob: Option<Override>,
     glob_case_insensitive: bool,
@@ -78,6 +78,11 @@ impl CandidateFilter {
         self.one_file_system
     }
 
+    #[must_use]
+    pub const fn visibility(&self) -> &VisibilityConfig {
+        &self.visibility
+    }
+
     /// Creates a new candidate filter from configuration.
     ///
     /// # Errors
@@ -123,7 +128,7 @@ impl CandidateFilter {
             root: index_root.to_path_buf(),
             scopes,
             exclude_paths: config.exclude_paths.clone(),
-            hidden: config.visibility.hidden,
+            visibility: config.visibility.clone(),
             gitignore,
             glob,
             glob_case_insensitive,
@@ -157,7 +162,7 @@ impl CandidateFilter {
         if self.is_excluded(candidate.rel_path()) {
             return false;
         }
-        if self.hidden == crate::search::filter::config::HiddenMode::Respect
+        if self.visibility.hidden == crate::search::filter::config::HiddenMode::Respect
             && Self::path_is_hidden(candidate.rel_path())
         {
             return false;
@@ -187,7 +192,7 @@ impl CandidateFilter {
     }
 
     fn matches_file(&self, rel_path: &Path) -> bool {
-        if self.hidden == crate::search::filter::config::HiddenMode::Respect
+        if self.visibility.hidden == crate::search::filter::config::HiddenMode::Respect
             && Self::path_is_hidden(rel_path)
         {
             return false;
