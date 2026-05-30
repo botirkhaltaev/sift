@@ -5,6 +5,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::POSTINGS_MAGIC;
 
 /// Memory-map a file for read access.
@@ -21,13 +22,19 @@ fn mmap_open(path: &Path) -> std::io::Result<Mmap> {
 
 #[derive(Debug)]
 pub struct Postings {
-    mmap: Mmap,
+    data: ArtifactData,
     payload_len: usize,
 }
 
 impl Postings {
     fn bytes(&self) -> &[u8] {
-        self.mmap.as_ref()
+        self.data.as_ref()
+    }
+
+    pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
+        let bytes = data.as_ref();
+        let payload_len = Self::validate(bytes)?;
+        Ok(Self { data, payload_len })
     }
 
     /// Write a postings file and return an mmap-backed instance.
@@ -57,9 +64,7 @@ impl Postings {
     /// Returns an error if the file is malformed.
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
-        let bytes = mmap.as_ref();
-        let payload_len = Self::validate(bytes)?;
-        Ok(Self { mmap, payload_len })
+        Self::from_artifact(ArtifactData::Mmap(mmap))
     }
 
     fn validate(bytes: &[u8]) -> std::io::Result<usize> {

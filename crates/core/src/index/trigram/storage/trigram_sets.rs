@@ -11,6 +11,7 @@ use std::path::Path;
 use memmap2::Mmap;
 
 use super::format::TRIGRAMS_MAGIC;
+use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::Trigram;
 
 /// Memory-map a file for read access.
@@ -187,13 +188,13 @@ impl TrigramSet {
 /// Memory-mapped view of per-file trigram sets.
 #[derive(Debug)]
 pub struct TrigramSets {
-    mmap: Mmap,
+    data: ArtifactData,
     count: usize,
     offset_table_start: usize,
 }
 
 impl TrigramSets {
-    fn encode(sets: &[TrigramSet]) -> std::io::Result<Vec<u8>> {
+    pub fn encode(sets: &[TrigramSet]) -> std::io::Result<Vec<u8>> {
         let count = sets.len();
         let offset_table_start = TRIGRAMS_MAGIC.len() + 4;
         let blob_start = offset_table_start + count * 8;
@@ -240,10 +241,14 @@ impl TrigramSets {
 
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
-        let bytes = mmap.as_ref();
+        Self::from_artifact(ArtifactData::Mmap(mmap))
+    }
+
+    pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
+        let bytes = data.as_ref();
         let (count, offset_table_start) = Self::validate(bytes)?;
         Ok(Self {
-            mmap,
+            data,
             count,
             offset_table_start,
         })
@@ -350,7 +355,7 @@ impl TrigramSets {
     }
 
     fn bytes(&self) -> &[u8] {
-        self.mmap.as_ref()
+        self.data.as_ref()
     }
 
     pub fn to_vec(&self) -> std::io::Result<Vec<TrigramSet>> {

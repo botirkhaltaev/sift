@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
+use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::FILES_MAGIC;
 
 /// Memory-map a file for read access.
@@ -36,7 +37,7 @@ pub struct FileFingerprint {
 
 #[derive(Debug)]
 pub struct FileTable {
-    mmap: Mmap,
+    data: ArtifactData,
     count: usize,
     offset_table_start: usize,
 }
@@ -44,7 +45,7 @@ pub struct FileTable {
 impl FileTable {
     const FINGERPRINT_LEN: usize = 16;
 
-    fn encode(fingerprints: &[FileFingerprint]) -> std::io::Result<Vec<u8>> {
+    pub fn encode(fingerprints: &[FileFingerprint]) -> std::io::Result<Vec<u8>> {
         let count = fingerprints.len();
         let offset_table_start = FILES_MAGIC.len() + 4;
         let blob_start = offset_table_start + count * 4;
@@ -91,7 +92,17 @@ impl FileTable {
     }
 
     fn bytes(&self) -> &[u8] {
-        self.mmap.as_ref()
+        self.data.as_ref()
+    }
+
+    pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
+        let bytes = data.as_ref();
+        let (count, offset_table_start) = Self::validate(bytes)?;
+        Ok(Self {
+            data,
+            count,
+            offset_table_start,
+        })
     }
 
     /// Write a file table and return an mmap-backed instance.
@@ -107,13 +118,7 @@ impl FileTable {
 
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
-        let bytes = mmap.as_ref();
-        let (count, offset_table_start) = Self::validate(bytes)?;
-        Ok(Self {
-            mmap,
-            count,
-            offset_table_start,
-        })
+        Self::from_artifact(ArtifactData::Mmap(mmap))
     }
 
     fn validate(bytes: &[u8]) -> std::io::Result<(usize, usize)> {

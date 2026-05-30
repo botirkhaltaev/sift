@@ -1,40 +1,34 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-use super::meta::StoreMeta;
-use super::snapshot::{SnapshotLease, SnapshotStore, SnapshotTransaction};
+use super::snapshot::{
+    OnDiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotStore,
+    SnapshotWrite, SnapshotWriterSession,
+};
 use super::{CorpusKind, IndexError};
 
 const MANIFEST_FILE: &str = "manifest.json";
 
-/// Manifest written into each snapshot directory listing the indexes it
-/// contains.
-#[derive(Debug, Serialize, Deserialize)]
-struct SnapshotManifest {
-    id: String,
-    indexes: Vec<String>,
-}
-
 /// Index lifecycle orchestrator backed by a [`SnapshotStore`] for atomic
-/// persistence, a writer lock for coordination, and reader leases for safe
-/// concurrent access.
-pub struct IndexStore {
-    snapshots: SnapshotStore,
+/// persistence and coordination.
+pub struct IndexStore<S: SnapshotStore = OnDiskSnapshotStore> {
+    snapshots: S,
     sift_dir: PathBuf,
+    meta: Option<super::meta::StoreMeta>,
 }
 
-impl IndexStore {
+impl IndexStore<OnDiskSnapshotStore> {
     /// Open an existing store at `sift_dir`.
     ///
     /// # Errors
     ///
     /// Returns an error if `CURRENT` exists but cannot be read.
     pub fn open(sift_dir: &Path) -> crate::Result<Self> {
-        let snapshots = SnapshotStore::open(sift_dir)?;
+        let snapshots = OnDiskSnapshotStore::open(sift_dir)?;
+        let meta = super::meta::StoreMeta::read(sift_dir).ok();
         Ok(Self {
             snapshots,
             sift_dir: sift_dir.to_path_buf(),
+            meta,
         })
     }
 
@@ -53,24 +47,21 @@ impl IndexStore {
     ) -> crate::Result<Self> {
         std::fs::create_dir_all(sift_dir)?;
 
-        if !StoreMeta::path(sift_dir).exists() {
-            // Serialize store initialization with the writer lock so that
-            // concurrent processes initialize the same store atomically.
+        if !super::meta::StoreMeta::path(sift_dir).exists() {
             let _guard = acquire_write_lock(sift_dir)?;
-            if !StoreMeta::path(sift_dir).exists() {
+            if !super::meta::StoreMeta::path(sift_dir).exists() {
                 let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-                let meta =
-                    StoreMeta::new(canonical_root, corpus_kind, follow_links, indexes.to_vec());
+                let meta = super::meta::StoreMeta::new(
+                    canonical_root,
+                    corpus_kind,
+                    follow_links,
+                    indexes.to_vec(),
+                );
                 meta.write(sift_dir)?;
             }
         }
 
         Self::open(sift_dir)
-    }
-
-    #[must_use]
-    pub fn current_id(&self) -> Option<&str> {
-        self.snapshots.current_id()
     }
 
     #[must_use]
@@ -98,9 +89,21 @@ impl IndexStore {
         kinds: &[super::IndexKind],
         config: &super::IndexConfig<'_>,
     ) -> crate::Result<String> {
-        let _guard = self.acquire_write_lock()?;
-        self.refresh_snapshots()?;
-        self.publish_snapshot(kinds, config)
+        let mut writer = self.snapshots.writer()?;
+        let txn = writer.begin()?;
+
+        for kind in kinds {
+            let index_dir = txn.dir().join(kind.as_str());
+            std::fs::create_dir_all(&index_dir)?;
+            kind.build(config, &index_dir)?;
+        }
+
+        let manifest = SnapshotManifest {
+            id: txn.id().clone(),
+            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+        };
+        let id = writer.publish(txn, manifest)?;
+        Ok(id.to_string())
     }
 
     /// Update the current snapshot, rebuilding only indexes whose corpus
@@ -121,14 +124,26 @@ impl IndexStore {
         kinds: &[super::IndexKind],
         config: &super::IndexConfig<'_>,
     ) -> crate::Result<Option<String>> {
-        let _guard = self.acquire_write_lock()?;
-        self.refresh_snapshots()?;
+        let mut writer = self.snapshots.writer()?;
 
-        let Some(current_dir) = self.snapshots.current_dir() else {
-            return self.publish_snapshot(kinds, config).map(Some);
+        let Some(current) = writer.current()? else {
+            // No current snapshot — build from scratch.
+            let txn = writer.begin()?;
+            for kind in kinds {
+                let index_dir = txn.dir().join(kind.as_str());
+                std::fs::create_dir_all(&index_dir)?;
+                kind.build(config, &index_dir)?;
+            }
+            let manifest = SnapshotManifest {
+                id: txn.id().clone(),
+                indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+            };
+            let id = writer.publish(txn, manifest)?;
+            return Ok(Some(id.to_string()));
         };
 
-        let txn = self.snapshots.begin()?;
+        let current_dir = current.dir().to_path_buf();
+        let txn = writer.begin()?;
 
         let changed: Vec<bool> = kinds
             .iter()
@@ -143,37 +158,17 @@ impl IndexStore {
             if !did_change {
                 let src = current_dir.join(kind.as_str());
                 if src.exists() {
-                    SnapshotStore::copy_dir(&src, &txn.dir().join(kind.as_str()))?;
+                    OnDiskSnapshotStore::copy_dir(&src, &txn.dir().join(kind.as_str()))?;
                 }
             }
         }
 
-        Self::write_manifest(&txn, kinds)?;
-        let id = txn.id().to_string();
-        self.snapshots.commit(txn)?;
-        Ok(Some(id))
-    }
-
-    /// Write index files into a new snapshot and atomically publish it.
-    ///
-    /// The caller must hold the writer lock before calling this.
-    fn publish_snapshot(
-        &mut self,
-        kinds: &[super::IndexKind],
-        config: &super::IndexConfig<'_>,
-    ) -> crate::Result<String> {
-        let txn = self.snapshots.begin()?;
-
-        for kind in kinds {
-            let index_dir = txn.dir().join(kind.as_str());
-            std::fs::create_dir_all(&index_dir)?;
-            kind.build(config, &index_dir)?;
-        }
-
-        Self::write_manifest(&txn, kinds)?;
-        let id = txn.id().to_string();
-        self.snapshots.commit(txn)?;
-        Ok(id)
+        let manifest = SnapshotManifest {
+            id: txn.id().clone(),
+            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+        };
+        let id = writer.publish(txn, manifest)?;
+        Ok(Some(id.to_string()))
     }
 
     // ------------------------------------------------------------------
@@ -192,20 +187,27 @@ impl IndexStore {
     /// unknown, or the snapshot could not be opened after retry.
     pub(crate) fn open_current(&self) -> crate::Result<super::snapshot::Snapshot> {
         for attempt in 0..2 {
-            // Re-read CURRENT on every attempt so a concurrent writer that
-            // advanced the pointer between attempts is picked up.
-            let Some(current_id) = SnapshotStore::read_current_id(&self.sift_dir)? else {
+            let Some(current_id) = OnDiskSnapshotStore::read_current_id(&self.sift_dir)? else {
                 return Ok(super::snapshot::Snapshot::empty(PathBuf::new()));
             };
 
-            // CURRENT exists — metadata is required to interpret the snapshot.
-            let meta = StoreMeta::read(&self.sift_dir)?;
-            let root = meta.root;
+            let meta = match self.meta {
+                Some(ref m) => m,
+                None => {
+                    return Err(crate::Error::Index(IndexError::Io {
+                        path: self.sift_dir.join("sift.meta"),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "store metadata not found",
+                        ),
+                    }));
+                }
+            };
+            let root = meta.root.clone();
             let corpus_kind = meta.corpus_kind;
 
             let snap_dir = self.sift_dir.join("snapshots").join(&current_id);
 
-            // Create lease before verifying snapshot exists.
             let lease = SnapshotLease::create_file(&self.sift_dir, &current_id)?;
 
             if !snap_dir.exists() {
@@ -213,7 +215,7 @@ impl IndexStore {
                 continue;
             }
 
-            let manifest_path = snap_dir.join(MANIFEST_FILE);
+            let manifest_path = snap_dir.join("manifest.json");
             let manifest_raw = match std::fs::read_to_string(&manifest_path) {
                 Ok(raw) => raw,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound && attempt == 0 => {
@@ -223,18 +225,19 @@ impl IndexStore {
                 Err(e) => return Err(crate::Error::Io(e)),
             };
 
-            let manifest: SnapshotManifest = serde_json::from_str(&manifest_raw).map_err(|e| {
-                crate::Error::Index(IndexError::InvalidManifest {
-                    path: manifest_path.clone(),
-                    source: e,
-                })
-            })?;
+            let manifest: SnapshotManifest =
+                serde_json::from_str(&manifest_raw).map_err(|e| {
+                    crate::Error::Index(IndexError::InvalidManifest {
+                        path: manifest_path.clone(),
+                        source: e,
+                    })
+                })?;
 
             let mut indexes = Vec::new();
             for name in &manifest.indexes {
-                let kind: super::IndexKind = name
-                    .parse()
-                    .map_err(|_| crate::Error::Index(IndexError::UnknownIndexKind(name.clone())))?;
+                let kind: super::IndexKind = name.parse().map_err(|_| {
+                    crate::Error::Index(IndexError::UnknownIndexKind(name.clone()))
+                })?;
                 let index_dir = snap_dir.join(name);
                 indexes.push(kind.open_from_dir(&index_dir, &root, corpus_kind)?);
             }
@@ -259,31 +262,14 @@ impl IndexStore {
     fn acquire_write_lock(&self) -> crate::Result<WriteLockGuard> {
         acquire_write_lock(&self.sift_dir)
     }
-
-    /// Reload the in-memory snapshot state from disk, picking up any changes
-    /// published by another writer.
-    fn refresh_snapshots(&mut self) -> crate::Result<()> {
-        self.snapshots = SnapshotStore::open(&self.sift_dir)?;
-        Ok(())
-    }
-
-    fn write_manifest(txn: &SnapshotTransaction, kinds: &[super::IndexKind]) -> crate::Result<()> {
-        let manifest = SnapshotManifest {
-            id: txn.id().to_string(),
-            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
-        };
-        let json = serde_json::to_vec_pretty(&manifest).map_err(|e| {
-            crate::Error::Index(IndexError::InvalidManifest {
-                path: txn.dir().join(MANIFEST_FILE),
-                source: e,
-            })
-        })?;
-        std::fs::write(txn.dir().join(MANIFEST_FILE), json)?;
-        Ok(())
-    }
 }
 
-/// Acquire the write lock for a store directory.
+impl<S: SnapshotStore> IndexStore<S> {
+    #[must_use]
+    pub fn current_id(&self) -> Option<&str> {
+        self.snapshots.current_id().map(SnapshotId::as_str)
+    }
+}
 fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {
     let lock_path = sift_dir.join("write.lock");
     let mut lock_file = fslock::LockFile::open(&lock_path)?;
@@ -299,6 +285,7 @@ struct WriteLockGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::meta::StoreMeta;
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexKind};
     use crate::search::filter::VisibilityConfig;
     use std::fs;
@@ -340,7 +327,7 @@ mod tests {
         assert!(StoreMeta::path(&sift_dir).exists());
 
         let id = store.current_id().expect("has current id");
-        let snapshot_dir = store.snapshots.current_dir().expect("has snapshot dir");
+        let snapshot_dir = store.snapshot_dir(&id);
         assert!(snapshot_dir.exists());
         assert!(snapshot_dir.join(MANIFEST_FILE).exists());
         assert!(snapshot_dir.join("trigram").exists());
