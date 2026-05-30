@@ -129,16 +129,9 @@ impl TrigramIndex {
     }
 
     #[must_use]
-    pub fn candidates(&self, query: &QuerySpec<'_>) -> Vec<crate::Candidate> {
-        TrigramPlanner::build(query).map_or_else(
-            || self.resolve_all_candidates(),
-            |plan| self.resolve_candidates(self.trigram_candidate_ids(&plan)),
-        )
-    }
-
-    #[must_use]
-    pub fn all_files(&self) -> Vec<crate::Candidate> {
-        self.resolve_all_candidates()
+    pub fn candidates(&self, query: &QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+        let plan = TrigramPlanner::build(query)?;
+        Some(self.resolve_candidates(self.trigram_candidate_ids(&plan)))
     }
 
     /// Build a new trigram index from the corpus described in `config`.
@@ -289,13 +282,6 @@ impl TrigramIndex {
                     .get(id.get())
                     .map(|fp| self.candidate_from_fingerprint(fp))
             })
-            .collect()
-    }
-
-    fn resolve_all_candidates(&self) -> Vec<crate::Candidate> {
-        self.fingerprints
-            .iter()
-            .map(|fp| self.candidate_from_fingerprint(fp))
             .collect()
     }
 

@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::search::filter::VisibilityConfig;
-use crate::search::output::mode::CandidateCoverage;
 
 pub use trigram::TrigramIndexError;
 
@@ -185,16 +184,9 @@ impl Index {
     }
 
     #[must_use]
-    pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
+    pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
         match self {
             Self::Trigram(idx) => idx.candidates(query),
-        }
-    }
-
-    #[must_use]
-    pub fn all_files(&self) -> Vec<crate::Candidate> {
-        match self {
-            Self::Trigram(idx) => idx.all_files(),
         }
     }
 }
@@ -268,71 +260,48 @@ impl Indexes {
         &self.root
     }
 
-    /// Resolve candidates for a query across all registered indexes.
+    /// Produce candidates from all indexes that can narrow the query.
     ///
-    /// Conservative sets from each [`SearchIndex`] are intersected using
-    /// `Candidate::rel_path` equality (no hashing), so distinct paths are never
-    /// merged by accident.
+    /// Returns `None` if no index could narrow. When at least one index
+    /// narrows, all narrowed candidate sets are intersected.
     #[must_use]
-    pub fn resolve_candidates(&self, query: &crate::query::QuerySpec<'_>) -> Vec<crate::Candidate> {
-        let mut iter = self.inner.iter();
-        let Some(first) = iter.next() else {
-            return Vec::new();
-        };
+    pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+        use rayon::prelude::*;
 
-        let mut candidates = first.candidates(query);
+        let sets: Vec<Vec<crate::Candidate>> = self
+            .inner
+            .par_iter()
+            .filter_map(|idx| idx.candidates(query))
+            .collect();
 
-        for index in iter {
-            let next: HashSet<PathBuf> = index
-                .candidates(query)
+        if sets.is_empty() {
+            return None;
+        }
+
+        let mut result = sets.into_iter();
+        let mut current = result.next()?;
+
+        current.sort_unstable_by(|a, b| a.rel_path().cmp(b.rel_path()));
+        current.dedup();
+
+        for next in result {
+            let mut next_sorted: Vec<_> = next
                 .into_iter()
                 .map(|c| c.rel_path().to_path_buf())
                 .collect();
-            candidates.retain(|c| next.contains(c.rel_path()));
-            if candidates.is_empty() {
+            next_sorted.sort_unstable();
+            next_sorted.dedup();
+
+            let lookup: HashSet<&Path> = next_sorted.iter().map(PathBuf::as_path).collect();
+            current.retain(|c| lookup.contains(c.rel_path()));
+
+            if current.is_empty() {
                 break;
             }
         }
 
-        candidates
-    }
-
-    /// Resolve candidates for a query, selecting narrowed or complete coverage.
-    #[must_use]
-    pub fn candidates(
-        &self,
-        query: &crate::query::QuerySpec<'_>,
-        coverage: CandidateCoverage,
-    ) -> Vec<crate::Candidate> {
-        match coverage {
-            CandidateCoverage::Narrowed => self.resolve_candidates(query),
-            CandidateCoverage::Complete => self.resolve_all_files(),
-        }
-    }
-
-    /// Return all indexed files across all registered indexes.
-    #[must_use]
-    pub fn resolve_all_files(&self) -> Vec<crate::Candidate> {
-        let mut iter = self.inner.iter();
-        let Some(first) = iter.next() else {
-            return Vec::new();
-        };
-
-        let mut files = first.all_files();
-
-        for index in iter {
-            let next: HashSet<PathBuf> = index
-                .all_files()
-                .into_iter()
-                .map(|c| c.rel_path().to_path_buf())
-                .collect();
-            files.retain(|c| next.contains(c.rel_path()));
-            if files.is_empty() {
-                break;
-            }
-        }
-
-        files
+        current.sort_unstable_by(|a, b| a.rel_path().cmp(b.rel_path()));
+        Some(current)
     }
 
     #[must_use]
@@ -340,7 +309,6 @@ impl Indexes {
         self.inner.first()
     }
 
-    /// Returns the corpus kind if all indexes agree, or `None` for mixed/empty.
     #[must_use]
     pub fn corpus_kind(&self) -> Option<CorpusKind> {
         let kind = self.inner.first()?.corpus_kind();

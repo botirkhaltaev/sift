@@ -10,6 +10,7 @@ use crate::SearchQuery;
 use crate::SearchSeparators;
 use crate::SearchStats;
 use crate::index::Indexes;
+use crate::query::QueryPlanner;
 use crate::search::SearchError;
 use crate::search::SearchOutcome;
 use crate::search::candidates::walk;
@@ -38,12 +39,11 @@ pub fn run(query: &SearchQuery, request: &GrepRequest<'_>) -> crate::Result<Sear
     let spec = query.spec();
     let output = request.output;
 
-    let raw = if request.indexes.is_empty() {
-        walk::collect_candidates(request.filter)?
-    } else {
-        let coverage = output.candidate_coverage();
-        request.indexes.candidates(&spec, coverage)
-    };
+    let raw = QueryPlanner::new(spec).candidates(
+        request.indexes,
+        output.candidate_requirement(),
+        || walk::collect_candidates(request.filter),
+    )?;
 
     let candidates: Vec<Candidate> = raw
         .into_par_iter()

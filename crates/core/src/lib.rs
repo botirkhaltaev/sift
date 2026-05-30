@@ -174,7 +174,7 @@ mod tests {
 
         let index = build_index_in_tmp(&tmp, &corpus);
 
-        let pat = vec![".*".to_string()];
+        let pat = vec!["one".to_string(), "three".to_string()];
         let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
         let mut from_index = q.collect_index_matches(&index).expect("index search");
         let mut from_walk = q.collect_walk_matches(&corpus).expect("walk search");

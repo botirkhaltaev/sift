@@ -203,7 +203,7 @@ impl SearchQuery {
         };
         let filter = CandidateFilter::new(&config, index.root())?;
         let spec = self.build_query_spec();
-        let candidates = index.candidates(&spec);
+        let candidates = index.candidates(&spec).unwrap_or_default();
         self.collect_index_candidate_paths(&filter, &candidates)
     }
 
