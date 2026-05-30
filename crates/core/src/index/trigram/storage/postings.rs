@@ -5,8 +5,19 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use super::mmap::open_mmap;
 use crate::index::trigram::storage::format::POSTINGS_MAGIC;
+
+/// Memory-map a file for read access.
+///
+/// # Safety invariant
+///
+/// `Mmap::map` dereferences the raw OS mapping pointer. The OS manages
+/// bounds and the mapping outlives the closed `File` handle via refcount.
+#[allow(unsafe_code)]
+fn mmap_open(path: &Path) -> std::io::Result<Mmap> {
+    let file = std::fs::File::open(path)?;
+    unsafe { Mmap::map(&file) }
+}
 
 #[derive(Debug)]
 pub struct Postings {
@@ -45,7 +56,7 @@ impl Postings {
     ///
     /// Returns an error if the file is malformed.
     pub fn open(path: &Path) -> std::io::Result<Self> {
-        let mmap = open_mmap(path)?;
+        let mmap = mmap_open(path)?;
         let bytes = mmap.as_ref();
         let payload_len = Self::validate(bytes)?;
         Ok(Self { mmap, payload_len })

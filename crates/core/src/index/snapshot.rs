@@ -54,7 +54,7 @@ impl SnapshotStore {
     pub fn open(dir: &Path) -> crate::Result<Self> {
         let current_path = dir.join(CURRENT_FILE);
         let current_id = if current_path.exists() {
-            Some(read_current(&current_path)?)
+            Some(Self::read_current(&current_path)?)
         } else {
             None
         };
@@ -89,7 +89,7 @@ impl SnapshotStore {
         let snapshots_dir = self.dir.join(SNAPSHOTS_DIR);
         std::fs::create_dir_all(&snapshots_dir)?;
 
-        let id = snapshot_id();
+        let id = Self::generate_id();
         let tmp_dir = snapshots_dir.join(format!("tmp-{id}"));
         std::fs::create_dir_all(&tmp_dir)?;
 
@@ -116,71 +116,71 @@ impl SnapshotStore {
         snapshot.committed = true;
 
         let current_path = self.dir.join(CURRENT_FILE);
-        write_atomic(&current_path, &snapshot.id)?;
+        Self::write_atomic(&current_path, &snapshot.id)?;
 
         let old_current = self.current_id.replace(snapshot.id.clone());
         let mut keep: Vec<&str> = vec![&snapshot.id];
         if let Some(ref old_id) = old_current {
             keep.push(old_id.as_str());
         }
-        gc_snapshots(&snapshots_dir, &keep)?;
+        Self::gc(&snapshots_dir, &keep)?;
 
         Ok(())
     }
-}
 
-fn snapshot_id() -> String {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{:010x}-{:08x}", d.as_secs(), d.subsec_nanos())
-}
-
-fn read_current(path: &Path) -> crate::Result<String> {
-    let raw = std::fs::read_to_string(path)?;
-    Ok(raw.trim().to_string())
-}
-
-fn write_atomic(path: &Path, contents: &str) -> crate::Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
-
-fn gc_snapshots(snapshots_dir: &Path, keep: &[&str]) -> crate::Result<()> {
-    let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
-        return Ok(());
-    };
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with("tmp-") || !keep.iter().any(|k| *k == name_str.as_ref()) {
-            let _ = std::fs::remove_dir_all(entry.path());
+    /// Recursively copy all contents from `src` into `dst`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any file or directory cannot be read or written.
+    pub(crate) fn copy_dir(src: &Path, dst: &Path) -> crate::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            let dest_path = dst.join(entry.file_name());
+            if ft.is_dir() {
+                Self::copy_dir(&entry.path(), &dest_path)?;
+            } else {
+                std::fs::copy(entry.path(), &dest_path)?;
+            }
         }
+        Ok(())
     }
-    Ok(())
-}
 
-/// Recursively copy all contents from `src` into `dst`.
-///
-/// # Errors
-///
-/// Returns an error if any file or directory cannot be read or written.
-pub fn copy_dir_contents(src: &Path, dst: &Path) -> crate::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ft = entry.file_type()?;
-        let dest_path = dst.join(entry.file_name());
-        if ft.is_dir() {
-            copy_dir_contents(&entry.path(), &dest_path)?;
-        } else {
-            std::fs::copy(entry.path(), &dest_path)?;
-        }
+    fn generate_id() -> String {
+        let d = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        format!("{:010x}-{:08x}", d.as_secs(), d.subsec_nanos())
     }
-    Ok(())
+
+    fn read_current(path: &Path) -> crate::Result<String> {
+        let raw = std::fs::read_to_string(path)?;
+        Ok(raw.trim().to_string())
+    }
+
+    fn write_atomic(path: &Path, contents: &str) -> crate::Result<()> {
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, contents)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    fn gc(snapshots_dir: &Path, keep: &[&str]) -> crate::Result<()> {
+        let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
+            return Ok(());
+        };
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("tmp-") || !keep.iter().any(|k| *k == name_str.as_ref()) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -225,7 +225,7 @@ mod tests {
         std::fs::create_dir_all(snapshots_dir.join("tmp-stale")).expect("create stale tmp");
         std::fs::create_dir_all(snapshots_dir.join("0000000000000001")).expect("create snapshot");
 
-        gc_snapshots(&snapshots_dir, &["0000000000000001"]).expect("gc");
+        SnapshotStore::gc(&snapshots_dir, &["0000000000000001"]).expect("gc");
 
         assert!(!snapshots_dir.join("tmp-stale").exists());
         assert!(snapshots_dir.join("0000000000000001").exists());

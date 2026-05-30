@@ -283,16 +283,14 @@ impl Cli {
         let filter_config =
             self.build_filter_config(filter, ctx.prefixes.clone(), ctx.exclude_paths.clone())?;
         let search_filter = CandidateFilter::new(&filter_config, &ctx.filter_root)?;
-        let outcome = sift_core::grep::run(
-            query,
-            &sift_core::grep::GrepRequest {
-                indexes,
-                filter: &search_filter,
-                output: *output,
-                separators: &out.separators,
-                collect_stats: out.print_stats,
-            },
-        )?;
+        let outcome = sift_core::grep::GrepRequest {
+            indexes,
+            filter: &search_filter,
+            output: *output,
+            separators: &out.separators,
+            collect_stats: out.print_stats,
+        }
+        .run(query)?;
         if let Some(s) = &outcome.stats {
             write_search_stats(s);
         }

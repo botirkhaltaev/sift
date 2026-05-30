@@ -1,11 +1,11 @@
 //! Grep-style search execution, filtering, and output-mode benchmarks.
 //!
-//! Exercises the public `grep::run` pipeline.
+//! Exercises the public `GrepRequest::run` pipeline.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::grep::{GrepRequest, run as grep_run};
+use sift_core::grep::GrepRequest;
 use sift_core::{
     Index, Indexes, SearchMatchFlags, SearchMode, SearchOptions, SearchQuery, TrigramIndex,
 };
@@ -41,16 +41,14 @@ fn bench_indexed_search(c: &mut Criterion) {
         let query: SearchQuery = common::make_search(&["beta"], SearchOptions::default());
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -61,16 +59,14 @@ fn bench_indexed_search(c: &mut Criterion) {
         let query: SearchQuery = common::make_search(&["[A-Z]+_RESUME"], SearchOptions::default());
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -84,16 +80,14 @@ fn bench_indexed_search(c: &mut Criterion) {
         );
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -110,16 +104,14 @@ fn bench_indexed_search(c: &mut Criterion) {
         );
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -133,16 +125,14 @@ fn bench_indexed_search(c: &mut Criterion) {
         );
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -159,16 +149,14 @@ fn bench_indexed_search(c: &mut Criterion) {
         );
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -179,16 +167,14 @@ fn bench_indexed_search(c: &mut Criterion) {
         let query: SearchQuery = common::make_search(&["beta"], SearchOptions::default());
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: true,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: true,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -214,16 +200,14 @@ fn bench_walk_search(c: &mut Criterion) {
         let query: SearchQuery = common::make_search(&["beta"], SearchOptions::default());
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -234,16 +218,14 @@ fn bench_walk_search(c: &mut Criterion) {
         let query: SearchQuery = common::make_search(&[".*"], SearchOptions::default());
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Standard),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Standard),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -266,16 +248,14 @@ fn bench_output_modes(c: &mut Criterion) {
     g.bench_function("count", |b| {
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::Count),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::Count),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -285,16 +265,14 @@ fn bench_output_modes(c: &mut Criterion) {
     g.bench_function("files_with_matches", |b| {
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::FilesWithMatches),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::FilesWithMatches),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );
@@ -304,16 +282,14 @@ fn bench_output_modes(c: &mut Criterion) {
     g.bench_function("files_without_match", |b| {
         b.iter(|| {
             black_box(
-                grep_run(
-                    &query,
-                    &GrepRequest {
-                        indexes: &indexes,
-                        filter: &filter,
-                        output: common::output_quiet(SearchMode::FilesWithoutMatch),
-                        separators: &common::default_seps(),
-                        collect_stats: false,
-                    },
-                )
+                GrepRequest {
+                    indexes: &indexes,
+                    filter: &filter,
+                    output: common::output_quiet(SearchMode::FilesWithoutMatch),
+                    separators: &common::default_seps(),
+                    collect_stats: false,
+                }
+                .run(&query)
                 .unwrap()
                 .matched,
             );

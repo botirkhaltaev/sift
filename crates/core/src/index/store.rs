@@ -139,7 +139,7 @@ impl IndexStore {
             if !did_change {
                 let src = current_dir.join(kind.as_str());
                 if src.exists() {
-                    snapshot::copy_dir_contents(&src, &snapshot.dir().join(kind.as_str()))?;
+                    snapshot::SnapshotStore::copy_dir(&src, &snapshot.dir().join(kind.as_str()))?;
                 }
             }
         }
