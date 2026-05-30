@@ -70,8 +70,11 @@ impl TrigramSet {
 
     /// Extract sorted unique trigrams from a file on disk.
     pub(crate) fn from_file(path: &Path) -> std::io::Result<Self> {
-        let mmap = mmap_open(path)?;
-        Ok(Self::from_bytes(mmap.as_ref()))
+        // Trigram extraction scans the file exactly once, sequentially, so a
+        // plain read into a buffer is cheaper than a memory map: it avoids the
+        // per-file `mmap`/`munmap` syscalls and lazy page-fault overhead that
+        // bring no benefit without reuse or random access.
+        Ok(Self::from_bytes(&std::fs::read(path)?))
     }
 
     pub fn as_slice(&self) -> &[Trigram] {
