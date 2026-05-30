@@ -1,12 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use super::snapshot::{
-    OnDiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotStore,
+    OnDiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotRead, SnapshotStore,
     SnapshotWrite, SnapshotWriterSession,
 };
 use super::{CorpusKind, IndexError};
-
-const MANIFEST_FILE: &str = "manifest.json";
 
 /// Index lifecycle orchestrator backed by a [`SnapshotStore`] for atomic
 /// persistence and coordination.
@@ -70,108 +68,6 @@ impl IndexStore<OnDiskSnapshotStore> {
     }
 
     // ------------------------------------------------------------------
-    // Write path
-    // ------------------------------------------------------------------
-
-    /// Build a new snapshot using the given index kinds.
-    ///
-    /// Acquires the writer lock, reloads snapshot state, then builds and
-    /// publishes the snapshot.
-    ///
-    /// Returns the snapshot id.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the write lock cannot be acquired, the index build
-    /// fails, the manifest cannot be written, or snapshot commit fails.
-    pub fn build(
-        &mut self,
-        kinds: &[super::IndexKind],
-        config: &super::IndexConfig<'_>,
-    ) -> crate::Result<String> {
-        let mut writer = self.snapshots.writer()?;
-        let txn = writer.begin()?;
-
-        for kind in kinds {
-            let index_dir = txn.dir().join(kind.as_str());
-            std::fs::create_dir_all(&index_dir)?;
-            kind.build(config, &index_dir)?;
-        }
-
-        let manifest = SnapshotManifest {
-            id: txn.id().clone(),
-            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
-        };
-        let id = writer.publish(txn, manifest)?;
-        Ok(id.to_string())
-    }
-
-    /// Update the current snapshot, rebuilding only indexes whose corpus
-    /// changed.
-    ///
-    /// Acquires the writer lock, reloads snapshot state, then checks for
-    /// changes and publishes a new snapshot if needed.
-    ///
-    /// Returns the snapshot id if a new snapshot was published, or `None` if
-    /// no index changed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the write lock cannot be acquired, the current
-    /// snapshot cannot be opened, the update check fails, or publishing fails.
-    pub fn update(
-        &mut self,
-        kinds: &[super::IndexKind],
-        config: &super::IndexConfig<'_>,
-    ) -> crate::Result<Option<String>> {
-        let mut writer = self.snapshots.writer()?;
-
-        let Some(current) = writer.current()? else {
-            // No current snapshot — build from scratch.
-            let txn = writer.begin()?;
-            for kind in kinds {
-                let index_dir = txn.dir().join(kind.as_str());
-                std::fs::create_dir_all(&index_dir)?;
-                kind.build(config, &index_dir)?;
-            }
-            let manifest = SnapshotManifest {
-                id: txn.id().clone(),
-                indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
-            };
-            let id = writer.publish(txn, manifest)?;
-            return Ok(Some(id.to_string()));
-        };
-
-        let current_dir = current.dir().to_path_buf();
-        let txn = writer.begin()?;
-
-        let changed: Vec<bool> = kinds
-            .iter()
-            .map(|kind| kind.update(&current_dir, config, &txn.dir().join(kind.as_str())))
-            .collect::<crate::Result<_>>()?;
-
-        if !changed.iter().any(|&c| c) {
-            return Ok(None);
-        }
-
-        for (kind, did_change) in kinds.iter().zip(&changed) {
-            if !did_change {
-                let src = current_dir.join(kind.as_str());
-                if src.exists() {
-                    OnDiskSnapshotStore::copy_dir(&src, &txn.dir().join(kind.as_str()))?;
-                }
-            }
-        }
-
-        let manifest = SnapshotManifest {
-            id: txn.id().clone(),
-            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
-        };
-        let id = writer.publish(txn, manifest)?;
-        Ok(Some(id.to_string()))
-    }
-
-    // ------------------------------------------------------------------
     // Read path
     // ------------------------------------------------------------------
 
@@ -191,17 +87,14 @@ impl IndexStore<OnDiskSnapshotStore> {
                 return Ok(super::snapshot::Snapshot::empty(PathBuf::new()));
             };
 
-            let meta = match self.meta {
-                Some(ref m) => m,
-                None => {
-                    return Err(crate::Error::Index(IndexError::Io {
-                        path: self.sift_dir.join("sift.meta"),
-                        source: std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "store metadata not found",
-                        ),
-                    }));
-                }
+            let Some(ref meta) = self.meta else {
+                return Err(crate::Error::Index(IndexError::Io {
+                    path: self.sift_dir.join("sift.meta"),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "store metadata not found",
+                    ),
+                }));
             };
             let root = meta.root.clone();
             let corpus_kind = meta.corpus_kind;
@@ -225,21 +118,24 @@ impl IndexStore<OnDiskSnapshotStore> {
                 Err(e) => return Err(crate::Error::Io(e)),
             };
 
-            let manifest: SnapshotManifest =
-                serde_json::from_str(&manifest_raw).map_err(|e| {
-                    crate::Error::Index(IndexError::InvalidManifest {
-                        path: manifest_path.clone(),
-                        source: e,
-                    })
-                })?;
+            let manifest: SnapshotManifest = serde_json::from_str(&manifest_raw).map_err(|e| {
+                crate::Error::Index(IndexError::InvalidManifest {
+                    path: manifest_path.clone(),
+                    source: e,
+                })
+            })?;
 
             let mut indexes = Vec::new();
             for name in &manifest.indexes {
-                let kind: super::IndexKind = name.parse().map_err(|_| {
-                    crate::Error::Index(IndexError::UnknownIndexKind(name.clone()))
-                })?;
+                let kind: super::IndexKind = name
+                    .parse()
+                    .map_err(|_| crate::Error::Index(IndexError::UnknownIndexKind(name.clone())))?;
                 let index_dir = snap_dir.join(name);
-                indexes.push(kind.open_from_dir(&index_dir, &root, corpus_kind)?);
+                indexes.push(kind.open(
+                    super::IndexSource::Directory(&index_dir),
+                    &root,
+                    corpus_kind,
+                )?);
             }
 
             return Ok(super::snapshot::Snapshot::current(root, indexes, lease));
@@ -250,24 +146,138 @@ impl IndexStore<OnDiskSnapshotStore> {
             "snapshot disappeared during open",
         )))
     }
-
-    // ------------------------------------------------------------------
-    // Internals
-    // ------------------------------------------------------------------
-
-    /// Acquire the exclusive writer lock for this store.
-    ///
-    /// The lock lives at `<sift_dir>/write.lock` and is released when the
-    /// returned guard is dropped.
-    fn acquire_write_lock(&self) -> crate::Result<WriteLockGuard> {
-        acquire_write_lock(&self.sift_dir)
-    }
 }
+
+// ------------------------------------------------------------------
+// Generic impl (works for any SnapshotStore)
+// ------------------------------------------------------------------
 
 impl<S: SnapshotStore> IndexStore<S> {
     #[must_use]
     pub fn current_id(&self) -> Option<&str> {
         self.snapshots.current_id().map(SnapshotId::as_str)
+    }
+
+    // ------------------------------------------------------------------
+    // Write path
+    // ------------------------------------------------------------------
+
+    /// Build a new snapshot using the given index kinds.
+    ///
+    /// Acquires the writer session, builds each index kind as artifacts, and
+    /// publishes the snapshot.
+    ///
+    /// Returns the snapshot id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the writer session cannot be acquired, the index
+    /// build fails, or publishing fails.
+    pub fn build(
+        &mut self,
+        kinds: &[super::IndexKind],
+        config: &super::IndexConfig<'_>,
+    ) -> crate::Result<String> {
+        let mut writer = self.snapshots.writer()?;
+        let mut txn = writer.begin()?;
+
+        for kind in kinds {
+            kind.build(
+                config,
+                super::IndexDestination::Snapshot {
+                    writer: &mut txn,
+                    namespace: kind.as_str(),
+                },
+            )?;
+        }
+
+        let manifest = SnapshotManifest {
+            id: txn.id().clone(),
+            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+        };
+        let id = writer.publish(txn, manifest)?;
+        Ok(id.to_string())
+    }
+
+    /// Update the current snapshot, rebuilding only indexes whose corpus
+    /// changed.
+    ///
+    /// Acquires the writer session, checks for changes, copies unchanged
+    /// artifacts from the current snapshot, and publishes a new one.
+    ///
+    /// Returns the snapshot id if a new snapshot was published, or `None` if
+    /// no index changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the writer session cannot be acquired, the current
+    /// snapshot cannot be opened, the update check fails, or publishing fails.
+    pub fn update(
+        &mut self,
+        kinds: &[super::IndexKind],
+        config: &super::IndexConfig<'_>,
+    ) -> crate::Result<Option<String>> {
+        let mut writer = self.snapshots.writer()?;
+
+        let Some(current) = writer.current()? else {
+            // No current snapshot — build from scratch.
+            let mut txn = writer.begin()?;
+            for kind in kinds {
+                kind.build(
+                    config,
+                    super::IndexDestination::Snapshot {
+                        writer: &mut txn,
+                        namespace: kind.as_str(),
+                    },
+                )?;
+            }
+            let manifest = SnapshotManifest {
+                id: txn.id().clone(),
+                indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+            };
+            let id = writer.publish(txn, manifest)?;
+            return Ok(Some(id.to_string()));
+        };
+
+        let mut txn = writer.begin()?;
+
+        let changed: Vec<bool> = kinds
+            .iter()
+            .map(|kind| {
+                kind.update(
+                    super::IndexSource::Snapshot {
+                        reader: &current as &dyn super::snapshot::SnapshotRead,
+                        namespace: kind.as_str(),
+                    },
+                    config,
+                    super::IndexDestination::Snapshot {
+                        writer: &mut txn,
+                        namespace: kind.as_str(),
+                    },
+                )
+            })
+            .collect::<crate::Result<_>>()?;
+
+        if !changed.iter().any(|&c| c) {
+            return Ok(None);
+        }
+
+        for (kind, did_change) in kinds.iter().zip(&changed) {
+            if !did_change {
+                for artifact_name in kind.artifact_names() {
+                    let data = current.artifact(kind.as_str(), artifact_name)?;
+                    let bytes = data.as_ref().to_vec();
+                    txn.put_artifact(kind.as_str(), artifact_name, bytes)?;
+                }
+            }
+        }
+
+        let manifest = SnapshotManifest {
+            id: txn.id().clone(),
+            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+        };
+        let id = writer.publish(txn, manifest)?;
+        Ok(Some(id.to_string()))
     }
 }
 fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {
@@ -290,6 +300,8 @@ mod tests {
     use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
+
+    const MANIFEST_FILE: &str = "manifest.json";
 
     #[test]
     fn build_creates_store_layout() {
@@ -327,7 +339,7 @@ mod tests {
         assert!(StoreMeta::path(&sift_dir).exists());
 
         let id = store.current_id().expect("has current id");
-        let snapshot_dir = store.snapshot_dir(&id);
+        let snapshot_dir = store.snapshot_dir(id);
         assert!(snapshot_dir.exists());
         assert!(snapshot_dir.join(MANIFEST_FILE).exists());
         assert!(snapshot_dir.join("trigram").exists());

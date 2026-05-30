@@ -37,12 +37,12 @@ impl Postings {
         Ok(Self { data, payload_len })
     }
 
-    /// Write a postings file and return an mmap-backed instance.
+    /// Encode a postings payload into bytes (magic + length prefix + payload).
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be written or reopened.
-    pub fn create(path: &Path, payload: &[u8]) -> std::io::Result<Self> {
+    /// Returns an error if the payload length exceeds `u32::MAX`.
+    pub fn encode(payload: &[u8]) -> std::io::Result<Vec<u8>> {
         let mut data = Vec::with_capacity(POSTINGS_MAGIC.len() + 4 + payload.len());
         data.extend_from_slice(&POSTINGS_MAGIC);
         let plen = u32::try_from(payload.len()).map_err(|_| {
@@ -53,6 +53,16 @@ impl Postings {
         })?;
         data.extend_from_slice(&plen.to_le_bytes());
         data.extend_from_slice(payload);
+        Ok(data)
+    }
+
+    /// Write a postings file and return an mmap-backed instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written or reopened.
+    pub fn create(path: &Path, payload: &[u8]) -> std::io::Result<Self> {
+        let data = Self::encode(payload)?;
         std::fs::write(path, &data)?;
         Self::open(path)
     }

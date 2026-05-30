@@ -163,7 +163,8 @@ pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
         },
         visibility: VisibilityConfig::default(),
     };
-    TrigramIndex::build(&config, idx_dir).unwrap()
+    TrigramIndex::build(&config, idx_dir).unwrap();
+    TrigramIndex::open(idx_dir, root, kind).unwrap()
 }
 
 pub fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> TrigramIndex {

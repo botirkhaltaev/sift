@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::config::{CorpusKind, IndexConfig};
 use super::trigram;
+use super::{IndexDestination, IndexSource};
 
 /// How an index query plan resolves candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -38,42 +39,72 @@ impl IndexKind {
         }
     }
 
-    pub(crate) fn build(self, config: &IndexConfig<'_>, output_dir: &Path) -> crate::Result<()> {
+    /// Return the artifact file names that this index kind produces.
+    #[must_use]
+    pub(crate) const fn artifact_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Trigram => &[
+                crate::FILES_BIN,
+                crate::LEXICON_BIN,
+                crate::POSTINGS_BIN,
+                crate::TRIGRAMS_BIN,
+            ],
+        }
+    }
+
+    /// Build this index kind into the given destination.
+    pub(crate) fn build(
+        self,
+        config: &IndexConfig<'_>,
+        dest: IndexDestination,
+    ) -> crate::Result<()> {
         match self {
             Self::Trigram => {
-                trigram::TrigramIndex::build(config, output_dir)?;
+                let tables = trigram::builder::IndexTables::build(config)?;
+                let root = config.corpus.root.canonicalize()?;
+                trigram::TrigramIndex::persist_tables(&tables, &root, config.corpus.kind, dest)?;
                 Ok(())
             }
         }
     }
 
-    pub(crate) fn open_from_dir(
+    /// Open this index kind from the given source.
+    pub(crate) fn open(
         self,
-        index_dir: &Path,
+        source: IndexSource,
         root: &Path,
         corpus_kind: CorpusKind,
     ) -> crate::Result<Index> {
         match self {
-            Self::Trigram => Ok(Index::Trigram(trigram::TrigramIndex::open(
-                index_dir,
+            Self::Trigram => Ok(Index::Trigram(trigram::TrigramIndex::open_tables(
+                source,
                 root,
                 corpus_kind,
             )?)),
         }
     }
 
-    /// Returns `true` if a new index was written.
+    /// Update this index kind from the current snapshot, writing to `dest`.
+    ///
+    /// Returns `true` if a new index was written. If the index kind is not
+    /// present in the current snapshot, it is built from scratch.
     pub(crate) fn update(
         self,
-        snapshot_dir: &Path,
+        current: IndexSource,
         config: &IndexConfig<'_>,
-        output_dir: &Path,
+        dest: IndexDestination,
     ) -> crate::Result<bool> {
-        let existing_dir = snapshot_dir.join(self.as_str());
-        if !existing_dir.exists() {
-            self.build(config, output_dir)?;
+        let is_present = match &current {
+            IndexSource::Directory(dir) => dir.exists(),
+            IndexSource::Snapshot { reader, namespace } => {
+                reader.manifest().indexes.iter().any(|n| n == *namespace)
+            }
+        };
+        if !is_present {
+            self.build(config, dest)?;
             return Ok(true);
         }
+
         let root = config
             .corpus
             .root
@@ -82,8 +113,9 @@ impl IndexKind {
         match self {
             Self::Trigram => {
                 let existing =
-                    trigram::TrigramIndex::open(&existing_dir, &root, config.corpus.kind)?;
-                Ok(existing.update(config, output_dir)?.is_some())
+                    trigram::TrigramIndex::open_tables(current, &root, config.corpus.kind)?;
+                let output = existing.rebuild(config, dest)?;
+                Ok(output.is_some())
             }
         }
     }

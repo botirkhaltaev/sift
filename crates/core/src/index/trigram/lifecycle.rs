@@ -1,16 +1,20 @@
 use std::path::Path;
 
-use crate::index::{CorpusKind, IndexConfig};
+use crate::index::snapshot::ArtifactData;
+use crate::index::{CorpusKind, IndexConfig, IndexDestination, IndexSource};
 
 use super::TrigramIndex;
 use super::TrigramIndexError;
 use super::builder::IndexTables;
 use super::file_table::{FileFingerprint, FileTable};
 use super::storage;
+use super::storage::lexicon::Lexicon;
+use super::storage::postings::Postings;
+use super::storage::trigram_sets::TrigramSets;
 
 impl TrigramIndex {
     /// Write tables to `dir` as persistence files and return an mmap-backed index.
-    pub(crate) fn create_in_dir(
+    fn create_in_dir(
         tables: &IndexTables,
         root: &Path,
         corpus_kind: CorpusKind,
@@ -63,15 +67,82 @@ impl TrigramIndex {
         })
     }
 
-    /// Build a new trigram index from the corpus described in `config`.
+    /// Build a new trigram index from the corpus described in `config`,
+    /// writing artifact files into `output_dir`.
     ///
     /// # Errors
     ///
-    /// Returns an error if corpus walking, extraction, or file I/O fails.
+    /// Returns an error if corpus walking, extraction, or encoding fails.
     pub fn build(config: &IndexConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
         let tables = IndexTables::build(config)?;
         let root = config.corpus.root.canonicalize()?;
-        Self::create_in_dir(&tables, &root, config.corpus.kind, output_dir)
+        Self::persist_tables(
+            &tables,
+            &root,
+            config.corpus.kind,
+            IndexDestination::Directory(output_dir),
+        )
+    }
+
+    /// Encode and store tables at the given destination, returning a live index.
+    pub(crate) fn persist_tables(
+        tables: &IndexTables,
+        root: &Path,
+        corpus_kind: CorpusKind,
+        dest: IndexDestination,
+    ) -> crate::Result<Self> {
+        match dest {
+            IndexDestination::Directory(dir) => Self::create_in_dir(tables, root, corpus_kind, dir),
+            IndexDestination::Snapshot { writer, namespace } => {
+                let ((fr, lr), (pr, tr)) = rayon::join(
+                    || {
+                        rayon::join(
+                            || FileTable::encode(&tables.fingerprints),
+                            || Lexicon::encode(&tables.lexicon),
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || Postings::encode(&tables.postings),
+                            || TrigramSets::encode(&tables.file_trigrams),
+                        )
+                    },
+                );
+
+                let files_bytes = fr.map_err(crate::Error::Io)?;
+                let lexicon_bytes = lr.map_err(crate::Error::Io)?;
+                let postings_bytes = pr.map_err(crate::Error::Io)?;
+                let trigram_sets_bytes = tr.map_err(crate::Error::Io)?;
+
+                let files =
+                    FileTable::from_artifact(ArtifactData::Memory(files_bytes.clone().into()))?;
+                let lexicon =
+                    Lexicon::from_artifact(ArtifactData::Memory(lexicon_bytes.clone().into()))?;
+                let postings =
+                    Postings::from_artifact(ArtifactData::Memory(postings_bytes.clone().into()))?;
+                let trigram_sets = TrigramSets::from_artifact(ArtifactData::Memory(
+                    trigram_sets_bytes.clone().into(),
+                ))?;
+
+                writer.put_artifact(namespace, crate::FILES_BIN, files_bytes)?;
+                writer.put_artifact(namespace, crate::LEXICON_BIN, lexicon_bytes)?;
+                writer.put_artifact(namespace, crate::POSTINGS_BIN, postings_bytes)?;
+                writer.put_artifact(namespace, crate::TRIGRAMS_BIN, trigram_sets_bytes)?;
+
+                let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
+                Self::validate_file_paths(&fingerprints, Path::new(""))?;
+                Self::validate_lexicon_postings(&lexicon, &postings)?;
+
+                Ok(Self {
+                    root: root.to_path_buf(),
+                    fingerprints,
+                    trigram_sets,
+                    lexicon,
+                    postings,
+                    corpus_kind,
+                })
+            }
+        }
     }
 
     /// Open a previously persisted trigram index from `index_dir`.
@@ -80,22 +151,31 @@ impl TrigramIndex {
     ///
     /// Returns an error if persistence files are missing or malformed.
     pub fn open(index_dir: &Path, root: &Path, corpus_kind: CorpusKind) -> crate::Result<Self> {
-        Ok(Self::open_tables(index_dir, root, corpus_kind)?)
+        Self::open_tables(IndexSource::Directory(index_dir), root, corpus_kind)
     }
 
-    /// Update the index from the current corpus, reusing per-file trigram sets
-    /// for unchanged files.
+    /// Update the index from the current corpus, writing artifact files
+    /// into `output_dir`.
     ///
-    /// Returns `Ok(Some(index))` if a new snapshot was written, or `Ok(None)`
+    /// Returns `Ok(Some(index))` if a new index was written, or `Ok(None)`
     /// if no files changed.
     ///
     /// # Errors
     ///
-    /// Returns an error if corpus walking, extraction, or file I/O fails.
+    /// Returns an error if corpus walking, extraction, or encoding fails.
     pub fn update(
         &self,
         config: &IndexConfig<'_>,
         output_dir: &Path,
+    ) -> crate::Result<Option<Self>> {
+        self.rebuild(config, IndexDestination::Directory(output_dir))
+    }
+
+    /// Rebuild index tables for changed files and persist to `dest`.
+    pub(crate) fn rebuild(
+        &self,
+        config: &IndexConfig<'_>,
+        dest: IndexDestination,
     ) -> crate::Result<Option<Self>> {
         use rayon::prelude::*;
         use std::collections::HashMap;
@@ -140,48 +220,82 @@ impl TrigramIndex {
         };
 
         let root = config.corpus.root.canonicalize()?;
-        let index = Self::create_in_dir(&tables, &root, config.corpus.kind, output_dir)?;
+        let index = Self::persist_tables(&tables, &root, config.corpus.kind, dest)?;
         Ok(Some(index))
     }
 
+    /// Open index tables from a storage source (directory or snapshot).
     pub(crate) fn open_tables(
-        dir: &Path,
+        source: IndexSource,
         root: &Path,
         corpus_kind: CorpusKind,
-    ) -> Result<Self, TrigramIndexError> {
-        let files_path = dir.join(crate::FILES_BIN);
-        let lexicon_path = dir.join(crate::LEXICON_BIN);
-        let postings_path = dir.join(crate::POSTINGS_BIN);
-        let trigrams_path = dir.join(crate::TRIGRAMS_BIN);
+    ) -> crate::Result<Self> {
+        match source {
+            IndexSource::Directory(dir) => {
+                let files_path = dir.join(crate::FILES_BIN);
+                let lexicon_path = dir.join(crate::LEXICON_BIN);
+                let postings_path = dir.join(crate::POSTINGS_BIN);
+                let trigrams_path = dir.join(crate::TRIGRAMS_BIN);
 
-        for p in [&files_path, &lexicon_path, &postings_path, &trigrams_path] {
-            if !p.is_file() {
-                return Err(TrigramIndexError::MissingComponent(p.clone()));
+                for p in [&files_path, &lexicon_path, &postings_path, &trigrams_path] {
+                    if !p.is_file() {
+                        return Err(TrigramIndexError::MissingComponent(p.clone()).into());
+                    }
+                }
+
+                let files = FileTable::open(&files_path).map_err(TrigramIndexError::Io)?;
+                let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
+                Self::validate_file_paths(&fingerprints, &files_path)?;
+
+                let lexicon = storage::lexicon::Lexicon::open(&lexicon_path)
+                    .map_err(TrigramIndexError::Io)?;
+                let postings = storage::postings::Postings::open(&postings_path)
+                    .map_err(TrigramIndexError::Io)?;
+
+                Self::validate_lexicon_postings(&lexicon, &postings)?;
+
+                let trigram_sets = storage::trigram_sets::TrigramSets::open(&trigrams_path)
+                    .map_err(TrigramIndexError::Io)?;
+
+                Ok(Self {
+                    root: root.to_path_buf(),
+                    fingerprints,
+                    trigram_sets,
+                    lexicon,
+                    postings,
+                    corpus_kind,
+                })
+            }
+            IndexSource::Snapshot { reader, namespace } => {
+                let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
+                let files = FileTable::from_artifact(files_data).map_err(TrigramIndexError::Io)?;
+                let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
+                Self::validate_file_paths(&fingerprints, Path::new(""))?;
+
+                let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
+                let lexicon =
+                    Lexicon::from_artifact(lexicon_data).map_err(TrigramIndexError::Io)?;
+
+                let postings_data = reader.artifact(namespace, crate::POSTINGS_BIN)?;
+                let postings =
+                    Postings::from_artifact(postings_data).map_err(TrigramIndexError::Io)?;
+
+                Self::validate_lexicon_postings(&lexicon, &postings)?;
+
+                let trigram_sets_data = reader.artifact(namespace, crate::TRIGRAMS_BIN)?;
+                let trigram_sets =
+                    TrigramSets::from_artifact(trigram_sets_data).map_err(TrigramIndexError::Io)?;
+
+                Ok(Self {
+                    root: root.to_path_buf(),
+                    fingerprints,
+                    trigram_sets,
+                    lexicon,
+                    postings,
+                    corpus_kind,
+                })
             }
         }
-
-        let files = FileTable::open(&files_path).map_err(TrigramIndexError::Io)?;
-        let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
-        Self::validate_file_paths(&fingerprints, &files_path)?;
-
-        let lexicon =
-            storage::lexicon::Lexicon::open(&lexicon_path).map_err(TrigramIndexError::Io)?;
-        let postings =
-            storage::postings::Postings::open(&postings_path).map_err(TrigramIndexError::Io)?;
-
-        Self::validate_lexicon_postings(&lexicon, &postings)?;
-
-        let trigram_sets = storage::trigram_sets::TrigramSets::open(&trigrams_path)
-            .map_err(TrigramIndexError::Io)?;
-
-        Ok(Self {
-            root: root.to_path_buf(),
-            fingerprints,
-            trigram_sets,
-            lexicon,
-            postings,
-            corpus_kind,
-        })
     }
 
     fn validate_lexicon_postings(

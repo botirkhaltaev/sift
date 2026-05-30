@@ -62,6 +62,10 @@ parallel variants when the new function is the old function plus one extra
 feature, mode, lock, flag, or parameter. This creates duplicate execution paths
 and weakens the domain model.
 
+If a different signature is needed, prefer adding optional parameters or
+grouping related params into a struct with optional fields over creating
+a new variant function.
+
 If behavior gains another input or mode:
 - Evolve the original function body so it owns the concept.
 - Introduce a domain type that represents the concept.
@@ -79,9 +83,37 @@ Examples of **good** names that describe the domain action:
 - `resolve_candidates` (it looks up matching files)
 - `build_index_metadata`
 
+When a lifecycle function needs to write to either a directory or a
+snapshot store, use a domain enum instead of `*_to_dir` / `*_into` variants:
+
+```rust
+// Do this:
+pub fn build(config: &IndexConfig<'_>, dest: IndexDestination) -> Result<Self>;
+
+// NOT this (parallel variants):
+fn build(config, output_dir) -> Result;     // directory
+fn build_into(config, writer, ns) -> Result; // snapshot
+```
+
 Small local helpers are acceptable only when they remove duplication inside one
 function or one orchestration path, and their name describes what they do, not
 how they differ from an alternate path.
+
+## IndexSource / IndexDestination
+
+TrigramIndex lifecycle functions (`build`, `open`, `update`) and IndexKind
+lifecycle functions (`build`, `open`, `update`) use `IndexSource` and
+`IndexDestination` domain types instead of parallel variants:
+
+- `IndexSource` — describes where index data is read from:
+  `Directory(&Path)` or `Snapshot { reader, namespace }`.
+- `IndexDestination` — describes where index data is written to:
+  `Directory(&Path)` or `Snapshot { writer, namespace }`.
+
+Each function dispatches internally on the enum variant. See
+`crates/core/src/index/mod.rs` for the type definitions,
+`crates/core/src/index/trigram/lifecycle.rs` for the TrigramIndex lifecycle,
+and `crates/core/src/index/kinds.rs` for IndexKind dispatch.
 
 ## Do NOT
 

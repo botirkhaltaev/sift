@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -18,7 +17,7 @@ const CURRENT_FILE: &str = "CURRENT";
 pub struct SnapshotId(String);
 
 impl SnapshotId {
-    pub fn new(id: String) -> Self {
+    pub const fn new(id: String) -> Self {
         Self(id)
     }
 
@@ -74,8 +73,7 @@ pub trait SnapshotRead {
 /// A writable snapshot transaction that accepts named byte artifacts.
 pub trait SnapshotWrite {
     fn id(&self) -> &SnapshotId;
-    fn put_artifact(&mut self, namespace: &str, name: &str, bytes: Vec<u8>)
-        -> crate::Result<()>;
+    fn put_artifact(&mut self, namespace: &str, name: &str, bytes: Vec<u8>) -> crate::Result<()>;
 }
 
 /// A scoped writer session that serialises access to the snapshot store.
@@ -116,7 +114,7 @@ pub trait SnapshotStore {
 // ---------------------------------------------------------------------------
 
 /// A lease that prevents a snapshot from being garbage-collected.
-pub(crate) enum SnapshotLease {
+pub enum SnapshotLease {
     File { path: PathBuf },
     InMemory,
 }
@@ -136,10 +134,6 @@ impl SnapshotLease {
         std::fs::write(&tmp_path, snapshot_id)?;
         std::fs::rename(&tmp_path, &lease_path)?;
         Ok(Self::File { path: lease_path })
-    }
-
-    pub(super) const fn in_memory() -> Self {
-        Self::InMemory
     }
 }
 
@@ -266,11 +260,6 @@ impl OnDiskSnapshotStore {
         }
     }
 
-    /// Create a lease file for `snapshot_id` in the leases directory.
-    pub(crate) fn create_lease(&self, snapshot_id: &SnapshotId) -> crate::Result<SnapshotLease> {
-        SnapshotLease::create_file(&self.dir, snapshot_id.as_str())
-    }
-
     pub fn leases_dir(&self) -> PathBuf {
         self.dir.join(LEASES_DIR)
     }
@@ -361,33 +350,17 @@ impl OnDiskSnapshotStore {
         }
         Ok(())
     }
-
-    /// Recursively copy all contents from `src` into `dst`.
-    pub(crate) fn copy_dir(src: &Path, dst: &Path) -> crate::Result<()> {
-        std::fs::create_dir_all(dst)?;
-        for entry in std::fs::read_dir(src)? {
-            let entry = entry?;
-            let ft = entry.file_type()?;
-            let dest_path = dst.join(entry.file_name());
-            if ft.is_dir() {
-                Self::copy_dir(&entry.path(), &dest_path)?;
-            } else {
-                std::fs::copy(entry.path(), &dest_path)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 /// A writer session that holds the write lock for an [`OnDiskSnapshotStore`].
 pub struct OnDiskWriterSession<'a> {
     store: &'a mut OnDiskSnapshotStore,
-    lock: fslock::LockFile,
+    _lock: fslock::LockFile,
 }
 
 impl Drop for OnDiskWriterSession<'_> {
     fn drop(&mut self) {
-        // Lock is released when `lock` is dropped.
+        // Lock is released when `_lock` is dropped.
     }
 }
 
@@ -487,22 +460,11 @@ impl SnapshotWrite for OnDiskSnapshotWrite {
         &self.id
     }
 
-    fn put_artifact(
-        &mut self,
-        namespace: &str,
-        name: &str,
-        bytes: Vec<u8>,
-    ) -> crate::Result<()> {
+    fn put_artifact(&mut self, namespace: &str, name: &str, bytes: Vec<u8>) -> crate::Result<()> {
         let dir = self.dir.join(namespace);
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join(name), &bytes)?;
         Ok(())
-    }
-}
-
-impl OnDiskSnapshotWrite {
-    pub(crate) fn dir(&self) -> &Path {
-        &self.dir
     }
 }
 
@@ -522,12 +484,6 @@ pub struct OnDiskSnapshotRead {
     _lease: SnapshotLease,
 }
 
-impl OnDiskSnapshotRead {
-    pub(crate) fn dir(&self) -> &Path {
-        &self.dir
-    }
-}
-
 impl SnapshotRead for OnDiskSnapshotRead {
     fn id(&self) -> &SnapshotId {
         &self.id
@@ -542,7 +498,10 @@ impl SnapshotRead for OnDiskSnapshotRead {
         if !path.exists() {
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("artifact {namespace}/{name} not found in snapshot {}", self.id),
+                format!(
+                    "artifact {namespace}/{name} not found in snapshot {}",
+                    self.id
+                ),
             )));
         }
         let file = std::fs::File::open(&path)?;
@@ -603,186 +562,197 @@ impl SnapshotStore for OnDiskSnapshotStore {
         lock.lock()?;
         Ok(OnDiskWriterSession {
             store: self,
-            lock,
+            _lock: lock,
         })
     }
 }
 
 // ---------------------------------------------------------------------------
-// In-memory snapshot implementation
+// In-memory snapshot implementation (test-only)
 // ---------------------------------------------------------------------------
 
-/// Pure in-memory snapshot store with no filesystem access.
-pub struct InMemorySnapshotStore {
-    snapshots: BTreeMap<SnapshotId, InMemorySnapshotData>,
-    current_id: Option<SnapshotId>,
-    next_id: u64,
-}
+#[cfg(test)]
+pub mod in_memory {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
 
-struct InMemorySnapshotData {
-    manifest: SnapshotManifest,
-    artifacts: BTreeMap<String, BTreeMap<String, Arc<[u8]>>>,
-}
+    use super::{
+        ArtifactData, SnapshotId, SnapshotManifest, SnapshotRead, SnapshotStore, SnapshotWrite,
+        SnapshotWriterSession,
+    };
 
-impl InMemorySnapshotStore {
-    pub fn new() -> Self {
-        Self {
-            snapshots: BTreeMap::new(),
-            current_id: None,
-            next_id: 0,
+    /// Pure in-memory snapshot store with no filesystem access.
+    pub struct InMemorySnapshotStore {
+        snapshots: BTreeMap<SnapshotId, InMemorySnapshotData>,
+        current_id: Option<SnapshotId>,
+        next_id: u64,
+    }
+
+    struct InMemorySnapshotData {
+        manifest: SnapshotManifest,
+        artifacts: BTreeMap<String, BTreeMap<String, Arc<[u8]>>>,
+    }
+
+    impl InMemorySnapshotStore {
+        pub fn new() -> Self {
+            Self {
+                snapshots: BTreeMap::new(),
+                current_id: None,
+                next_id: 0,
+            }
         }
     }
-}
 
-impl Default for InMemorySnapshotStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Writer session for [`InMemorySnapshotStore`] (no-op locking).
-pub struct InMemoryWriterSession<'a> {
-    store: &'a mut InMemorySnapshotStore,
-}
-
-impl SnapshotWriterSession for InMemoryWriterSession<'_> {
-    type Read = InMemorySnapshotRead;
-    type Write = InMemorySnapshotWrite;
-
-    fn current_id(&self) -> Option<&SnapshotId> {
-        self.store.current_id.as_ref()
+    impl Default for InMemorySnapshotStore {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
-    fn current(&self) -> crate::Result<Option<Self::Read>> {
-        let Some(ref id) = self.store.current_id else {
-            return Ok(None);
-        };
-        let data = self.store.snapshots.get(id).ok_or_else(|| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "current snapshot missing from in-memory store",
-            ))
-        })?;
-        Ok(Some(InMemorySnapshotRead {
-            id: id.clone(),
-            manifest: data.manifest.clone(),
-            artifacts: data.artifacts.clone(),
-        }))
+    /// Writer session for [`InMemorySnapshotStore`] (no-op locking).
+    pub struct InMemoryWriterSession<'a> {
+        store: &'a mut InMemorySnapshotStore,
     }
 
-    fn begin(&mut self) -> crate::Result<Self::Write> {
-        let id_num = self.store.next_id;
-        self.store.next_id += 1;
-        let id = SnapshotId::new(format!("mem-{id_num:020x}"));
-        Ok(InMemorySnapshotWrite {
-            id,
-            artifacts: BTreeMap::new(),
-        })
+    impl SnapshotWriterSession for InMemoryWriterSession<'_> {
+        type Read = InMemorySnapshotRead;
+        type Write = InMemorySnapshotWrite;
+
+        fn current_id(&self) -> Option<&SnapshotId> {
+            self.store.current_id.as_ref()
+        }
+
+        fn current(&self) -> crate::Result<Option<Self::Read>> {
+            let Some(ref id) = self.store.current_id else {
+                return Ok(None);
+            };
+            let data = self.store.snapshots.get(id).ok_or_else(|| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "current snapshot missing from in-memory store",
+                ))
+            })?;
+            Ok(Some(InMemorySnapshotRead {
+                id: id.clone(),
+                manifest: data.manifest.clone(),
+                artifacts: data.artifacts.clone(),
+            }))
+        }
+
+        fn begin(&mut self) -> crate::Result<Self::Write> {
+            let id_num = self.store.next_id;
+            self.store.next_id += 1;
+            let id = SnapshotId::new(format!("mem-{id_num:020x}"));
+            Ok(InMemorySnapshotWrite {
+                id,
+                artifacts: BTreeMap::new(),
+            })
+        }
+
+        fn publish(
+            &mut self,
+            write: Self::Write,
+            manifest: SnapshotManifest,
+        ) -> crate::Result<SnapshotId> {
+            let data = InMemorySnapshotData {
+                manifest,
+                artifacts: write.artifacts,
+            };
+            let id = write.id;
+            self.store.snapshots.insert(id.clone(), data);
+            self.store.current_id = Some(id.clone());
+            Ok(id)
+        }
     }
 
-    fn publish(
-        &mut self,
-        write: Self::Write,
+    /// An in-progress snapshot write backed by a memory buffer.
+    pub struct InMemorySnapshotWrite {
+        id: SnapshotId,
+        artifacts: BTreeMap<String, BTreeMap<String, Arc<[u8]>>>,
+    }
+
+    impl SnapshotWrite for InMemorySnapshotWrite {
+        fn id(&self) -> &SnapshotId {
+            &self.id
+        }
+
+        fn put_artifact(
+            &mut self,
+            namespace: &str,
+            name: &str,
+            bytes: Vec<u8>,
+        ) -> crate::Result<()> {
+            self.artifacts
+                .entry(namespace.to_string())
+                .or_default()
+                .insert(name.to_string(), Arc::from(bytes));
+            Ok(())
+        }
+    }
+
+    /// A readable snapshot backed by in-memory buffers.
+    #[derive(Clone)]
+    pub struct InMemorySnapshotRead {
+        id: SnapshotId,
         manifest: SnapshotManifest,
-    ) -> crate::Result<SnapshotId> {
-        let data = InMemorySnapshotData {
-            manifest,
-            artifacts: write.artifacts,
-        };
-        let id = write.id.clone();
-        self.store.snapshots.insert(id.clone(), data);
-        self.store.current_id = Some(id.clone());
-        Ok(id)
-    }
-}
-
-/// An in-progress snapshot write backed by a memory buffer.
-pub struct InMemorySnapshotWrite {
-    id: SnapshotId,
-    artifacts: BTreeMap<String, BTreeMap<String, Arc<[u8]>>>,
-}
-
-impl SnapshotWrite for InMemorySnapshotWrite {
-    fn id(&self) -> &SnapshotId {
-        &self.id
+        artifacts: BTreeMap<String, BTreeMap<String, Arc<[u8]>>>,
     }
 
-    fn put_artifact(
-        &mut self,
-        namespace: &str,
-        name: &str,
-        bytes: Vec<u8>,
-    ) -> crate::Result<()> {
-        self.artifacts
-            .entry(namespace.to_string())
-            .or_default()
-            .insert(name.to_string(), Arc::from(bytes));
-        Ok(())
-    }
-}
+    impl SnapshotRead for InMemorySnapshotRead {
+        fn id(&self) -> &SnapshotId {
+            &self.id
+        }
 
-/// A readable snapshot backed by in-memory buffers.
-#[derive(Clone)]
-pub struct InMemorySnapshotRead {
-    id: SnapshotId,
-    manifest: SnapshotManifest,
-    artifacts: BTreeMap<String, BTreeMap<String, Arc<[u8]>>>,
-}
+        fn manifest(&self) -> &SnapshotManifest {
+            &self.manifest
+        }
 
-impl SnapshotRead for InMemorySnapshotRead {
-    fn id(&self) -> &SnapshotId {
-        &self.id
-    }
-
-    fn manifest(&self) -> &SnapshotManifest {
-        &self.manifest
+        fn artifact(&self, namespace: &str, name: &str) -> crate::Result<ArtifactData> {
+            let ns = self.artifacts.get(namespace).ok_or_else(|| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("namespace {namespace} not found"),
+                ))
+            })?;
+            let bytes = ns.get(name).ok_or_else(|| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("artifact {namespace}/{name} not found"),
+                ))
+            })?;
+            Ok(ArtifactData::Memory(bytes.clone()))
+        }
     }
 
-    fn artifact(&self, namespace: &str, name: &str) -> crate::Result<ArtifactData> {
-        let ns = self.artifacts.get(namespace).ok_or_else(|| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("namespace {namespace} not found"),
-            ))
-        })?;
-        let bytes = ns.get(name).ok_or_else(|| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("artifact {namespace}/{name} not found"),
-            ))
-        })?;
-        Ok(ArtifactData::Memory(bytes.clone()))
-    }
-}
+    impl SnapshotStore for InMemorySnapshotStore {
+        type Read = InMemorySnapshotRead;
+        type Write = InMemorySnapshotWrite;
+        type Writer<'a> = InMemoryWriterSession<'a>;
 
-impl SnapshotStore for InMemorySnapshotStore {
-    type Read = InMemorySnapshotRead;
-    type Write = InMemorySnapshotWrite;
-    type Writer<'a> = InMemoryWriterSession<'a>;
+        fn current_id(&self) -> Option<&SnapshotId> {
+            self.current_id.as_ref()
+        }
 
-    fn current_id(&self) -> Option<&SnapshotId> {
-        self.current_id.as_ref()
-    }
+        fn current(&self) -> crate::Result<Option<Self::Read>> {
+            let Some(ref id) = self.current_id else {
+                return Ok(None);
+            };
+            let data = self.snapshots.get(id).ok_or_else(|| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "current snapshot missing from in-memory store",
+                ))
+            })?;
+            Ok(Some(InMemorySnapshotRead {
+                id: id.clone(),
+                manifest: data.manifest.clone(),
+                artifacts: data.artifacts.clone(),
+            }))
+        }
 
-    fn current(&self) -> crate::Result<Option<Self::Read>> {
-        let Some(ref id) = self.current_id else {
-            return Ok(None);
-        };
-        let data = self.snapshots.get(id).ok_or_else(|| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "current snapshot missing from in-memory store",
-            ))
-        })?;
-        Ok(Some(InMemorySnapshotRead {
-            id: id.clone(),
-            manifest: data.manifest.clone(),
-            artifacts: data.artifacts.clone(),
-        }))
-    }
-
-    fn writer(&mut self) -> crate::Result<Self::Writer<'_>> {
-        Ok(InMemoryWriterSession { store: self })
+        fn writer(&mut self) -> crate::Result<Self::Writer<'_>> {
+            Ok(InMemoryWriterSession { store: self })
+        }
     }
 }
 
@@ -792,6 +762,7 @@ impl SnapshotStore for InMemorySnapshotStore {
 
 #[cfg(test)]
 mod tests {
+    use super::in_memory::InMemorySnapshotStore;
     use super::*;
     use tempfile::TempDir;
 
@@ -817,7 +788,9 @@ mod tests {
         }
 
         assert!(store.current_id.is_some());
-        let snap_dir = store.snapshots_dir().join(store.current_id.as_ref().unwrap().as_str());
+        let snap_dir = store
+            .snapshots_dir()
+            .join(store.current_id.as_ref().unwrap().as_str());
         assert!(snap_dir.exists());
         assert!(snap_dir.join("test").join("data.txt").exists());
 
