@@ -100,27 +100,7 @@ impl IndexStore {
     ) -> crate::Result<String> {
         let _guard = self.acquire_write_lock()?;
         self.refresh_snapshots()?;
-        self.build_locked(kinds, config)
-    }
-
-    /// Build without acquiring the writer lock (caller must hold it).
-    fn build_locked(
-        &mut self,
-        kinds: &[super::IndexKind],
-        config: &super::IndexConfig<'_>,
-    ) -> crate::Result<String> {
-        let txn = self.snapshots.begin()?;
-
-        for kind in kinds {
-            let index_dir = txn.dir().join(kind.as_str());
-            std::fs::create_dir_all(&index_dir)?;
-            kind.build(config, &index_dir)?;
-        }
-
-        Self::write_manifest(&txn, kinds)?;
-        let id = txn.id().to_string();
-        self.snapshots.commit(txn)?;
-        Ok(id)
+        self.publish_snapshot(kinds, config)
     }
 
     /// Update the current snapshot, rebuilding only indexes whose corpus
@@ -143,18 +123,9 @@ impl IndexStore {
     ) -> crate::Result<Option<String>> {
         let _guard = self.acquire_write_lock()?;
         self.refresh_snapshots()?;
-        self.update_locked(kinds, config)
-    }
 
-    /// Update without acquiring the writer lock (caller must hold it).
-    fn update_locked(
-        &mut self,
-        kinds: &[super::IndexKind],
-        config: &super::IndexConfig<'_>,
-    ) -> crate::Result<Option<String>> {
         let Some(current_dir) = self.snapshots.current_dir() else {
-            let id = self.build_locked(kinds, config)?;
-            return Ok(Some(id));
+            return self.publish_snapshot(kinds, config).map(Some);
         };
 
         let txn = self.snapshots.begin()?;
@@ -181,6 +152,28 @@ impl IndexStore {
         let id = txn.id().to_string();
         self.snapshots.commit(txn)?;
         Ok(Some(id))
+    }
+
+    /// Write index files into a new snapshot and atomically publish it.
+    ///
+    /// The caller must hold the writer lock before calling this.
+    fn publish_snapshot(
+        &mut self,
+        kinds: &[super::IndexKind],
+        config: &super::IndexConfig<'_>,
+    ) -> crate::Result<String> {
+        let txn = self.snapshots.begin()?;
+
+        for kind in kinds {
+            let index_dir = txn.dir().join(kind.as_str());
+            std::fs::create_dir_all(&index_dir)?;
+            kind.build(config, &index_dir)?;
+        }
+
+        Self::write_manifest(&txn, kinds)?;
+        let id = txn.id().to_string();
+        self.snapshots.commit(txn)?;
+        Ok(id)
     }
 
     // ------------------------------------------------------------------
@@ -246,9 +239,7 @@ impl IndexStore {
                 indexes.push(kind.open_from_dir(&index_dir, &root, corpus_kind)?);
             }
 
-            return Ok(super::snapshot::Snapshot::current_with_lease(
-                root, indexes, lease,
-            ));
+            return Ok(super::snapshot::Snapshot::current(root, indexes, lease));
         }
 
         Err(crate::Error::Io(std::io::Error::new(

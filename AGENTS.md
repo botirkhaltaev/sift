@@ -57,15 +57,31 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Function Evolution
 
-Prefer evolving existing orchestration functions and domain types over adding
-parallel `*_with_*` functions or free-floating helpers.
+Do not create `*_with_*`, `*_locked`, `*_async`, `*_new`, or similarly named
+parallel variants when the new function is the old function plus one extra
+feature, mode, lock, flag, or parameter. This creates duplicate execution paths
+and weakens the domain model.
 
-If behavior gains another input or mode, modify the original function body or
-introduce a domain object that owns the concept. Avoid overload-style variants
-such as `run_search_with_index`, `run_search_walk`, or `open_*` helper functions.
+If behavior gains another input or mode:
+- Evolve the original function body so it owns the concept.
+- Introduce a domain type that represents the concept.
+- Use a small private helper named after the **domain operation** it performs,
+  not after how it differs from the variant it serves.
+
+Examples of **bad** names that flag the pattern:
+- `build_locked` (the variant adds a lock)
+- `current_with_lease` (the variant adds a lease)
+- `run_search_with_index` (the variant adds an index)
+- `open_with_lease`
+
+Examples of **good** names that describe the domain action:
+- `publish_snapshot` (it writes files and commits)
+- `resolve_candidates` (it looks up matching files)
+- `build_index_metadata`
 
 Small local helpers are acceptable only when they remove duplication inside one
-function and do not become alternate execution paths.
+function or one orchestration path, and their name describes what they do, not
+how they differ from an alternate path.
 
 ## Do NOT
 

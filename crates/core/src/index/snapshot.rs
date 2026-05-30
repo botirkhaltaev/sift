@@ -114,9 +114,9 @@ impl Snapshot {
         }
     }
 
-    /// Create a current snapshot with opened indexes, backed by an on-disk
-    /// lease that prevents GC from collecting the snapshot.
-    pub(super) const fn current_with_lease(
+    /// Create a current snapshot with opened indexes, backed by a lease that
+    /// prevents GC from collecting the snapshot.
+    pub(super) const fn current(
         root: PathBuf,
         indexes: Vec<super::kinds::Index>,
         lease: SnapshotLease,
