@@ -422,45 +422,47 @@ impl<'a> PostingAssembler<'a> {
 /// Build in-memory index tables from a corpus configuration.
 ///
 /// Orchestrates: corpus walk → fingerprint → trigram extraction → posting assembly.
-pub fn build_tables(config: &IndexConfig<'_>) -> crate::Result<IndexTables> {
-    use rayon::prelude::*;
+impl IndexTables {
+    pub fn build(config: &IndexConfig<'_>) -> crate::Result<Self> {
+        use rayon::prelude::*;
 
-    let (paths, root) = match config.corpus.kind {
-        CorpusKind::SingleFile => {
-            if config.corpus.include_paths.is_empty() {
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "SingleFile corpus must specify the file in include_paths",
-                )));
+        let (paths, root) = match config.corpus.kind {
+            CorpusKind::SingleFile => {
+                if config.corpus.include_paths.is_empty() {
+                    return Err(crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "SingleFile corpus must specify the file in include_paths",
+                    )));
+                }
+                let paths = config.corpus.include_paths.to_vec();
+                (paths, config.corpus.root)
             }
-            let paths = config.corpus.include_paths.to_vec();
-            (paths, config.corpus.root)
-        }
-        CorpusKind::Directory => {
-            let paths = CorpusWalker::new(config).collect()?;
-            (paths, config.corpus.root)
-        }
-    };
+            CorpusKind::Directory => {
+                let paths = CorpusWalker::new(config).collect()?;
+                (paths, config.corpus.root)
+            }
+        };
 
-    let fingerprints = FingerprintCollector::new(root, &paths).collect()?;
+        let fingerprints = FingerprintCollector::new(root, &paths).collect()?;
 
-    let file_trigrams: Vec<TrigramSet> = fingerprints
-        .par_iter()
-        .map(|fp| {
-            let abs = root.join(&fp.path);
-            TrigramSet::from_file(&abs)
+        let file_trigrams: Vec<TrigramSet> = fingerprints
+            .par_iter()
+            .map(|fp| {
+                let abs = root.join(&fp.path);
+                TrigramSet::from_file(&abs)
+            })
+            .collect::<std::io::Result<_>>()
+            .map_err(crate::Error::Io)?;
+
+        let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
+
+        Ok(Self {
+            fingerprints,
+            file_trigrams,
+            lexicon,
+            postings,
         })
-        .collect::<std::io::Result<_>>()
-        .map_err(crate::Error::Io)?;
-
-    let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
-
-    Ok(IndexTables {
-        fingerprints,
-        file_trigrams,
-        lexicon,
-        postings,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +500,7 @@ mod tests {
 
         fn build(root: &Path) -> IndexTables {
             let config = Self::no_ignore_config(root);
-            build_tables(&config).expect("build tables")
+            IndexTables::build(&config).expect("build tables")
         }
     }
 
@@ -616,7 +618,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = build_tables(&config).expect("build tables");
+        let tables = IndexTables::build(&config).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -733,7 +735,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = build_tables(&config).expect("build tables");
+        let tables = IndexTables::build(&config).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -756,7 +758,7 @@ mod tests {
             },
             visibility: VisibilityConfig::default(),
         };
-        let tables = build_tables(&config).expect("build tables");
+        let tables = IndexTables::build(&config).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(
             tables.fingerprints[0].path,
@@ -795,7 +797,7 @@ mod tests {
             },
             visibility: VisibilityConfig::default(),
         };
-        let tables = build_tables(&config).expect("build tables");
+        let tables = IndexTables::build(&config).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             !paths.iter().any(|p| p == "skip.ignored"),
@@ -826,7 +828,7 @@ mod tests {
             },
             visibility: VisibilityConfig::default(),
         };
-        let tables = build_tables(&config).expect("build tables");
+        let tables = IndexTables::build(&config).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             paths.iter().any(|p| p == Path::new("src/keep.txt")),

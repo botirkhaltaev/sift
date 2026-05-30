@@ -1,0 +1,28 @@
+use std::path::PathBuf;
+
+use super::trigram::TrigramIndexError;
+
+/// Errors specific to the index registry layer.
+#[derive(Debug, thiserror::Error)]
+pub enum IndexError {
+    #[error("invalid index layout: {path}")]
+    InvalidLayout { path: PathBuf },
+
+    #[error(transparent)]
+    Trigram(#[from] TrigramIndexError),
+
+    #[error("IO error inspecting index path {path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("unknown index kind: {0}")]
+    UnknownIndexKind(String),
+
+    #[error("invalid snapshot manifest at {path}: {source}")]
+    InvalidManifest {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+}

@@ -5,7 +5,18 @@ use std::path::Path;
 use memmap2::Mmap;
 
 use crate::index::trigram::storage::format::LEXICON_MAGIC;
-use crate::index::trigram::storage::mmap::open_mmap;
+
+/// Memory-map a file for read access.
+///
+/// # Safety invariant
+///
+/// `Mmap::map` dereferences the raw OS mapping pointer. The OS manages
+/// bounds and the mapping outlives the closed `File` handle via refcount.
+#[allow(unsafe_code)]
+fn mmap_open(path: &Path) -> std::io::Result<Mmap> {
+    let file = std::fs::File::open(path)?;
+    unsafe { Mmap::map(&file) }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexiconEntry {
@@ -66,7 +77,7 @@ impl Lexicon {
     ///
     /// Returns an error if the file is malformed.
     pub fn open(path: &Path) -> std::io::Result<Self> {
-        let mmap = open_mmap(path)?;
+        let mmap = mmap_open(path)?;
         let bytes = mmap.as_ref();
         let count = Self::validate(bytes)?;
         Ok(Self { mmap, count })

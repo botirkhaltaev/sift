@@ -1,4 +1,4 @@
-use sift_core::grep::{GrepRequest, run};
+use sift_core::grep::GrepRequest;
 use sift_core::{
     CandidateFilter, CandidateFilterConfig, SearchOptions, SearchOutput, SearchQuery,
     SearchSeparators,
@@ -19,16 +19,14 @@ fn grep_finds_match_in_indexed_corpus() {
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
     let query = SearchQuery::new(&["beta".to_string()], SearchOptions::default()).expect("query");
-    let outcome = run(
-        &query,
-        &GrepRequest {
-            indexes: &indexes,
-            filter: &filter,
-            output: SearchOutput::default(),
-            separators: &SearchSeparators::default(),
-            collect_stats: false,
-        },
-    )
+    let outcome = GrepRequest {
+        indexes: &indexes,
+        filter: &filter,
+        output: SearchOutput::default(),
+        separators: &SearchSeparators::default(),
+        collect_stats: false,
+    }
+    .run(&query)
     .expect("grep run");
     assert!(outcome.matched);
 }
