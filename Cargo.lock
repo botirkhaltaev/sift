@@ -906,6 +906,7 @@ dependencies = [
  "bitflags",
  "bstr",
  "criterion",
+ "fslock",
  "grep-cli",
  "grep-matcher",
  "grep-printer",

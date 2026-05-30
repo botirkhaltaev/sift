@@ -139,58 +139,34 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
     }
 }
 
-/// Debounce state for the file-watcher event loop.
-enum RefreshState {
-    Idle,
-    Pending { deadline: Instant },
+// ---------------------------------------------------------------------------
+// Coordinator event types
+// ---------------------------------------------------------------------------
+
+/// Events flowing through the coordinator channel.
+enum CoordinatorEvent {
+    Fs(notify::Event),
+    RefreshComplete,
 }
 
-impl RefreshState {
-    /// Process an incoming filesystem event and update the debounce state.
-    fn observe(&mut self, event: &notify::Event, sift_dir: &Path, debounce: Duration) {
-        match event.kind {
-            notify::EventKind::Access(_) => {}
-            _ if event.paths.iter().any(|p| p.starts_with(sift_dir)) => {}
-            _ => {
-                *self = Self::Pending {
-                    deadline: Instant::now() + debounce,
-                };
-            }
-        }
-    }
-
-    /// Timeout to pass to `recv_timeout`.  When idle the default interval is
-    /// used; when a refresh is pending the remaining wall time until the
-    /// deadline.
-    fn timeout(&self, default: Duration) -> Duration {
-        match self {
-            Self::Idle => default,
-            Self::Pending { deadline } => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    Duration::ZERO
-                } else {
-                    remaining
-                }
-            }
-        }
-    }
-
-    /// Transition to idle and return `true` when a pending refresh is due.
-    const fn take_due(&mut self) -> bool {
-        match self {
-            Self::Pending { .. } => {
-                *self = Self::Idle;
-                true
-            }
-            Self::Idle => false,
-        }
-    }
+/// State of the coordinator loop.
+enum CoordinatorState {
+    Idle,
+    Debouncing { deadline: Instant },
+    Refreshing { need_another: bool },
 }
 
 // ---------------------------------------------------------------------------
 // Daemon runner
 // ---------------------------------------------------------------------------
+
+/// Loaded daemon metadata extracted from the store.
+struct DaemonMeta {
+    root: PathBuf,
+    corpus_kind: sift_core::CorpusKind,
+    follow_links: bool,
+    kinds: Vec<IndexKind>,
+}
 
 /// Configuration for the long-running daemon process.
 #[derive(Debug, Clone)]
@@ -200,6 +176,11 @@ pub struct DaemonRunConfig {
 }
 
 /// The long-running daemon event loop with stoppable support for testing.
+///
+/// Uses a coordinator loop that receives filesystem events and manages a
+/// background refresh worker. The coordinator can keep processing events
+/// while the worker is running, and schedules a follow-up refresh if events
+/// arrive during an active refresh.
 pub struct DaemonRunner {
     config: DaemonRunConfig,
 }
@@ -248,17 +229,13 @@ impl DaemonRunner {
         let mut store =
             IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links, kinds)?;
 
-        let exclude = sift_dir
-            .strip_prefix(&root)
-            .unwrap_or(sift_dir)
-            .to_path_buf();
         let build_config = IndexConfig {
             corpus: CorpusSpec {
                 root: &root,
                 kind: corpus_kind,
                 follow_links,
                 include_paths: &[],
-                exclude_paths: &[exclude],
+                exclude_paths: &[],
             },
             visibility: VisibilityConfig::default(),
         };
@@ -269,6 +246,63 @@ impl DaemonRunner {
             store.update(kinds, &build_config)?;
         }
 
+        Ok(())
+    }
+
+    fn load_daemon_meta(
+        sift_dir: &Path,
+        init_root: Option<&PathBuf>,
+    ) -> anyhow::Result<DaemonMeta> {
+        match (StoreMeta::read(sift_dir), init_root) {
+            (Ok(meta), _) => Ok(DaemonMeta {
+                root: meta.root,
+                corpus_kind: meta.corpus_kind,
+                follow_links: meta.follow_links,
+                kinds: if meta.indexes.is_empty() {
+                    IndexKind::ALL.to_vec()
+                } else {
+                    meta.indexes
+                },
+            }),
+            (Err(_), Some(init_root)) => {
+                let root = init_root.canonicalize()?;
+                Ok(DaemonMeta {
+                    root,
+                    corpus_kind: sift_core::CorpusKind::Directory,
+                    follow_links: false,
+                    kinds: IndexKind::ALL.to_vec(),
+                })
+            }
+            (Err(e), None) => {
+                anyhow::bail!("no store metadata: {e}");
+            }
+        }
+    }
+
+    fn build_initial_snapshot(
+        sift_dir: &Path,
+        root: &Path,
+        corpus_kind: sift_core::CorpusKind,
+        follow_links: bool,
+        kinds: &[IndexKind],
+    ) -> anyhow::Result<()> {
+        let mut store =
+            IndexStore::open_or_create(sift_dir, root, corpus_kind, follow_links, kinds)?;
+        let exclude = sift_dir
+            .strip_prefix(root)
+            .unwrap_or(sift_dir)
+            .to_path_buf();
+        let build_config = IndexConfig {
+            corpus: CorpusSpec {
+                root,
+                kind: corpus_kind,
+                follow_links,
+                include_paths: &[],
+                exclude_paths: &[exclude],
+            },
+            visibility: VisibilityConfig::default(),
+        };
+        store.build(kinds, &build_config)?;
         Ok(())
     }
 
@@ -296,32 +330,139 @@ impl DaemonRunner {
             return Ok(());
         }
 
-        let (root, corpus_kind, follow_links, stored_kinds) =
-            match (StoreMeta::read(sift_dir), &self.config.init_root) {
-                (Ok(meta), _) => (meta.root, meta.corpus_kind, meta.follow_links, meta.indexes),
-                (Err(_), Some(init_root)) => {
-                    let root = init_root.canonicalize()?;
-                    (root, sift_core::CorpusKind::Directory, false, Vec::new())
+        let DaemonMeta {
+            root,
+            corpus_kind,
+            follow_links,
+            kinds,
+        } = Self::load_daemon_meta(sift_dir, self.config.init_root.as_ref())?;
+
+        // Build initial snapshot if none exists.
+        if !sift_dir.join("CURRENT").exists() {
+            Self::build_initial_snapshot(sift_dir, &root, corpus_kind, follow_links, &kinds)?;
+        }
+
+        // Unified coordinator channel: receives both watcher events and
+        // refresh-completion signals.
+        let (tx, rx) = mpsc::channel::<CoordinatorEvent>();
+
+        // Start the filesystem watcher.
+        let watcher_tx = tx.clone();
+        let watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let _ = watcher_tx.send(CoordinatorEvent::Fs(event));
                 }
-                (Err(e), None) => {
-                    anyhow::bail!("no store metadata: {e}");
+            })?;
+        let mut watcher = watcher;
+        watcher.watch(&root, RecursiveMode::Recursive)?;
+
+        let debounce = Duration::from_millis(DEBOUNCE_MS);
+        let mut state = CoordinatorState::Idle;
+
+        loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+
+            let timeout = match &state {
+                CoordinatorState::Debouncing { deadline } => {
+                    deadline.saturating_duration_since(Instant::now())
                 }
+                CoordinatorState::Idle | CoordinatorState::Refreshing { .. } => debounce,
             };
-        let kinds: &[IndexKind] = if stored_kinds.is_empty() {
-            IndexKind::ALL
-        } else {
-            &stored_kinds
-        };
 
-        let mut store =
-            IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links, kinds)?;
+            match rx.recv_timeout(timeout) {
+                Ok(CoordinatorEvent::Fs(event)) => {
+                    state = Self::observe(state, &event, sift_dir, debounce);
+                }
+                Ok(CoordinatorEvent::RefreshComplete) => match state {
+                    CoordinatorState::Refreshing { need_another: true } => {
+                        Self::spawn_refresh(
+                            tx.clone(),
+                            sift_dir,
+                            &kinds,
+                            &root,
+                            corpus_kind,
+                            follow_links,
+                        );
+                        state = CoordinatorState::Refreshing {
+                            need_another: false,
+                        };
+                    }
+                    _ => {
+                        state = CoordinatorState::Idle;
+                    }
+                },
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    match state {
+                        CoordinatorState::Debouncing { .. } => {
+                            Self::spawn_refresh(
+                                tx.clone(),
+                                sift_dir,
+                                &kinds,
+                                &root,
+                                corpus_kind,
+                                follow_links,
+                            );
+                            state = CoordinatorState::Refreshing {
+                                need_another: false,
+                            };
+                        }
+                        CoordinatorState::Idle | CoordinatorState::Refreshing { .. } => {
+                            // Nothing to do.
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            }
+        }
+    }
 
-        if store.current_id().is_none() {
+    /// Process an incoming filesystem event and transition state.
+    fn observe(
+        state: CoordinatorState,
+        event: &notify::Event,
+        sift_dir: &Path,
+        debounce: Duration,
+    ) -> CoordinatorState {
+        // Filter out access events and .sift directory events.
+        if matches!(event.kind, notify::EventKind::Access(_)) {
+            return state;
+        }
+        if event.paths.iter().any(|p| p.starts_with(sift_dir)) {
+            return state;
+        }
+
+        match state {
+            CoordinatorState::Refreshing { .. } => {
+                CoordinatorState::Refreshing { need_another: true }
+            }
+            _ => CoordinatorState::Debouncing {
+                deadline: Instant::now() + debounce,
+            },
+        }
+    }
+
+    /// Spawn a background refresh worker thread.
+    fn spawn_refresh(
+        tx: mpsc::Sender<CoordinatorEvent>,
+        sift_dir: &Path,
+        kinds: &[IndexKind],
+        root: &Path,
+        corpus_kind: sift_core::CorpusKind,
+        follow_links: bool,
+    ) {
+        let sift_dir = sift_dir.to_path_buf();
+        let kinds = kinds.to_vec();
+        let root = root.to_path_buf();
+
+        std::thread::spawn(move || {
             let exclude = sift_dir
                 .strip_prefix(&root)
-                .unwrap_or(sift_dir)
+                .unwrap_or(&sift_dir)
                 .to_path_buf();
-            let build_config = IndexConfig {
+            let config = IndexConfig {
                 corpus: CorpusSpec {
                     root: &root,
                     kind: corpus_kind,
@@ -331,82 +472,27 @@ impl DaemonRunner {
                 },
                 visibility: VisibilityConfig::default(),
             };
-            store.build(kinds, &build_config)?;
-        }
 
-        let (tx, rx) = mpsc::channel();
-        let watcher =
-            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    let _ = tx.send(event);
-                }
-            })?;
-        let mut watcher = watcher;
-        watcher.watch(&root, RecursiveMode::Recursive)?;
+            let result = (|| -> anyhow::Result<()> {
+                let mut store = IndexStore::open_or_create(
+                    &sift_dir,
+                    &root,
+                    corpus_kind,
+                    follow_links,
+                    &kinds,
+                )?;
+                store.update(&kinds, &config)?;
+                Ok(())
+            })();
 
-        let debounce = Duration::from_millis(DEBOUNCE_MS);
-        let mut refresh_state = RefreshState::Idle;
-        loop {
-            if shutdown.load(Ordering::Relaxed) {
-                return Ok(());
+            if let Err(e) = result {
+                eprintln!("sift-daemon: refresh failed: {e}");
             }
 
-            match rx.recv_timeout(refresh_state.timeout(debounce)) {
-                Ok(event) => {
-                    refresh_state.observe(&event, sift_dir, debounce);
-                    while let Ok(event) = rx.try_recv() {
-                        refresh_state.observe(&event, sift_dir, debounce);
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if refresh_state.take_due() {
-                        Self::refresh(
-                            &mut store,
-                            sift_dir,
-                            kinds,
-                            &root,
-                            corpus_kind,
-                            follow_links,
-                        );
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-            }
-        }
-    }
-
-    fn refresh(
-        store: &mut IndexStore,
-        sift_dir: &Path,
-        kinds: &[IndexKind],
-        root: &Path,
-        corpus_kind: sift_core::CorpusKind,
-        follow_links: bool,
-    ) {
-        let exclude = sift_dir
-            .strip_prefix(root)
-            .unwrap_or(sift_dir)
-            .to_path_buf();
-        let build_config = IndexConfig {
-            corpus: CorpusSpec {
-                root,
-                kind: corpus_kind,
-                follow_links,
-                include_paths: &[],
-                exclude_paths: &[exclude],
-            },
-            visibility: VisibilityConfig::default(),
-        };
-
-        if let Err(e) = store.update(kinds, &build_config) {
-            eprintln!("sift-daemon: refresh failed: {e}");
-        }
+            let _ = tx.send(CoordinatorEvent::RefreshComplete);
+        });
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
