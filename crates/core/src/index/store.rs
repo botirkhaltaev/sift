@@ -191,19 +191,19 @@ impl IndexStore {
     /// Returns an error if the manifest is malformed, an index kind is
     /// unknown, or the snapshot could not be opened after retry.
     pub(crate) fn open_current(&self) -> crate::Result<super::snapshot::Snapshot> {
-        // If no CURRENT file exists, return an empty snapshot (no metadata needed).
-        let Some(current_id) = SnapshotStore::read_current_id(&self.sift_dir)? else {
-            return Ok(super::snapshot::Snapshot::empty(PathBuf::new()));
-        };
-
-        // CURRENT exists — metadata is required to interpret the snapshot.
-        let meta = StoreMeta::read(&self.sift_dir)?;
-        let root = meta.root;
-        let corpus_kind = meta.corpus_kind;
-
         for attempt in 0..2 {
-            let snapshots_dir = self.sift_dir.join("snapshots");
-            let snap_dir = snapshots_dir.join(&current_id);
+            // Re-read CURRENT on every attempt so a concurrent writer that
+            // advanced the pointer between attempts is picked up.
+            let Some(current_id) = SnapshotStore::read_current_id(&self.sift_dir)? else {
+                return Ok(super::snapshot::Snapshot::empty(PathBuf::new()));
+            };
+
+            // CURRENT exists — metadata is required to interpret the snapshot.
+            let meta = StoreMeta::read(&self.sift_dir)?;
+            let root = meta.root;
+            let corpus_kind = meta.corpus_kind;
+
+            let snap_dir = self.sift_dir.join("snapshots").join(&current_id);
 
             // Create lease before verifying snapshot exists.
             let lease = SnapshotLease::create_file(&self.sift_dir, &current_id)?;

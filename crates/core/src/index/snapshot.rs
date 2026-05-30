@@ -60,8 +60,11 @@ impl SnapshotLease {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let lease_path = leases_dir.join(format!("{pid}-{now}"));
-        std::fs::write(&lease_path, snapshot_id)?;
+        let leaf = format!("{pid}-{now}");
+        let lease_path = leases_dir.join(&leaf);
+        let tmp_path = leases_dir.join(format!("{leaf}.tmp"));
+        std::fs::write(&tmp_path, snapshot_id)?;
+        std::fs::rename(&tmp_path, &lease_path)?;
         Ok(Self::File { path: lease_path })
     }
 }
@@ -180,17 +183,30 @@ impl SnapshotStore {
 
     /// Read active lease files and return the set of snapshot IDs they
     /// reference.
+    ///
+    /// Stale lease files (older than 1 hour from crashed readers) are deleted
+    /// as a side effect.
     pub fn active_lease_ids(sift_dir: &Path) -> crate::Result<Vec<String>> {
         let leases_dir = Self::leases_dir(sift_dir);
         let Ok(entries) = std::fs::read_dir(&leases_dir) else {
             return Ok(Vec::new());
         };
+        let stale_threshold = std::time::Duration::from_hours(1);
         let mut ids = Vec::new();
         for entry in entries {
             let entry = entry?;
-            if entry.file_type().is_ok_and(|t| t.is_file())
-                && let Ok(raw) = std::fs::read_to_string(entry.path())
+            if !entry.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            if let Ok(metadata) = entry.metadata()
+                && let Ok(mtime) = metadata.modified()
+                && let Ok(age) = mtime.elapsed()
+                && age > stale_threshold
             {
+                let _ = std::fs::remove_file(entry.path());
+                continue;
+            }
+            if let Ok(raw) = std::fs::read_to_string(entry.path()) {
                 let id = raw.trim().to_string();
                 if !id.is_empty() {
                     ids.push(id);

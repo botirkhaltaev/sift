@@ -325,8 +325,12 @@ impl DaemonRunner {
     ///
     /// Propagates lock-acquisition, metadata, watcher, and build errors.
     pub fn run_until(&self, shutdown: &AtomicBool) -> anyhow::Result<()> {
-        let sift_dir = &self.config.sift_dir;
-        std::fs::create_dir_all(sift_dir)?;
+        std::fs::create_dir_all(&self.config.sift_dir)?;
+        let sift_dir = self
+            .config
+            .sift_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.config.sift_dir.clone());
 
         let lock_path = sift_dir.join(DAEMON_LOCK);
         let mut lock_file = LockFile::open(&lock_path)?;
@@ -339,11 +343,11 @@ impl DaemonRunner {
             corpus_kind,
             follow_links,
             kinds,
-        } = Self::load_daemon_meta(sift_dir, self.config.init_root.as_ref())?;
+        } = Self::load_daemon_meta(&sift_dir, self.config.init_root.as_ref())?;
 
         // Build initial snapshot if none exists.
         if !sift_dir.join("CURRENT").exists() {
-            Self::build_initial_snapshot(sift_dir, &root, corpus_kind, follow_links, &kinds)?;
+            Self::build_initial_snapshot(&sift_dir, &root, corpus_kind, follow_links, &kinds)?;
         }
 
         // Unified coordinator channel: receives both watcher events and
@@ -389,13 +393,13 @@ impl DaemonRunner {
 
             match rx.recv_timeout(timeout) {
                 Ok(CoordinatorEvent::Fs(event)) => {
-                    state = Self::observe(state, &event, sift_dir, debounce);
+                    state = Self::observe(state, &event, &sift_dir, debounce);
                 }
                 Ok(CoordinatorEvent::RefreshComplete) => match state {
                     CoordinatorState::Refreshing { need_another: true } => {
                         Self::spawn_refresh(
                             tx.clone(),
-                            sift_dir,
+                            &sift_dir,
                             &kinds,
                             &root,
                             corpus_kind,
@@ -414,7 +418,7 @@ impl DaemonRunner {
                         CoordinatorState::Debouncing { .. } => {
                             Self::spawn_refresh(
                                 tx.clone(),
-                                sift_dir,
+                                &sift_dir,
                                 &kinds,
                                 &root,
                                 corpus_kind,
