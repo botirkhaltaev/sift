@@ -143,14 +143,6 @@ impl TrigramIndex {
         )
     }
 
-    #[must_use]
-    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
-        self.fingerprints
-            .iter()
-            .map(|fp| crate::Candidate::new(fp.path.clone(), self.root.join(&fp.path)))
-            .collect()
-    }
-
     /// Build a new trigram index from the corpus described in `config`.
     ///
     /// # Errors

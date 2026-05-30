@@ -32,13 +32,7 @@ impl<'a> QueryPlanner<'a> {
         base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
     ) -> crate::Result<Vec<Candidate>> {
         match requirement {
-            CandidateRequirement::Complete => {
-                if indexes.is_empty() {
-                    base()
-                } else {
-                    Ok(indexes.all_candidates())
-                }
-            }
+            CandidateRequirement::Complete => base(),
             CandidateRequirement::PotentialMatches => {
                 if indexes.is_empty() {
                     return base();
