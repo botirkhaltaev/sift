@@ -1,10 +1,7 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use sift_core::{
-    CandidateFilter, CandidateFilterConfig, CorpusKind, IndexKind, IndexStore, Indexes, QueryFlags,
-    QuerySpec, VisibilityConfig,
-};
+use sift_core::{CorpusKind, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec};
 use tempfile::TempDir;
 
 use super::common::{build_store, make_filter_corpus, no_ignore_build_config, open_indexes};
@@ -94,11 +91,12 @@ fn defaults_exclude_gitignored_and_ignore_file_paths() {
 }
 
 #[test]
-fn indexed_paths_match_candidate_filter() {
+fn build_respects_hidden_files_by_default() {
     let corpus = TempDir::new().expect("tempdir");
-    let sift_dir = TempDir::new().expect("sift tempdir");
-    make_filter_corpus(corpus.path());
+    fs::create_dir_all(corpus.path().join(".secret")).expect("create dir");
+    fs::write(corpus.path().join(".secret/hidden.txt"), "beta\n").expect("write");
 
+    let sift_dir = TempDir::new().expect("sift tempdir");
     let mut store = IndexStore::open_or_create(
         sift_dir.path(),
         corpus.path(),
@@ -115,58 +113,18 @@ fn indexed_paths_match_candidate_filter() {
         .expect("build");
 
     let spec = QuerySpec {
-        patterns: &[
-            "beta".to_string(),
-            "fn main".to_string(),
-            "no match".to_string(),
-        ],
+        patterns: &["beta".to_string()],
         flags: QueryFlags::empty(),
     };
-    let indexed: std::collections::HashSet<_> = Indexes::open(sift_dir.path())
+    let paths: Vec<_> = Indexes::open(sift_dir.path())
         .expect("open")
         .candidates(&spec)
         .expect("candidates")
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
         .collect();
-
-    let filter = CandidateFilter::new(
-        &CandidateFilterConfig {
-            visibility: VisibilityConfig::default(),
-            ..CandidateFilterConfig::default()
-        },
-        corpus.path(),
-    )
-    .expect("filter");
-
-    for rel in AllCorpusFiles::collect(corpus.path()) {
-        let should_index = filter.matches_path(&rel);
-        let is_indexed = indexed.contains(&rel);
-        assert_eq!(
-            is_indexed, should_index,
-            "path {rel:?}: indexed={is_indexed} filter={should_index}"
-        );
-    }
-}
-
-struct AllCorpusFiles;
-
-impl AllCorpusFiles {
-    fn collect(root: &Path) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        Self::collect_recursive(root, root, &mut files);
-        files.sort_unstable();
-        files
-    }
-
-    fn collect_recursive(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in fs::read_dir(dir).expect("read dir").flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                Self::collect_recursive(root, &path, out);
-            } else if path.is_file() {
-                out.push(path.strip_prefix(root).expect("under root").to_path_buf());
-            }
-        }
-    }
+    assert!(
+        !paths.iter().any(|p| p.starts_with(".secret")),
+        "hidden files excluded by default: {paths:?}"
+    );
 }

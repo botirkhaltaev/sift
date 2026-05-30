@@ -15,28 +15,30 @@ pub struct QueryPlanner<'a> {
 }
 
 impl<'a> QueryPlanner<'a> {
+    #[must_use]
     pub const fn new(spec: QuerySpec<'a>) -> Self {
         Self { spec }
     }
 
+    /// Resolve candidates using indexes or the lazy base provider.
+    ///
+    /// # Errors
+    ///
+    /// Delegates to `base` when fallback is triggered; returns `base` errors unchanged.
     pub fn candidates(
         &self,
         indexes: &Indexes,
         requirement: CandidateRequirement,
         base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
     ) -> crate::Result<Vec<Candidate>> {
-        let use_base = match requirement {
-            CandidateRequirement::Complete => true,
+        match requirement {
+            CandidateRequirement::Complete => base(),
             CandidateRequirement::PotentialMatches => {
-                indexes.is_empty() || indexes.candidates(&self.spec).is_none()
+                if indexes.is_empty() {
+                    return base();
+                }
+                indexes.candidates(&self.spec).map_or_else(base, Ok)
             }
-        };
-
-        if use_base {
-            base()
-        } else {
-            // SAFETY: we already confirmed indexes.candidates returned Some.
-            Ok(indexes.candidates(&self.spec).unwrap())
         }
     }
 }
