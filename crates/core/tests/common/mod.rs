@@ -10,18 +10,6 @@ use sift_core::{
     TrigramIndex, VisibilityConfig,
 };
 
-pub struct IndexedPaths;
-
-impl IndexedPaths {
-    pub fn from_indexes(indexes: &Indexes) -> Vec<PathBuf> {
-        indexes
-            .resolve_all_files()
-            .into_iter()
-            .map(|c| c.rel_path().to_path_buf())
-            .collect()
-    }
-}
-
 pub fn make_parity_corpus(root: &Path) {
     fs::create_dir_all(root.join("a")).expect("create dir");
     fs::create_dir_all(root.join("b")).expect("create dir");

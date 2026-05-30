@@ -14,7 +14,7 @@ use crate::query::QuerySpec;
 
 use self::builder::{IndexTables, build_tables};
 use self::file_table::FileFingerprint;
-use self::planner::{TrigramCandidatePlan, TrigramPlanner};
+use self::planner::TrigramPlanner;
 pub use key::Trigram;
 
 /// Errors specific to opening or persisting a trigram index.
@@ -129,16 +129,29 @@ impl TrigramIndex {
     }
 
     #[must_use]
-    pub fn candidates(&self, query: &QuerySpec<'_>) -> Vec<crate::Candidate> {
-        TrigramPlanner::build(query).map_or_else(
-            || self.resolve_all_candidates(),
-            |plan| self.resolve_candidates(self.trigram_candidate_ids(&plan)),
+    pub fn candidates(&self, query: &QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+        let plan = TrigramPlanner::build(query)?;
+        Some(
+            self.candidate_file_ids(&plan.arms)
+                .into_iter()
+                .filter_map(|id| {
+                    let fid = FileId::new(usize::try_from(id).ok()?);
+                    let fp = self.fingerprints.get(fid.get())?;
+                    Some(crate::Candidate::new(
+                        fp.path.clone(),
+                        self.root.join(&fp.path),
+                    ))
+                })
+                .collect(),
         )
     }
 
     #[must_use]
-    pub fn all_files(&self) -> Vec<crate::Candidate> {
-        self.resolve_all_candidates()
+    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
+        self.fingerprints
+            .iter()
+            .map(|fp| crate::Candidate::new(fp.path.clone(), self.root.join(&fp.path)))
+            .collect()
     }
 
     /// Build a new trigram index from the corpus described in `config`.
@@ -267,36 +280,6 @@ impl TrigramIndex {
         slices.sort_unstable_by_key(|slice| slice.len());
         let ids = PostingOps::intersect_sorted_slices(&slices);
         if ids.is_empty() { None } else { Some(ids) }
-    }
-
-    fn trigram_candidate_ids(&self, plan: &TrigramCandidatePlan) -> Vec<FileId> {
-        let raw = self.candidate_file_ids(&plan.arms);
-        raw.into_iter()
-            .filter_map(|id| usize::try_from(id).ok().map(FileId::new))
-            .collect()
-    }
-
-    fn candidate_from_fingerprint(&self, fp: &FileFingerprint) -> crate::Candidate {
-        let rel_path = fp.path.clone();
-        let abs_path = self.root.join(&fp.path);
-        crate::Candidate::new(rel_path, abs_path)
-    }
-
-    fn resolve_candidates(&self, ids: impl IntoIterator<Item = FileId>) -> Vec<crate::Candidate> {
-        ids.into_iter()
-            .filter_map(|id| {
-                self.fingerprints
-                    .get(id.get())
-                    .map(|fp| self.candidate_from_fingerprint(fp))
-            })
-            .collect()
-    }
-
-    fn resolve_all_candidates(&self) -> Vec<crate::Candidate> {
-        self.fingerprints
-            .iter()
-            .map(|fp| self.candidate_from_fingerprint(fp))
-            .collect()
     }
 
     fn open_tables(

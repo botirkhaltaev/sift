@@ -5,7 +5,7 @@
 pub mod candidate;
 pub mod grep;
 mod index;
-pub(crate) mod query;
+pub mod query;
 mod search;
 
 pub use candidate::Candidate;
@@ -30,7 +30,7 @@ pub use index::{
     PlanMode, QueryPlanOutput,
 };
 
-pub use query::{QueryFlags, QuerySpec};
+pub use query::{CandidateRequirement, QueryFlags, QueryPlanner, QuerySpec};
 
 use thiserror::Error;
 
@@ -165,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn full_scan_uses_files_bin_same_hits_as_fresh_walk() {
+    fn index_and_walk_return_same_matches_for_literal_pattern() {
         let tmp = TempDir::new().expect("create temp dir");
         let corpus = tmp.path().join("corpus");
         fs::create_dir_all(corpus.join("keep")).expect("create keep dir");
@@ -174,7 +174,7 @@ mod tests {
 
         let index = build_index_in_tmp(&tmp, &corpus);
 
-        let pat = vec![".*".to_string()];
+        let pat = vec!["one".to_string(), "three".to_string()];
         let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
         let mut from_index = q.collect_index_matches(&index).expect("index search");
         let mut from_walk = q.collect_walk_matches(&corpus).expect("walk search");
