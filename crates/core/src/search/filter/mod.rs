@@ -37,10 +37,15 @@ pub struct CandidateFilter {
 
 impl CandidateFilter {
     fn path_is_hidden(rel_path: &Path) -> bool {
-        rel_path.components().any(|component| {
-            let bytes = component.as_os_str().as_encoded_bytes();
-            bytes.starts_with(b".") && bytes.len() > 1
-        })
+        // Scan the encoded path bytes once and split on separators instead of
+        // materializing a `Components` iterator per candidate. A segment is
+        // hidden when it starts with '.' and is longer than a single byte
+        // (so a lone "." current-dir segment is not treated as hidden).
+        rel_path
+            .as_os_str()
+            .as_encoded_bytes()
+            .split(|&b| std::path::is_separator(b as char))
+            .any(|segment| matches!(segment, [b'.', _, ..]))
     }
 
     #[must_use]
