@@ -226,6 +226,7 @@ fn daemon_reindexes_on_file_changes() {
         let config = sift_grep::daemon::DaemonRunConfig {
             sift_dir: daemon_sift_dir,
             init_root: None,
+            ready_file: None,
         };
         let runner = sift_grep::daemon::DaemonRunner::new(config);
         runner.run_until(&s).unwrap();

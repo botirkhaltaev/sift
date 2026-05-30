@@ -12,6 +12,9 @@ use crate::config::DaemonSpawnConfig;
 const DEBOUNCE_MS: u64 = 250;
 const SPAWN_LOCK: &str = "daemon-spawn.lock";
 const DAEMON_LOCK: &str = "lock";
+const READY_DIR: &str = "daemon-ready";
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 // ---------------------------------------------------------------------------
 // Spawn types
@@ -31,6 +34,8 @@ pub struct SpawnRequest {
     pub exe: PathBuf,
     pub sift_dir: PathBuf,
     pub init_root: Option<PathBuf>,
+    /// Startup handshake file the child creates after acquiring the daemon lock.
+    pub ready_file: Option<PathBuf>,
 }
 
 /// Abstraction over process spawning for testability.
@@ -57,6 +62,9 @@ impl DaemonSpawner for ProcessDaemonSpawner {
             .stdin(std::process::Stdio::null());
         if let Some(root) = &request.init_root {
             cmd.arg("--init-root").arg(root);
+        }
+        if let Some(path) = &request.ready_file {
+            cmd.arg("--ready-file").arg(path);
         }
         cmd.spawn()?;
         Ok(())
@@ -94,11 +102,13 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
     /// Returns [`SpawnOutcome::Disabled`] when config has spawning disabled.
     /// Returns [`SpawnOutcome::AlreadyRunning`] when the spawn coordination
     /// lock or the daemon lock is already held.
-    /// Returns [`SpawnOutcome::Spawned`] on successful launch.
+    /// Returns [`SpawnOutcome::Spawned`] on successful launch after the child
+    /// signals startup readiness.
     ///
     /// # Errors
     ///
-    /// Propagates lock-acquisition and process-spawn errors.
+    /// Propagates lock-acquisition and process-spawn errors. Returns an error
+    /// if the child does not signal readiness within [`READY_TIMEOUT`].
     pub fn spawn(&self, config: &DaemonSpawnConfig) -> anyhow::Result<SpawnOutcome> {
         if !config.enabled {
             return Ok(SpawnOutcome::Disabled);
@@ -118,8 +128,9 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
             return Ok(SpawnOutcome::AlreadyRunning);
         }
 
-        // Check whether the daemon lock is already held (another daemon is running).
-        // Release it before spawning so the child can acquire it.
+        // Check whether the daemon lock is already held (another daemon is
+        // running).  Keep the probe lock released — the child will acquire the
+        // daemon lock after starting.
         {
             let daemon_lock_path = sift_dir.join(DAEMON_LOCK);
             let mut daemon_lock = LockFile::open(&daemon_lock_path)?;
@@ -128,14 +139,40 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
             }
         }
 
+        // Generate a unique ready-file path for this spawn attempt.
+        let ready_dir = sift_dir.join(READY_DIR);
+        std::fs::create_dir_all(&ready_dir)?;
+        let pid = std::process::id();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let ready_path = ready_dir.join(format!("{pid}-{now}"));
+
+        // Remove any stale ready file at this path.
+        let _ = std::fs::remove_file(&ready_path);
+
         let request = SpawnRequest {
             exe,
             sift_dir: sift_dir.clone(),
             init_root: config.init_root.clone(),
+            ready_file: Some(ready_path.clone()),
         };
         self.spawner.spawn(&request)?;
 
-        Ok(SpawnOutcome::Spawned)
+        // Poll for readiness while holding the spawn lock.
+        let deadline = Instant::now() + READY_TIMEOUT;
+        loop {
+            if ready_path.exists() {
+                // Child signalled readiness — clean up and confirm.
+                let _ = std::fs::remove_file(&ready_path);
+                return Ok(SpawnOutcome::Spawned);
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("daemon did not signal readiness within {READY_TIMEOUT:?}");
+            }
+            std::thread::sleep(READY_POLL_INTERVAL);
+        }
     }
 }
 
@@ -173,6 +210,9 @@ struct DaemonMeta {
 pub struct DaemonRunConfig {
     pub sift_dir: PathBuf,
     pub init_root: Option<PathBuf>,
+    /// Internal startup handshake: after acquiring the daemon lock, the child
+    /// atomically creates this file to signal readiness to the parent.
+    pub ready_file: Option<PathBuf>,
 }
 
 /// The long-running daemon event loop with stoppable support for testing.
@@ -336,6 +376,15 @@ impl DaemonRunner {
         let mut lock_file = LockFile::open(&lock_path)?;
         if !lock_file.try_lock()? {
             return Ok(());
+        }
+
+        // Signal readiness to the parent process if started via the
+        // startup handshake protocol.  Write atomically so the parent
+        // never observes a partial file.
+        if let Some(ready) = &self.config.ready_file {
+            let tmp = ready.with_extension("tmp");
+            std::fs::write(&tmp, "")?;
+            std::fs::rename(&tmp, ready)?;
         }
 
         let DaemonMeta {
@@ -542,6 +591,14 @@ mod tests {
         fn spawn(&self, request: &SpawnRequest) -> anyhow::Result<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             *self.last_request.lock().unwrap() = Some(request.clone());
+            // Simulate daemon startup: create the ready file so the parent
+            // doesn't time out waiting for the real daemon.
+            if let Some(path) = &request.ready_file {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(path, "")?;
+            }
             Ok(())
         }
     }
@@ -663,6 +720,7 @@ mod tests {
         let config = DaemonRunConfig {
             sift_dir,
             init_root: None,
+            ready_file: None,
         };
         let runner = DaemonRunner::new(config);
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -689,6 +747,7 @@ mod tests {
         let config = DaemonRunConfig {
             sift_dir,
             init_root: None,
+            ready_file: None,
         };
         let runner = DaemonRunner::new(config);
         runner.run_until(&AtomicBool::new(false)).unwrap();
