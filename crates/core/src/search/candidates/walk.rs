@@ -1,15 +1,17 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use ignore::{DirEntry, Error as IgnoreError, WalkBuilder, WalkState};
 
 use crate::Candidate;
 use crate::search::filter::{CandidateFilter, HiddenMode, IgnoreSources};
 use crate::search::request::{LinkTraversal, WalkOptions};
 
-fn walk_directory_files(root: &Path, filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
-    let root = root.canonicalize()?;
+fn configure_walker<'a>(filter: &'a CandidateFilter, root: &'a Path) -> WalkBuilder {
     let visibility = filter.visibility();
     let sources = visibility.ignore.sources;
-    let mut builder = ignore::WalkBuilder::new(&root);
+    let mut builder = WalkBuilder::new(root);
     builder
         .follow_links(filter.follow_links())
         .same_file_system(filter.one_file_system())
@@ -23,30 +25,108 @@ fn walk_directory_files(root: &Path, filter: &CandidateFilter) -> crate::Result<
     if let Some(d) = filter.max_depth() {
         builder.max_depth(Some(d + 1));
     }
+    builder
+}
+
+struct CandidateCollector {
+    filter_root: PathBuf,
+    max_filesize: Option<u64>,
+    thread_candidates: Vec<Candidate>,
+    walk_error: Arc<Mutex<Option<crate::Error>>>,
+    consolidated: Arc<Mutex<Vec<Candidate>>>,
+}
+
+impl Drop for CandidateCollector {
+    fn drop(&mut self) {
+        if self.thread_candidates.is_empty() {
+            return;
+        }
+        let mut guard = self.consolidated.lock().expect("candidate lock");
+        guard.append(&mut self.thread_candidates);
+    }
+}
+
+impl ignore::ParallelVisitor for CandidateCollector {
+    fn visit(&mut self, entry: Result<DirEntry, IgnoreError>) -> WalkState {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(err) => {
+                let mut guard = self.walk_error.lock().expect("walk error lock");
+                if guard.is_none() {
+                    *guard = Some(crate::Error::Ignore(err));
+                }
+                drop(guard);
+                return WalkState::Quit;
+            }
+        };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            return WalkState::Continue;
+        }
+        if let Some(limit) = self.max_filesize
+            && entry.metadata().is_ok_and(|m| m.len() > limit)
+        {
+            return WalkState::Continue;
+        }
+        let abs_path = entry.path().to_path_buf();
+        let rel_path = abs_path
+            .strip_prefix(&self.filter_root)
+            .unwrap_or(&abs_path)
+            .to_path_buf();
+        self.thread_candidates
+            .push(Candidate::new(rel_path, abs_path));
+        WalkState::Continue
+    }
+}
+
+struct CandidateCollectorBuilder {
+    filter_root: PathBuf,
+    max_filesize: Option<u64>,
+    walk_error: Arc<Mutex<Option<crate::Error>>>,
+    consolidated: Arc<Mutex<Vec<Candidate>>>,
+}
+
+impl<'a> ignore::ParallelVisitorBuilder<'a> for CandidateCollectorBuilder {
+    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
+        Box::new(CandidateCollector {
+            filter_root: self.filter_root.clone(),
+            max_filesize: self.max_filesize,
+            thread_candidates: Vec::new(),
+            walk_error: Arc::clone(&self.walk_error),
+            consolidated: Arc::clone(&self.consolidated),
+        })
+    }
+}
+
+fn walk_directory_files(root: &Path, filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
+    let root = root.canonicalize()?;
     let filter_root = filter
         .root()
         .canonicalize()
         .unwrap_or_else(|_| filter.root().to_path_buf());
-    let mut out = Vec::new();
-    for entry in builder.build() {
-        let entry = entry.map_err(crate::Error::Ignore)?;
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
+
+    let walk_error: Arc<Mutex<Option<crate::Error>>> = Arc::new(Mutex::new(None));
+    let consolidated: Arc<Mutex<Vec<Candidate>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let mut builder = CandidateCollectorBuilder {
+        filter_root,
+        max_filesize: filter.max_filesize(),
+        walk_error: Arc::clone(&walk_error),
+        consolidated: Arc::clone(&consolidated),
+    };
+
+    configure_walker(filter, &root)
+        .build_parallel()
+        .visit(&mut builder);
+
+    {
+        let mut guard = walk_error.lock().expect("walk error lock");
+        if let Some(err) = guard.take() {
+            return Err(err);
         }
-        if let Some(limit) = filter.max_filesize() {
-            let skip = entry.metadata().is_ok_and(|m| m.len() > limit);
-            if skip {
-                continue;
-            }
-        }
-        let abs_path = entry.path().to_path_buf();
-        let rel_path = abs_path
-            .strip_prefix(&filter_root)
-            .unwrap_or(&abs_path)
-            .to_path_buf();
-        out.push(Candidate::new(rel_path, abs_path));
     }
-    Ok(out)
+
+    let results = std::mem::take(&mut *consolidated.lock().expect("candidate lock"));
+    Ok(results)
 }
 
 /// Collect candidate files across all scopes by walking the filesystem.
