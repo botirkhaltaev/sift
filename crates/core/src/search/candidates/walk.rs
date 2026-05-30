@@ -2,22 +2,24 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::Candidate;
-use crate::search::filter::CandidateFilter;
+use crate::search::filter::{CandidateFilter, HiddenMode, IgnoreSources};
 use crate::search::request::{LinkTraversal, WalkOptions};
 
 fn walk_directory_files(root: &Path, filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
     let root = root.canonicalize()?;
+    let visibility = filter.visibility();
+    let sources = visibility.ignore.sources;
     let mut builder = ignore::WalkBuilder::new(&root);
     builder
         .follow_links(filter.follow_links())
         .same_file_system(filter.one_file_system())
-        .hidden(false)
-        .parents(false)
-        .ignore(false)
-        .git_global(false)
-        .git_ignore(false)
-        .git_exclude(false)
-        .require_git(false);
+        .hidden(matches!(visibility.hidden, HiddenMode::Respect))
+        .parents(sources.contains(IgnoreSources::PARENT))
+        .ignore(sources.contains(IgnoreSources::DOT))
+        .git_ignore(sources.contains(IgnoreSources::VCS))
+        .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
+        .git_global(sources.contains(IgnoreSources::GLOBAL))
+        .require_git(visibility.ignore.require_git);
     if let Some(d) = filter.max_depth() {
         builder.max_depth(Some(d + 1));
     }
