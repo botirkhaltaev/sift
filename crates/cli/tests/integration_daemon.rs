@@ -252,36 +252,38 @@ fn daemon_reindexes_on_file_changes() {
     let mut lock = fslock::LockFile::open(&sift_dir.join("lock")).unwrap();
     assert!(!lock.try_lock().unwrap(), "daemon did not acquire lock");
 
-    // --- Add a file ---
+    // Write all changes at once (create + modify) so they land in a single
+    // FSEvent batch.  On macOS CI, `FSEvent` callbacks are slow enough that
+    // sequential writes can cause timeouts (see notify-rs/notify#935).
     fs::write(root.join("b.txt"), "added_by_daemon\n").unwrap();
+    fs::write(root.join("a.txt"), "initial_token modified_by_daemon\n").unwrap();
+
+    // Both changes are picked up by a single watcher callback + refresh.
     poll_until(
         &sift_dir,
         "added_by_daemon",
-        Duration::from_secs(10),
+        Duration::from_secs(20),
         |out| {
             out.status.success()
                 && normalize(&String::from_utf8_lossy(&out.stdout)).contains("b.txt")
         },
     );
-
-    // --- Modify a file ---
-    fs::write(root.join("a.txt"), "initial_token modified_by_daemon\n").unwrap();
     poll_until(
         &sift_dir,
         "modified_by_daemon",
-        Duration::from_secs(10),
+        Duration::from_secs(20),
         |out| {
             out.status.success()
                 && normalize(&String::from_utf8_lossy(&out.stdout)).contains("a.txt")
         },
     );
 
-    // --- Delete a file ---
+    // --- Delete a file (requires a second watcher callback) ---
     fs::remove_file(root.join("b.txt")).unwrap();
     poll_until(
         &sift_dir,
         "added_by_daemon",
-        Duration::from_secs(10),
+        Duration::from_secs(20),
         |out| !out.status.success(),
     );
 
