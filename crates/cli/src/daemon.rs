@@ -527,12 +527,10 @@ impl DaemonRunner {
                 return Ok(());
             }
 
-            let timeout = state
-                .deadline()
-                .map_or(SHUTDOWN_POLL, |d| {
-                    d.saturating_duration_since(Instant::now())
-                        .min(SHUTDOWN_POLL)
-                });
+            let timeout = state.deadline().map_or(SHUTDOWN_POLL, |d| {
+                d.saturating_duration_since(Instant::now())
+                    .min(SHUTDOWN_POLL)
+            });
 
             let input = match rx.recv_timeout(timeout) {
                 Ok(CoordinatorMessage::FsChange(event)) => {
