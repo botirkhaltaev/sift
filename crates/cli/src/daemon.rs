@@ -18,7 +18,7 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Platform-specific watcher chosen by cfg.
 ///
-/// On Linux and macOS the native `notify` backend is used (inotify, FSEvent).
+/// On Linux and macOS the native `notify` backend is used (inotify, `FSEvent`).
 /// On Windows the polling backend is used as a workaround for `ReadDirectoryChangesWatcher`
 /// not reliably delivering file-creation events in recursive temp-directory watches
 /// under CI (GitHub Actions `windows-latest`).
