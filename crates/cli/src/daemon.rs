@@ -42,8 +42,9 @@ fn watcher_config() -> notify::Config {
 ///
 /// Wraps the platform-specific `notify` backend and provides the same
 /// [`notify::Watcher`] interface.  Linux and macOS use native inotify /
-/// `FSEvent`; Windows uses `PollWatcher` to work around a `ReadDirectoryChangesWatcher`
-/// regression in recursive temp-directory watches.
+/// `FSEvent`; Windows uses `PollWatcher` to work around
+/// [`ReadDirectoryChangesWatcher` failing to deliver creation events in
+/// recursive temp-directory watches on CI](https://github.com/notify-rs/notify/issues/935).
 struct FileWatcher {
     inner: PlatformWatcher,
 }
