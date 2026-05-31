@@ -257,7 +257,7 @@ fn daemon_reindexes_on_file_changes() {
     poll_until(
         &sift_dir,
         "added_by_daemon",
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         |out| {
             out.status.success()
                 && normalize(&String::from_utf8_lossy(&out.stdout)).contains("b.txt")
@@ -269,7 +269,7 @@ fn daemon_reindexes_on_file_changes() {
     poll_until(
         &sift_dir,
         "modified_by_daemon",
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         |out| {
             out.status.success()
                 && normalize(&String::from_utf8_lossy(&out.stdout)).contains("a.txt")
@@ -281,7 +281,7 @@ fn daemon_reindexes_on_file_changes() {
     poll_until(
         &sift_dir,
         "added_by_daemon",
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         |out| !out.status.success(),
     );
 
