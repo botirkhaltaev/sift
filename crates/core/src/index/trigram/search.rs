@@ -532,7 +532,7 @@ mod tests {
         tri.extend_from_slice(&0u32.to_le_bytes());
         std::fs::write(dir.join("trigrams.bin"), &tri).expect("write trigrams");
 
-        let result = TrigramIndex::open_tables(
+        let result = TrigramIndex::open(
             &dir,
             Path::new("/root"),
             crate::index::CorpusKind::Directory,

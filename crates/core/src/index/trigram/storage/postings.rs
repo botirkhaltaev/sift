@@ -5,6 +5,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::POSTINGS_MAGIC;
 
 /// Memory-map a file for read access.
@@ -21,21 +22,27 @@ fn mmap_open(path: &Path) -> std::io::Result<Mmap> {
 
 #[derive(Debug)]
 pub struct Postings {
-    mmap: Mmap,
+    data: ArtifactData,
     payload_len: usize,
 }
 
 impl Postings {
     fn bytes(&self) -> &[u8] {
-        self.mmap.as_ref()
+        self.data.as_ref()
     }
 
-    /// Write a postings file and return an mmap-backed instance.
+    pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
+        let bytes = data.as_ref();
+        let payload_len = Self::validate(bytes)?;
+        Ok(Self { data, payload_len })
+    }
+
+    /// Encode a postings payload into bytes (magic + length prefix + payload).
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be written or reopened.
-    pub fn create(path: &Path, payload: &[u8]) -> std::io::Result<Self> {
+    /// Returns an error if the payload length exceeds `u32::MAX`.
+    pub fn encode(payload: &[u8]) -> std::io::Result<Vec<u8>> {
         let mut data = Vec::with_capacity(POSTINGS_MAGIC.len() + 4 + payload.len());
         data.extend_from_slice(&POSTINGS_MAGIC);
         let plen = u32::try_from(payload.len()).map_err(|_| {
@@ -46,6 +53,16 @@ impl Postings {
         })?;
         data.extend_from_slice(&plen.to_le_bytes());
         data.extend_from_slice(payload);
+        Ok(data)
+    }
+
+    /// Write a postings file and return an mmap-backed instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written or reopened.
+    pub fn create(path: &Path, payload: &[u8]) -> std::io::Result<Self> {
+        let data = Self::encode(payload)?;
         std::fs::write(path, &data)?;
         Self::open(path)
     }
@@ -57,9 +74,7 @@ impl Postings {
     /// Returns an error if the file is malformed.
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
-        let bytes = mmap.as_ref();
-        let payload_len = Self::validate(bytes)?;
-        Ok(Self { mmap, payload_len })
+        Self::from_artifact(ArtifactData::Mmap(mmap))
     }
 
     fn validate(bytes: &[u8]) -> std::io::Result<usize> {

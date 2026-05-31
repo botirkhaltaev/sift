@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 bitflags = "2"
 bstr = "1"
+fslock = "0.2"
 grep-cli = "0.1"
 grep-matcher = "0.1"
 grep-printer = "0.3"

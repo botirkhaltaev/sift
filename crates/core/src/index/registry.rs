@@ -4,12 +4,15 @@ use std::path::{Path, PathBuf};
 use super::config::CorpusKind;
 use super::error::IndexError;
 use super::kinds::Index;
+use super::snapshot::Snapshot;
 use super::store;
 
 /// Registry of opened indexes read from a snapshot store.
+///
+/// Owns a [`Snapshot`] that holds a reader lease, preventing the snapshot
+/// from being garbage-collected while searches are active.
 pub struct Indexes {
-    inner: Vec<Index>,
-    root: PathBuf,
+    snapshot: Snapshot,
 }
 
 impl Indexes {
@@ -19,8 +22,7 @@ impl Indexes {
     #[must_use]
     pub fn from_single(index: Index, root: PathBuf) -> Self {
         Self {
-            inner: vec![index],
-            root,
+            snapshot: Snapshot::from_indexes(root, vec![index]),
         }
     }
 
@@ -45,7 +47,7 @@ impl Indexes {
             },
         })?;
 
-        let inner = store.open_current().map_err(|e| match e {
+        let snapshot = store.open_current().map_err(|e| match e {
             crate::Error::Index(ie) => ie,
             crate::Error::Io(io) => IndexError::Io {
                 path: sift_dir.to_path_buf(),
@@ -57,22 +59,17 @@ impl Indexes {
             },
         })?;
 
-        let root = super::meta::StoreMeta::read(sift_dir)
-            .ok()
-            .map(|m| m.root)
-            .unwrap_or_default();
-
-        Ok(Self { inner, root })
+        Ok(Self { snapshot })
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.snapshot.is_empty()
     }
 
     #[must_use]
     pub fn root(&self) -> &Path {
-        &self.root
+        self.snapshot.root()
     }
 
     /// Produce narrowed candidates from all indexes that can narrow the query.
@@ -81,17 +78,19 @@ impl Indexes {
     /// narrows, all narrowed candidate sets are intersected.
     #[must_use]
     pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
-        match self.inner.len() {
+        let indexes = self.snapshot.indexes();
+        match indexes.len() {
             0 => None,
-            1 => self.inner[0].candidates(query),
-            _ => self.candidates_multi(query),
+            1 => indexes[0].candidates(query),
+            _ => Self::candidates_multi(indexes, query),
         }
     }
 
     /// Return all indexed candidates across all registered indexes.
     #[must_use]
     pub(crate) fn complete_candidates(&self) -> Vec<crate::Candidate> {
-        let mut iter = self.inner.iter();
+        let indexes = self.snapshot.indexes();
+        let mut iter = indexes.iter();
         let Some(first) = iter.next() else {
             return Vec::new();
         };
@@ -115,13 +114,12 @@ impl Indexes {
 
     /// Intersect candidates from multiple indexes.
     fn candidates_multi(
-        &self,
+        indexes: &[Index],
         query: &crate::query::QuerySpec<'_>,
     ) -> Option<Vec<crate::Candidate>> {
         use rayon::prelude::*;
 
-        let sets: Vec<Vec<crate::Candidate>> = self
-            .inner
+        let sets: Vec<Vec<crate::Candidate>> = indexes
             .par_iter()
             .filter_map(|idx| idx.candidates(query))
             .collect();
@@ -146,13 +144,14 @@ impl Indexes {
 
     #[must_use]
     pub fn first(&self) -> Option<&Index> {
-        self.inner.first()
+        self.snapshot.indexes().first()
     }
 
     #[must_use]
     pub fn corpus_kind(&self) -> Option<CorpusKind> {
-        let kind = self.inner.first()?.corpus_kind();
-        if self.inner.iter().any(|idx| idx.corpus_kind() != kind) {
+        let indexes = self.snapshot.indexes();
+        let kind = indexes.first()?.corpus_kind();
+        if indexes.iter().any(|idx| idx.corpus_kind() != kind) {
             return None;
         }
         Some(kind)

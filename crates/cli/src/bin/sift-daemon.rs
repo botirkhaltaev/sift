@@ -14,6 +14,10 @@ struct DaemonArgs {
     /// Build or update once, then exit instead of watching for changes.
     #[arg(long)]
     once: bool,
+
+    /// Internal: startup handshake file created after the watcher is active.
+    #[arg(long, hide = true)]
+    ready_file: Option<PathBuf>,
 }
 
 fn main() {
@@ -21,6 +25,7 @@ fn main() {
     let config = sift_grep::daemon::DaemonRunConfig {
         sift_dir: args.sift_dir,
         init_root: args.init_root,
+        ready_file: args.ready_file,
     };
     let runner = sift_grep::daemon::DaemonRunner::new(config);
     let result = if args.once {

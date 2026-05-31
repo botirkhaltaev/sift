@@ -1,3 +1,4 @@
+pub mod artifacts;
 pub mod config;
 pub mod error;
 pub mod kinds;
@@ -7,6 +8,7 @@ pub mod snapshot;
 pub mod store;
 pub mod trigram;
 
+pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexConfig};
 pub use error::IndexError;
 pub use kinds::{FileId, Index, IndexId, IndexKind, PlanMode, QueryPlanOutput};

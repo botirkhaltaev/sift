@@ -218,7 +218,9 @@ fn daemon_reindexes_on_file_changes() {
     );
 
     // Run the daemon event loop in a thread.
+    let ready_path = sift_dir.join("daemon-ready.test");
     let daemon_sift_dir = sift_dir.clone();
+    let daemon_ready_path = ready_path.clone();
     let shutdown = Arc::new(AtomicBool::new(false));
     let s = Arc::clone(&shutdown);
 
@@ -226,48 +228,126 @@ fn daemon_reindexes_on_file_changes() {
         let config = sift_grep::daemon::DaemonRunConfig {
             sift_dir: daemon_sift_dir,
             init_root: None,
+            ready_file: Some(daemon_ready_path),
         };
         let runner = sift_grep::daemon::DaemonRunner::new(config);
         runner.run_until(&s).unwrap();
     });
 
-    std::thread::sleep(Duration::from_millis(500));
+    // Wait for the daemon to signal readiness.  The ready file is created
+    // after the daemon acquires the lock AND sets up the filesystem watcher,
+    // so this confirms the daemon is fully ready to receive events.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if ready_path.exists() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not signal readiness within 10s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 
-    let lock_path = sift_dir.join("lock");
-    let mut lock = fslock::LockFile::open(&lock_path).unwrap();
+    let mut lock = fslock::LockFile::open(&sift_dir.join("lock")).unwrap();
     assert!(!lock.try_lock().unwrap(), "daemon did not acquire lock");
 
-    // --- Add a file ---
+    // Write all changes at once (create + modify) so they land in a single
+    // FSEvent batch.  On macOS CI, `FSEvent` callbacks are slow enough that
+    // sequential writes can cause timeouts (see notify-rs/notify#935).
     fs::write(root.join("b.txt"), "added_by_daemon\n").unwrap();
+    fs::write(root.join("a.txt"), "initial_token modified_by_daemon\n").unwrap();
+
+    // Both changes are picked up by a single watcher callback + refresh.
     poll_until(
         &sift_dir,
         "added_by_daemon",
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         |out| {
             out.status.success()
                 && normalize(&String::from_utf8_lossy(&out.stdout)).contains("b.txt")
         },
     );
-
-    // --- Modify a file ---
-    fs::write(root.join("a.txt"), "initial_token modified_by_daemon\n").unwrap();
     poll_until(
         &sift_dir,
         "modified_by_daemon",
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         |out| {
             out.status.success()
                 && normalize(&String::from_utf8_lossy(&out.stdout)).contains("a.txt")
         },
     );
 
-    // --- Delete a file ---
+    // --- Delete a file (requires a second watcher callback) ---
     fs::remove_file(root.join("b.txt")).unwrap();
     poll_until(
         &sift_dir,
         "added_by_daemon",
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         |out| !out.status.success(),
+    );
+
+    shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+}
+
+#[test]
+fn daemon_builds_initial_index_on_startup_when_no_current() {
+    let dir = fresh_dir("no-current");
+    let root = dir.path().to_path_buf();
+    let sift_dir = root.join(".sift");
+
+    // Write StoreMeta but do NOT build an index (no CURRENT file).
+    let meta = StoreMeta::new(
+        root.clone(),
+        CorpusKind::Directory,
+        false,
+        vec![IndexKind::Trigram],
+    );
+    fs::create_dir_all(&sift_dir).unwrap();
+    StoreMeta::write(&meta, &sift_dir).unwrap();
+    fs::write(root.join("hello.txt"), "startup_content\n").unwrap();
+
+    // Run the daemon event loop in a thread — it should build the initial
+    // index as a background refresh since CURRENT is missing.
+    let ready_path = sift_dir.join("daemon-ready.no-current");
+    let daemon_sift_dir = sift_dir.clone();
+    let daemon_ready_path = ready_path.clone();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let s = Arc::clone(&shutdown);
+
+    let handle = std::thread::spawn(move || {
+        let config = sift_grep::daemon::DaemonRunConfig {
+            sift_dir: daemon_sift_dir,
+            init_root: None,
+            ready_file: Some(daemon_ready_path),
+        };
+        let runner = sift_grep::daemon::DaemonRunner::new(config);
+        runner.run_until(&s).unwrap();
+    });
+
+    // Wait for the daemon to signal readiness.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if ready_path.exists() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not signal readiness within 10s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Verify the daemon built the index by searching within a timeout.
+    poll_until(
+        &sift_dir,
+        "startup_content",
+        Duration::from_secs(10),
+        |out| {
+            out.status.success()
+                && normalize(&String::from_utf8_lossy(&out.stdout)).contains("hello.txt")
+        },
     );
 
     shutdown.store(true, Ordering::Relaxed);

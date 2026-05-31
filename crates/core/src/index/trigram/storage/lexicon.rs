@@ -4,6 +4,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::LEXICON_MAGIC;
 
 /// Memory-map a file for read access.
@@ -30,14 +31,14 @@ pub struct LexiconEntry {
 /// Binary search over on-disk sorted trigram table.
 #[derive(Debug)]
 pub struct Lexicon {
-    mmap: Mmap,
+    data: ArtifactData,
     count: usize,
 }
 
 impl Lexicon {
     const ENTRY_SIZE: usize = 15;
 
-    fn encode(entries: &[LexiconEntry]) -> std::io::Result<Vec<u8>> {
+    pub fn encode(entries: &[LexiconEntry]) -> std::io::Result<Vec<u8>> {
         let mut data =
             Vec::with_capacity(LEXICON_MAGIC.len() + 4 + entries.len() * Self::ENTRY_SIZE);
         data.extend_from_slice(&LEXICON_MAGIC);
@@ -57,7 +58,13 @@ impl Lexicon {
     }
 
     fn bytes(&self) -> &[u8] {
-        self.mmap.as_ref()
+        self.data.as_ref()
+    }
+
+    pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
+        let bytes = data.as_ref();
+        let count = Self::validate(bytes)?;
+        Ok(Self { data, count })
     }
 
     /// Write a lexicon file and return an mmap-backed instance.
@@ -78,9 +85,7 @@ impl Lexicon {
     /// Returns an error if the file is malformed.
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
-        let bytes = mmap.as_ref();
-        let count = Self::validate(bytes)?;
-        Ok(Self { mmap, count })
+        Self::from_artifact(ArtifactData::Mmap(mmap))
     }
 
     fn validate(bytes: &[u8]) -> std::io::Result<usize> {
