@@ -15,7 +15,7 @@ struct DaemonArgs {
     #[arg(long)]
     once: bool,
 
-    /// Internal: startup handshake file created after acquiring the daemon lock.
+    /// Internal: startup handshake file created after the watcher is active.
     #[arg(long, hide = true)]
     ready_file: Option<PathBuf>,
 }

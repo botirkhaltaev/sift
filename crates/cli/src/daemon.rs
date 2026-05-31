@@ -34,7 +34,7 @@ pub struct SpawnRequest {
     pub exe: PathBuf,
     pub sift_dir: PathBuf,
     pub init_root: Option<PathBuf>,
-    /// Startup handshake file the child creates after acquiring the daemon lock.
+    /// Startup handshake file the child creates after the watcher is active.
     pub ready_file: Option<PathBuf>,
 }
 
@@ -177,7 +177,7 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
 }
 
 // ---------------------------------------------------------------------------
-// Coordinator event types
+// Coordinator types
 // ---------------------------------------------------------------------------
 
 /// Events flowing through the coordinator channel.
@@ -186,11 +186,88 @@ enum CoordinatorEvent {
     RefreshComplete,
 }
 
-/// State of the coordinator loop.
+/// Input to the coordinator state machine.
+enum CoordinatorInput {
+    ChangeObserved { debounce: Duration },
+    DebounceElapsed,
+    RefreshFinished,
+}
+
+/// Action produced by a state transition.
+#[derive(Debug, PartialEq)]
+enum CoordinatorAction {
+    None,
+    StartRefresh,
+}
+
+/// Whether a follow-up refresh was requested while one was already running.
+#[derive(Clone, Copy)]
+enum FollowUpRefresh {
+    None,
+    Requested,
+}
+
+/// Time remaining in a debounce window.
+struct DebounceState {
+    deadline: Instant,
+}
+
+/// Refresh currently running, with an optional follow-up request.
+struct RefreshState {
+    follow_up: FollowUpRefresh,
+}
+
+/// Phase of the coordinator loop.
 enum CoordinatorState {
     Idle,
-    Debouncing { deadline: Instant },
-    Refreshing { need_another: bool },
+    Debouncing(DebounceState),
+    Refreshing(RefreshState),
+}
+
+impl CoordinatorState {
+    fn timeout(&self, fallback: Duration) -> Duration {
+        match self {
+            Self::Debouncing(state) => state.deadline.saturating_duration_since(Instant::now()),
+            Self::Idle | Self::Refreshing(_) => fallback,
+        }
+    }
+
+    fn transition(self, input: CoordinatorInput) -> (Self, CoordinatorAction) {
+        match (self, input) {
+            (Self::Idle | Self::Debouncing(_), CoordinatorInput::ChangeObserved { debounce }) => (
+                Self::Debouncing(DebounceState {
+                    deadline: Instant::now() + debounce,
+                }),
+                CoordinatorAction::None,
+            ),
+            (Self::Debouncing(_), CoordinatorInput::DebounceElapsed) => (
+                Self::Refreshing(RefreshState {
+                    follow_up: FollowUpRefresh::None,
+                }),
+                CoordinatorAction::StartRefresh,
+            ),
+            (Self::Refreshing(_), CoordinatorInput::ChangeObserved { .. }) => (
+                Self::Refreshing(RefreshState {
+                    follow_up: FollowUpRefresh::Requested,
+                }),
+                CoordinatorAction::None,
+            ),
+            (Self::Refreshing(state), CoordinatorInput::RefreshFinished) => match state.follow_up {
+                FollowUpRefresh::Requested => (
+                    Self::Refreshing(RefreshState {
+                        follow_up: FollowUpRefresh::None,
+                    }),
+                    CoordinatorAction::StartRefresh,
+                ),
+                FollowUpRefresh::None => (Self::Idle, CoordinatorAction::None),
+            },
+            (state, _) => (state, CoordinatorAction::None),
+        }
+    }
+
+    const fn is_refreshing(&self) -> bool {
+        matches!(self, Self::Refreshing(_))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +287,7 @@ struct DaemonMeta {
 pub struct DaemonRunConfig {
     pub sift_dir: PathBuf,
     pub init_root: Option<PathBuf>,
-    /// Internal startup handshake: after acquiring the daemon lock, the child
+    /// Internal startup handshake: after the watcher is active, the child
     /// atomically creates this file to signal readiness to the parent.
     pub ready_file: Option<PathBuf>,
 }
@@ -323,47 +400,30 @@ impl DaemonRunner {
         }
     }
 
-    fn build_initial_snapshot(
-        sift_dir: &Path,
-        root: &Path,
-        corpus_kind: sift_core::CorpusKind,
-        follow_links: bool,
-        kinds: &[IndexKind],
-    ) -> anyhow::Result<()> {
-        let mut store =
-            IndexStore::open_or_create(sift_dir, root, corpus_kind, follow_links, kinds)?;
-        let exclude = sift_dir
-            .strip_prefix(root)
-            .unwrap_or(sift_dir)
-            .to_path_buf();
-        let build_config = IndexConfig {
-            corpus: CorpusSpec {
-                root,
-                kind: corpus_kind,
-                follow_links,
-                include_paths: &[],
-                exclude_paths: &[exclude],
-            },
-            visibility: VisibilityConfig::default(),
-        };
-        store.build(kinds, &build_config)?;
-        Ok(())
-    }
-
     /// Run the daemon forever (production use).
+    ///
+    /// Lock-acquisition, metadata, and watcher errors are propagated
+    /// immediately.  Index build/update failures during background
+    /// refreshes are logged to stderr and do not propagate — the
+    /// daemon stays running and retries on the next file change.
     ///
     /// # Errors
     ///
-    /// Propagates lock-acquisition, metadata, watcher, and build errors.
+    /// Propagates lock-acquisition, metadata, and watcher setup errors.
     pub fn run(&self) -> anyhow::Result<()> {
         self.run_until(&AtomicBool::new(false))
     }
 
     /// Run the daemon until `shutdown` becomes `true`.
     ///
+    /// Lock-acquisition, metadata, and watcher errors are propagated
+    /// immediately.  Index build/update failures during background
+    /// refreshes are logged to stderr and do not propagate — the
+    /// daemon stays running and retries on the next file change.
+    ///
     /// # Errors
     ///
-    /// Propagates lock-acquisition, metadata, watcher, and build errors.
+    /// Propagates lock-acquisition, metadata, and watcher setup errors.
     pub fn run_until(&self, shutdown: &AtomicBool) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.config.sift_dir)?;
         let sift_dir = self
@@ -378,26 +438,7 @@ impl DaemonRunner {
             return Ok(());
         }
 
-        // Signal readiness to the parent process if started via the
-        // startup handshake protocol.  Write atomically so the parent
-        // never observes a partial file.
-        if let Some(ready) = &self.config.ready_file {
-            let tmp = ready.with_extension("tmp");
-            std::fs::write(&tmp, "")?;
-            std::fs::rename(&tmp, ready)?;
-        }
-
-        let DaemonMeta {
-            root,
-            corpus_kind,
-            follow_links,
-            kinds,
-        } = Self::load_daemon_meta(&sift_dir, self.config.init_root.as_ref())?;
-
-        // Build initial snapshot if none exists.
-        if !sift_dir.join("CURRENT").exists() {
-            Self::build_initial_snapshot(&sift_dir, &root, corpus_kind, follow_links, &kinds)?;
-        }
+        let meta = Self::load_daemon_meta(&sift_dir, self.config.init_root.as_ref())?;
 
         // Unified coordinator channel: receives both watcher events and
         // refresh-completion signals.
@@ -412,104 +453,133 @@ impl DaemonRunner {
                 }
             })?;
         let mut watcher = watcher;
-        watcher.watch(&root, RecursiveMode::Recursive)?;
+        watcher.watch(&meta.root, RecursiveMode::Recursive)?;
+
+        // Signal readiness after acquiring the daemon lock AND setting up the
+        // filesystem watcher, so the parent knows the daemon is fully ready to
+        // receive events.  Write atomically so the parent never observes a
+        // partial file.
+        if let Some(ready) = &self.config.ready_file {
+            let tmp = ready.with_extension("tmp");
+            std::fs::write(&tmp, "")?;
+            std::fs::rename(&tmp, ready)?;
+        }
 
         let debounce = Duration::from_millis(DEBOUNCE_MS);
         let mut state = CoordinatorState::Idle;
 
+        // If there is no current snapshot, schedule an initial refresh through
+        // the normal refresh path instead of blocking before readiness.
+        if !sift_dir.join("CURRENT").exists() {
+            state = CoordinatorState::Refreshing(RefreshState {
+                follow_up: FollowUpRefresh::None,
+            });
+            Self::spawn_refresh(
+                tx.clone(),
+                &sift_dir,
+                &meta.kinds,
+                &meta.root,
+                meta.corpus_kind,
+                meta.follow_links,
+            );
+        }
+
         loop {
             if shutdown.load(Ordering::Relaxed) {
-                // Let any active refresh worker finish before releasing the
-                // daemon lock so we don't orphan a long-running refresh.
-                while matches!(state, CoordinatorState::Refreshing { .. }) {
-                    match rx.recv_timeout(Duration::from_secs(1)) {
-                        Ok(CoordinatorEvent::RefreshComplete) => {
-                            state = CoordinatorState::Idle;
-                        }
-                        Ok(CoordinatorEvent::Fs(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    }
-                }
+                Self::drain_active_refresh(&rx, &mut state);
                 return Ok(());
             }
 
-            let timeout = match &state {
-                CoordinatorState::Debouncing { deadline } => {
-                    deadline.saturating_duration_since(Instant::now())
-                }
-                CoordinatorState::Idle | CoordinatorState::Refreshing { .. } => debounce,
-            };
+            let (next, continue_running) =
+                Self::handle_one_event(&rx, tx.clone(), state, &sift_dir, &meta, debounce);
 
-            match rx.recv_timeout(timeout) {
-                Ok(CoordinatorEvent::Fs(event)) => {
-                    state = Self::observe(state, &event, &sift_dir, debounce);
-                }
-                Ok(CoordinatorEvent::RefreshComplete) => match state {
-                    CoordinatorState::Refreshing { need_another: true } => {
-                        Self::spawn_refresh(
-                            tx.clone(),
-                            &sift_dir,
-                            &kinds,
-                            &root,
-                            corpus_kind,
-                            follow_links,
-                        );
-                        state = CoordinatorState::Refreshing {
-                            need_another: false,
-                        };
-                    }
-                    _ => {
-                        state = CoordinatorState::Idle;
-                    }
-                },
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    match state {
-                        CoordinatorState::Debouncing { .. } => {
-                            Self::spawn_refresh(
-                                tx.clone(),
-                                &sift_dir,
-                                &kinds,
-                                &root,
-                                corpus_kind,
-                                follow_links,
-                            );
-                            state = CoordinatorState::Refreshing {
-                                need_another: false,
-                            };
-                        }
-                        CoordinatorState::Idle | CoordinatorState::Refreshing { .. } => {
-                            // Nothing to do.
-                        }
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            state = next;
+            if !continue_running {
+                return Ok(());
             }
         }
     }
 
-    /// Process an incoming filesystem event and transition state.
-    fn observe(
-        state: CoordinatorState,
-        event: &notify::Event,
-        sift_dir: &Path,
-        debounce: Duration,
-    ) -> CoordinatorState {
-        // Filter out access events and .sift directory events.
-        if matches!(event.kind, notify::EventKind::Access(_)) {
-            return state;
-        }
-        if event.paths.iter().any(|p| p.starts_with(sift_dir)) {
-            return state;
-        }
-
-        match state {
-            CoordinatorState::Refreshing { .. } => {
-                CoordinatorState::Refreshing { need_another: true }
+    /// Drain any active refresh worker before releasing the daemon lock.
+    fn drain_active_refresh(rx: &mpsc::Receiver<CoordinatorEvent>, state: &mut CoordinatorState) {
+        while state.is_refreshing() {
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(CoordinatorEvent::RefreshComplete) => {
+                    *state = CoordinatorState::Idle;
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            _ => CoordinatorState::Debouncing {
-                deadline: Instant::now() + debounce,
-            },
         }
+    }
+
+    /// Receive and handle one coordinator event.  Returns the next state and
+    /// whether the loop should continue.
+    fn handle_one_event(
+        rx: &mpsc::Receiver<CoordinatorEvent>,
+        tx: mpsc::Sender<CoordinatorEvent>,
+        state: CoordinatorState,
+        sift_dir: &Path,
+        meta: &DaemonMeta,
+        debounce: Duration,
+    ) -> (CoordinatorState, bool) {
+        let timeout = state.timeout(debounce);
+
+        match rx.recv_timeout(timeout) {
+            Ok(CoordinatorEvent::Fs(event)) => {
+                if Self::should_ignore_event(&event, sift_dir) {
+                    return (state, true);
+                }
+                let (next, action) =
+                    state.transition(CoordinatorInput::ChangeObserved { debounce });
+                if matches!(action, CoordinatorAction::StartRefresh) {
+                    Self::spawn_refresh(
+                        tx,
+                        sift_dir,
+                        &meta.kinds,
+                        &meta.root,
+                        meta.corpus_kind,
+                        meta.follow_links,
+                    );
+                }
+                (next, true)
+            }
+            Ok(CoordinatorEvent::RefreshComplete) => {
+                let (next, action) = state.transition(CoordinatorInput::RefreshFinished);
+                if matches!(action, CoordinatorAction::StartRefresh) {
+                    Self::spawn_refresh(
+                        tx,
+                        sift_dir,
+                        &meta.kinds,
+                        &meta.root,
+                        meta.corpus_kind,
+                        meta.follow_links,
+                    );
+                }
+                (next, true)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let (next, action) = state.transition(CoordinatorInput::DebounceElapsed);
+                if matches!(action, CoordinatorAction::StartRefresh) {
+                    Self::spawn_refresh(
+                        tx,
+                        sift_dir,
+                        &meta.kinds,
+                        &meta.root,
+                        meta.corpus_kind,
+                        meta.follow_links,
+                    );
+                }
+                (next, true)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => (state, false),
+        }
+    }
+
+    /// Returns `true` when a filesystem event should be ignored.
+    fn should_ignore_event(event: &notify::Event, sift_dir: &Path) -> bool {
+        matches!(event.kind, notify::EventKind::Access(_))
+            || event.paths.iter().any(|p| p.starts_with(sift_dir))
     }
 
     /// Spawn a background refresh worker thread.
@@ -701,6 +771,151 @@ mod tests {
         let outcome = sup.spawn(&config).unwrap();
         assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
         assert_eq!(spawner.call_count(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // CoordinatorState::transition tests
+    // -----------------------------------------------------------------------
+
+    const DEBOUNCE: Duration = Duration::from_mins(1);
+
+    #[test]
+    fn idle_change_observed_transitions_to_debouncing() {
+        let (next, action) = CoordinatorState::Idle
+            .transition(CoordinatorInput::ChangeObserved { debounce: DEBOUNCE });
+        assert!(matches!(next, CoordinatorState::Debouncing(_)));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn idle_debounce_elapsed_stays_idle() {
+        let (next, action) = CoordinatorState::Idle.transition(CoordinatorInput::DebounceElapsed);
+        assert!(matches!(next, CoordinatorState::Idle));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn idle_refresh_finished_stays_idle() {
+        let (next, action) = CoordinatorState::Idle.transition(CoordinatorInput::RefreshFinished);
+        assert!(matches!(next, CoordinatorState::Idle));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn debouncing_change_observed_resets_debounce() {
+        let state = CoordinatorState::Debouncing(DebounceState {
+            deadline: Instant::now(),
+        });
+        let (next, action) =
+            state.transition(CoordinatorInput::ChangeObserved { debounce: DEBOUNCE });
+        assert!(matches!(next, CoordinatorState::Debouncing(_)));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn debouncing_debounce_elapsed_starts_refresh() {
+        let state = CoordinatorState::Debouncing(DebounceState {
+            deadline: Instant::now(),
+        });
+        let (next, action) = state.transition(CoordinatorInput::DebounceElapsed);
+        assert!(
+            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::None))
+        );
+        assert_eq!(action, CoordinatorAction::StartRefresh);
+    }
+
+    #[test]
+    fn debouncing_refresh_finished_stays_debouncing() {
+        let state = CoordinatorState::Debouncing(DebounceState {
+            deadline: Instant::now() + DEBOUNCE,
+        });
+        let (next, action) = state.transition(CoordinatorInput::RefreshFinished);
+        assert!(matches!(next, CoordinatorState::Debouncing(_)));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn refreshing_change_observed_requests_follow_up() {
+        let state = CoordinatorState::Refreshing(RefreshState {
+            follow_up: FollowUpRefresh::None,
+        });
+        let (next, action) =
+            state.transition(CoordinatorInput::ChangeObserved { debounce: DEBOUNCE });
+        assert!(
+            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::Requested))
+        );
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn refreshing_debounce_elapsed_stays_refreshing() {
+        let state = CoordinatorState::Refreshing(RefreshState {
+            follow_up: FollowUpRefresh::None,
+        });
+        let (next, action) = state.transition(CoordinatorInput::DebounceElapsed);
+        assert!(
+            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::None))
+        );
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn refreshing_finished_without_follow_up_returns_to_idle() {
+        let state = CoordinatorState::Refreshing(RefreshState {
+            follow_up: FollowUpRefresh::None,
+        });
+        let (next, action) = state.transition(CoordinatorInput::RefreshFinished);
+        assert!(matches!(next, CoordinatorState::Idle));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn refreshing_finished_with_follow_up_restarts_refresh() {
+        let state = CoordinatorState::Refreshing(RefreshState {
+            follow_up: FollowUpRefresh::Requested,
+        });
+        let (next, action) = state.transition(CoordinatorInput::RefreshFinished);
+        assert!(
+            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::None))
+        );
+        assert_eq!(action, CoordinatorAction::StartRefresh);
+    }
+
+    #[test]
+    fn refreshing_finished_with_follow_up_clears_request_flag() {
+        // Regression: follow-up flag must be reset to None when restarting.
+        let state = CoordinatorState::Refreshing(RefreshState {
+            follow_up: FollowUpRefresh::Requested,
+        });
+        let (next, _action) = state.transition(CoordinatorInput::RefreshFinished);
+        match next {
+            CoordinatorState::Refreshing(s) => assert!(
+                matches!(s.follow_up, FollowUpRefresh::None),
+                "follow_up should be None after restart"
+            ),
+            _ => panic!("expected Refreshing state"),
+        }
+    }
+
+    #[test]
+    fn coordinator_state_is_refreshing_returns_true_for_refreshing() {
+        let state = CoordinatorState::Refreshing(RefreshState {
+            follow_up: FollowUpRefresh::None,
+        });
+        assert!(state.is_refreshing());
+    }
+
+    #[test]
+    fn coordinator_state_is_refreshing_returns_false_for_idle() {
+        assert!(!CoordinatorState::Idle.is_refreshing());
+    }
+
+    #[test]
+    fn coordinator_state_is_refreshing_returns_false_for_debouncing() {
+        let state = CoordinatorState::Debouncing(DebounceState {
+            deadline: Instant::now(),
+        });
+        assert!(!state.is_refreshing());
     }
 
     #[test]

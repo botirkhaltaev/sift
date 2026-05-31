@@ -1,27 +1,27 @@
 use std::path::{Path, PathBuf};
 
 use super::snapshot::{
-    OnDiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotRead, SnapshotStore,
+    DiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotRead, SnapshotStore,
     SnapshotWrite, SnapshotWriterSession,
 };
 use super::{CorpusKind, IndexError};
 
 /// Index lifecycle orchestrator backed by a [`SnapshotStore`] for atomic
 /// persistence and coordination.
-pub struct IndexStore<S: SnapshotStore = OnDiskSnapshotStore> {
+pub struct IndexStore<S: SnapshotStore = DiskSnapshotStore> {
     snapshots: S,
     sift_dir: PathBuf,
     meta: Option<super::meta::StoreMeta>,
 }
 
-impl IndexStore<OnDiskSnapshotStore> {
+impl IndexStore<DiskSnapshotStore> {
     /// Open an existing store at `sift_dir`.
     ///
     /// # Errors
     ///
     /// Returns an error if `CURRENT` exists but cannot be read.
     pub fn open(sift_dir: &Path) -> crate::Result<Self> {
-        let snapshots = OnDiskSnapshotStore::open(sift_dir)?;
+        let snapshots = DiskSnapshotStore::open(sift_dir)?;
         let meta = super::meta::StoreMeta::read(sift_dir).ok();
         Ok(Self {
             snapshots,
@@ -83,7 +83,7 @@ impl IndexStore<OnDiskSnapshotStore> {
     /// unknown, or the snapshot could not be opened after retry.
     pub(crate) fn open_current(&self) -> crate::Result<super::snapshot::Snapshot> {
         for attempt in 0..2 {
-            let Some(current_id) = OnDiskSnapshotStore::read_current_id(&self.sift_dir)? else {
+            let Some(current_id) = DiskSnapshotStore::read_current_id(&self.sift_dir)? else {
                 return Ok(super::snapshot::Snapshot::empty(PathBuf::new()));
             };
 
