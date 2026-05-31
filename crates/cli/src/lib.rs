@@ -97,6 +97,11 @@ pub fn main_entry() -> ExitCode {
         };
     }
 
+    // Re-spawn the daemon if it exited due to idle timeout.
+    if let Err(e) = daemon::DaemonSupervisor::new_process().spawn(&cfg.daemon.spawn) {
+        eprintln!("sift: warning: daemon not started: {e}");
+    }
+
     let no_messages = resolve_visibility_and_ignore(&args)
         .msg_flags
         .contains(MessageFlags::NO_MESSAGES);

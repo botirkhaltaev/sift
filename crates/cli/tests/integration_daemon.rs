@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+const LONG_IDLE: Duration = Duration::from_mins(10);
+
 use common::assert_exit_code;
 use common::normalize;
 use sift_core::{CorpusKind, IndexKind, StoreMeta};
@@ -229,6 +231,7 @@ fn daemon_reindexes_on_file_changes() {
             sift_dir: daemon_sift_dir,
             init_root: None,
             ready_file: Some(daemon_ready_path),
+            idle_timeout: LONG_IDLE,
         };
         let runner = sift_grep::daemon::DaemonRunner::new(config);
         runner.run_until(&s).unwrap();
@@ -321,6 +324,7 @@ fn daemon_builds_initial_index_on_startup_when_no_current() {
             sift_dir: daemon_sift_dir,
             init_root: None,
             ready_file: Some(daemon_ready_path),
+            idle_timeout: LONG_IDLE,
         };
         let runner = sift_grep::daemon::DaemonRunner::new(config);
         runner.run_until(&s).unwrap();
@@ -352,4 +356,69 @@ fn daemon_builds_initial_index_on_startup_when_no_current() {
 
     shutdown.store(true, Ordering::Relaxed);
     handle.join().unwrap();
+}
+
+#[test]
+fn daemon_exits_after_idle_timeout() {
+    let dir = fresh_dir("idle-exit");
+    let root = dir.path().to_path_buf();
+    let sift_dir = root.join(".sift");
+
+    let meta = StoreMeta::new(
+        root.clone(),
+        CorpusKind::Directory,
+        false,
+        vec![IndexKind::Trigram],
+    );
+    fs::create_dir_all(&sift_dir).unwrap();
+    StoreMeta::write(&meta, &sift_dir).unwrap();
+    fs::write(root.join("a.txt"), "idle_test\n").unwrap();
+
+    let ready_path = sift_dir.join("daemon-ready.idle");
+    let daemon_sift_dir = sift_dir.clone();
+    let daemon_ready_path = ready_path.clone();
+
+    let handle = std::thread::spawn(move || {
+        let config = sift_grep::daemon::DaemonRunConfig {
+            sift_dir: daemon_sift_dir,
+            init_root: None,
+            ready_file: Some(daemon_ready_path),
+            idle_timeout: Duration::from_secs(2),
+        };
+        let runner = sift_grep::daemon::DaemonRunner::new(config);
+        runner.run_until(&AtomicBool::new(false)).unwrap();
+    });
+
+    // Wait for the daemon to signal readiness.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if ready_path.exists() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not signal readiness within 10s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Do NOT generate any filesystem events.  The daemon should exit after
+    // the idle timeout (~2 seconds).
+    let start = Instant::now();
+    handle.join().unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed >= Duration::from_secs(1),
+        "daemon exited too early: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "daemon took too long to exit: {elapsed:?}"
+    );
+
+    // Verify the daemon lock is released.
+    let lock_path = sift_dir.join("lock");
+    let mut lock = fslock::LockFile::open(&lock_path).unwrap();
+    assert!(lock.try_lock().unwrap(), "daemon lock should be released");
 }
