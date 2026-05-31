@@ -353,3 +353,91 @@ fn daemon_builds_initial_index_on_startup_when_no_current() {
     shutdown.store(true, Ordering::Relaxed);
     handle.join().unwrap();
 }
+
+#[test]
+fn daemon_reconciles_offline_changes() {
+    let dir = fresh_dir("reconcile");
+    let root = dir.path().to_path_buf();
+    let sift_dir = root.join(".sift");
+
+    // Set up project with initial file and metadata.
+    let meta = StoreMeta::new(
+        root.clone(),
+        CorpusKind::Directory,
+        false,
+        vec![IndexKind::Trigram],
+    );
+    fs::create_dir_all(&sift_dir).unwrap();
+    StoreMeta::write(&meta, &sift_dir).unwrap();
+    fs::write(root.join("a.txt"), "original_content\n").unwrap();
+
+    // Build the initial index (no daemon running).
+    let status = Command::new(sift_bin())
+        .arg("--sift-dir")
+        .arg(&sift_dir)
+        .arg("build")
+        .arg(&root)
+        .env("SIFT_NO_DAEMON", "1")
+        .status()
+        .unwrap();
+    assert!(status.success(), "initial build failed");
+
+    // Verify baseline search works.
+    let out = search(&sift_dir, "original_content");
+    assert_exit_code(&out, 0);
+
+    // --- Simulate offline changes (daemon is NOT running) ---
+    fs::write(root.join("b.txt"), "offline_addition\n").unwrap();
+    fs::write(root.join("a.txt"), "original_content offline_edit\n").unwrap();
+
+    // Confirm the offline addition is NOT yet in the index.
+    let out = search(&sift_dir, "offline_addition");
+    assert_exit_code(&out, 1);
+
+    // Start the daemon — it should reconcile on startup.
+    let ready_path = sift_dir.join("daemon-ready.reconcile");
+    let daemon_sift_dir = sift_dir.clone();
+    let daemon_ready_path = ready_path.clone();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let s = Arc::clone(&shutdown);
+
+    let handle = std::thread::spawn(move || {
+        let config = sift_grep::daemon::DaemonRunConfig {
+            sift_dir: daemon_sift_dir,
+            init_root: None,
+            ready_file: Some(daemon_ready_path),
+        };
+        let runner = sift_grep::daemon::DaemonRunner::new(config);
+        runner.run_until(&s).unwrap();
+    });
+
+    // Wait for the daemon to signal readiness.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if ready_path.exists() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not signal readiness within 10s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // The startup reconciliation should pick up the offline changes.
+    poll_until(
+        &sift_dir,
+        "offline_addition",
+        Duration::from_secs(10),
+        |out| {
+            out.status.success()
+                && normalize(&String::from_utf8_lossy(&out.stdout)).contains("b.txt")
+        },
+    );
+    poll_until(&sift_dir, "offline_edit", Duration::from_secs(10), |out| {
+        out.status.success() && normalize(&String::from_utf8_lossy(&out.stdout)).contains("a.txt")
+    });
+
+    shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+}
