@@ -29,7 +29,9 @@ struct DaemonArgs {
 fn main() {
     let args = DaemonArgs::parse();
     let idle_timeout = if args.idle_timeout_secs == 0 {
-        Duration::from_secs(u64::MAX / 2)
+        // Effectively infinite — ~100 years; small enough to avoid
+        // Instant overflow on all platforms.
+        Duration::from_hours(876_000)
     } else {
         Duration::from_secs(args.idle_timeout_secs)
     };

@@ -367,7 +367,7 @@ pub struct DaemonRunConfig {
     /// atomically creates this file to signal readiness to the parent.
     pub ready_file: Option<PathBuf>,
     /// How long the daemon stays alive with no filesystem activity before
-    /// exiting gracefully.  Defaults to 10 minutes.
+    /// exiting gracefully.  Defaults to 2 minutes.
     pub idle_timeout: Duration,
 }
 
