@@ -288,11 +288,16 @@ impl CoordinatorState {
         })
     }
 
+    /// Maximum `recv_timeout` duration — keeps the loop responsive to
+    /// the `shutdown` flag even when the idle deadline is far away.
+    const POLL_CAP: Duration = Duration::from_secs(1);
+
     fn timeout(&self) -> Duration {
         match self {
             Self::Idle(state) => state
                 .idle_deadline
-                .saturating_duration_since(Instant::now()),
+                .saturating_duration_since(Instant::now())
+                .min(Self::POLL_CAP),
             Self::Debouncing(state) => state.deadline.saturating_duration_since(Instant::now()),
             Self::Refreshing(_) => Duration::from_mins(1),
         }
@@ -532,34 +537,28 @@ impl DaemonRunner {
         })?;
         watcher.watch(&meta.root, RecursiveMode::Recursive)?;
 
-        // Signal readiness after acquiring the daemon lock AND setting up the
-        // filesystem watcher, so the parent knows the daemon is fully ready to
-        // receive events.  Write atomically so the parent never observes a
-        // partial file.
+        let debounce = Duration::from_millis(DEBOUNCE_MS);
+        let idle_timeout = self.config.idle_timeout;
+
+        // Reconcile synchronously before entering the event loop: if
+        // CURRENT is missing, `IndexStore::update` builds the first index;
+        // if CURRENT exists, it compares fingerprints and rebuilds only
+        // indexes whose corpus changed while the daemon was down.  Doing
+        // this synchronously keeps startup out of the coordinator state
+        // machine and guarantees the index is up-to-date before we signal
+        // readiness or start the idle timer.
+        Self::refresh_index(&sift_dir, &meta);
+
+        // Signal readiness after acquiring the daemon lock, setting up the
+        // filesystem watcher, AND completing the initial reconciliation, so
+        // the parent knows the daemon is fully ready.
         if let Some(ready) = &self.config.ready_file {
             let tmp = ready.with_extension("tmp");
             std::fs::write(&tmp, "")?;
             std::fs::rename(&tmp, ready)?;
         }
 
-        let debounce = Duration::from_millis(DEBOUNCE_MS);
-        let idle_timeout = self.config.idle_timeout;
-
-        // Always reconcile on startup: if CURRENT is missing,
-        // IndexStore::update builds the first index; if CURRENT exists, it
-        // compares fingerprints and rebuilds only indexes whose corpus
-        // changed while the daemon was down.
-        let mut state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::None,
-        });
-        Self::spawn_refresh(
-            tx.clone(),
-            &sift_dir,
-            &meta.kinds,
-            &meta.root,
-            meta.corpus_kind,
-            meta.follow_links,
-        );
+        let mut state = CoordinatorState::new_idle(idle_timeout);
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
@@ -618,14 +617,7 @@ impl DaemonRunner {
                 let (next, action) =
                     state.transition(CoordinatorInput::ChangeObserved { debounce }, idle_timeout);
                 if matches!(action, CoordinatorAction::StartRefresh) {
-                    Self::spawn_refresh(
-                        tx,
-                        sift_dir,
-                        &meta.kinds,
-                        &meta.root,
-                        meta.corpus_kind,
-                        meta.follow_links,
-                    );
+                    Self::spawn_refresh(tx, sift_dir, meta);
                 }
                 (next, true)
             }
@@ -633,20 +625,22 @@ impl DaemonRunner {
                 let (next, action) =
                     state.transition(CoordinatorInput::RefreshFinished, idle_timeout);
                 if matches!(action, CoordinatorAction::StartRefresh) {
-                    Self::spawn_refresh(
-                        tx,
-                        sift_dir,
-                        &meta.kinds,
-                        &meta.root,
-                        meta.corpus_kind,
-                        meta.follow_links,
-                    );
+                    Self::spawn_refresh(tx, sift_dir, meta);
                 }
                 (next, true)
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let input = match &state {
-                    CoordinatorState::Idle(_) => CoordinatorInput::IdleElapsed,
+                    CoordinatorState::Idle(idle_state) => {
+                        if Instant::now() >= idle_state.idle_deadline {
+                            CoordinatorInput::IdleElapsed
+                        } else {
+                            // Timeout fired before idle deadline (due to
+                            // POLL_CAP).  Re-loop so the caller can check
+                            // the shutdown flag.
+                            return (state, true);
+                        }
+                    }
                     CoordinatorState::Debouncing(_) => CoordinatorInput::DebounceElapsed,
                     CoordinatorState::Refreshing(_) => return (state, true),
                 };
@@ -669,14 +663,7 @@ impl DaemonRunner {
         match action {
             CoordinatorAction::None => Some(()),
             CoordinatorAction::StartRefresh => {
-                Self::spawn_refresh(
-                    tx,
-                    sift_dir,
-                    &meta.kinds,
-                    &meta.root,
-                    meta.corpus_kind,
-                    meta.follow_links,
-                );
+                Self::spawn_refresh(tx, sift_dir, meta);
                 Some(())
             }
             CoordinatorAction::Exit => None,
@@ -684,56 +671,69 @@ impl DaemonRunner {
     }
 
     /// Returns `true` when a filesystem event should be ignored.
+    ///
+    /// Compares event paths against the (already-canonicalized) `sift_dir`.
+    /// On macOS, temp directories use a symlink (`/var/folders` →
+    /// `/private/var/folders`), so the raw event path may not match the
+    /// canonicalized `sift_dir`.  We fall back to canonicalizing the event
+    /// path when the raw comparison fails.
     fn should_ignore_event(event: &notify::Event, sift_dir: &Path) -> bool {
         matches!(event.kind, notify::EventKind::Access(_))
-            || event.paths.iter().any(|p| p.starts_with(sift_dir))
+            || event.paths.iter().any(|p| {
+                p.starts_with(sift_dir) || p.canonicalize().is_ok_and(|c| c.starts_with(sift_dir))
+            })
+    }
+
+    /// Build or update the index for the watched corpus.
+    fn refresh_index(sift_dir: &Path, meta: &DaemonMeta) {
+        let exclude = sift_dir
+            .strip_prefix(&meta.root)
+            .unwrap_or(sift_dir)
+            .to_path_buf();
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &meta.root,
+                kind: meta.corpus_kind,
+                follow_links: meta.follow_links,
+                include_paths: &[],
+                exclude_paths: &[exclude],
+            },
+            visibility: VisibilityConfig::default(),
+        };
+
+        let result = (|| -> anyhow::Result<()> {
+            let mut store = IndexStore::open_or_create(
+                sift_dir,
+                &meta.root,
+                meta.corpus_kind,
+                meta.follow_links,
+                &meta.kinds,
+            )?;
+            store.update(&meta.kinds, &config)?;
+            Ok(())
+        })();
+
+        if let Err(e) = result {
+            eprintln!("sift-daemon: refresh failed: {e}");
+        }
     }
 
     /// Spawn a background refresh worker thread.
-    fn spawn_refresh(
-        tx: mpsc::Sender<CoordinatorEvent>,
-        sift_dir: &Path,
-        kinds: &[IndexKind],
-        root: &Path,
-        corpus_kind: sift_core::CorpusKind,
-        follow_links: bool,
-    ) {
+    fn spawn_refresh(tx: mpsc::Sender<CoordinatorEvent>, sift_dir: &Path, meta: &DaemonMeta) {
         let sift_dir = sift_dir.to_path_buf();
-        let kinds = kinds.to_vec();
-        let root = root.to_path_buf();
+        let root = meta.root.clone();
+        let corpus_kind = meta.corpus_kind;
+        let follow_links = meta.follow_links;
+        let kinds = meta.kinds.clone();
 
         std::thread::spawn(move || {
-            let exclude = sift_dir
-                .strip_prefix(&root)
-                .unwrap_or(&sift_dir)
-                .to_path_buf();
-            let config = IndexConfig {
-                corpus: CorpusSpec {
-                    root: &root,
-                    kind: corpus_kind,
-                    follow_links,
-                    include_paths: &[],
-                    exclude_paths: &[exclude],
-                },
-                visibility: VisibilityConfig::default(),
+            let meta = DaemonMeta {
+                root,
+                corpus_kind,
+                follow_links,
+                kinds,
             };
-
-            let result = (|| -> anyhow::Result<()> {
-                let mut store = IndexStore::open_or_create(
-                    &sift_dir,
-                    &root,
-                    corpus_kind,
-                    follow_links,
-                    &kinds,
-                )?;
-                store.update(&kinds, &config)?;
-                Ok(())
-            })();
-
-            if let Err(e) = result {
-                eprintln!("sift-daemon: refresh failed: {e}");
-            }
-
+            Self::refresh_index(&sift_dir, &meta);
             let _ = tx.send(CoordinatorEvent::RefreshComplete);
         });
     }
