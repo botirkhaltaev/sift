@@ -12,6 +12,9 @@ use crate::config::DaemonSpawnConfig;
 const DEBOUNCE_MS: u64 = 250;
 /// Default idle timeout for the daemon (2 minutes).
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_mins(2);
+/// Maximum `recv_timeout` — keeps the event loop responsive to the
+/// `shutdown` flag even when the next state deadline is far away.
+const SHUTDOWN_POLL: Duration = Duration::from_secs(1);
 const SPAWN_LOCK: &str = "daemon-spawn.lock";
 const DAEMON_LOCK: &str = "lock";
 const READY_DIR: &str = "daemon-ready";
@@ -230,18 +233,17 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
 // Coordinator types
 // ---------------------------------------------------------------------------
 
-/// Events flowing through the coordinator channel.
-enum CoordinatorEvent {
-    Fs(notify::Event),
+/// Messages sent through the coordinator channel.
+enum CoordinatorMessage {
+    FsChange(notify::Event),
     RefreshComplete,
 }
 
 /// Input to the coordinator state machine.
 enum CoordinatorInput {
-    ChangeObserved { debounce: Duration },
-    DebounceElapsed,
-    RefreshFinished,
-    IdleElapsed,
+    FsChange,
+    RefreshComplete,
+    DeadlineReached,
 }
 
 /// Action produced by a state transition.
@@ -252,102 +254,65 @@ enum CoordinatorAction {
     Exit,
 }
 
-/// Whether a follow-up refresh was requested while one was already running.
-#[derive(Clone, Copy)]
-enum FollowUpRefresh {
-    None,
-    Requested,
-}
-
-/// Time remaining in a debounce window.
-struct DebounceState {
-    deadline: Instant,
-}
-
-/// Refresh currently running, with an optional follow-up request.
-struct RefreshState {
-    follow_up: FollowUpRefresh,
-}
-
-/// Idle state with a deadline for the idle timeout.
-struct IdleState {
-    idle_deadline: Instant,
-}
-
 /// Phase of the coordinator loop.
 enum CoordinatorState {
-    Idle(IdleState),
-    Debouncing(DebounceState),
-    Refreshing(RefreshState),
+    Idle { deadline: Instant },
+    Debouncing { deadline: Instant },
+    Refreshing { follow_up: bool },
 }
 
 impl CoordinatorState {
     fn new_idle(idle_timeout: Duration) -> Self {
-        Self::Idle(IdleState {
-            idle_deadline: Instant::now() + idle_timeout,
-        })
-    }
-
-    /// Maximum `recv_timeout` duration — keeps the loop responsive to
-    /// the `shutdown` flag even when the idle deadline is far away.
-    const POLL_CAP: Duration = Duration::from_secs(1);
-
-    fn timeout(&self) -> Duration {
-        match self {
-            Self::Idle(state) => state
-                .idle_deadline
-                .saturating_duration_since(Instant::now())
-                .min(Self::POLL_CAP),
-            Self::Debouncing(state) => state.deadline.saturating_duration_since(Instant::now()),
-            Self::Refreshing(_) => Duration::from_mins(1),
+        Self::Idle {
+            deadline: Instant::now() + idle_timeout,
         }
     }
 
+    /// The deadline at which a [`CoordinatorInput::DeadlineReached`] input
+    /// should be generated.  Returns `None` when the state has no deadline
+    /// (i.e. `Refreshing`, which waits for `RefreshComplete`).
+    const fn deadline(&self) -> Option<Instant> {
+        match self {
+            Self::Idle { deadline } | Self::Debouncing { deadline } => Some(*deadline),
+            Self::Refreshing { .. } => None,
+        }
+    }
+
+    /// Pure state transition.  `debounce` and `idle_timeout` are loop config.
     fn transition(
         self,
         input: CoordinatorInput,
+        debounce: Duration,
         idle_timeout: Duration,
     ) -> (Self, CoordinatorAction) {
         match (self, input) {
-            (
-                Self::Idle(_) | Self::Debouncing(_),
-                CoordinatorInput::ChangeObserved { debounce },
-            ) => (
-                Self::Debouncing(DebounceState {
+            (Self::Idle { .. } | Self::Debouncing { .. }, CoordinatorInput::FsChange) => (
+                Self::Debouncing {
                     deadline: Instant::now() + debounce,
-                }),
+                },
                 CoordinatorAction::None,
             ),
-            (Self::Debouncing(_), CoordinatorInput::DebounceElapsed) => (
-                Self::Refreshing(RefreshState {
-                    follow_up: FollowUpRefresh::None,
-                }),
+            (Self::Debouncing { .. }, CoordinatorInput::DeadlineReached)
+            | (Self::Refreshing { follow_up: true }, CoordinatorInput::RefreshComplete) => (
+                Self::Refreshing { follow_up: false },
                 CoordinatorAction::StartRefresh,
             ),
-            (Self::Refreshing(_), CoordinatorInput::ChangeObserved { .. }) => (
-                Self::Refreshing(RefreshState {
-                    follow_up: FollowUpRefresh::Requested,
-                }),
+            (Self::Idle { .. }, CoordinatorInput::DeadlineReached) => {
+                (Self::new_idle(idle_timeout), CoordinatorAction::Exit)
+            }
+            (Self::Refreshing { .. }, CoordinatorInput::FsChange) => (
+                Self::Refreshing { follow_up: true },
                 CoordinatorAction::None,
             ),
-            (Self::Refreshing(state), CoordinatorInput::RefreshFinished) => match state.follow_up {
-                FollowUpRefresh::Requested => (
-                    Self::Refreshing(RefreshState {
-                        follow_up: FollowUpRefresh::None,
-                    }),
-                    CoordinatorAction::StartRefresh,
-                ),
-                FollowUpRefresh::None => (Self::new_idle(idle_timeout), CoordinatorAction::None),
-            },
-            (Self::Idle(_), CoordinatorInput::IdleElapsed) => {
-                (Self::new_idle(idle_timeout), CoordinatorAction::Exit)
+            (Self::Refreshing { follow_up: false }, CoordinatorInput::RefreshComplete) => {
+                (Self::new_idle(idle_timeout), CoordinatorAction::None)
             }
             (state, _) => (state, CoordinatorAction::None),
         }
     }
 
     const fn is_refreshing(&self) -> bool {
-        matches!(self, Self::Refreshing(_))
+        matches!(self, Self::Refreshing { .. })
     }
 }
 
@@ -500,21 +465,26 @@ impl DaemonRunner {
 
     /// Run the daemon until `shutdown` becomes `true`.
     ///
-    /// Lock-acquisition, metadata, and watcher errors are propagated
-    /// immediately.  Index build/update failures during background
-    /// refreshes are logged to stderr and do not propagate — the
-    /// daemon stays running and retries on the next file change.
+    /// Lifecycle: lock → metadata → reconcile → ready signal → watcher → loop.
+    /// Reconciliation runs synchronously **before** the watcher starts, so
+    /// index writes never generate spurious watcher events.
     ///
     /// # Errors
     ///
     /// Propagates lock-acquisition, metadata, and watcher setup errors.
     pub fn run_until(&self, shutdown: &AtomicBool) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.config.sift_dir)?;
-        let sift_dir = self
-            .config
-            .sift_dir
+
+        // Keep both the raw and canonical forms of `sift_dir`.  On macOS
+        // temp directories are symlinked (`/var/folders` →
+        // `/private/var/folders`).  FSEvent returns raw (symlink) paths,
+        // while `IndexStore` needs the canonical path.  Checking both in
+        // `should_ignore` avoids calling `canonicalize()` on each event
+        // path (which fails for already-deleted temp files).
+        let sift_dir_raw = self.config.sift_dir.clone();
+        let sift_dir = sift_dir_raw
             .canonicalize()
-            .unwrap_or_else(|_| self.config.sift_dir.clone());
+            .unwrap_or_else(|_| sift_dir_raw.clone());
 
         let lock_path = sift_dir.join(DAEMON_LOCK);
         let mut lock_file = LockFile::open(&lock_path)?;
@@ -524,40 +494,31 @@ impl DaemonRunner {
 
         let meta = Self::load_daemon_meta(&sift_dir, self.config.init_root.as_ref())?;
 
-        // Unified coordinator channel: receives both watcher events and
-        // refresh-completion signals.
-        let (tx, rx) = mpsc::channel::<CoordinatorEvent>();
-
-        // Start the filesystem watcher.
-        let watcher_tx = tx.clone();
-        let mut watcher = FileWatcher::new(move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                let _ = watcher_tx.send(CoordinatorEvent::Fs(event));
-            }
-        })?;
-        watcher.watch(&meta.root, RecursiveMode::Recursive)?;
-
-        let debounce = Duration::from_millis(DEBOUNCE_MS);
-        let idle_timeout = self.config.idle_timeout;
-
-        // Reconcile synchronously before entering the event loop: if
-        // CURRENT is missing, `IndexStore::update` builds the first index;
-        // if CURRENT exists, it compares fingerprints and rebuilds only
-        // indexes whose corpus changed while the daemon was down.  Doing
-        // this synchronously keeps startup out of the coordinator state
-        // machine and guarantees the index is up-to-date before we signal
-        // readiness or start the idle timer.
+        // Reconcile synchronously before setting up the watcher.  This
+        // guarantees the index is up-to-date and avoids the watcher seeing
+        // its own index-write events (the root cause of macOS CI hangs).
         Self::refresh_index(&sift_dir, &meta);
 
-        // Signal readiness after acquiring the daemon lock, setting up the
-        // filesystem watcher, AND completing the initial reconciliation, so
-        // the parent knows the daemon is fully ready.
+        // Signal readiness after lock + reconciliation.
         if let Some(ready) = &self.config.ready_file {
             let tmp = ready.with_extension("tmp");
             std::fs::write(&tmp, "")?;
             std::fs::rename(&tmp, ready)?;
         }
 
+        // Start the watcher AFTER reconciliation so it never sees the
+        // index writes from the initial build/update.
+        let (tx, rx) = mpsc::channel::<CoordinatorMessage>();
+        let watcher_tx = tx.clone();
+        let mut watcher = FileWatcher::new(move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = watcher_tx.send(CoordinatorMessage::FsChange(event));
+            }
+        })?;
+        watcher.watch(&meta.root, RecursiveMode::Recursive)?;
+
+        let debounce = Duration::from_millis(DEBOUNCE_MS);
+        let idle_timeout = self.config.idle_timeout;
         let mut state = CoordinatorState::new_idle(idle_timeout);
 
         loop {
@@ -566,28 +527,44 @@ impl DaemonRunner {
                 return Ok(());
             }
 
-            let (next, continue_running) = Self::handle_one_event(
-                &rx,
-                tx.clone(),
-                state,
-                &sift_dir,
-                &meta,
-                debounce,
-                idle_timeout,
-            );
+            let timeout = state
+                .deadline()
+                .map_or(SHUTDOWN_POLL, |d| {
+                    d.saturating_duration_since(Instant::now())
+                        .min(SHUTDOWN_POLL)
+                });
 
-            state = next;
-            if !continue_running {
+            let input = match rx.recv_timeout(timeout) {
+                Ok(CoordinatorMessage::FsChange(event)) => {
+                    if Self::should_ignore(&event, &sift_dir, &sift_dir_raw) {
+                        continue;
+                    }
+                    CoordinatorInput::FsChange
+                }
+                Ok(CoordinatorMessage::RefreshComplete) => CoordinatorInput::RefreshComplete,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if state.deadline().is_some_and(|d| Instant::now() >= d) {
+                        CoordinatorInput::DeadlineReached
+                    } else {
+                        continue;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            };
+
+            let (next, action) = state.transition(input, debounce, idle_timeout);
+            if !Self::execute(action, &tx, &sift_dir, &meta) {
                 return Ok(());
             }
+            state = next;
         }
     }
 
     /// Drain any active refresh worker before releasing the daemon lock.
-    fn drain_active_refresh(rx: &mpsc::Receiver<CoordinatorEvent>, state: &mut CoordinatorState) {
+    fn drain_active_refresh(rx: &mpsc::Receiver<CoordinatorMessage>, state: &mut CoordinatorState) {
         while state.is_refreshing() {
             match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(CoordinatorEvent::RefreshComplete) => {
+                Ok(CoordinatorMessage::RefreshComplete) => {
                     *state = CoordinatorState::new_idle(DEFAULT_IDLE_TIMEOUT);
                 }
                 Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -596,92 +573,37 @@ impl DaemonRunner {
         }
     }
 
-    /// Receive and handle one coordinator event.  Returns the next state and
-    /// whether the loop should continue.
-    fn handle_one_event(
-        rx: &mpsc::Receiver<CoordinatorEvent>,
-        tx: mpsc::Sender<CoordinatorEvent>,
-        state: CoordinatorState,
-        sift_dir: &Path,
-        meta: &DaemonMeta,
-        debounce: Duration,
-        idle_timeout: Duration,
-    ) -> (CoordinatorState, bool) {
-        let timeout = state.timeout();
-
-        match rx.recv_timeout(timeout) {
-            Ok(CoordinatorEvent::Fs(event)) => {
-                if Self::should_ignore_event(&event, sift_dir) {
-                    return (state, true);
-                }
-                let (next, action) =
-                    state.transition(CoordinatorInput::ChangeObserved { debounce }, idle_timeout);
-                if matches!(action, CoordinatorAction::StartRefresh) {
-                    Self::spawn_refresh(tx, sift_dir, meta);
-                }
-                (next, true)
-            }
-            Ok(CoordinatorEvent::RefreshComplete) => {
-                let (next, action) =
-                    state.transition(CoordinatorInput::RefreshFinished, idle_timeout);
-                if matches!(action, CoordinatorAction::StartRefresh) {
-                    Self::spawn_refresh(tx, sift_dir, meta);
-                }
-                (next, true)
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let input = match &state {
-                    CoordinatorState::Idle(idle_state) => {
-                        if Instant::now() >= idle_state.idle_deadline {
-                            CoordinatorInput::IdleElapsed
-                        } else {
-                            // Timeout fired before idle deadline (due to
-                            // POLL_CAP).  Re-loop so the caller can check
-                            // the shutdown flag.
-                            return (state, true);
-                        }
-                    }
-                    CoordinatorState::Debouncing(_) => CoordinatorInput::DebounceElapsed,
-                    CoordinatorState::Refreshing(_) => return (state, true),
-                };
-                let (next, action) = state.transition(input, idle_timeout);
-                let cont = Self::apply_action(action, tx, sift_dir, meta).is_some();
-                (next, cont)
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => (state, false),
-        }
-    }
-
-    /// Apply a coordinator action.  Returns `Some(())` if the loop should
-    /// continue, or `None` if the daemon should exit.
-    fn apply_action(
+    /// Execute a coordinator action.  Returns `true` when the loop should
+    /// continue, `false` when the daemon should exit.
+    fn execute(
         action: CoordinatorAction,
-        tx: mpsc::Sender<CoordinatorEvent>,
+        tx: &mpsc::Sender<CoordinatorMessage>,
         sift_dir: &Path,
         meta: &DaemonMeta,
-    ) -> Option<()> {
+    ) -> bool {
         match action {
-            CoordinatorAction::None => Some(()),
+            CoordinatorAction::None => true,
             CoordinatorAction::StartRefresh => {
-                Self::spawn_refresh(tx, sift_dir, meta);
-                Some(())
+                Self::spawn_refresh(tx.clone(), sift_dir, meta);
+                true
             }
-            CoordinatorAction::Exit => None,
+            CoordinatorAction::Exit => false,
         }
     }
 
     /// Returns `true` when a filesystem event should be ignored.
     ///
-    /// Compares event paths against the (already-canonicalized) `sift_dir`.
-    /// On macOS, temp directories use a symlink (`/var/folders` →
-    /// `/private/var/folders`), so the raw event path may not match the
-    /// canonicalized `sift_dir`.  We fall back to canonicalizing the event
-    /// path when the raw comparison fails.
-    fn should_ignore_event(event: &notify::Event, sift_dir: &Path) -> bool {
+    /// Checks event paths against both the canonical and raw `sift_dir`
+    /// paths.  On macOS, `FSEvent` delivers symlink-based paths that won't
+    /// match the canonical form; checking the raw form avoids calling
+    /// `canonicalize()` on each event path (which fails for temp files
+    /// deleted during index builds).
+    fn should_ignore(event: &notify::Event, canonical: &Path, raw: &Path) -> bool {
         matches!(event.kind, notify::EventKind::Access(_))
-            || event.paths.iter().any(|p| {
-                p.starts_with(sift_dir) || p.canonicalize().is_ok_and(|c| c.starts_with(sift_dir))
-            })
+            || event
+                .paths
+                .iter()
+                .any(|p| p.starts_with(canonical) || p.starts_with(raw))
     }
 
     /// Build or update the index for the watched corpus.
@@ -719,7 +641,7 @@ impl DaemonRunner {
     }
 
     /// Spawn a background refresh worker thread.
-    fn spawn_refresh(tx: mpsc::Sender<CoordinatorEvent>, sift_dir: &Path, meta: &DaemonMeta) {
+    fn spawn_refresh(tx: mpsc::Sender<CoordinatorMessage>, sift_dir: &Path, meta: &DaemonMeta) {
         let sift_dir = sift_dir.to_path_buf();
         let root = meta.root.clone();
         let corpus_kind = meta.corpus_kind;
@@ -734,7 +656,7 @@ impl DaemonRunner {
                 kinds,
             };
             Self::refresh_index(&sift_dir, &meta);
-            let _ = tx.send(CoordinatorEvent::RefreshComplete);
+            let _ = tx.send(CoordinatorMessage::RefreshComplete);
         });
     }
 }
@@ -892,133 +814,115 @@ mod tests {
     }
 
     #[test]
-    fn idle_change_observed_transitions_to_debouncing() {
-        let (next, action) = idle_state().transition(
-            CoordinatorInput::ChangeObserved { debounce: DEBOUNCE },
-            IDLE,
-        );
-        assert!(matches!(next, CoordinatorState::Debouncing(_)));
+    fn idle_fs_change_transitions_to_debouncing() {
+        let (next, action) = idle_state().transition(CoordinatorInput::FsChange, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Debouncing { .. }));
         assert_eq!(action, CoordinatorAction::None);
     }
 
     #[test]
-    fn idle_debounce_elapsed_stays_idle() {
-        let (next, action) = idle_state().transition(CoordinatorInput::DebounceElapsed, IDLE);
-        assert!(matches!(next, CoordinatorState::Idle(_)));
+    fn idle_deadline_reached_exits() {
+        let (next, action) =
+            idle_state().transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Idle { .. }));
+        assert_eq!(action, CoordinatorAction::Exit);
+    }
+
+    #[test]
+    fn idle_refresh_complete_stays_idle() {
+        let (next, action) =
+            idle_state().transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Idle { .. }));
         assert_eq!(action, CoordinatorAction::None);
     }
 
     #[test]
-    fn idle_refresh_finished_stays_idle() {
-        let (next, action) = idle_state().transition(CoordinatorInput::RefreshFinished, IDLE);
-        assert!(matches!(next, CoordinatorState::Idle(_)));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn debouncing_change_observed_resets_debounce() {
-        let state = CoordinatorState::Debouncing(DebounceState {
+    fn debouncing_fs_change_resets_debounce() {
+        let state = CoordinatorState::Debouncing {
             deadline: Instant::now(),
-        });
-        let (next, action) = state.transition(
-            CoordinatorInput::ChangeObserved { debounce: DEBOUNCE },
-            IDLE,
-        );
-        assert!(matches!(next, CoordinatorState::Debouncing(_)));
+        };
+        let (next, action) = state.transition(CoordinatorInput::FsChange, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Debouncing { .. }));
         assert_eq!(action, CoordinatorAction::None);
     }
 
     #[test]
-    fn debouncing_debounce_elapsed_starts_refresh() {
-        let state = CoordinatorState::Debouncing(DebounceState {
+    fn debouncing_deadline_reached_starts_refresh() {
+        let state = CoordinatorState::Debouncing {
             deadline: Instant::now(),
-        });
-        let (next, action) = state.transition(CoordinatorInput::DebounceElapsed, IDLE);
-        assert!(
-            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::None))
-        );
+        };
+        let (next, action) = state.transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
         assert_eq!(action, CoordinatorAction::StartRefresh);
     }
 
     #[test]
-    fn debouncing_refresh_finished_stays_debouncing() {
-        let state = CoordinatorState::Debouncing(DebounceState {
+    fn debouncing_refresh_complete_stays_debouncing() {
+        let state = CoordinatorState::Debouncing {
             deadline: Instant::now() + DEBOUNCE,
-        });
-        let (next, action) = state.transition(CoordinatorInput::RefreshFinished, IDLE);
-        assert!(matches!(next, CoordinatorState::Debouncing(_)));
+        };
+        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Debouncing { .. }));
         assert_eq!(action, CoordinatorAction::None);
     }
 
     #[test]
-    fn refreshing_change_observed_requests_follow_up() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::None,
-        });
-        let (next, action) = state.transition(
-            CoordinatorInput::ChangeObserved { debounce: DEBOUNCE },
-            IDLE,
-        );
-        assert!(
-            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::Requested))
-        );
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_debounce_elapsed_stays_refreshing() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::None,
-        });
-        let (next, action) = state.transition(CoordinatorInput::DebounceElapsed, IDLE);
-        assert!(
-            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::None))
-        );
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_finished_without_follow_up_returns_to_idle() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::None,
-        });
-        let (next, action) = state.transition(CoordinatorInput::RefreshFinished, IDLE);
-        assert!(matches!(next, CoordinatorState::Idle(_)));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_finished_with_follow_up_restarts_refresh() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::Requested,
-        });
-        let (next, action) = state.transition(CoordinatorInput::RefreshFinished, IDLE);
-        assert!(
-            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::None))
-        );
+    fn debouncing_deadline_reached_stays_debouncing_on_catch_all() {
+        let state = CoordinatorState::Debouncing {
+            deadline: Instant::now() + DEBOUNCE,
+        };
+        let (next, action) = state.transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
         assert_eq!(action, CoordinatorAction::StartRefresh);
     }
 
     #[test]
-    fn refreshing_finished_with_follow_up_clears_request_flag() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::Requested,
-        });
-        let (next, _action) = state.transition(CoordinatorInput::RefreshFinished, IDLE);
+    fn refreshing_fs_change_requests_follow_up() {
+        let state = CoordinatorState::Refreshing { follow_up: false };
+        let (next, action) = state.transition(CoordinatorInput::FsChange, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if follow_up));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn refreshing_deadline_reached_stays_refreshing() {
+        let state = CoordinatorState::Refreshing { follow_up: false };
+        let (next, action) = state.transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn refreshing_complete_without_follow_up_returns_to_idle() {
+        let state = CoordinatorState::Refreshing { follow_up: false };
+        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Idle { .. }));
+        assert_eq!(action, CoordinatorAction::None);
+    }
+
+    #[test]
+    fn refreshing_complete_with_follow_up_restarts_refresh() {
+        let state = CoordinatorState::Refreshing { follow_up: true };
+        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
+        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
+        assert_eq!(action, CoordinatorAction::StartRefresh);
+    }
+
+    #[test]
+    fn refreshing_complete_with_follow_up_clears_flag() {
+        let state = CoordinatorState::Refreshing { follow_up: true };
+        let (next, _action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
         match next {
-            CoordinatorState::Refreshing(s) => assert!(
-                matches!(s.follow_up, FollowUpRefresh::None),
-                "follow_up should be None after restart"
-            ),
+            CoordinatorState::Refreshing { follow_up } => {
+                assert!(!follow_up, "follow_up should be false after restart");
+            }
             _ => panic!("expected Refreshing state"),
         }
     }
 
     #[test]
     fn coordinator_state_is_refreshing_returns_true_for_refreshing() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::None,
-        });
+        let state = CoordinatorState::Refreshing { follow_up: false };
         assert!(state.is_refreshing());
     }
 
@@ -1029,11 +933,29 @@ mod tests {
 
     #[test]
     fn coordinator_state_is_refreshing_returns_false_for_debouncing() {
-        let state = CoordinatorState::Debouncing(DebounceState {
+        let state = CoordinatorState::Debouncing {
             deadline: Instant::now(),
-        });
+        };
         assert!(!state.is_refreshing());
     }
+
+    #[test]
+    fn refreshing_complete_resets_idle_deadline() {
+        let state = CoordinatorState::Refreshing { follow_up: false };
+        let before = Instant::now();
+        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
+        assert_eq!(action, CoordinatorAction::None);
+        match next {
+            CoordinatorState::Idle { deadline } => {
+                assert!(deadline >= before + IDLE);
+            }
+            _ => panic!("expected Idle state"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // DaemonRunner integration tests
+    // -----------------------------------------------------------------------
 
     #[test]
     fn run_until_stops_on_shutdown() {
@@ -1087,55 +1009,6 @@ mod tests {
         runner.run_until(&AtomicBool::new(false)).unwrap();
     }
 
-    // -----------------------------------------------------------------------
-    // Idle timeout state transition tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn idle_idle_elapsed_exits() {
-        let (next, action) = idle_state().transition(CoordinatorInput::IdleElapsed, IDLE);
-        assert!(matches!(next, CoordinatorState::Idle(_)));
-        assert_eq!(action, CoordinatorAction::Exit);
-    }
-
-    #[test]
-    fn debouncing_idle_elapsed_stays_debouncing() {
-        let state = CoordinatorState::Debouncing(DebounceState {
-            deadline: Instant::now() + DEBOUNCE,
-        });
-        let (next, action) = state.transition(CoordinatorInput::IdleElapsed, IDLE);
-        assert!(matches!(next, CoordinatorState::Debouncing(_)));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_idle_elapsed_stays_refreshing() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::None,
-        });
-        let (next, action) = state.transition(CoordinatorInput::IdleElapsed, IDLE);
-        assert!(
-            matches!(next, CoordinatorState::Refreshing(s) if matches!(s.follow_up, FollowUpRefresh::None))
-        );
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_finished_resets_idle_deadline() {
-        let state = CoordinatorState::Refreshing(RefreshState {
-            follow_up: FollowUpRefresh::None,
-        });
-        let before = Instant::now();
-        let (next, action) = state.transition(CoordinatorInput::RefreshFinished, IDLE);
-        assert_eq!(action, CoordinatorAction::None);
-        match next {
-            CoordinatorState::Idle(idle) => {
-                assert!(idle.idle_deadline >= before + IDLE);
-            }
-            _ => panic!("expected Idle state"),
-        }
-    }
-
     #[test]
     fn run_until_exits_on_idle_timeout() {
         let dir = TempDir::new().unwrap();
@@ -1154,7 +1027,7 @@ mod tests {
             sift_dir: sift_dir.clone(),
             init_root: None,
             ready_file: None,
-            idle_timeout: Duration::from_secs(1),
+            idle_timeout: Duration::from_secs(2),
         };
         let runner = DaemonRunner::new(config);
 
