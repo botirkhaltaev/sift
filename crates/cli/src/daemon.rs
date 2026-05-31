@@ -512,23 +512,22 @@ impl DaemonRunner {
         }
 
         let debounce = Duration::from_millis(DEBOUNCE_MS);
-        let mut state = CoordinatorState::Idle;
 
-        // If there is no current snapshot, schedule an initial refresh through
-        // the normal refresh path instead of blocking before readiness.
-        if !sift_dir.join("CURRENT").exists() {
-            state = CoordinatorState::Refreshing(RefreshState {
-                follow_up: FollowUpRefresh::None,
-            });
-            Self::spawn_refresh(
-                tx.clone(),
-                &sift_dir,
-                &meta.kinds,
-                &meta.root,
-                meta.corpus_kind,
-                meta.follow_links,
-            );
-        }
+        // Always reconcile on startup: if CURRENT is missing,
+        // IndexStore::update builds the first index; if CURRENT exists, it
+        // compares fingerprints and rebuilds only indexes whose corpus
+        // changed while the daemon was down.
+        let mut state = CoordinatorState::Refreshing(RefreshState {
+            follow_up: FollowUpRefresh::None,
+        });
+        Self::spawn_refresh(
+            tx.clone(),
+            &sift_dir,
+            &meta.kinds,
+            &meta.root,
+            meta.corpus_kind,
+            meta.follow_links,
+        );
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
