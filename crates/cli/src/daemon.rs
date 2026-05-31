@@ -16,6 +16,53 @@ const READY_DIR: &str = "daemon-ready";
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+/// Platform-specific watcher chosen by cfg.
+///
+/// On Linux and macOS the native `notify` backend is used (inotify, FSEvent).
+/// On Windows the polling backend is used as a workaround for `ReadDirectoryChangesWatcher`
+/// not reliably delivering file-creation events in recursive temp-directory watches
+/// under CI (GitHub Actions `windows-latest`).
+#[cfg(windows)]
+type PlatformWatcher = notify::PollWatcher;
+
+#[cfg(not(windows))]
+type PlatformWatcher = notify::RecommendedWatcher;
+
+#[cfg(windows)]
+fn watcher_config() -> notify::Config {
+    notify::Config::default().with_poll_interval(Duration::from_millis(250))
+}
+
+#[cfg(not(windows))]
+fn watcher_config() -> notify::Config {
+    notify::Config::default()
+}
+
+/// A cross-platform filesystem watcher.
+///
+/// Wraps the platform-specific `notify` backend and provides the same
+/// [`notify::Watcher`] interface.  Linux and macOS use native inotify /
+/// `FSEvent`; Windows uses `PollWatcher` to work around a `ReadDirectoryChangesWatcher`
+/// regression in recursive temp-directory watches.
+struct FileWatcher {
+    inner: PlatformWatcher,
+}
+
+impl FileWatcher {
+    fn new<F>(event_handler: F) -> notify::Result<Self>
+    where
+        F: notify::EventHandler,
+    {
+        Ok(Self {
+            inner: PlatformWatcher::new(event_handler, watcher_config())?,
+        })
+    }
+
+    fn watch(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
+        self.inner.watch(path, mode)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Spawn types
 // ---------------------------------------------------------------------------
@@ -446,13 +493,11 @@ impl DaemonRunner {
 
         // Start the filesystem watcher.
         let watcher_tx = tx.clone();
-        let watcher =
-            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    let _ = watcher_tx.send(CoordinatorEvent::Fs(event));
-                }
-            })?;
-        let mut watcher = watcher;
+        let mut watcher = FileWatcher::new(move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = watcher_tx.send(CoordinatorEvent::Fs(event));
+            }
+        })?;
         watcher.watch(&meta.root, RecursiveMode::Recursive)?;
 
         // Signal readiness after acquiring the daemon lock AND setting up the
