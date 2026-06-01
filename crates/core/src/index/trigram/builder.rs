@@ -313,20 +313,27 @@ impl<'a> PostingAssembler<'a> {
     }
 
     fn collect_pairs(&self) -> crate::Result<Vec<PackedPosting>> {
-        let total: usize = self.file_trigrams.iter().map(|s| s.as_slice().len()).sum();
-        let mut pairs = Vec::with_capacity(total);
-        for (id, set) in self.file_trigrams.iter().enumerate() {
-            let id_u32: u32 = id.try_into().map_err(|_| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "too many indexed files",
-                ))
-            })?;
-            for tri in set.as_slice() {
-                pairs.push(PackedPosting::new(*tri, id_u32));
-            }
-        }
-        Ok(pairs)
+        use rayon::prelude::*;
+
+        self.file_trigrams
+            .par_iter()
+            .enumerate()
+            .try_fold(Vec::new, |mut pairs, (id, set)| {
+                let id_u32: u32 = id.try_into().map_err(|_| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "too many indexed files",
+                    ))
+                })?;
+                for tri in set.as_slice() {
+                    pairs.push(PackedPosting::new(*tri, id_u32));
+                }
+                Ok(pairs)
+            })
+            .try_reduce(Vec::new, |mut a, b| {
+                a.extend(b);
+                Ok(a)
+            })
     }
 
     fn sort_pairs(pairs: &mut Vec<PackedPosting>) {
