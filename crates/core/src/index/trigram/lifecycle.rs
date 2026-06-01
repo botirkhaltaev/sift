@@ -189,20 +189,20 @@ impl TrigramIndex {
             return Ok(None);
         }
 
-        let previous_sets = self.trigram_sets.to_vec().map_err(crate::Error::Io)?;
-
-        let lookup: HashMap<(&Path, i64, u64), &storage::trigram_sets::TrigramSet> = self
+        let prev_id_by_fp: HashMap<(&Path, i64, u64), usize> = self
             .fingerprints
             .iter()
-            .zip(previous_sets.iter())
-            .map(|(fp, set)| ((fp.path.as_path(), fp.mtime_secs, fp.size), set))
+            .enumerate()
+            .map(|(id, fp)| ((fp.path.as_path(), fp.mtime_secs, fp.size), id))
             .collect();
 
         let file_trigrams: Vec<storage::trigram_sets::TrigramSet> = fingerprints
             .par_iter()
             .map(|fp| {
-                if let Some(set) = lookup.get(&(fp.path.as_path(), fp.mtime_secs, fp.size)) {
-                    return Ok((*set).clone());
+                if let Some(&prev_id) =
+                    prev_id_by_fp.get(&(fp.path.as_path(), fp.mtime_secs, fp.size))
+                {
+                    return self.trigram_sets.get(prev_id).map_err(crate::Error::Io);
                 }
                 let abs = config.corpus.root.join(&fp.path);
                 storage::trigram_sets::TrigramSet::from_file(&abs).map_err(crate::Error::Io)

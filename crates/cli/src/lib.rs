@@ -69,7 +69,12 @@ pub fn main_entry() -> ExitCode {
                 },
             },
         };
-        if let Err(e) = store.build(&build.indexes, &index_cfg) {
+        let build_result = if store.current_id().is_some() {
+            store.update(&build.indexes, &index_cfg).map(|_| ())
+        } else {
+            store.build(&build.indexes, &index_cfg).map(|_| ())
+        };
+        if let Err(e) = build_result {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
