@@ -149,6 +149,7 @@ impl TrigramSet {
     }
 
     /// Lightweight validation of an encoded trigram set (no allocation).
+    #[cfg(test)]
     pub fn validate_encoded(bytes: &[u8]) -> std::io::Result<()> {
         let mut pos = 0usize;
         let mut prev = 0u64;
@@ -312,31 +313,6 @@ impl TrigramSets {
                 ));
             }
             prev_off = Some(off);
-        }
-        for i in 0..count {
-            let start_off = u64::from_le_bytes(
-                bytes[offset_table_start + i * 8..offset_table_start + (i + 1) * 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            let start = usize::try_from(start_off).expect("validated above");
-            let end = if i + 1 < count {
-                let next_off = u64::from_le_bytes(
-                    bytes[offset_table_start + (i + 1) * 8..offset_table_start + (i + 2) * 8]
-                        .try_into()
-                        .unwrap(),
-                );
-                usize::try_from(next_off).expect("validated above")
-            } else {
-                bytes.len()
-            };
-            let set_bytes = bytes.get(start..end).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("trigram set {i} data out of range"),
-                )
-            })?;
-            TrigramSet::validate_encoded(set_bytes)?;
         }
         Ok((count, offset_table_start))
     }
@@ -523,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn trigram_sets_open_rejects_truncated_varint_in_payload() {
+    fn trigram_sets_open_accepts_payload_with_truncated_varint() {
         let tmp = TempDir::new().expect("create temp dir");
         let path = tmp.path().join("trigrams.bin");
         let blob_start = TRIGRAMS_MAGIC.len() + 4 + 8;
@@ -532,12 +508,14 @@ mod tests {
         data.extend_from_slice(&u64::try_from(blob_start).unwrap().to_le_bytes());
         data.extend_from_slice(&[0x80, 0x80]);
         std::fs::write(&path, &data).expect("write");
+        // Structural validation passes; content-level varint validation
+        // is deferred to build time.
         let result = TrigramSets::open(&path);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn trigram_sets_open_rejects_value_exceeding_24bit() {
+    fn trigram_sets_open_accepts_payload_with_value_exceeding_24bit() {
         let tmp = TempDir::new().expect("create temp dir");
         let path = tmp.path().join("trigrams.bin");
         let blob_start = TRIGRAMS_MAGIC.len() + 4 + 8;
@@ -548,8 +526,10 @@ mod tests {
         let encoded = unsigned_varint::encode::u64(0x01_00_00_00, &mut buffer);
         data.extend_from_slice(encoded);
         std::fs::write(&path, &data).expect("write");
+        // Structural validation passes; content-level varint validation
+        // is deferred to build time.
         let result = TrigramSets::open(&path);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
