@@ -359,31 +359,38 @@ impl TrigramSets {
         self.data.as_ref()
     }
 
-    pub fn to_vec(&self) -> std::io::Result<Vec<TrigramSet>> {
-        let mut out = Vec::with_capacity(self.count);
-        let bytes = self.bytes();
-        for id in 0..self.count {
-            let off_start = self.offset_table_start + id * 8;
-            let off = usize::try_from(u64::from_le_bytes(
-                bytes[off_start..off_start + 8].try_into().unwrap(),
-            ))
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("trigram set {id} offset exceeds address space"),
-                )
-            })?;
-            let end = self.blob_end(id);
-            if off > end || end > bytes.len() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("trigram set {id} data extends past end"),
-                ));
-            }
-            let set = TrigramSet::decode(&bytes[off..end])?;
-            out.push(set);
+    /// Decode a single trigram set by file index.
+    pub fn get(&self, id: usize) -> std::io::Result<TrigramSet> {
+        if id >= self.count {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("trigram set index {id} out of range (count={})", self.count),
+            ));
         }
-        Ok(out)
+        let bytes = self.bytes();
+        let off_start = self.offset_table_start + id * 8;
+        let off = usize::try_from(u64::from_le_bytes(
+            bytes[off_start..off_start + 8].try_into().unwrap(),
+        ))
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("trigram set {id} offset exceeds address space"),
+            )
+        })?;
+        let end = self.blob_end(id);
+        if off > end || end > bytes.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("trigram set {id} data extends past end"),
+            ));
+        }
+        TrigramSet::decode(&bytes[off..end])
+    }
+
+    #[cfg(test)]
+    pub fn to_vec(&self) -> std::io::Result<Vec<TrigramSet>> {
+        (0..self.count).map(|id| self.get(id)).collect()
     }
 }
 
