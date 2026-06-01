@@ -1,6 +1,5 @@
 //! Contiguous delta-varint encoded file-id payloads referenced by the lexicon.
 
-use std::cmp::Ordering;
 use std::path::Path;
 
 use memmap2::Mmap;
@@ -194,21 +193,49 @@ impl Postings {
     }
 
     pub(crate) fn intersect_sorted(ids: &[u32], encoded: &[u8]) -> std::io::Result<Vec<u32>> {
-        let decoded = Self::decode_sorted(encoded)?;
         let mut i = 0usize;
-        let mut j = 0usize;
-        let mut out = Vec::with_capacity(ids.len().min(decoded.len()));
-        while i < ids.len() && j < decoded.len() {
-            match ids[i].cmp(&decoded[j]) {
-                Ordering::Less => i += 1,
-                Ordering::Greater => j += 1,
-                Ordering::Equal => {
-                    out.push(ids[i]);
-                    i += 1;
-                    j += 1;
-                }
+        let mut pos = 0usize;
+        let mut prev = 0u64;
+        let mut first = true;
+        let mut out = Vec::new();
+
+        while i < ids.len() && pos < encoded.len() {
+            let (raw, remaining) = unsigned_varint::decode::u64(&encoded[pos..]).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "malformed varint in posting list",
+                )
+            })?;
+            pos += encoded[pos..].len().saturating_sub(remaining.len());
+            let value = if first {
+                first = false;
+                raw
+            } else {
+                prev.checked_add(raw).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "delta overflow in posting list",
+                    )
+                })?
+            };
+            if value > u64::from(u32::MAX) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "posting value exceeds u32::MAX",
+                ));
+            }
+            let v = u32::try_from(value).expect("value bounded above");
+            prev = value;
+
+            while i < ids.len() && u64::from(ids[i]) < value {
+                i += 1;
+            }
+            if i < ids.len() && ids[i] == v {
+                out.push(v);
+                i += 1;
             }
         }
+
         Ok(out)
     }
 }
