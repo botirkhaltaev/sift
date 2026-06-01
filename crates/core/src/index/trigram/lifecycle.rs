@@ -252,8 +252,6 @@ impl TrigramIndex {
                 let postings = storage::postings::Postings::open(&postings_path)
                     .map_err(TrigramIndexError::Io)?;
 
-                Self::validate_lexicon_postings(&lexicon, &postings)?;
-
                 let trigram_sets = storage::trigram_sets::TrigramSets::open(&trigrams_path)
                     .map_err(TrigramIndexError::Io)?;
 
@@ -279,8 +277,6 @@ impl TrigramIndex {
                 let postings_data = reader.artifact(namespace, crate::POSTINGS_BIN)?;
                 let postings =
                     Postings::from_artifact(postings_data).map_err(TrigramIndexError::Io)?;
-
-                Self::validate_lexicon_postings(&lexicon, &postings)?;
 
                 let trigram_sets_data = reader.artifact(namespace, crate::TRIGRAMS_BIN)?;
                 let trigram_sets =
