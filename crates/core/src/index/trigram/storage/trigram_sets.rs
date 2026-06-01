@@ -6,6 +6,7 @@
 //! Each entry in the blob:
 //!   delta-varint encoded sorted 24-bit trigram values
 
+use std::cell::RefCell;
 use std::path::Path;
 
 use memmap2::Mmap;
@@ -49,24 +50,48 @@ impl TrigramSet {
         Ok(Self { trigrams })
     }
 
-    /// Extract sorted unique trigrams from file bytes using rolling key + Vec dedup.
+    /// Extract sorted unique trigrams from file bytes.
+    ///
+    /// Uses a thread-local 24-bit bitset (2 MiB, allocated once per thread)
+    /// for O(1) dedup during the scan so only unique values need sorting.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
         if bytes.len() < 3 {
             return Self {
                 trigrams: Vec::new(),
             };
         }
-        let mut trigrams = Vec::with_capacity(bytes.len() - 2);
-        let mut key =
-            (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
-        trigrams.push(Trigram::from_u24(key));
-        for &b in &bytes[3..] {
-            key = ((key & 0x0000_FFFF) << 8) | u32::from(b);
-            trigrams.push(Trigram::from_u24(key));
+
+        thread_local! {
+            static SEEN: RefCell<Vec<u64>> = RefCell::new(vec![0u64; 1 << 18]);
         }
-        trigrams.sort_unstable();
-        trigrams.dedup();
-        Self { trigrams }
+
+        SEEN.with(|cell| {
+            let mut seen = cell.borrow_mut();
+            let mut trigrams = Vec::new();
+            let mut key =
+                (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+            {
+                let idx = key as usize;
+                seen[idx >> 6] |= 1u64 << (idx & 63);
+                trigrams.push(Trigram::from_u24(key));
+            }
+            for &b in &bytes[3..] {
+                key = ((key & 0x0000_FFFF) << 8) | u32::from(b);
+                let idx = key as usize;
+                let word = &mut seen[idx >> 6];
+                let bit = 1u64 << (idx & 63);
+                if *word & bit == 0 {
+                    *word |= bit;
+                    trigrams.push(Trigram::from_u24(key));
+                }
+            }
+            for t in &trigrams {
+                let idx = t.as_u24() as usize;
+                seen[idx >> 6] &= !(1u64 << (idx & 63));
+            }
+            trigrams.sort_unstable();
+            Self { trigrams }
+        })
     }
 
     /// Extract sorted unique trigrams from a file on disk.
