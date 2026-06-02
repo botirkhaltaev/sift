@@ -13,6 +13,16 @@ const fn installed_sift_name() -> &'static str {
     if cfg!(windows) { "sift.exe" } else { "sift" }
 }
 
+/// Executable used to run `sift update` in tests. Must differ from [`installed_sift_name`]
+/// so the install script can replace `bin/sift` while this process is still running (ETXTBSY).
+const fn update_runner_name() -> &'static str {
+    if cfg!(windows) {
+        "sift-update-test.exe"
+    } else {
+        "sift-update-test"
+    }
+}
+
 #[cfg(unix)]
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -46,10 +56,13 @@ fn install_layout(exe_src: &Path) -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
     let bin = tmp.path().join(".local").join("bin");
     fs::create_dir_all(&bin).unwrap();
-    let sift = bin.join(installed_sift_name());
-    fs::copy(exe_src, &sift).unwrap();
-    make_executable(&sift);
-    (tmp, sift)
+    let install_target = bin.join(installed_sift_name());
+    let runner = bin.join(update_runner_name());
+    fs::copy(exe_src, &install_target).unwrap();
+    fs::copy(exe_src, &runner).unwrap();
+    make_executable(&install_target);
+    make_executable(&runner);
+    (tmp, runner)
 }
 
 #[test]
