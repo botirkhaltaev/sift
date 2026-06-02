@@ -33,7 +33,7 @@ ignore = "0.4"
 fslock = "0.2"
 notify = "9.0.0-rc.4"
 rayon = "1"
-sift-core = { version = "0.2.0", path = "../core" }
+sift-core = { version = "0.3.0", path = "../core" }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
