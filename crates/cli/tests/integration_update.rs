@@ -3,22 +3,53 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use common::{assert_exit_code, assert_stdout_contains};
 use tempfile::TempDir;
 
+const fn installed_sift_name() -> &'static str {
+    if cfg!(windows) { "sift.exe" } else { "sift" }
+}
+
+fn make_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let _ = path;
+    }
+}
+
+fn write_stub_sh(path_bin: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let sh = path_bin.join("sh.cmd");
+        fs::write(&sh, "@echo off\r\nexit /b 0\r\n").unwrap();
+        sh
+    }
+    #[cfg(not(windows))]
+    {
+        let sh = path_bin.join("sh");
+        fs::write(&sh, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&sh);
+        sh
+    }
+}
+
 fn install_layout(exe_src: &Path) -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
     let bin = tmp.path().join(".local").join("bin");
     fs::create_dir_all(&bin).unwrap();
-    let sift = bin.join("sift");
+    let sift = bin.join(installed_sift_name());
     fs::copy(exe_src, &sift).unwrap();
-    let mut perms = fs::metadata(&sift).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&sift, perms).unwrap();
+    make_executable(&sift);
     (tmp, sift)
 }
 
@@ -39,11 +70,7 @@ fn binary_update_without_curl_exits_2() {
 
     let path_bin = tmpdir.path().join("path-bin");
     fs::create_dir_all(&path_bin).unwrap();
-    let sh = path_bin.join("sh");
-    fs::write(&sh, "#!/bin/sh\nexit 0\n").unwrap();
-    let mut perms = fs::metadata(&sh).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&sh, perms).unwrap();
+    write_stub_sh(&path_bin);
 
     let out = Command::new(&sift)
         .env("PATH", &path_bin)
