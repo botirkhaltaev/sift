@@ -51,8 +51,9 @@ fi
 
 echo "Releasing ${TAG}..."
 
-# 1. Bump workspace version in Cargo.toml.
+# 1. Bump workspace version in Cargo.toml and path-dep version pins.
 sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+sed -i "s/sift-core = { version = \"[^\"]*\"/sift-core = { version = \"${VERSION}\"/" crates/cli/Cargo.toml
 
 # 2. Regenerate Cargo.lock.
 cargo check --workspace --quiet 2>/dev/null || cargo check --workspace
