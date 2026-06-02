@@ -3,52 +3,29 @@ use std::path::PathBuf;
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, measurement::WallTime};
 use std::hint::black_box;
 
-use sift_core::IgnoreSources;
 use sift_grep::filter::{
-    FilterDecl, SearchFilterCtx, build_search_filter_config, builtin_type_defs, parse_size_suffix,
-    resolve_type_defs,
+    FilterDecl, SearchFilterCtx, TypeCatalog, candidate_config, parse_size_suffix,
 };
-use sift_grep::ignore::MessageFlags;
 
 use crate::support::parse_cli;
 
 fn bench_filter_type_defs_variants(g: &mut BenchmarkGroup<'_, WallTime>) {
     let decl_clear = FilterDecl {
-        max_depth: None,
-        max_filesize: None,
-        iglob: vec![],
-        ignore_file: vec![],
-        files: false,
-        type_include: vec![],
-        type_exclude: vec![],
-        type_list: false,
-        type_add: vec![],
         type_clear: vec!["rust".into(), "py".into(), "js".into()],
-        sort: None,
-        sortr: None,
+        ..Default::default()
     };
     let decl_add = FilterDecl {
-        max_depth: None,
-        max_filesize: None,
-        iglob: vec![],
-        ignore_file: vec![],
-        files: false,
-        type_include: vec![],
-        type_exclude: vec![],
-        type_list: false,
         type_add: vec!["mytype:*.my".into(), "rust:*.rsx".into()],
-        type_clear: vec![],
-        sort: None,
-        sortr: None,
+        ..Default::default()
     };
 
     let type_cases = [("with_clear", &decl_clear), ("with_add", &decl_add)];
     for (name, decl) in &type_cases {
         g.bench_with_input(
-            BenchmarkId::new("resolve_type_defs", *name),
+            BenchmarkId::new("TypeCatalog::from_decl", *name),
             decl,
             |b, d| {
-                b.iter(|| black_box(resolve_type_defs(black_box(d))));
+                b.iter(|| black_box(TypeCatalog::from_decl(black_box(d)).into_definitions()));
             },
         );
     }
@@ -66,46 +43,29 @@ pub fn bench(c: &mut Criterion) {
         });
     });
 
-    g.bench_function("builtin_type_defs", |b| {
-        b.iter(|| black_box(builtin_type_defs()));
-    });
-
-    let decl_default = FilterDecl {
-        max_depth: None,
-        max_filesize: None,
-        iglob: vec![],
-        ignore_file: vec![],
-        files: false,
-        type_include: vec![],
-        type_exclude: vec![],
-        type_list: false,
-        type_add: vec![],
-        type_clear: vec![],
-        sort: None,
-        sortr: None,
-    };
+    let decl_default = FilterDecl::default();
     g.bench_with_input(
-        BenchmarkId::new("resolve_type_defs", "default"),
+        BenchmarkId::new("TypeCatalog::from_decl", "default"),
         &decl_default,
         |b, d| {
-            b.iter(|| black_box(resolve_type_defs(black_box(d))));
+            b.iter(|| black_box(TypeCatalog::from_decl(black_box(d)).into_definitions()));
         },
     );
 
     bench_filter_type_defs_variants(&mut g);
 
-    // build_filter_config
     let cli_plain = parse_cli(&["pattern"]);
-    let filter_ctx_default = SearchFilterCtx {
-        hidden: false,
-        ignore_sources: IgnoreSources::all(),
-        require_git: false,
-        glob_case_insensitive: false,
-        msg_flags: MessageFlags::empty(),
-    };
+    let filter_ctx_default = SearchFilterCtx::default();
 
-    g.bench_function("build_filter_config/default", |b| {
-        b.iter(|| black_box(cli_plain.build_filter_config(filter_ctx_default, vec![], vec![])));
+    g.bench_function("candidate_config/default", |b| {
+        b.iter(|| {
+            black_box(candidate_config(
+                black_box(&cli_plain.filter_config()),
+                filter_ctx_default,
+                vec![],
+                vec![],
+            ))
+        });
     });
 
     let cli_glob = parse_cli(&[
@@ -122,29 +82,15 @@ pub fn bench(c: &mut Criterion) {
         "pattern",
     ]);
     let filter_ctx_glob = SearchFilterCtx {
-        hidden: false,
-        ignore_sources: IgnoreSources::all(),
-        require_git: false,
         glob_case_insensitive: true,
-        msg_flags: MessageFlags::empty(),
+        ..Default::default()
     };
-    g.bench_function("build_filter_config/with_glob_and_type", |b| {
+    g.bench_function("candidate_config/with_glob_and_type", |b| {
         b.iter(|| {
-            black_box(cli_glob.build_filter_config(
+            black_box(candidate_config(
+                black_box(&cli_glob.filter_config()),
                 filter_ctx_glob,
                 vec![PathBuf::from("")],
-                vec![],
-            ))
-        });
-    });
-
-    // build_search_filter_config
-    g.bench_function("build_search_filter_config/default", |b| {
-        b.iter(|| {
-            black_box(build_search_filter_config(
-                &cli_plain,
-                filter_ctx_default,
-                vec![],
                 vec![],
             ))
         });

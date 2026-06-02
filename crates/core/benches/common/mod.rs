@@ -11,11 +11,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, CorpusSpec, FilenameMode,
-    GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, IndexConfig, IndexKind, IndexStore,
-    LineStyleFlags, OutputEmission, PassthruMode, PathDisplay, RecordTerminator, SearchLineStyle,
-    SearchMode, SearchOptions, SearchOutput, SearchOutputFormat, SearchQuery, SearchRecordStyle,
-    SearchSeparators, TrigramIndex, VisibilityConfig, ZeroCountMode,
+    CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, CorpusSpec, GlobConfig,
+    HiddenMode, IgnoreConfig, IgnoreSources, IndexConfig, IndexKind, IndexStore, OutputEmission,
+    SearchMode, SearchOptions, SearchOutput, SearchQuery, SearchRecordStyle, TrigramIndex,
+    VisibilityConfig,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -212,27 +211,13 @@ pub fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
 
 // ─── Filter configs ─────────────────────────────────────────────────────────
 
-pub fn default_filter() -> CandidateFilterConfig {
-    CandidateFilterConfig {
-        visibility: VisibilityConfig {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::DOT | IgnoreSources::VCS | IgnoreSources::EXCLUDE,
-                custom_files: Vec::new(),
-                require_git: true,
-            },
-        },
-        ..CandidateFilterConfig::default()
-    }
-}
-
 pub fn glob_include_filter() -> CandidateFilterConfig {
     CandidateFilterConfig {
         glob: GlobConfig {
             patterns: vec!["**/*.txt".to_string()],
             case_insensitive: false,
         },
-        ..default_filter()
+        ..Default::default()
     }
 }
 
@@ -242,7 +227,7 @@ pub fn glob_exclude_filter() -> CandidateFilterConfig {
             patterns: vec!["!**/*.txt".to_string()],
             case_insensitive: false,
         },
-        ..default_filter()
+        ..Default::default()
     }
 }
 
@@ -252,7 +237,7 @@ pub fn glob_casei_filter() -> CandidateFilterConfig {
             patterns: vec!["**/*.TXT".to_string()],
             case_insensitive: true,
         },
-        ..default_filter()
+        ..Default::default()
     }
 }
 
@@ -260,9 +245,9 @@ pub fn hidden_include_filter() -> CandidateFilterConfig {
     CandidateFilterConfig {
         visibility: VisibilityConfig {
             hidden: HiddenMode::Include,
-            ..default_filter().visibility
+            ..VisibilityConfig::default()
         },
-        ..default_filter()
+        ..Default::default()
     }
 }
 
@@ -276,84 +261,29 @@ pub fn ignore_custom_filter() -> CandidateFilterConfig {
                 require_git: false,
             },
         },
-        ..CandidateFilterConfig::default()
+        ..Default::default()
     }
 }
 
 pub fn scoped_filter(subdir: &str) -> CandidateFilterConfig {
     CandidateFilterConfig {
         scopes: vec![PathBuf::from(subdir)],
-        ..default_filter()
+        ..Default::default()
     }
 }
 
 // ─── Output helpers ─────────────────────────────────────────────────────────
 
-pub const fn output_std() -> SearchOutput {
+pub fn quiet_output(mode: SearchMode) -> SearchOutput {
     SearchOutput {
-        format: SearchOutputFormat::Text,
-        mode: SearchMode::Standard,
-        emission: OutputEmission::Normal,
-        lines: SearchLineStyle {
-            filename_mode: FilenameMode::Auto,
-            flags: LineStyleFlags::empty(),
-            path_display: PathDisplay::Relative,
-            columns: None,
-        },
-        records: SearchRecordStyle {
-            terminator: RecordTerminator::Newline,
-            color: ColorChoice::Never,
-            path_separator: None,
-        },
-        passthru: PassthruMode::Disabled,
-        include_zero: ZeroCountMode::Omit,
-    }
-}
-
-pub const fn output_quiet(mode: SearchMode) -> SearchOutput {
-    SearchOutput {
-        format: SearchOutputFormat::Text,
         mode,
         emission: OutputEmission::Quiet,
-        lines: SearchLineStyle {
-            filename_mode: FilenameMode::Auto,
-            flags: LineStyleFlags::empty(),
-            path_display: PathDisplay::Relative,
-            columns: None,
-        },
         records: SearchRecordStyle {
-            terminator: RecordTerminator::Newline,
             color: ColorChoice::Never,
-            path_separator: None,
+            ..Default::default()
         },
-        passthru: PassthruMode::Disabled,
-        include_zero: ZeroCountMode::Omit,
+        ..Default::default()
     }
-}
-
-pub const fn output_json(mode: SearchMode) -> SearchOutput {
-    SearchOutput {
-        format: SearchOutputFormat::Json,
-        mode,
-        emission: OutputEmission::Quiet,
-        lines: SearchLineStyle {
-            filename_mode: FilenameMode::Auto,
-            flags: LineStyleFlags::empty(),
-            path_display: PathDisplay::Relative,
-            columns: None,
-        },
-        records: SearchRecordStyle {
-            terminator: RecordTerminator::Newline,
-            color: ColorChoice::Never,
-            path_separator: None,
-        },
-        passthru: PassthruMode::Disabled,
-        include_zero: ZeroCountMode::Omit,
-    }
-}
-
-pub fn default_seps() -> SearchSeparators {
-    SearchSeparators::default()
 }
 
 // ─── Search helpers ─────────────────────────────────────────────────────────

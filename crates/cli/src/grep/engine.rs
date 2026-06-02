@@ -1,7 +1,7 @@
 use clap::Args;
 
 /// Regex engine and configuration flags.
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct EngineDecl {
     #[arg(long = "no-config")]
     pub no_config: bool,
@@ -42,7 +42,7 @@ pub struct WalkerDecl {
 }
 
 /// Multiline and CRLF flags.
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct MultilineDecl {
     #[arg(short = 'U', long = "multiline")]
     pub multiline: bool,

@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use criterion::{BenchmarkId, Criterion};
 use std::hint::black_box;
 
-use sift_grep::paths::{
-    corpus_path_prefixes, effective_path_display, excluded_search_paths, walk_path_prefixes,
-};
+use sift_grep::paths::CorpusScope;
 
 use crate::support::make_small_corpus;
 
@@ -16,27 +14,15 @@ fn bench_effective_path_display(c: &mut Criterion) {
     let rel: &[PathBuf] = &[PathBuf::from("src")];
     let abs: &[PathBuf] = &[PathBuf::from("/home/user")];
 
-    g.bench_with_input(
-        BenchmarkId::new("effective_path_display", "empty"),
-        empty,
-        |b, s| {
-            b.iter(|| black_box(effective_path_display(black_box(s))));
-        },
-    );
-    g.bench_with_input(
-        BenchmarkId::new("effective_path_display", "relative"),
-        rel,
-        |b, s| {
-            b.iter(|| black_box(effective_path_display(black_box(s))));
-        },
-    );
-    g.bench_with_input(
-        BenchmarkId::new("effective_path_display", "absolute"),
-        abs,
-        |b, s| {
-            b.iter(|| black_box(effective_path_display(black_box(s))));
-        },
-    );
+    g.bench_with_input(BenchmarkId::new("path_display", "empty"), empty, |b, s| {
+        b.iter(|| black_box(CorpusScope::path_display(black_box(s))));
+    });
+    g.bench_with_input(BenchmarkId::new("path_display", "relative"), rel, |b, s| {
+        b.iter(|| black_box(CorpusScope::path_display(black_box(s))));
+    });
+    g.bench_with_input(BenchmarkId::new("path_display", "absolute"), abs, |b, s| {
+        b.iter(|| black_box(CorpusScope::path_display(black_box(s))));
+    });
 
     g.finish();
 }
@@ -55,37 +41,49 @@ fn bench_path_prefixes(c: &mut Criterion) {
     let mut g = c.benchmark_group("paths");
 
     g.bench_with_input(
-        BenchmarkId::new("corpus_prefixes", "empty"),
+        BenchmarkId::new("indexed_prefixes", "empty"),
         &(&corpus, empty_scope),
         |b, (root, scopes)| {
             b.iter(|| {
                 black_box(
-                    corpus_path_prefixes(black_box(root), black_box(root), black_box(scopes))
-                        .unwrap(),
+                    CorpusScope::indexed_prefixes(
+                        black_box(root),
+                        black_box(root),
+                        black_box(scopes),
+                    )
+                    .unwrap(),
                 )
             });
         },
     );
     g.bench_with_input(
-        BenchmarkId::new("corpus_prefixes", "one_scope"),
+        BenchmarkId::new("indexed_prefixes", "one_scope"),
         &(&corpus, one_scope),
         |b, (root, scopes)| {
             b.iter(|| {
                 black_box(
-                    corpus_path_prefixes(black_box(root), black_box(root), black_box(scopes))
-                        .unwrap(),
+                    CorpusScope::indexed_prefixes(
+                        black_box(root),
+                        black_box(root),
+                        black_box(scopes),
+                    )
+                    .unwrap(),
                 )
             });
         },
     );
     g.bench_with_input(
-        BenchmarkId::new("corpus_prefixes", "many_scopes"),
+        BenchmarkId::new("indexed_prefixes", "many_scopes"),
         &(&corpus, &many_scope),
         |b, (root, scopes)| {
             b.iter(|| {
                 black_box(
-                    corpus_path_prefixes(black_box(root), black_box(root), black_box(scopes))
-                        .unwrap(),
+                    CorpusScope::indexed_prefixes(
+                        black_box(root),
+                        black_box(root),
+                        black_box(scopes),
+                    )
+                    .unwrap(),
                 )
             });
         },
@@ -95,21 +93,9 @@ fn bench_path_prefixes(c: &mut Criterion) {
         BenchmarkId::new("walk_prefixes", "empty"),
         &(&corpus, empty_scope),
         |b, (root, scopes)| {
-            b.iter(|| black_box(walk_path_prefixes(black_box(root), black_box(scopes)).unwrap()));
-        },
-    );
-    g.bench_with_input(
-        BenchmarkId::new("walk_prefixes", "one_scope"),
-        &(&corpus, one_scope),
-        |b, (root, scopes)| {
-            b.iter(|| black_box(walk_path_prefixes(black_box(root), black_box(scopes)).unwrap()));
-        },
-    );
-    g.bench_with_input(
-        BenchmarkId::new("walk_prefixes", "many_scopes"),
-        &(&corpus, &many_scope),
-        |b, (root, scopes)| {
-            b.iter(|| black_box(walk_path_prefixes(black_box(root), black_box(scopes)).unwrap()));
+            b.iter(|| {
+                black_box(CorpusScope::walk_prefixes(black_box(root), black_box(scopes)).unwrap())
+            });
         },
     );
 
@@ -128,7 +114,7 @@ fn bench_excluded_paths(c: &mut Criterion) {
 
     g.bench_function("excluded_paths/inside", |b| {
         b.iter(|| {
-            black_box(excluded_search_paths(
+            black_box(CorpusScope::excluded_paths(
                 black_box(&index_root),
                 black_box(&sift_dir),
             ))
@@ -136,7 +122,7 @@ fn bench_excluded_paths(c: &mut Criterion) {
     });
     g.bench_function("excluded_paths/outside", |b| {
         b.iter(|| {
-            black_box(excluded_search_paths(
+            black_box(CorpusScope::excluded_paths(
                 black_box(&index_root),
                 black_box(&outside),
             ))

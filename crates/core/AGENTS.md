@@ -127,7 +127,7 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 - **Storage is benchmarked indirectly** through `index.rs` build/open/save/reopen paths. Storage is private to the index module.
 - **Benchmarks mirror implementation modules.** One bench file per domain (`query`, `index`, `grep`).
 - **Fixture placement:** build benches materialize corpus + build inside `b.iter`; search/open/candidate benches build fixtures outside `b.iter`.
-- **Shared fixtures** live in `benches/common/mod.rs`.
+- **Shared fixtures** live in `benches/common/mod.rs`. Prefer `Default` on domain types for baseline fixtures; override fields with struct update. Avoid `default_*()` helpers that duplicate `Default`.
 
 ### Running
 

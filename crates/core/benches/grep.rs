@@ -7,7 +7,8 @@ use std::hint::black_box;
 
 use sift_core::grep::GrepRequest;
 use sift_core::{
-    Index, Indexes, SearchMatchFlags, SearchMode, SearchOptions, SearchQuery, TrigramIndex,
+    CandidateFilterConfig, Index, Indexes, SearchMatchFlags, SearchMode, SearchOptions,
+    SearchQuery, SearchSeparators, TrigramIndex,
 };
 
 mod common;
@@ -33,7 +34,7 @@ fn wrap_index(index: TrigramIndex) -> Indexes {
 fn bench_indexed_search(c: &mut Criterion) {
     let (_tmp, index) = common::open_large_index();
     let indexes = wrap_index(index);
-    let filter = common::make_filter(&common::default_filter(), indexes.root());
+    let filter = common::make_filter(&CandidateFilterConfig::default(), indexes.root());
 
     let mut g = c.benchmark_group("grep_indexed");
 
@@ -44,8 +45,8 @@ fn bench_indexed_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -62,8 +63,8 @@ fn bench_indexed_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -83,8 +84,8 @@ fn bench_indexed_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -107,8 +108,8 @@ fn bench_indexed_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -128,8 +129,8 @@ fn bench_indexed_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -152,8 +153,8 @@ fn bench_indexed_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -170,8 +171,8 @@ fn bench_indexed_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: true,
                 }
                 .run(&query)
@@ -191,7 +192,7 @@ fn bench_walk_search(c: &mut Criterion) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     common::make_filter_corpus(&corpus);
-    let filter = common::make_filter(&common::default_filter(), &corpus);
+    let filter = common::make_filter(&CandidateFilterConfig::default(), &corpus);
     let indexes = Indexes::open(&tmp.path().join(".sift")).unwrap();
 
     let mut g = c.benchmark_group("grep_walk");
@@ -203,8 +204,8 @@ fn bench_walk_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -221,8 +222,8 @@ fn bench_walk_search(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Standard),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Standard),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -240,7 +241,7 @@ fn bench_walk_search(c: &mut Criterion) {
 fn bench_output_modes(c: &mut Criterion) {
     let (_tmp, index) = common::open_large_index();
     let indexes = wrap_index(index);
-    let filter = common::make_filter(&common::default_filter(), indexes.root());
+    let filter = common::make_filter(&CandidateFilterConfig::default(), indexes.root());
     let query: SearchQuery = common::make_search(&["beta"], SearchOptions::default());
 
     let mut g = c.benchmark_group("grep_output_modes");
@@ -251,8 +252,8 @@ fn bench_output_modes(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::Count),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::Count),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -268,8 +269,8 @@ fn bench_output_modes(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::FilesWithMatches),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::FilesWithMatches),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)
@@ -285,8 +286,8 @@ fn bench_output_modes(c: &mut Criterion) {
                 GrepRequest {
                     indexes: &indexes,
                     filter: &filter,
-                    output: common::output_quiet(SearchMode::FilesWithoutMatch),
-                    separators: &common::default_seps(),
+                    output: common::quiet_output(SearchMode::FilesWithoutMatch),
+                    separators: &SearchSeparators::default(),
                     collect_stats: false,
                 }
                 .run(&query)

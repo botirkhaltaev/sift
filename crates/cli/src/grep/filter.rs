@@ -1,14 +1,21 @@
 use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
-use sift_core::{
-    CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, TypeDef, VisibilityConfig,
-};
+use sift_core::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig};
 
-use super::ignore::MessageFlags;
-use crate::cli::Cli;
+use super::argv::Argv;
+use super::ignore::{IgnoreResolution, MessageFlags};
+use super::output::OutputArgv;
 
-#[derive(Args)]
+#[derive(Clone)]
+pub struct FilterConfig {
+    pub decl: FilterDecl,
+    pub glob_patterns: Vec<String>,
+    pub follow_links: bool,
+    pub one_file_system: bool,
+}
+
+#[derive(Args, Clone, Default)]
 pub struct FilterDecl {
     #[arg(long = "max-depth", value_name = "NUM")]
     pub max_depth: Option<usize>,
@@ -37,22 +44,19 @@ pub struct FilterDecl {
 }
 
 /// Resolved visibility, ignore sources, and glob case for [`CandidateFilterConfig`].
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct SearchFilterCtx {
-    pub hidden: bool,
-    pub ignore_sources: sift_core::IgnoreSources,
-    pub require_git: bool,
+    pub ignore: IgnoreResolution,
     pub glob_case_insensitive: bool,
-    pub msg_flags: MessageFlags,
 }
 
 impl SearchFilterCtx {
     #[must_use]
-    pub const fn hidden_mode(self) -> HiddenMode {
-        if self.hidden {
-            HiddenMode::Include
-        } else {
-            HiddenMode::Respect
+    pub fn resolve(argv: &Argv<'_>) -> Self {
+        let output = OutputArgv::resolve(argv);
+        Self {
+            ignore: IgnoreResolution::resolve(argv),
+            glob_case_insensitive: output.path.glob_case_insensitive,
         }
     }
 }
@@ -150,8 +154,79 @@ pub fn parse_size_suffix(s: &str) -> anyhow::Result<u64> {
     Ok(base * multiplier)
 }
 
-#[must_use]
-pub fn builtin_type_defs() -> Vec<TypeDef> {
+/// Built-in and user-defined file type definitions.
+pub struct TypeCatalog {
+    defs: Vec<TypeDef>,
+}
+
+impl TypeCatalog {
+    #[must_use]
+    pub fn from_decl(decl: &FilterDecl) -> Self {
+        let mut defs = builtin_type_defs();
+
+        for spec in &decl.type_clear {
+            defs.retain(|d| d.name != *spec);
+        }
+
+        for spec in &decl.type_add {
+            if let Some((name, globs_str)) = spec.split_once(':') {
+                if let Some(rest) = globs_str.strip_prefix("include:") {
+                    let includes: Vec<&str> = rest.split(',').collect();
+                    let mut new_globs = Vec::new();
+                    for inc_name in &includes {
+                        for d in &defs {
+                            if d.name == *inc_name {
+                                new_globs.extend(d.globs.clone());
+                            }
+                        }
+                    }
+                    if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
+                        existing.globs.extend(new_globs);
+                    } else {
+                        defs.push(TypeDef {
+                            name: name.to_string(),
+                            globs: new_globs,
+                        });
+                    }
+                } else {
+                    let globs: Vec<String> =
+                        globs_str.split(',').map(|s| s.trim().to_string()).collect();
+                    if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
+                        existing.globs.extend(globs);
+                    } else {
+                        defs.push(TypeDef {
+                            name: name.to_string(),
+                            globs,
+                        });
+                    }
+                }
+            }
+        }
+
+        Self { defs }
+    }
+
+    #[must_use]
+    pub fn definitions(&self) -> &[TypeDef] {
+        &self.defs
+    }
+
+    #[must_use]
+    pub fn into_definitions(self) -> Vec<TypeDef> {
+        self.defs
+    }
+
+    /// Print sorted type definitions for `--type-list`.
+    pub fn print_list(decl: &FilterDecl) {
+        let mut defs = Self::from_decl(decl).into_definitions();
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        for def in &defs {
+            println!("{}: {}", def.name, def.globs.join(", "));
+        }
+    }
+}
+
+fn builtin_type_defs() -> Vec<TypeDef> {
     [
         ("rust", &["*.rs"][..]),
         ("py", &["*.py", "*.pyi"]),
@@ -218,157 +293,39 @@ pub fn builtin_type_defs() -> Vec<TypeDef> {
     .collect()
 }
 
-#[must_use]
-pub fn resolve_type_defs(decl: &FilterDecl) -> Vec<TypeDef> {
-    let mut defs = builtin_type_defs();
-
-    for spec in &decl.type_clear {
-        defs.retain(|d| d.name != *spec);
-    }
-
-    for spec in &decl.type_add {
-        if let Some((name, globs_str)) = spec.split_once(':') {
-            if let Some(rest) = globs_str.strip_prefix("include:") {
-                let includes: Vec<&str> = rest.split(',').collect();
-                let mut new_globs = Vec::new();
-                for inc_name in &includes {
-                    for d in &defs {
-                        if d.name == *inc_name {
-                            new_globs.extend(d.globs.clone());
-                        }
-                    }
-                }
-                if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
-                    existing.globs.extend(new_globs);
-                } else {
-                    defs.push(TypeDef {
-                        name: name.to_string(),
-                        globs: new_globs,
-                    });
-                }
-            } else {
-                let globs: Vec<String> =
-                    globs_str.split(',').map(|s| s.trim().to_string()).collect();
-                if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
-                    existing.globs.extend(globs);
-                } else {
-                    defs.push(TypeDef {
-                        name: name.to_string(),
-                        globs,
-                    });
-                }
-            }
-        }
-    }
-
-    defs
-}
-
-// ── Config builders ──
-
-impl Cli {
-    /// # Errors
-    ///
-    /// Returns an error if `max_filesize` parsing fails.
-    pub fn build_filter_config(
-        &self,
-        filter: SearchFilterCtx,
-        scopes: Vec<PathBuf>,
-        exclude_paths: Vec<PathBuf>,
-    ) -> anyhow::Result<CandidateFilterConfig> {
-        let max_filesize = self
-            .filter_decl
-            .max_filesize
-            .as_ref()
-            .map(|s| parse_size_suffix(s))
-            .transpose()?;
-
-        let mut glob_patterns = self.glob_flags.glob.clone();
-        for ig in &self.filter_decl.iglob {
-            glob_patterns.push(ig.clone());
-        }
-
-        let glob_ci = filter.glob_case_insensitive || !self.filter_decl.iglob.is_empty();
-
-        let needs_type_defs = !self.filter_decl.type_include.is_empty()
-            || !self.filter_decl.type_exclude.is_empty()
-            || !self.filter_decl.type_add.is_empty()
-            || !self.filter_decl.type_clear.is_empty();
-        let type_definitions = if needs_type_defs {
-            resolve_type_defs(&self.filter_decl)
-        } else {
-            Vec::new()
-        };
-
-        Ok(CandidateFilterConfig {
-            scopes,
-            exclude_paths,
-            glob: GlobConfig {
-                patterns: glob_patterns,
-                case_insensitive: glob_ci,
-            },
-            visibility: VisibilityConfig {
-                hidden: filter.hidden_mode(),
-                ignore: IgnoreConfig {
-                    sources: filter.ignore_sources,
-                    custom_files: if filter.msg_flags.contains(MessageFlags::NO_IGNORE_FILES) {
-                        Vec::new()
-                    } else {
-                        self.filter_decl.ignore_file.clone()
-                    },
-                    require_git: filter.require_git,
-                },
-            },
-            follow_links: self.paths.follow,
-            max_depth: self.filter_decl.max_depth,
-            max_filesize,
-            type_definitions,
-            type_include: self.filter_decl.type_include.clone(),
-            type_exclude: self.filter_decl.type_exclude.clone(),
-            one_file_system: self.walker_decl.one_file_system,
-        })
-    }
-}
-
-/// Free-function version used by `run_files_mode` (no self).
+/// Build a [`CandidateFilterConfig`] from CLI declarations and resolved filter context.
 ///
 /// # Errors
 ///
 /// Returns an error if `max_filesize` parsing fails.
-pub fn build_search_filter_config(
-    cli: &Cli,
+pub fn candidate_config(
+    config: &FilterConfig,
     filter: SearchFilterCtx,
     scopes: Vec<PathBuf>,
     exclude_paths: Vec<PathBuf>,
 ) -> anyhow::Result<CandidateFilterConfig> {
-    let max_filesize = cli
-        .filter_decl
+    let max_filesize = config
+        .decl
         .max_filesize
         .as_ref()
         .map(|s| parse_size_suffix(s))
         .transpose()?;
 
-    let mut glob_patterns = cli.glob_flags.glob.clone();
-    for ig in &cli.filter_decl.iglob {
+    let mut glob_patterns = config.glob_patterns.clone();
+    for ig in &config.decl.iglob {
         glob_patterns.push(ig.clone());
     }
 
-    let glob_ci = filter.glob_case_insensitive || !cli.filter_decl.iglob.is_empty();
+    let glob_ci = filter.glob_case_insensitive || !config.decl.iglob.is_empty();
 
-    let needs_type_defs = !cli.filter_decl.type_include.is_empty()
-        || !cli.filter_decl.type_exclude.is_empty()
-        || !cli.filter_decl.type_add.is_empty()
-        || !cli.filter_decl.type_clear.is_empty();
+    let needs_type_defs = !config.decl.type_include.is_empty()
+        || !config.decl.type_exclude.is_empty()
+        || !config.decl.type_add.is_empty()
+        || !config.decl.type_clear.is_empty();
     let type_definitions = if needs_type_defs {
-        resolve_type_defs(&cli.filter_decl)
+        TypeCatalog::from_decl(&config.decl).into_definitions()
     } else {
         Vec::new()
-    };
-
-    let custom_files = if filter.msg_flags.contains(MessageFlags::NO_IGNORE_FILES) {
-        Vec::new()
-    } else {
-        cli.filter_decl.ignore_file.clone()
     };
 
     Ok(CandidateFilterConfig {
@@ -379,20 +336,28 @@ pub fn build_search_filter_config(
             case_insensitive: glob_ci,
         },
         visibility: VisibilityConfig {
-            hidden: filter.hidden_mode(),
+            hidden: filter.ignore.hidden_mode(),
             ignore: IgnoreConfig {
-                sources: filter.ignore_sources,
-                custom_files,
-                require_git: filter.require_git,
+                sources: filter.ignore.sources,
+                custom_files: if filter
+                    .ignore
+                    .msg_flags
+                    .contains(MessageFlags::NO_IGNORE_FILES)
+                {
+                    Vec::new()
+                } else {
+                    config.decl.ignore_file.clone()
+                },
+                require_git: filter.ignore.require_git,
             },
         },
-        follow_links: cli.paths.follow,
-        max_depth: cli.filter_decl.max_depth,
+        follow_links: config.follow_links,
+        max_depth: config.decl.max_depth,
         max_filesize,
         type_definitions,
-        type_include: cli.filter_decl.type_include.clone(),
-        type_exclude: cli.filter_decl.type_exclude.clone(),
-        one_file_system: cli.walker_decl.one_file_system,
+        type_include: config.decl.type_include.clone(),
+        type_exclude: config.decl.type_exclude.clone(),
+        one_file_system: config.one_file_system,
     })
 }
 
@@ -439,39 +404,30 @@ mod tests {
 
     #[test]
     fn builtin_type_defs_contains_rust() {
-        let defs = builtin_type_defs();
+        let defs = TypeCatalog::from_decl(&FilterDecl::default()).into_definitions();
         assert!(defs.iter().any(|d| d.name == "rust"));
     }
 
     #[test]
     fn builtin_type_defs_contains_python() {
-        let defs = builtin_type_defs();
+        let defs = TypeCatalog::from_decl(&FilterDecl::default()).into_definitions();
         assert!(defs.iter().any(|d| d.name == "py"));
     }
 
     #[test]
     fn builtin_type_defs_non_empty() {
-        let defs = builtin_type_defs();
+        let defs = TypeCatalog::from_decl(&FilterDecl::default()).into_definitions();
         assert!(!defs.is_empty());
     }
 
     #[test]
     fn resolve_type_defs_clear_removes_type() {
         let decl = FilterDecl {
-            max_depth: None,
-            max_filesize: None,
-            iglob: vec![],
-            ignore_file: vec![],
-            files: false,
-            type_include: vec![],
-            type_exclude: vec![],
-            type_list: false,
-            type_add: vec![],
             type_clear: vec!["rust".into(), "py".into()],
-            sort: None,
-            sortr: None,
+            ..Default::default()
         };
-        let defs = resolve_type_defs(&decl);
+        let catalog = TypeCatalog::from_decl(&decl);
+        let defs = catalog.definitions();
         assert!(!defs.iter().any(|d| d.name == "rust"));
         assert!(!defs.iter().any(|d| d.name == "py"));
     }
@@ -479,40 +435,22 @@ mod tests {
     #[test]
     fn resolve_type_defs_add_custom_type() {
         let decl = FilterDecl {
-            max_depth: None,
-            max_filesize: None,
-            iglob: vec![],
-            ignore_file: vec![],
-            files: false,
-            type_include: vec![],
-            type_exclude: vec![],
-            type_list: false,
             type_add: vec!["mytype:*.my".into()],
-            type_clear: vec![],
-            sort: None,
-            sortr: None,
+            ..Default::default()
         };
-        let defs = resolve_type_defs(&decl);
+        let catalog = TypeCatalog::from_decl(&decl);
+        let defs = catalog.definitions();
         assert!(defs.iter().any(|d| d.name == "mytype"));
     }
 
     #[test]
     fn resolve_type_defs_add_extends_existing() {
         let decl = FilterDecl {
-            max_depth: None,
-            max_filesize: None,
-            iglob: vec![],
-            ignore_file: vec![],
-            files: false,
-            type_include: vec![],
-            type_exclude: vec![],
-            type_list: false,
             type_add: vec!["rust:*.rsx".into()],
-            type_clear: vec![],
-            sort: None,
-            sortr: None,
+            ..Default::default()
         };
-        let defs = resolve_type_defs(&decl);
+        let catalog = TypeCatalog::from_decl(&decl);
+        let defs = catalog.definitions();
         let rust = defs.iter().find(|d| d.name == "rust").unwrap();
         assert!(rust.globs.contains(&"*.rsx".to_string()));
         assert!(rust.globs.contains(&"*.rs".to_string()));
@@ -521,20 +459,11 @@ mod tests {
     #[test]
     fn resolve_type_defs_add_include() {
         let decl = FilterDecl {
-            max_depth: None,
-            max_filesize: None,
-            iglob: vec![],
-            ignore_file: vec![],
-            files: false,
-            type_include: vec![],
-            type_exclude: vec![],
-            type_list: false,
             type_add: vec!["combined:include:rust,py".into()],
-            type_clear: vec![],
-            sort: None,
-            sortr: None,
+            ..Default::default()
         };
-        let defs = resolve_type_defs(&decl);
+        let catalog = TypeCatalog::from_decl(&decl);
+        let defs = catalog.definitions();
         let combined = defs.iter().find(|d| d.name == "combined").unwrap();
         assert!(combined.globs.contains(&"*.rs".to_string()));
         assert!(combined.globs.contains(&"*.py".to_string()));
@@ -542,26 +471,37 @@ mod tests {
 
     #[test]
     fn search_filter_ctx_hidden_mode_include() {
+        use crate::grep::ignore::IgnoreResolution;
+        use sift_core::IgnoreSources;
         let ctx = SearchFilterCtx {
-            hidden: true,
-            ignore_sources: sift_core::IgnoreSources::empty(),
-            require_git: false,
-            glob_case_insensitive: false,
-            msg_flags: MessageFlags::empty(),
+            ignore: IgnoreResolution {
+                hidden: true,
+                sources: IgnoreSources::empty(),
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        assert!(matches!(ctx.hidden_mode(), sift_core::HiddenMode::Include));
+        assert!(matches!(
+            ctx.ignore.hidden_mode(),
+            sift_core::HiddenMode::Include
+        ));
     }
 
     #[test]
     fn search_filter_ctx_hidden_mode_respect() {
+        use crate::grep::ignore::IgnoreResolution;
+        use sift_core::IgnoreSources;
         let ctx = SearchFilterCtx {
-            hidden: false,
-            ignore_sources: sift_core::IgnoreSources::empty(),
-            require_git: false,
-            glob_case_insensitive: false,
-            msg_flags: MessageFlags::empty(),
+            ignore: IgnoreResolution {
+                sources: IgnoreSources::empty(),
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        assert!(matches!(ctx.hidden_mode(), sift_core::HiddenMode::Respect));
+        assert!(matches!(
+            ctx.ignore.hidden_mode(),
+            sift_core::HiddenMode::Respect
+        ));
     }
 
     #[test]
