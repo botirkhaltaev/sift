@@ -6,20 +6,20 @@ Installable agent skills following the [Agent Skills](https://agentskills.io) fo
 
 ```bash
 # From a clone of this repo
-npx skills add ./skills/sift-cli
+npx skills add ./skills/sift
 
 # Pick specific agents
-npx skills add ./skills/sift-cli -a cursor -a claude-code -y
+npx skills add ./skills/sift -a cursor -a claude-code -y
 
 # From GitHub
-npx skills add https://github.com/botirk38/sift/tree/master/skills/sift-cli
+npx skills add https://github.com/botirk38/sift/tree/master/skills/sift
 ```
 
 ## Available Skills
 
 | Directory | Description |
 |-----------|-------------|
-| [`sift-cli/`](sift-cli/) | Work on the `sift` CLI: flags, tests, integration |
+| [`sift/`](sift/) | Search codebases with the `sift` CLI (index, query, flags) |
 
 ## Listing
 

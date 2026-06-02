@@ -32,7 +32,7 @@ sift/
 ├── fuzz/               # cargo-fuzz targets (standalone, nightly)
 ├── benchsuite/         # rg vs sift comparative benchmarks
 ├── scripts/            # bench.sh, fuzz.sh, install.sh
-├── skills/             # Agent skills (skills.sh / npx skills)
+├── skills/             # Agent skill for searching with sift (npx skills)
 └── docs/               # Performance snapshots and compatibility matrix
 ```
 
