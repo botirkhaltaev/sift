@@ -29,7 +29,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
 | `benchsuite/` | Comparative `rg` vs `sift` benchmarks |
 | `scripts/` | `bench.sh`, `fuzz.sh`, `install.sh` |
-| `skills/` | Agent skills (`skills.sh` / `npx skills`) |
+| `skills/` | Agent usage skill for searching with `sift` (`npx skills`); CLI development → `crates/cli/AGENTS.md` |
 | `docs/` | Performance snapshots, compatibility matrix |
 
 ## Key Conventions
