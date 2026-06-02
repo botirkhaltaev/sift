@@ -13,9 +13,9 @@ const DEFAULT_REPO: &str = "botirk38/sift";
 ///
 /// Returns an error when the executable path has no parent or `BIN_DIR` has no parent.
 pub fn install_dirs_from_exe(exe: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let bin_dir = exe
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("cannot determine install directory from {}", exe.display()))?;
+    let bin_dir = exe.parent().ok_or_else(|| {
+        anyhow::anyhow!("cannot determine install directory from {}", exe.display())
+    })?;
     let prefix = bin_dir.parent().ok_or_else(|| {
         anyhow::anyhow!(
             "install path {} has no parent PREFIX; set PREFIX and BIN_DIR and re-run install.sh",

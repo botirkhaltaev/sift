@@ -54,11 +54,7 @@ fn index_build_twice_exits_2() {
     p.write("a.txt", "hello\n");
     p.build_index();
 
-    let out = p
-        .sift()
-        .args(["index", "build"])
-        .output()
-        .unwrap();
+    let out = p.sift().args(["index", "build"]).output().unwrap();
     assert_exit_code(&out, 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("index update"), "expected hint: {stderr}");
@@ -69,11 +65,7 @@ fn index_update_without_build_exits_2() {
     let p = TestProject::new("errors-index-update-missing");
     p.write("a.txt", "hello\n");
 
-    let out = p
-        .sift()
-        .args(["index", "update"])
-        .output()
-        .unwrap();
+    let out = p.sift().args(["index", "update"]).output().unwrap();
     assert_exit_code(&out, 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("index build"), "expected hint: {stderr}");

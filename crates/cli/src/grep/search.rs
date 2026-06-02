@@ -5,7 +5,6 @@ use sift_core::{
     SearchLineStyle, SearchMode, SearchQuery, SearchRecordStyle,
 };
 
-use crate::cli::Cli;
 use super::filter::{SearchFilterCtx, build_search_filter_config, resolve_type_defs};
 use super::ignore::resolve_visibility_and_ignore;
 use super::output::{
@@ -17,6 +16,7 @@ use super::paths::{
     corpus_path_prefixes, effective_path_display, excluded_search_paths, walk_path_prefixes,
 };
 use super::pattern::{resolve_invert_match_from_args, resolve_output_mode, resolve_patterns};
+use crate::cli::Cli;
 
 pub fn run_type_list(cli: &Cli) {
     let defs = resolve_type_defs(&cli.filter_decl);

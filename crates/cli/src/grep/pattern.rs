@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
 use sift_core::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions};
 
-use crate::cli::Cli;
 use super::filter::parse_size_suffix;
 use super::output::resolve_context_from_args;
+use crate::cli::Cli;
 
 #[derive(Args)]
 pub struct PatternArgs {

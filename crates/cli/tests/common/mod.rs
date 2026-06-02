@@ -96,11 +96,7 @@ impl TestProject {
             cmd.arg("--follow");
         }
         cmd.args(extra_args);
-        let status = cmd
-            .args(["index", "build"])
-            .arg(corpus)
-            .status()
-            .unwrap();
+        let status = cmd.args(["index", "build"]).arg(corpus).status().unwrap();
         assert!(
             status.success(),
             "build index over {} failed with status {status}",
@@ -327,11 +323,7 @@ impl BuildIndexOptions {
         if self.follow_symlinks {
             cmd.arg("--follow");
         }
-        let status = cmd
-            .args(["index", "build"])
-            .arg(corpus)
-            .status()
-            .unwrap();
+        let status = cmd.args(["index", "build"]).arg(corpus).status().unwrap();
         assert!(status.success(), "build index failed with status {status}");
     }
 }
