@@ -426,7 +426,7 @@ fn build_command_error_exit_code() {
         .sift()
         .arg("--sift-dir")
         .arg(p.root().join(".sift"))
-        .arg("build")
+        .args(["index", "build"])
         .arg("/nonexistent/path")
         .output()
         .unwrap();

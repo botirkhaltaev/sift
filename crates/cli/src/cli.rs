@@ -2,19 +2,21 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
-use crate::filter::{FilterDecl, GlobFlags};
-use crate::ignore::{
+use crate::grep::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
+use crate::grep::filter::{FilterDecl, GlobFlags};
+use crate::grep::ignore::{
     ContextDecl, IgnoreDotDecl, IgnoreExcludeDecl, IgnoreFilesDecl, IgnoreGitDecl,
     IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreVcsDecl,
     MessagesDecl, UnrestrictedDecl,
 };
-use crate::output::{
+use crate::grep::output::{
     ColumnDecl, ColumnsDecl, ExtraOutputDecl, FilenameDecl, HeadingDecl, JsonDecl, LineNumberDecl,
     NullColorDecl, ReplaceDecl, SeparatorDecl, StatsDecl,
 };
-use crate::paths::PathArgs;
-use crate::pattern::{BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope};
+use crate::grep::paths::PathArgs;
+use crate::grep::pattern::{
+    BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope,
+};
 
 #[derive(Parser)]
 #[command(version)]
@@ -98,11 +100,32 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Download and install the latest release over the current binary.
+    Update,
+    Index {
+        #[command(subcommand)]
+        command: IndexCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum IndexCommands {
+    /// Create an index at `--sift-dir` (fails if an index already exists).
     Build {
         #[arg(default_value = ".")]
         path: PathBuf,
 
         /// Comma-separated index kinds to build (default: all).
+        /// Available: trigram
+        #[arg(short, long, value_delimiter = ',')]
+        indexes: Option<Vec<sift_core::IndexKind>>,
+    },
+    /// Incrementally refresh an existing index (fails if no index exists).
+    Update {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Comma-separated index kinds to update (default: all).
         /// Available: trigram
         #[arg(short, long, value_delimiter = ',')]
         indexes: Option<Vec<sift_core::IndexKind>>,
@@ -134,20 +157,42 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_build_subcommand() {
-        let cli = Cli::try_parse_from(["sift", "build"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Build { .. })));
+    fn cli_parses_update_subcommand() {
+        let cli = Cli::try_parse_from(["sift", "update"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Update)));
     }
 
     #[test]
-    fn cli_parses_build_subcommand_with_path() {
-        let cli = Cli::try_parse_from(["sift", "build", "/tmp"]).unwrap();
+    fn cli_parses_index_build_subcommand() {
+        let cli = Cli::try_parse_from(["sift", "index", "build"]).unwrap();
         match cli.command {
-            Some(Commands::Build { path, .. }) => {
-                assert_eq!(path, PathBuf::from("/tmp"));
-            }
-            _ => panic!("expected Build subcommand"),
+            Some(Commands::Index {
+                command: IndexCommands::Build { path, .. },
+            }) => assert_eq!(path, PathBuf::from(".")),
+            _ => panic!("expected index build subcommand"),
         }
+    }
+
+    #[test]
+    fn cli_parses_index_build_subcommand_with_path() {
+        let cli = Cli::try_parse_from(["sift", "index", "build", "/tmp"]).unwrap();
+        match cli.command {
+            Some(Commands::Index {
+                command: IndexCommands::Build { path, .. },
+            }) => assert_eq!(path, PathBuf::from("/tmp")),
+            _ => panic!("expected index build subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_index_update_subcommand() {
+        let cli = Cli::try_parse_from(["sift", "index", "update"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Index {
+                command: IndexCommands::Update { .. }
+            })
+        ));
     }
 
     #[test]

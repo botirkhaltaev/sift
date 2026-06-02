@@ -61,14 +61,11 @@ cargo check --workspace --quiet 2>/dev/null || cargo check --workspace
 # 3. Update install.sh fallback version.
 sed -i "s/SIFT_DEFAULT_VERSION=\"[^\"]*\"/SIFT_DEFAULT_VERSION=\"${VERSION}\"/" scripts/install.sh
 
-# 4. Update README.md install URL.
-sed -i "s|/sift/v[0-9][0-9.]*[0-9]/scripts/install.sh|/sift/${TAG}/scripts/install.sh|" README.md
-
-# 5. Generate changelog (prepend new version, keep history).
+# 4. Generate changelog (prepend new version, keep history).
 git-cliff --config cliff.toml --tag "$TAG" -o CHANGELOG.md
 
-# 6. Commit and tag.
-git add Cargo.toml Cargo.lock crates/cli/Cargo.toml scripts/install.sh README.md CHANGELOG.md
+# 5. Commit and tag.
+git add Cargo.toml Cargo.lock crates/cli/Cargo.toml scripts/install.sh CHANGELOG.md
 git commit -m "release: ${TAG}"
 git tag -a "$TAG" -m "release: ${TAG}"
 

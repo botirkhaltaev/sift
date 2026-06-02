@@ -120,7 +120,7 @@ fn search_literal_index_without_subcommand() {
     p.write("t.txt", "word index here\n");
     p.build_index();
 
-    let out = p.index_output(["index"]);
+    let out = p.index_output(["-e", "index"]);
     assert_success(&out);
     assert_stdout_contains(&out, &rel_match("t.txt", ""));
     assert_stdout_contains(&out, "index");

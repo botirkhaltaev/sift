@@ -5,8 +5,8 @@ use sift_core::{
     CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, TypeDef, VisibilityConfig,
 };
 
+use super::ignore::MessageFlags;
 use crate::cli::Cli;
-use crate::ignore::MessageFlags;
 
 #[derive(Args)]
 pub struct FilterDecl {

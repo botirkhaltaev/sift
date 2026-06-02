@@ -36,7 +36,7 @@ pub fn bench(c: &mut Criterion) {
     });
 
     g.bench_function("build_subcommand", |b| {
-        b.iter(|| black_box(parse_cli(&["build", "/tmp"])));
+        b.iter(|| black_box(parse_cli(&["index", "build", "/tmp"])));
     });
 
     g.bench_function("last_wins_heavy", |b| {

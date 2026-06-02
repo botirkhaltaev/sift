@@ -2,8 +2,8 @@
 # Install the `sift` binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/botirk38/sift/v0.1.2/scripts/install.sh | sh
-# (pin the tag to the version you want, or rely on default latest-release resolution)
+#   curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/install.sh | sh
+# Resolves the latest release by default (override with SIFT_VERSION=...).
 #
 # Environment:
 #   SIFT_REPO   — owner/repo (default: botirk38/sift)
@@ -51,7 +51,7 @@ detect_asset() {
 	MINGW*|MSYS*|CYGWIN*) printf '%s\n' "sift-x86_64-pc-windows-msvc.exe" ;;
 	*)
 		echo "install: unsupported OS/arch: ${_os} ${_arch}" >&2
-		echo "install: try: cargo install --locked --git https://github.com/${SIFT_REPO}.git sift-cli" >&2
+		echo "install: try: cargo install --locked --git https://github.com/${SIFT_REPO}.git sift-grep" >&2
 		exit 1
 		;;
 	esac
@@ -62,8 +62,8 @@ fallback_cargo() {
 		echo "install: curl download failed and cargo not found; install Rust from https://rustup.rs" >&2
 		exit 1
 	fi
-	echo "install: falling back to: cargo install --locked --git https://github.com/${SIFT_REPO}.git sift-cli" >&2
-	cargo install --locked --git "https://github.com/${SIFT_REPO}.git" sift-cli
+	echo "install: falling back to: cargo install --locked --git https://github.com/${SIFT_REPO}.git sift-grep" >&2
+	cargo install --locked --git "https://github.com/${SIFT_REPO}.git" sift-grep
 	exit 0
 }
 
@@ -71,6 +71,15 @@ VERSION=$(resolve_version)
 ASSET=$(detect_asset)
 TAG="v${VERSION}"
 URL="https://github.com/${SIFT_REPO}/releases/download/${TAG}/${ASSET}"
+
+case "$ASSET" in
+*.exe) _bin_name="sift.exe" ;;
+*) _bin_name="sift" ;;
+esac
+if [ -x "${BIN_DIR}/${_bin_name}" ]; then
+	_old_ver=$("${BIN_DIR}/${_bin_name}" --version 2>/dev/null || true)
+	echo "install: upgrading ${_bin_name} (${_old_ver:-unknown}) → ${TAG}" >&2
+fi
 
 TMP="${TMPDIR:-/tmp}"
 DEST="${TMP}/sift-install-$$"

@@ -53,7 +53,7 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`IndexStore::open_or_create` → `IndexStore::build(kinds, config)` → `Indexes::open` → `SearchQuery::new` → `SearchQuery::run(SearchExecution)`. The `--indexes` flag on `sift build` selects which `IndexKind` variants to build (defaults to all). See `crates/core/README.md`.
+`IndexStore::open_or_create` → `IndexStore::build(kinds, config)` → `Indexes::open` → `SearchQuery::new` → `SearchQuery::run(SearchExecution)`. The `--indexes` flag on `sift index build` / `sift index update` selects which `IndexKind` variants to use (defaults to all). See `crates/core/README.md`.
 
 ## Architecture & Design
 

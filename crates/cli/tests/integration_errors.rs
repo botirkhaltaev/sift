@@ -37,15 +37,38 @@ fn unknown_flag_exits_2() {
 }
 
 #[test]
-fn build_on_nonexistent_path_exits_2() {
+fn index_build_on_nonexistent_path_exits_2() {
     let out = Command::new(env!("CARGO_BIN_EXE_sift"))
         .arg("--sift-dir")
         .arg("/tmp/nonexistent-sift-test-xyzzy")
-        .arg("build")
+        .args(["index", "build"])
         .arg("/tmp/nonexistent-corpus-test-xyzzy")
         .output()
         .unwrap();
     assert_exit_code(&out, 2);
+}
+
+#[test]
+fn index_build_twice_exits_2() {
+    let p = TestProject::new("errors-index-build-twice");
+    p.write("a.txt", "hello\n");
+    p.build_index();
+
+    let out = p.sift().args(["index", "build"]).output().unwrap();
+    assert_exit_code(&out, 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("index update"), "expected hint: {stderr}");
+}
+
+#[test]
+fn index_update_without_build_exits_2() {
+    let p = TestProject::new("errors-index-update-missing");
+    p.write("a.txt", "hello\n");
+
+    let out = p.sift().args(["index", "update"]).output().unwrap();
+    assert_exit_code(&out, 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("index build"), "expected hint: {stderr}");
 }
 
 #[test]

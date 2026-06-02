@@ -5,18 +5,18 @@ use sift_core::{
     SearchLineStyle, SearchMode, SearchQuery, SearchRecordStyle,
 };
 
-use crate::cli::Cli;
-use crate::filter::{SearchFilterCtx, build_search_filter_config, resolve_type_defs};
-use crate::ignore::resolve_visibility_and_ignore;
-use crate::output::{
+use super::filter::{SearchFilterCtx, build_search_filter_config, resolve_type_defs};
+use super::ignore::resolve_visibility_and_ignore;
+use super::output::{
     FilenameContext, SearchOutputCtx, build_line_style_flags, effective_filename_mode,
     resolve_effective_line_number, resolve_glob_case_insensitive_from_args, resolve_json_from_args,
     resolve_line_number_from_args, resolve_null_from_args, search_output, write_search_stats,
 };
-use crate::paths::{
+use super::paths::{
     corpus_path_prefixes, effective_path_display, excluded_search_paths, walk_path_prefixes,
 };
-use crate::pattern::{resolve_invert_match_from_args, resolve_output_mode, resolve_patterns};
+use super::pattern::{resolve_invert_match_from_args, resolve_output_mode, resolve_patterns};
+use crate::cli::Cli;
 
 pub fn run_type_list(cli: &Cli) {
     let defs = resolve_type_defs(&cli.filter_decl);

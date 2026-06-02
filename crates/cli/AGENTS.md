@@ -6,9 +6,12 @@ Thin CLI binary over `sift-core`. Parses flags with clap, maps them to `SearchOp
 
 ## Structure
 
-- **`src/lib.rs`**: `main_entry`, `build` subcommand dispatch (with `--indexes` flag), search mode dispatch.
-- **`src/cli.rs`**: `Cli` (clap Parser), `Commands` enum with `Build { path, indexes }`.
-- **`src/main.rs`**: thin binary entrypoint calling `sift_cli::main()`.
+- **`src/lib.rs`**: `main_entry`; re-exports `grep::*` and `index::daemon` for tests/benches.
+- **`src/cli.rs`**: `Cli` (clap Parser), `Commands` (`Update`, `Index`), `IndexCommands` (`Build`, `Update`).
+- **`src/update.rs`**: `sift update` (install script via curl).
+- **`src/index/`**: `command.rs` (`index build` / `index update`), `daemon.rs` (background refresh).
+- **`src/grep/`**: search path — `search`, `pattern`, `filter`, `output`, `paths`, `ignore`, `engine`.
+- **`src/main.rs`**: thin binary entrypoint calling `sift_grep::main()`.
 - **`tests/common/mod.rs`**: shared test helpers: `TestProject`, assertion helpers, path normalization.
 - **`tests/integration_*.rs`**: domain-focused integration tests spawning the real `sift` binary.
 
@@ -38,15 +41,15 @@ p.assert_index_walk_same(["pattern"], "expected\n");
 
 ## Behavior Notes
 
-- Global options (e.g. `--index`) must appear **before** `build` when indexing.
+- Global options (e.g. `--sift-dir`) must appear **before** `index` subcommands.
 - Search paths are resolved and must sit under the corpus root in the index metadata.
 - Extend flags by threading new `SearchMatchFlags`/`SearchOptions` fields through to `SearchQuery::new` in core. Do not duplicate regex logic here.
 
 ## Testing
 
 ```bash
-cargo test -p sift-cli
-cargo build --release -p sift-cli
+cargo test -p sift-grep
+cargo build --release -p sift-grep
 ```
 
 ## Do NOT

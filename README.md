@@ -7,20 +7,28 @@ Indexed grep for codebases. Build an index once, then search with a grep-like CL
 ### Install (GitHub Release)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/botirk38/sift/v0.3.0/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/install.sh | sh
 ```
 
 Installs to `$HOME/.local/bin/sift`. Override with `PREFIX=/usr/local`.
 
+### Updating
+
+```bash
+sift update
+```
+
+Or re-run the install script (same as a fresh install over the existing binary).
+
 ### From Source
 
 ```bash
-cargo build --release -p sift-cli
-./target/release/sift --sift-dir .sift build /path/to/corpus
+cargo build --release -p sift-grep
+./target/release/sift --sift-dir .sift index build /path/to/corpus
 ./target/release/sift --sift-dir .sift "pattern"
 ```
 
-Patterns use Rust `regex` syntax by default. Use `-F` for fixed strings, `--` to disambiguate from subcommands (e.g. `sift -- build`).
+Patterns use Rust `regex` syntax by default. Use `-F` for fixed strings, `--` to disambiguate from subcommands (e.g. `sift -- index build`).
 
 ## Architecture
 
@@ -72,7 +80,7 @@ Correctness parity: **11/11** benchmarks. See [`crates/core/benches/README.md`](
 
 ## Differences from ripgrep
 
-- Requires a **prior index** (`sift build`) before searching.
+- Requires a **prior index** (`sift index build`) before searching; refresh with `sift index update`.
 - Search paths must sit **under** the indexed corpus root.
 - Uses `--no-filename` instead of `-h` (which is help).
 
