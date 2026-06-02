@@ -6,7 +6,7 @@ use sift_core::{
 };
 
 use crate::cli::Cli;
-use crate::ignore::MessageFlags;
+use super::ignore::MessageFlags;
 
 #[derive(Args)]
 pub struct FilterDecl {

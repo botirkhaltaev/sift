@@ -20,17 +20,21 @@ curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/instal
 sift --version
 ```
 
+Upgrade the binary: `sift update` (or re-run the install curl command).
+
 Do not `cargo build` unless the user is in the sift source tree and asked to build from source.
 
 ## Quick start
 
 ```bash
 cd /path/to/repo
-sift --sift-dir .sift build .
+sift --sift-dir .sift index build .
 sift "pattern" [PATH...]
 sift -l "pattern"
 sift -F "literal.string"
 ```
+
+Refresh the index after large changes: `sift --sift-dir .sift index update .`
 
 Default index directory is `.sift` (override with `--sift-dir` on every command).
 
@@ -39,7 +43,8 @@ Default index directory is `.sift` (override with `--sift-dir` on every command)
 ```text
 - [ ] cd to repository root
 - [ ] Check for .sift/ (or confirm --sift-dir)
-- [ ] If no index: sift --sift-dir .sift build .
+- [ ] If no index: sift --sift-dir .sift index build .
+- [ ] After repo changes: sift --sift-dir .sift index update .
 - [ ] Narrow with sift -l "pattern" [PATH...]
 - [ ] Full search; use -F for literals with regex metacharacters
 - [ ] Use --json only when parsing output programmatically
@@ -49,15 +54,15 @@ Default index directory is `.sift` (override with `--sift-dir` on every command)
 
 **Index present** (`.sift` built): fast trigram narrowing; search paths must be under the indexed corpus root.
 
-**No index**: walk mode from **cwd** only—comparable to scanning without indexing. Always `cd` to the repo root and run `build` before serious exploration.
-
-`build` is incremental when an index already exists (update, not full rebuild).
+**No index**: walk mode from **cwd** only—comparable to scanning without indexing. Always `cd` to the repo root and run `index build` before serious exploration.
 
 ## Rules
 
-- Global `--sift-dir` before `build`: `sift --sift-dir .sift build .`
+- Global `--sift-dir` before index commands: `sift --sift-dir .sift index build .`
+- `sift index build` creates an index; `sift index update` refreshes an existing one
+- `sift update` upgrades the **binary**, not the index
 - Rust `regex` syntax by default; `-F` for fixed strings
-- Literal pattern named `build`: `sift -- build` or `-e build`
+- Literal subcommand in pattern position: `sift -- index build` or `-e index`
 - `-h` is help (not “no filename”); use `--no-filename` instead
 - Scripts and CI: `export SIFT_NO_DAEMON=1` to avoid background index daemon
 

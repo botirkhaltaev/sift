@@ -81,7 +81,7 @@ pub fn build_index(corpus: &Path, sift_dir: &Path) {
     let out = Command::new(exe())
         .arg("--sift-dir")
         .arg(sift_dir)
-        .arg("build")
+        .args(["index", "build"])
         .arg(corpus)
         .output()
         .unwrap();

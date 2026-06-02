@@ -7,19 +7,27 @@ use std::path::PathBuf;
 
 use sift_core::{CorpusKind, IndexKind};
 
-use crate::cli::{Cli, Commands};
-use crate::paths::excluded_search_paths;
+use crate::cli::{Cli, Commands, IndexCommands};
+use crate::grep::paths::excluded_search_paths;
 
 /// Fully resolved runtime configuration for the CLI.
 pub struct CliConfig {
-    pub build: Option<BuildConfig>,
+    pub index: Option<IndexCommandConfig>,
     pub search: SearchConfig,
     pub daemon: DaemonConfig,
     pub files_mode: bool,
 }
 
-/// Resolved build sub-command configuration.
-pub struct BuildConfig {
+/// Which index subcommand was requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexOperation {
+    Build,
+    Update,
+}
+
+/// Resolved `sift index build` / `sift index update` configuration.
+pub struct IndexCommandConfig {
+    pub operation: IndexOperation,
     pub root: PathBuf,
     pub include_paths: Vec<PathBuf>,
     pub corpus_kind: CorpusKind,
@@ -61,10 +69,18 @@ impl CliConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if the build path cannot be canonicalised.
+    /// Returns an error if the index path cannot be canonicalised.
     pub fn from_cli(cli: &Cli) -> Result<Self, std::io::Error> {
-        let build = match &cli.command {
-            Some(Commands::Build { path, indexes }) => {
+        let index = match &cli.command {
+            Some(Commands::Index { command }) => {
+                let (path, indexes, operation) = match command {
+                    IndexCommands::Build { path, indexes } => {
+                        (path, indexes, IndexOperation::Build)
+                    }
+                    IndexCommands::Update { path, indexes } => {
+                        (path, indexes, IndexOperation::Update)
+                    }
+                };
                 let canonical = path.canonicalize()?;
                 let (root, include_paths, corpus_kind) = if canonical.is_file() {
                     let parent = canonical.parent().unwrap_or(&canonical).to_path_buf();
@@ -76,7 +92,8 @@ impl CliConfig {
                 let indexes: Vec<IndexKind> = indexes.as_deref().unwrap_or(IndexKind::ALL).to_vec();
                 let sift_dir = cli.paths.sift_dir.clone();
                 let exclude_paths = excluded_search_paths(&root, &sift_dir);
-                Some(BuildConfig {
+                Some(IndexCommandConfig {
+                    operation,
                     root,
                     include_paths,
                     corpus_kind,
@@ -86,7 +103,7 @@ impl CliConfig {
                     sift_dir,
                 })
             }
-            None => None,
+            Some(Commands::Update) | None => None,
         };
 
         let search = SearchConfig {
@@ -102,7 +119,7 @@ impl CliConfig {
         let files_mode = cli.filter_decl.files;
 
         Ok(Self {
-            build,
+            index,
             search,
             daemon: DaemonConfig {
                 spawn: daemon_spawn,

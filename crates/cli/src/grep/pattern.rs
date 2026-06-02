@@ -4,8 +4,8 @@ use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_pars
 use sift_core::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions};
 
 use crate::cli::Cli;
-use crate::filter::parse_size_suffix;
-use crate::output::resolve_context_from_args;
+use super::filter::parse_size_suffix;
+use super::output::resolve_context_from_args;
 
 #[derive(Args)]
 pub struct PatternArgs {

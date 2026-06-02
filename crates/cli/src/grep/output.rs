@@ -587,9 +587,9 @@ impl Cli {
         effective_mode: SearchMode,
         quiet: bool,
         line_number_override: Option<bool>,
-    ) -> (SearchOutputCtx, crate::filter::SearchFilterCtx) {
+    ) -> (SearchOutputCtx, super::filter::SearchFilterCtx) {
         let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
-        let ignore_res = crate::ignore::resolve_visibility_and_ignore(args);
+        let ignore_res = super::ignore::resolve_visibility_and_ignore(args);
         let null_data = resolve_null_from_args(args);
         let color = resolve_color_from_args(args);
         let heading = resolve_heading_from_args(args);
@@ -646,7 +646,7 @@ impl Cli {
             max_columns: self.columns_decl.max_columns,
             max_columns_preview: self.columns_decl.max_columns_preview,
         };
-        let filter = crate::filter::SearchFilterCtx {
+        let filter = super::filter::SearchFilterCtx {
             hidden: ignore_res.hidden,
             ignore_sources: ignore_res.sources,
             require_git: ignore_res.require_git,

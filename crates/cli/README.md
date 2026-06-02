@@ -1,12 +1,18 @@
-# sift-cli
+# sift-grep
 
 Grep-like CLI for indexed codebase search. Thin wrapper over `sift-core`: parses flags with clap, maps them to `SearchOptions`, and prints matches.
 
 ## Usage
 
 ```bash
-# Build an index
-sift --sift-dir .sift build /path/to/corpus
+# Create an index
+sift --sift-dir .sift index build /path/to/corpus
+
+# Refresh an existing index
+sift --sift-dir .sift index update .
+
+# Upgrade the binary
+sift update
 
 # Search
 sift --sift-dir .sift "pattern" [PATH...]
@@ -24,7 +30,9 @@ sift --json "pattern"      # JSON output
 
 | File | Description |
 |------|-------------|
-| [`src/main.rs`](src/main.rs) | `Cli` (clap Parser), `build` subcommand, search mode dispatch |
+| [`src/main.rs`](src/main.rs) | thin binary entrypoint |
+| [`src/lib.rs`](src/lib.rs) | `main_entry`, `update`, `index` subcommands, search dispatch |
+| [`src/cli.rs`](src/cli.rs) | `Cli` (clap Parser), `Commands` / `IndexCommands` |
 | [`tests/`](tests/) | Domain-focused integration tests spawning the real `sift` binary |
 
 ## Integration Tests
@@ -46,8 +54,8 @@ sift --json "pattern"      # JSON output
 ## Build & Test
 
 ```bash
-cargo build --release -p sift-cli
-cargo test -p sift-cli
+cargo build --release -p sift-grep
+cargo test -p sift-grep
 ```
 
 Release binary name: `sift` (see `Cargo.toml` `[[bin]]`).
