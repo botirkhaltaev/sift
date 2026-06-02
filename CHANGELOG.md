@@ -1,10 +1,44 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.3.0](https://github.com/botirk38/sift/releases/tag/v0.3.0) — 2026-06-02
+
+### Bug Fixes
+
+- reconcile on startup to catch changes made while daemon was down (#71)
+- configure WalkBuilder from VisibilityConfig in no-index search (#59)
+
+### Features
+
+- add idle timeout to daemon + redesign coordinator state machine (#72)
+- concurrent daemon and multi-reader-single-writer index store (#68)
+- add QueryPlanner, clean up index API, split regression tests (#60)
+
+### Miscellaneous
+
+- bump sift-core path dep during release
+
+### Performance
+
+- 2-pass trigram-only radix sort for posting assembly (#83)
+- use incremental update in CLI when index exists (#80)
+- use thread-local bitset for trigram dedup in from_bytes (#81)
+- stream-decode posting lists during intersection (#82)
+- defer content-level validation on index open (#78)
+- drop redundant result sort in scan workers (#65)
+- skip path work when no ignore rules apply (#66)
+- read files for trigram extraction instead of mmap (#67)
+
+### Refactor
+
+- reorganize index and trigram modules by domain (#64)
+
 ## [0.2.0](https://github.com/botirk38/sift/releases/tag/v0.2.0) — 2026-05-29
 
 ### Bug Fixes
 
+- rename sift-cli to sift-grep for crates.io publish
+- add version to sift-core dep, split publish jobs
 - prune gitignored directories during index build (#58)
 - redesign daemon event loop with RefreshState, remove is_relevant_event (#57)
 - optimize index build with varint postings and unified visibility (#54)
