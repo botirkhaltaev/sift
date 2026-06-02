@@ -13,18 +13,17 @@ const fn installed_sift_name() -> &'static str {
     if cfg!(windows) { "sift.exe" } else { "sift" }
 }
 
+#[cfg(unix)]
 fn make_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).unwrap();
-    }
-    #[cfg(windows)]
-    {
-        let _ = path;
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(windows)]
+const fn make_executable(path: &Path) {
+    let _ = path;
 }
 
 fn write_stub_sh(path_bin: &Path) -> PathBuf {
