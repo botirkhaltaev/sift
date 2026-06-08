@@ -36,20 +36,12 @@ const fn make_executable(path: &Path) {
     let _ = path;
 }
 
+#[cfg(not(windows))]
 fn write_stub_sh(path_bin: &Path) -> PathBuf {
-    #[cfg(windows)]
-    {
-        let sh = path_bin.join("sh.cmd");
-        fs::write(&sh, "@echo off\r\nexit /b 0\r\n").unwrap();
-        sh
-    }
-    #[cfg(not(windows))]
-    {
-        let sh = path_bin.join("sh");
-        fs::write(&sh, "#!/bin/sh\nexit 0\n").unwrap();
-        make_executable(&sh);
-        sh
-    }
+    let sh = path_bin.join("sh");
+    fs::write(&sh, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&sh);
+    sh
 }
 
 fn install_layout(exe_src: &Path) -> (TempDir, PathBuf) {
