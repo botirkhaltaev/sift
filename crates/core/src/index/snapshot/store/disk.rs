@@ -297,7 +297,7 @@ impl SnapshotRead for DiskSnapshotReader {
                 ),
             )));
         }
-        let mmap = crate::index::trigram::storage::mmap::mmap_open(&path)?;
+        let mmap = crate::index::mmap::mmap_open(&path)?;
         Ok(ArtifactData::Mmap(mmap))
     }
 }

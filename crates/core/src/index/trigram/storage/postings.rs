@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::POSTINGS_MAGIC;
 
-use super::mmap::mmap_open;
+use crate::index::mmap::mmap_open;
 
 #[derive(Debug)]
 pub struct Postings {

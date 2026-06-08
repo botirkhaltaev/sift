@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use super::format::TRIGRAMS_MAGIC;
-use super::mmap::mmap_open;
+use crate::index::mmap::mmap_open;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::Trigram;
 

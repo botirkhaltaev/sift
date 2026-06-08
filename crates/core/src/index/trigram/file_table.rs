@@ -10,9 +10,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::index::mmap::mmap_open;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::FILES_MAGIC;
-use crate::index::trigram::storage::mmap::mmap_open;
 
 /// Per-file fingerprint for change detection.
 #[derive(Debug, Clone, PartialEq, Eq)]
