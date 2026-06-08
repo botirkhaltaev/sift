@@ -88,7 +88,7 @@ fn in_memory_current_returns_snapshot() {
     let id = session.publish(txn, manifest).expect("publish");
 
     let current = store.current().unwrap().expect("has current");
-    assert_eq!(current.id(), &id);
+    assert_eq!(current.manifest().id, id);
     assert_eq!(current.manifest().indexes, &["trigram"]);
     let artifact = current.artifact("test", "data.txt").unwrap();
     assert_eq!(artifact.as_ref(), b"content");
@@ -107,8 +107,8 @@ fn in_memory_writer_sees_new_current() {
             indexes: vec![],
         };
         let id1 = session.publish(txn, manifest).expect("publish");
-        assert_eq!(session.current_id().unwrap(), &id1);
-        assert!(session.current().unwrap().is_some());
+        let cur = session.current().unwrap().expect("current after publish");
+        assert_eq!(cur.manifest().id, id1);
     }
 
     // Publish second snapshot — writer session sees the new current.
@@ -121,7 +121,8 @@ fn in_memory_writer_sees_new_current() {
             indexes: vec![],
         };
         let id2 = session.publish(txn, manifest).expect("publish");
-        assert_eq!(session.current_id().unwrap(), &id2);
-        assert_ne!(&id2, prev.id());
+        let cur = session.current().unwrap().expect("current after publish");
+        assert_eq!(cur.manifest().id, id2);
+        assert_ne!(id2, prev.manifest().id);
     }
 }

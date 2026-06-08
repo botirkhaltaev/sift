@@ -43,10 +43,6 @@ impl SnapshotWriterSession for MemorySnapshotWriterSession<'_> {
     type Read = MemorySnapshotReader;
     type Write = MemorySnapshotWriter;
 
-    fn current_id(&self) -> Option<&SnapshotId> {
-        self.store.current_id.as_ref()
-    }
-
     fn current(&self) -> crate::Result<Option<Self::Read>> {
         let Some(ref id) = self.store.current_id else {
             return Ok(None);
@@ -58,7 +54,6 @@ impl SnapshotWriterSession for MemorySnapshotWriterSession<'_> {
             ))
         })?;
         Ok(Some(MemorySnapshotReader {
-            id: id.clone(),
             manifest: data.manifest.clone(),
             artifacts: data.artifacts.clone(),
         }))
@@ -113,16 +108,11 @@ impl SnapshotWrite for MemorySnapshotWriter {
 /// A readable snapshot backed by in-memory buffers.
 #[derive(Clone)]
 pub struct MemorySnapshotReader {
-    id: SnapshotId,
     manifest: SnapshotManifest,
     artifacts: BTreeMap<String, BTreeMap<String, Arc<[u8]>>>,
 }
 
 impl SnapshotRead for MemorySnapshotReader {
-    fn id(&self) -> &SnapshotId {
-        &self.id
-    }
-
     fn manifest(&self) -> &SnapshotManifest {
         &self.manifest
     }
@@ -164,7 +154,6 @@ impl SnapshotStore for MemorySnapshotStore {
             ))
         })?;
         Ok(Some(MemorySnapshotReader {
-            id: id.clone(),
             manifest: data.manifest.clone(),
             artifacts: data.artifacts.clone(),
         }))
