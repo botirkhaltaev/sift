@@ -4,7 +4,9 @@
 //! Storage effects are measured indirectly through build/open/save/reopen paths.
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use std::fs;
 use std::hint::black_box;
+use std::path::Path;
 
 use sift_core::{
     CorpusKind, CorpusSpec, IndexConfig, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec,
@@ -23,6 +25,77 @@ fn sift_criterion() -> Criterion {
         .configure_from_args()
 }
 
+// ─── Index-only corpus helpers ───────────────────────────────────────────────
+
+fn make_parity_corpus(root: &Path) {
+    fs::create_dir_all(root.join("a")).unwrap();
+    fs::create_dir_all(root.join("b")).unwrap();
+    fs::write(root.join("a/x.txt"), "alpha beta\n").unwrap();
+    fs::write(root.join("b/y.txt"), "gamma delta\n").unwrap();
+}
+
+fn make_single_file_corpus(root: &Path) {
+    fs::create_dir_all(root).unwrap();
+    fs::write(
+        root.join("single.rs"),
+        "fn main() {\n    let x = 42;\n    println!(\"beta: {}\", x);\n}\n",
+    )
+    .unwrap();
+}
+
+fn make_many_files_corpus(root: &Path, n: usize) {
+    for i in 0..n {
+        let dir = root.join(format!("d{}", i % 10));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(format!("f{i}.txt")),
+            format!("line one line two content {i}\n"),
+        )
+        .unwrap();
+    }
+}
+
+fn materialize_monorepo_corpus(
+    root: &Path,
+    files: usize,
+    lines_per_file: usize,
+    dir_fanout: usize,
+) {
+    common::materialize_large_corpus(root, files, lines_per_file, dir_fanout);
+}
+
+// ─── Index-only build helpers ────────────────────────────────────────────────
+
+fn standard_build_config<'a>(
+    root: &'a Path,
+    exclude_paths: &'a [std::path::PathBuf],
+) -> IndexConfig<'a> {
+    IndexConfig {
+        corpus: CorpusSpec {
+            root,
+            kind: CorpusKind::Directory,
+            follow_links: false,
+            include_paths: &[],
+            exclude_paths,
+        },
+        visibility: VisibilityConfig::default(),
+    }
+}
+
+/// Full `sift build` path via [`IndexStore`] (production defaults).
+fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
+    let mut store = IndexStore::open_or_create(
+        sift_dir,
+        corpus,
+        CorpusKind::Directory,
+        false,
+        &[IndexKind::Trigram],
+    )
+    .unwrap();
+    let config = standard_build_config(corpus, &[]);
+    store.build(&[IndexKind::Trigram], &config).unwrap();
+}
+
 // ─── Build benchmarks ────────────────────────────────────────────────────────
 
 fn bench_index_build(c: &mut Criterion) {
@@ -32,9 +105,9 @@ fn bench_index_build(c: &mut Criterion) {
         b.iter(|| {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
-            common::make_single_file_corpus(&corpus);
+            make_single_file_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index_via_store(&corpus, &idx);
+            build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -42,9 +115,9 @@ fn bench_index_build(c: &mut Criterion) {
         b.iter(|| {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
-            common::make_parity_corpus(&corpus);
+            make_parity_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index_via_store(&corpus, &idx);
+            build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -54,7 +127,7 @@ fn bench_index_build(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::make_filter_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            common::build_index_via_store(&corpus, &idx);
+            build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -62,9 +135,9 @@ fn bench_index_build(c: &mut Criterion) {
         b.iter(|| {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
-            common::make_many_files_corpus(&corpus, 1_000);
+            make_many_files_corpus(&corpus, 1_000);
             let idx = tmp.path().join(".sift");
-            common::build_index_via_store(&corpus, &idx);
+            build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -72,9 +145,9 @@ fn bench_index_build(c: &mut Criterion) {
         b.iter(|| {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
-            common::materialize_monorepo_corpus(&corpus, 8_000, 100, 256);
+            materialize_monorepo_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
-            common::build_index_via_store(&corpus, &idx);
+            build_index_via_store(&corpus, &idx);
         });
     });
 
@@ -90,7 +163,7 @@ fn bench_index_open(c: &mut Criterion) {
         let (_tmp, idx_dir, root) = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
-            common::make_parity_corpus(&corpus);
+            make_parity_corpus(&corpus);
             let idx = tmp.path().join(".sift");
             let built = common::build_index(&corpus, &idx);
             let root = built.root().to_path_buf();
@@ -139,7 +212,7 @@ fn bench_indexes_open(c: &mut Criterion) {
         let (_tmp, sift_dir) = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
-            common::make_parity_corpus(&corpus);
+            make_parity_corpus(&corpus);
             let sift = tmp.path().join(".sift");
             let mut store = IndexStore::open_or_create(
                 &sift,
@@ -183,7 +256,7 @@ fn bench_index_save_reopen(c: &mut Criterion) {
     g.bench_function("reopen", |b| {
         let tmp = tempfile::tempdir().unwrap();
         let corpus = tmp.path().join("corpus");
-        common::make_parity_corpus(&corpus);
+        make_parity_corpus(&corpus);
         let idx_dir = tmp.path().join(".sift");
         let index = common::build_index(&corpus, &idx_dir);
         let root = index.root().to_path_buf();
