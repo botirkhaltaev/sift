@@ -150,6 +150,13 @@ describe the behavior or concept they own. Use nested modules when a domain has
 clear subdomains, such as `snapshot/store/disk.rs` and
 `snapshot/store/memory.rs`.
 
+## CLI Crate
+
+The shipped binary lives in `crates/cli/` (`sift-grep`). It follows the same
+domain-type rules as core; see [`crates/cli/AGENTS.md`](crates/cli/AGENTS.md).
+Clap parses `*Decl` flag groups; **`Argv` resolves effective runtime values**
+(ripgrep last-wins). Do not add `resolve_*_from_args` free-function helpers.
+
 ## Do NOT
 
 - Skip CI checks (`fmt`, `clippy`, `test`) before pushing.

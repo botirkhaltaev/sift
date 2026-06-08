@@ -1,7 +1,8 @@
 use criterion::Criterion;
 use std::hint::black_box;
 
-use sift_grep::ignore::resolve_visibility_and_ignore;
+use sift_grep::Argv;
+use sift_grep::ignore::IgnoreResolution;
 
 use crate::support::args;
 
@@ -14,19 +15,31 @@ pub fn bench(c: &mut Criterion) {
     let argv_uuu = args(&["sift", "-uuu", "pattern"]);
 
     g.bench_function("default", |b| {
-        b.iter(|| black_box(resolve_visibility_and_ignore(black_box(&argv_default))));
+        b.iter(|| {
+            black_box(IgnoreResolution::resolve(&Argv::new(black_box(
+                &argv_default,
+            ))))
+        });
     });
 
     g.bench_function("hidden_enabled", |b| {
-        b.iter(|| black_box(resolve_visibility_and_ignore(black_box(&argv_hidden))));
+        b.iter(|| {
+            black_box(IgnoreResolution::resolve(&Argv::new(black_box(
+                &argv_hidden,
+            ))))
+        });
     });
 
     g.bench_function("hidden_last_wins", |b| {
-        b.iter(|| black_box(resolve_visibility_and_ignore(black_box(&argv_hidden_lw))));
+        b.iter(|| {
+            black_box(IgnoreResolution::resolve(&Argv::new(black_box(
+                &argv_hidden_lw,
+            ))))
+        });
     });
 
     g.bench_function("unrestricted_x3", |b| {
-        b.iter(|| black_box(resolve_visibility_and_ignore(black_box(&argv_uuu))));
+        b.iter(|| black_box(IgnoreResolution::resolve(&Argv::new(black_box(&argv_uuu)))));
     });
 
     let argv_all_no = args(&[
@@ -44,7 +57,11 @@ pub fn bench(c: &mut Criterion) {
         "pattern",
     ]);
     g.bench_function("all_no_ignore", |b| {
-        b.iter(|| black_box(resolve_visibility_and_ignore(black_box(&argv_all_no))));
+        b.iter(|| {
+            black_box(IgnoreResolution::resolve(&Argv::new(black_box(
+                &argv_all_no,
+            ))))
+        });
     });
 
     let argv_all_toggle = args(&[
@@ -66,7 +83,11 @@ pub fn bench(c: &mut Criterion) {
         "pattern",
     ]);
     g.bench_function("all_ignore_toggles", |b| {
-        b.iter(|| black_box(resolve_visibility_and_ignore(black_box(&argv_all_toggle))));
+        b.iter(|| {
+            black_box(IgnoreResolution::resolve(&Argv::new(black_box(
+                &argv_all_toggle,
+            ))))
+        });
     });
 
     g.finish();

@@ -1,22 +1,30 @@
-use std::path::PathBuf;
+use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-
+use crate::grep::Argv;
 use crate::grep::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
-use crate::grep::filter::{FilterDecl, GlobFlags};
+use crate::grep::filter::FilterConfig;
+use crate::grep::filter::{FilterDecl, GlobFlags, TypeCatalog};
 use crate::grep::ignore::{
     ContextDecl, IgnoreDotDecl, IgnoreExcludeDecl, IgnoreFilesDecl, IgnoreGitDecl,
     IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreVcsDecl,
     MessagesDecl, UnrestrictedDecl,
 };
+use crate::grep::output::OutputConfig;
 use crate::grep::output::{
     ColumnDecl, ColumnsDecl, ExtraOutputDecl, FilenameDecl, HeadingDecl, JsonDecl, LineNumberDecl,
     NullColorDecl, ReplaceDecl, SeparatorDecl, StatsDecl,
 };
 use crate::grep::paths::PathArgs;
+use crate::grep::pattern::PatternConfig;
 use crate::grep::pattern::{
     BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope,
 };
+use crate::grep::run::{Grep, GrepConfig, GrepOutcome};
+use crate::index::{DaemonSpawnConfig, Index, IndexOperation, IndexRequest};
+use crate::update;
+
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(version)]
@@ -96,6 +104,178 @@ pub struct Cli {
     pub walker_decl: WalkerDecl,
     #[command(flatten)]
     pub engine_decl: EngineDecl,
+}
+
+impl Cli {
+    #[must_use]
+    pub fn pattern_config(&self) -> PatternConfig {
+        PatternConfig {
+            patterns: self.patterns.clone(),
+            search_flags: self.search_flags.clone(),
+            regex1: self.regex1.clone(),
+            regex2: self.regex2.clone(),
+            multiline: self.multiline_decl.clone(),
+            engine: self.engine_decl.clone(),
+            binary: self.binary_decl.clone(),
+            replace: self.replace_decl.clone(),
+            max_count: self.paths.max_count,
+        }
+    }
+
+    #[must_use]
+    pub fn filter_config(&self) -> FilterConfig {
+        FilterConfig {
+            decl: self.filter_decl.clone(),
+            glob_patterns: self.glob_flags.glob.clone(),
+            follow_links: self.paths.follow,
+            one_file_system: self.walker_decl.one_file_system,
+        }
+    }
+
+    #[must_use]
+    fn output_config(&self, search_paths: &[PathBuf]) -> OutputConfig {
+        OutputConfig {
+            column: self.column_decl.clone(),
+            columns: self.columns_decl.clone(),
+            extra: self.extra_output.clone(),
+            replace_trim: self.replace_decl.trim,
+            path_separator: self.threading.path_separator.clone(),
+            line_number: self.line_number_decl.line_number,
+            separators: self.separator_decl.clone(),
+            search_paths: search_paths.to_vec(),
+        }
+    }
+
+    #[must_use]
+    pub fn grep_config(&self) -> GrepConfig {
+        let search_paths = self.search_scope.paths.clone();
+        GrepConfig {
+            pattern: self.pattern_config(),
+            filter: self.filter_config(),
+            output: self.output_config(&search_paths),
+            sift_dir: self.paths.sift_dir.clone(),
+            search_paths,
+            threads: self.threading.threads,
+            files_mode: self.filter_decl.files,
+        }
+    }
+
+    fn index_request(&self) -> IndexRequest {
+        let Commands::Index { command } = self.command.as_ref().expect("index subcommand") else {
+            unreachable!("index_request called without index subcommand");
+        };
+        let (path, indexes, operation) = match command {
+            IndexCommands::Build { path, indexes } => {
+                (path.clone(), indexes.clone(), IndexOperation::Build)
+            }
+            IndexCommands::Update { path, indexes } => {
+                (path.clone(), indexes.clone(), IndexOperation::Update)
+            }
+        };
+        IndexRequest {
+            operation,
+            path,
+            indexes,
+            sift_dir: self.paths.sift_dir.clone(),
+            follow_links: self.paths.follow,
+        }
+    }
+
+    fn daemon_spawn(&self) -> DaemonSpawnConfig {
+        DaemonSpawnConfig {
+            enabled: std::env::var_os("SIFT_NO_DAEMON").is_none(),
+            sift_dir: self.paths.sift_dir.clone(),
+            init_root: None,
+        }
+    }
+
+    fn dispatch_route(&self) -> DispatchRoute {
+        if self.filter_decl.type_list {
+            return DispatchRoute::TypeList;
+        }
+        match &self.command {
+            Some(Commands::Update) => DispatchRoute::Update,
+            Some(Commands::Index { .. }) => DispatchRoute::Index(self.index_request()),
+            None => DispatchRoute::Grep,
+        }
+    }
+
+    #[must_use]
+    pub fn dispatch(&self, argv: &Argv<'_>) -> ExitCode {
+        match self.dispatch_route() {
+            DispatchRoute::TypeList => {
+                TypeCatalog::print_list(&self.filter_decl);
+                ExitCode::SUCCESS
+            }
+            DispatchRoute::Update => Self::exit_update(),
+            DispatchRoute::Index(req) => self.exit_index(req, argv),
+            DispatchRoute::Grep => self.exit_grep(argv),
+        }
+    }
+
+    fn exit_update() -> ExitCode {
+        match update::run_binary_update() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("sift: {e}");
+                ExitCode::from(2)
+            }
+        }
+    }
+
+    fn exit_index(&self, req: IndexRequest, argv: &Argv<'_>) -> ExitCode {
+        let spawn = self.daemon_spawn();
+        let index = match Index::resolve(req) {
+            Ok(index) => index,
+            Err(e) => {
+                eprintln!("sift: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        index.run(&spawn, argv)
+    }
+
+    fn exit_grep(&self, argv: &Argv<'_>) -> ExitCode {
+        let spawn = self.daemon_spawn();
+        let grep = Grep::new(self.grep_config());
+
+        if !self.filter_decl.files
+            && let Err(e) = crate::index::daemon::DaemonSupervisor::new_process().spawn(&spawn)
+        {
+            eprintln!("sift: warning: daemon not started: {e}");
+        }
+
+        let suppress_errors = grep.suppress_error_messages(argv);
+        Self::exit_from_grep(grep.run(argv), suppress_errors)
+    }
+
+    fn exit_from_grep(
+        result: Result<GrepOutcome, anyhow::Error>,
+        suppress_error_messages: bool,
+    ) -> ExitCode {
+        match result {
+            Ok(outcome) if outcome.succeeded() => ExitCode::SUCCESS,
+            Ok(GrepOutcome::Files { .. } | GrepOutcome::Search { .. }) => ExitCode::from(1),
+            Err(e) => {
+                if let Some(ioe) = e.downcast_ref::<std::io::Error>()
+                    && ioe.kind() == std::io::ErrorKind::BrokenPipe
+                {
+                    return ExitCode::SUCCESS;
+                }
+                if !suppress_error_messages {
+                    eprintln!("sift: {e}");
+                }
+                ExitCode::from(2)
+            }
+        }
+    }
+}
+
+enum DispatchRoute {
+    TypeList,
+    Update,
+    Index(IndexRequest),
+    Grep,
 }
 
 #[derive(Subcommand)]

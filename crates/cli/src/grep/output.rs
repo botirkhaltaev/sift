@@ -4,6 +4,7 @@ use sift_core::{
     SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
     ZeroCountMode,
 };
+use std::path::PathBuf;
 
 /// Describes the filename display context for deciding whether to show paths.
 #[derive(Clone, Copy)]
@@ -13,11 +14,25 @@ pub enum FilenameContext {
     SingleFileCorpus,
 }
 
-use crate::cli::Cli;
+use super::argv::Argv;
+use super::filter::SearchFilterCtx;
+
+/// Output-related flags resolved from clap declarations.
+#[derive(Clone)]
+pub struct OutputConfig {
+    pub column: ColumnDecl,
+    pub columns: ColumnsDecl,
+    pub extra: ExtraOutputDecl,
+    pub replace_trim: bool,
+    pub path_separator: Option<String>,
+    pub line_number: bool,
+    pub separators: SeparatorDecl,
+    pub search_paths: Vec<PathBuf>,
+}
 
 // ── Clap declarations (output flags) ──
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct SeparatorDecl {
     #[arg(
         long = "context-separator",
@@ -57,7 +72,7 @@ pub struct HeadingDecl {
     pub no_heading: bool,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct ColumnDecl {
     #[arg(long = "column")]
     pub column: bool,
@@ -67,7 +82,7 @@ pub struct ColumnDecl {
     pub pretty: bool,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct ColumnsDecl {
     #[arg(short = 'M', long = "max-columns", value_name = "NUM")]
     pub max_columns: Option<u64>,
@@ -75,7 +90,7 @@ pub struct ColumnsDecl {
     pub max_columns_preview: bool,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct ReplaceDecl {
     #[arg(short = 'r', long = "replace", value_name = "REPLACEMENT")]
     pub replace: Option<String>,
@@ -85,7 +100,7 @@ pub struct ReplaceDecl {
     pub passthru: bool,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct ExtraOutputDecl {
     #[arg(long = "include-zero")]
     pub include_zero: bool,
@@ -141,8 +156,19 @@ pub struct SearchFormatCtx {
     pub color: ColorChoice,
 }
 
+#[derive(Clone, Copy)]
+pub struct SearchRecordFlags {
+    pub byte_offset: bool,
+    pub trim: bool,
+    pub include_zero: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct SearchColumnResolve {
+    pub max_columns_preview: bool,
+}
+
 #[derive(Clone)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct SearchOutputCtx {
     pub mode: SearchModeCtx,
     pub lines: SearchLineResolveCtx,
@@ -150,50 +176,226 @@ pub struct SearchOutputCtx {
     pub output_format: SearchOutputFormat,
     pub separators: SearchSeparators,
     pub print_stats: bool,
-    pub byte_offset: bool,
-    pub trim: bool,
-    pub include_zero: bool,
+    pub record: SearchRecordFlags,
     pub path_separator: Option<u8>,
     pub max_columns: Option<u64>,
-    pub max_columns_preview: bool,
+    pub columns: SearchColumnResolve,
 }
 
-// ── Argv-order resolvers ──
+// ── Argv-order resolution ──
 
-#[must_use]
-pub fn parse_usize_token(s: &str) -> Option<usize> {
-    s.parse().ok()
+/// Output-related flags resolved from raw argv (ripgrep last-wins).
+#[derive(Clone, Copy, Default)]
+pub struct OutputModeFlags {
+    pub stats: bool,
+    pub json: bool,
+    pub heading: bool,
 }
 
-#[must_use]
-pub fn resolve_glob_case_insensitive_from_args(args: &[String]) -> bool {
-    let mut last_idx = 0usize;
-    let mut result = false;
-    for (i, arg) in args.iter().enumerate() {
-        let bytes = arg.as_bytes();
-        let is_long = bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-';
-        if is_long {
-            let suffix = &bytes[2..];
-            let flag = if suffix == b"glob-case-insensitive" {
-                Some((i, true))
-            } else if suffix == b"no-glob-case-insensitive" {
-                Some((i, false))
+#[derive(Clone, Copy, Default)]
+pub struct OutputPathFlags {
+    pub glob_case_insensitive: bool,
+    pub null_data: bool,
+}
+
+pub struct OutputArgv {
+    pub mode: OutputModeFlags,
+    pub path: OutputPathFlags,
+    pub color: ColorChoice,
+    pub line_number: Option<bool>,
+    pub with_filename: Option<bool>,
+}
+
+impl OutputArgv {
+    #[must_use]
+    pub fn resolve(argv: &Argv<'_>) -> Self {
+        let tokens = argv.as_slice();
+        Self {
+            mode: OutputModeFlags {
+                stats: Self::stats(tokens),
+                json: Self::json(tokens),
+                heading: Self::heading(tokens),
+            },
+            path: OutputPathFlags {
+                glob_case_insensitive: Self::glob_case_insensitive(tokens),
+                null_data: Self::null_data(tokens),
+            },
+            color: Self::color(tokens),
+            line_number: Self::line_number(tokens),
+            with_filename: Self::with_filename(tokens),
+        }
+    }
+
+    fn glob_case_insensitive(args: &[String]) -> bool {
+        let mut last_idx = 0usize;
+        let mut result = false;
+        for (i, arg) in args.iter().enumerate() {
+            let bytes = arg.as_bytes();
+            let is_long = bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-';
+            if is_long {
+                let suffix = &bytes[2..];
+                let flag = if suffix == b"glob-case-insensitive" {
+                    Some((i, true))
+                } else if suffix == b"no-glob-case-insensitive" {
+                    Some((i, false))
+                } else {
+                    None
+                };
+                if let Some((idx, val)) = flag
+                    && idx > last_idx
+                {
+                    last_idx = idx;
+                    result = val;
+                }
+            }
+        }
+        result
+    }
+
+    fn null_data(args: &[String]) -> bool {
+        let mut result = false;
+        for arg in args {
+            match arg.as_str() {
+                "-0" | "--null" => result = true,
+                _ => {}
+            }
+        }
+        result
+    }
+
+    fn color(args: &[String]) -> ColorChoice {
+        let mut result = ColorChoice::Auto;
+        let mut i = 0usize;
+        while i < args.len() {
+            if let Some(rest) = args[i].strip_prefix("--color=") {
+                result = parse_color_when(rest);
+                i += 1;
+                continue;
+            }
+            if args[i] == "--color"
+                && let Some(v) = args.get(i + 1)
+            {
+                result = parse_color_when(v);
+                i += 2;
+                continue;
+            }
+            i += 1;
+        }
+        result
+    }
+
+    fn stats(args: &[String]) -> bool {
+        let mut last_idx = 0usize;
+        let mut result = false;
+        for (i, arg) in args.iter().enumerate() {
+            if arg == "--stats" && i >= last_idx {
+                last_idx = i;
+                result = true;
+            }
+        }
+        result
+    }
+
+    fn json(args: &[String]) -> bool {
+        let mut last_idx = 0usize;
+        let mut result = false;
+        for (i, arg) in args.iter().enumerate() {
+            if arg == "--json" && i >= last_idx {
+                last_idx = i;
+                result = true;
+            }
+            if arg == "--no-json" && i >= last_idx {
+                last_idx = i;
+                result = false;
+            }
+        }
+        result
+    }
+
+    fn heading(args: &[String]) -> bool {
+        let mut last_idx = 0usize;
+        let mut result = false;
+        for (i, arg) in args.iter().enumerate() {
+            let bytes = arg.as_bytes();
+            if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
+                let value = match &bytes[2..] {
+                    b"heading" => Some(true),
+                    b"no-heading" => Some(false),
+                    _ => None,
+                };
+                if let Some(value) = value
+                    && i > last_idx
+                {
+                    last_idx = i;
+                    result = value;
+                }
+            }
+        }
+        result
+    }
+
+    fn line_number(args: &[String]) -> Option<bool> {
+        let mut last_idx = 0usize;
+        let mut result = None;
+        for (i, arg) in args.iter().enumerate() {
+            let bytes = arg.as_bytes();
+            let value = if bytes.len() == 2 && bytes[0] == b'-' {
+                match bytes.get(1) {
+                    Some(&b'n') => Some(true),
+                    Some(&b'N') => Some(false),
+                    _ => None,
+                }
+            } else if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
+                match &bytes[2..] {
+                    b"line-number" => Some(true),
+                    b"no-line-number" => Some(false),
+                    _ => None,
+                }
             } else {
                 None
             };
-            if let Some((idx, val)) = flag
-                && idx > last_idx
+            if let Some(value) = value
+                && i > last_idx
             {
-                last_idx = idx;
-                result = val;
+                last_idx = i;
+                result = Some(value);
             }
         }
+        result
     }
-    result
+
+    fn with_filename(args: &[String]) -> Option<bool> {
+        let mut last_idx = 0usize;
+        let mut result = None;
+        for (i, arg) in args.iter().enumerate() {
+            let bytes = arg.as_bytes();
+            let value = if bytes.len() == 2 && bytes[0] == b'-' {
+                match bytes[1] {
+                    b'H' => Some(true),
+                    b'I' => Some(false),
+                    _ => None,
+                }
+            } else if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
+                match &bytes[2..] {
+                    b"with-filename" => Some(true),
+                    b"no-filename" => Some(false),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(value) = value
+                && i > last_idx
+            {
+                last_idx = i;
+                result = Some(value);
+            }
+        }
+        result
+    }
 }
 
-#[must_use]
-pub fn parse_color_when(s: &str) -> ColorChoice {
+fn parse_color_when(s: &str) -> ColorChoice {
     match s {
         "never" => ColorChoice::Never,
         "always" => ColorChoice::Always,
@@ -201,333 +403,7 @@ pub fn parse_color_when(s: &str) -> ColorChoice {
     }
 }
 
-#[must_use]
-pub fn resolve_null_from_args(args: &[String]) -> bool {
-    let mut result = false;
-    for arg in args {
-        match arg.as_str() {
-            "-0" | "--null" => result = true,
-            _ => {}
-        }
-    }
-    result
-}
-
-#[must_use]
-pub fn resolve_color_from_args(args: &[String]) -> ColorChoice {
-    let mut result = ColorChoice::Auto;
-    let mut i = 0usize;
-    while i < args.len() {
-        if let Some(rest) = args[i].strip_prefix("--color=") {
-            result = parse_color_when(rest);
-            i += 1;
-            continue;
-        }
-        if args[i] == "--color"
-            && let Some(v) = args.get(i + 1)
-        {
-            result = parse_color_when(v);
-            i += 2;
-            continue;
-        }
-        i += 1;
-    }
-    result
-}
-
-#[must_use]
-pub fn resolve_stats_from_args(args: &[String]) -> bool {
-    let mut last_idx = 0usize;
-    let mut result = false;
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "--stats" && i >= last_idx {
-            last_idx = i;
-            result = true;
-        }
-    }
-    result
-}
-
-#[must_use]
-pub fn resolve_json_from_args(args: &[String]) -> bool {
-    let mut last_idx = 0usize;
-    let mut result = false;
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "--json" && i >= last_idx {
-            last_idx = i;
-            result = true;
-        }
-        if arg == "--no-json" && i >= last_idx {
-            last_idx = i;
-            result = false;
-        }
-    }
-    result
-}
-
-#[must_use]
-pub fn resolve_heading_from_args(args: &[String]) -> bool {
-    let mut last_idx = 0usize;
-    let mut result = false;
-    for (i, arg) in args.iter().enumerate() {
-        let bytes = arg.as_bytes();
-        if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
-            let value = match &bytes[2..] {
-                b"heading" => Some(true),
-                b"no-heading" => Some(false),
-                _ => None,
-            };
-            if let Some(value) = value
-                && i > last_idx
-            {
-                last_idx = i;
-                result = value;
-            }
-        }
-    }
-    result
-}
-
-#[must_use]
-pub fn resolve_line_number_from_args(args: &[String]) -> Option<bool> {
-    let mut last_idx = 0usize;
-    let mut result = None;
-    for (i, arg) in args.iter().enumerate() {
-        let bytes = arg.as_bytes();
-        let value = if bytes.len() == 2 && bytes[0] == b'-' {
-            match bytes.get(1) {
-                Some(&b'n') => Some(true),
-                Some(&b'N') => Some(false),
-                _ => None,
-            }
-        } else if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
-            match &bytes[2..] {
-                b"line-number" => Some(true),
-                b"no-line-number" => Some(false),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(value) = value
-            && i > last_idx
-        {
-            last_idx = i;
-            result = Some(value);
-        }
-    }
-    result
-}
-
-#[must_use]
-pub fn resolve_with_filename_from_args(args: &[String]) -> Option<bool> {
-    let mut last_idx = 0usize;
-    let mut result = None;
-    for (i, arg) in args.iter().enumerate() {
-        let bytes = arg.as_bytes();
-        let value = if bytes.len() == 2 && bytes[0] == b'-' {
-            match bytes[1] {
-                b'H' => Some(true),
-                b'I' => Some(false),
-                _ => None,
-            }
-        } else if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] == b'-' {
-            match &bytes[2..] {
-                b"with-filename" => Some(true),
-                b"no-filename" => Some(false),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(value) = value
-            && i > last_idx
-        {
-            last_idx = i;
-            result = Some(value);
-        }
-    }
-    result
-}
-
-/// `-A` / `-B` / `-C` and long forms; argv order with later flags overriding (ripgrep-style).
-#[must_use]
-pub fn resolve_context_from_args(args: &[String]) -> (usize, usize) {
-    let mut before = 0usize;
-    let mut after = 0usize;
-    let mut i = 0usize;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        if let Some(rest) = arg.strip_prefix("--after-context=") {
-            if let Some(n) = parse_usize_token(rest) {
-                after = n;
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(rest) = arg.strip_prefix("--before-context=") {
-            if let Some(n) = parse_usize_token(rest) {
-                before = n;
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(rest) = arg.strip_prefix("--context=") {
-            if let Some(n) = parse_usize_token(rest) {
-                before = n;
-                after = n;
-            }
-            i += 1;
-            continue;
-        }
-        match arg {
-            "-A" | "--after-context" => {
-                if let Some(n) = args.get(i + 1).and_then(|s| parse_usize_token(s)) {
-                    after = n;
-                    i += 2;
-                    continue;
-                }
-            }
-            "-B" | "--before-context" => {
-                if let Some(n) = args.get(i + 1).and_then(|s| parse_usize_token(s)) {
-                    before = n;
-                    i += 2;
-                    continue;
-                }
-            }
-            "-C" | "--context" => {
-                if let Some(n) = args.get(i + 1).and_then(|s| parse_usize_token(s)) {
-                    before = n;
-                    after = n;
-                    i += 2;
-                    continue;
-                }
-            }
-            _ => {}
-        }
-        if let Some(body) = arg.strip_prefix("-A")
-            && !body.is_empty()
-            && let Some(n) = parse_usize_token(body)
-        {
-            after = n;
-            i += 1;
-            continue;
-        }
-        if let Some(body) = arg.strip_prefix("-B")
-            && !body.is_empty()
-            && let Some(n) = parse_usize_token(body)
-        {
-            before = n;
-            i += 1;
-            continue;
-        }
-        if let Some(body) = arg.strip_prefix("-C")
-            && !body.is_empty()
-            && let Some(n) = parse_usize_token(body)
-        {
-            before = n;
-            after = n;
-            i += 1;
-            continue;
-        }
-        i += 1;
-    }
-    (before, after)
-}
-
-// ── Output helpers ──
-
-#[must_use]
-pub const fn search_output(
-    format: SearchOutputFormat,
-    effective_mode: SearchMode,
-    quiet: bool,
-    lines: SearchLineStyle,
-    records: SearchRecordStyle,
-    include_zero: bool,
-) -> SearchOutput {
-    SearchOutput {
-        format,
-        mode: effective_mode,
-        emission: if quiet {
-            OutputEmission::Quiet
-        } else {
-            OutputEmission::Normal
-        },
-        lines,
-        records,
-        passthru: PassthruMode::Disabled,
-        include_zero: if include_zero {
-            ZeroCountMode::Include
-        } else {
-            ZeroCountMode::Omit
-        },
-    }
-}
-
-#[must_use]
-pub fn build_line_style_flags(out: &SearchOutputCtx, line_number: bool) -> LineStyleFlags {
-    let mut f = LineStyleFlags::empty();
-    if out.lines.heading {
-        f |= LineStyleFlags::HEADING;
-    }
-    if line_number {
-        f |= LineStyleFlags::LINE_NUMBER;
-    }
-    if out.lines.column {
-        f |= LineStyleFlags::COLUMN;
-    }
-    if out.byte_offset {
-        f |= LineStyleFlags::BYTE_OFFSET;
-    }
-    if out.trim {
-        f |= LineStyleFlags::TRIM;
-    }
-    f
-}
-
-#[must_use]
-pub const fn effective_filename_mode(
-    with_filename: Option<bool>,
-    context: FilenameContext,
-) -> FilenameMode {
-    if matches!(context, FilenameContext::PathMode) || matches!(with_filename, Some(true)) {
-        FilenameMode::Always
-    } else if matches!(with_filename, Some(false))
-        || matches!(context, FilenameContext::SingleFileCorpus)
-    {
-        FilenameMode::Never
-    } else {
-        FilenameMode::Always
-    }
-}
-
-#[must_use]
-pub const fn resolve_effective_line_number(
-    clap_line_number: bool,
-    line_number_override: Option<bool>,
-    output_format: SearchOutputFormat,
-) -> bool {
-    if matches!(output_format, SearchOutputFormat::Json) {
-        return true;
-    }
-    match line_number_override {
-        Some(val) => val,
-        None => clap_line_number,
-    }
-}
-
-pub fn write_search_stats(stats: &SearchStats) {
-    eprintln!("{} matches", stats.matches);
-    eprintln!("{} files contained matches", stats.files_with_matches);
-    eprintln!("{} files searched", stats.files_searched);
-    eprintln!("{} bytes printed", stats.bytes_printed);
-    eprintln!("{} bytes searched", stats.bytes_searched);
-    eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
-}
-
-#[must_use]
-pub fn unescape_separator(s: &str) -> Vec<u8> {
+fn unescape_separator(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -551,895 +427,305 @@ pub fn unescape_separator(s: &str) -> Vec<u8> {
     out
 }
 
-// ── Cli method implementations ──
-
-impl Cli {
+impl SearchOutputCtx {
     #[must_use]
-    pub fn resolve_separators(&self) -> SearchSeparators {
-        let context_separator = if self.separator_decl.suppress_context_sep {
-            None
-        } else if let Some(ref s) = self.separator_decl.context_sep {
-            Some(unescape_separator(s))
-        } else {
-            Some(b"--".to_vec())
-        };
-        let field_match_separator = self
-            .separator_decl
-            .field_match
-            .as_ref()
-            .map_or_else(|| b":".to_vec(), |s| unescape_separator(s));
-        let field_context_separator = self
-            .separator_decl
-            .field_context
-            .as_ref()
-            .map_or_else(|| b"-".to_vec(), |s| unescape_separator(s));
-        SearchSeparators {
-            context_separator,
-            field_match_separator,
-            field_context_separator,
-        }
-    }
-
-    #[must_use]
-    pub fn build_output_and_filter(
-        &self,
-        args: &[String],
+    pub fn resolve(
+        config: &OutputConfig,
+        argv: &Argv<'_>,
         effective_mode: SearchMode,
         quiet: bool,
         line_number_override: Option<bool>,
-    ) -> (SearchOutputCtx, super::filter::SearchFilterCtx) {
-        let glob_case_insensitive = resolve_glob_case_insensitive_from_args(args);
-        let ignore_res = super::ignore::resolve_visibility_and_ignore(args);
-        let null_data = resolve_null_from_args(args);
-        let color = resolve_color_from_args(args);
-        let heading = resolve_heading_from_args(args);
-        let with_filename = resolve_with_filename_from_args(args);
-        let use_json = resolve_json_from_args(args);
-        let print_stats = resolve_stats_from_args(args) || use_json;
-
-        let pretty = self.column_decl.pretty;
-        let vimgrep = self.column_decl.vimgrep;
-        let column = self.column_decl.column || vimgrep;
+    ) -> (Self, SearchFilterCtx) {
+        let output_argv = OutputArgv::resolve(argv);
+        let pretty = config.column.pretty;
+        let vimgrep = config.column.vimgrep;
+        let column = config.column.column || vimgrep;
 
         let is_path_mode = matches!(
             effective_mode,
             SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
         );
-        let effective_heading = heading || pretty;
-        let effective_color = if pretty && color == ColorChoice::Auto {
+        let effective_heading = output_argv.mode.heading || pretty;
+        let effective_color = if pretty && output_argv.color == ColorChoice::Auto {
             ColorChoice::Always
         } else {
-            color
+            output_argv.color
         };
+        let print_stats = output_argv.mode.stats || output_argv.mode.json;
 
-        let out = SearchOutputCtx {
+        let out = Self {
             mode: SearchModeCtx {
                 effective_mode,
                 quiet,
             },
             lines: SearchLineResolveCtx {
                 heading: effective_heading,
-                with_filename,
+                with_filename: output_argv.with_filename,
                 is_path_mode,
                 column,
                 line_number: line_number_override,
             },
             format: SearchFormatCtx {
-                null_data,
+                null_data: output_argv.path.null_data,
                 color: effective_color,
             },
-            output_format: if use_json {
+            output_format: if output_argv.mode.json {
                 SearchOutputFormat::Json
             } else {
                 SearchOutputFormat::Text
             },
-            separators: self.resolve_separators(),
+            separators: separators(config),
             print_stats,
-            byte_offset: self.extra_output.byte_offset,
-            trim: self.replace_decl.trim,
-            include_zero: self.extra_output.include_zero,
-            path_separator: self
-                .threading
+            record: SearchRecordFlags {
+                byte_offset: config.extra.byte_offset,
+                trim: config.replace_trim,
+                include_zero: config.extra.include_zero,
+            },
+            path_separator: config
                 .path_separator
                 .as_ref()
                 .and_then(|s| s.as_bytes().first().copied()),
-            max_columns: self.columns_decl.max_columns,
-            max_columns_preview: self.columns_decl.max_columns_preview,
+            max_columns: config.columns.max_columns,
+            columns: SearchColumnResolve {
+                max_columns_preview: config.columns.max_columns_preview,
+            },
         };
-        let filter = super::filter::SearchFilterCtx {
-            hidden: ignore_res.hidden,
-            ignore_sources: ignore_res.sources,
-            require_git: ignore_res.require_git,
-            glob_case_insensitive,
-            msg_flags: ignore_res.msg_flags,
-        };
+        let filter = SearchFilterCtx::resolve(argv);
         (out, filter)
+    }
+
+    #[must_use]
+    pub fn to_core_output(
+        &self,
+        config: &OutputConfig,
+        filename_ctx: FilenameContext,
+    ) -> SearchOutput {
+        use super::paths::CorpusScope;
+        let path_display = CorpusScope::path_display(&config.search_paths);
+        let line_number = Self::effective_line_number(
+            config.line_number,
+            self.lines.line_number,
+            self.output_format,
+        );
+        let line_flags = Self::line_style_flags(self, line_number);
+        Self::core_output(
+            self.output_format,
+            self.mode.effective_mode,
+            self.mode.quiet,
+            SearchLineStyle {
+                filename_mode: Self::filename_mode(self.lines.with_filename, filename_ctx),
+                flags: line_flags,
+                path_display,
+                columns: self.max_columns.map(|max| sift_core::ColumnLimit {
+                    max,
+                    overflow: if self.columns.max_columns_preview {
+                        sift_core::ColumnOverflow::Preview
+                    } else {
+                        sift_core::ColumnOverflow::Omit
+                    },
+                }),
+            },
+            SearchRecordStyle {
+                terminator: if self.format.null_data {
+                    sift_core::RecordTerminator::Nul
+                } else {
+                    sift_core::RecordTerminator::Newline
+                },
+                color: self.format.color,
+                path_separator: self.path_separator,
+            },
+            self.record.include_zero,
+        )
+    }
+
+    pub fn write_stats(stats: &SearchStats) {
+        eprintln!("{} matches", stats.matches);
+        eprintln!("{} files contained matches", stats.files_with_matches);
+        eprintln!("{} files searched", stats.files_searched);
+        eprintln!("{} bytes printed", stats.bytes_printed);
+        eprintln!("{} bytes searched", stats.bytes_searched);
+        eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
+    }
+
+    #[must_use]
+    const fn core_output(
+        format: SearchOutputFormat,
+        effective_mode: SearchMode,
+        quiet: bool,
+        lines: SearchLineStyle,
+        records: SearchRecordStyle,
+        include_zero: bool,
+    ) -> SearchOutput {
+        SearchOutput {
+            format,
+            mode: effective_mode,
+            emission: if quiet {
+                OutputEmission::Quiet
+            } else {
+                OutputEmission::Normal
+            },
+            lines,
+            records,
+            passthru: PassthruMode::Disabled,
+            include_zero: if include_zero {
+                ZeroCountMode::Include
+            } else {
+                ZeroCountMode::Omit
+            },
+        }
+    }
+
+    #[must_use]
+    fn line_style_flags(out: &Self, line_number: bool) -> LineStyleFlags {
+        let mut f = LineStyleFlags::empty();
+        if out.lines.heading {
+            f |= LineStyleFlags::HEADING;
+        }
+        if line_number {
+            f |= LineStyleFlags::LINE_NUMBER;
+        }
+        if out.lines.column {
+            f |= LineStyleFlags::COLUMN;
+        }
+        if out.record.byte_offset {
+            f |= LineStyleFlags::BYTE_OFFSET;
+        }
+        if out.record.trim {
+            f |= LineStyleFlags::TRIM;
+        }
+        f
+    }
+
+    #[must_use]
+    const fn filename_mode(with_filename: Option<bool>, context: FilenameContext) -> FilenameMode {
+        if matches!(context, FilenameContext::PathMode) || matches!(with_filename, Some(true)) {
+            FilenameMode::Always
+        } else if matches!(with_filename, Some(false))
+            || matches!(context, FilenameContext::SingleFileCorpus)
+        {
+            FilenameMode::Never
+        } else {
+            FilenameMode::Always
+        }
+    }
+
+    #[must_use]
+    const fn effective_line_number(
+        clap_line_number: bool,
+        line_number_override: Option<bool>,
+        output_format: SearchOutputFormat,
+    ) -> bool {
+        if matches!(output_format, SearchOutputFormat::Json) {
+            return true;
+        }
+        match line_number_override {
+            Some(val) => val,
+            None => clap_line_number,
+        }
+    }
+}
+
+#[must_use]
+pub fn separators(config: &OutputConfig) -> SearchSeparators {
+    let context_separator = if config.separators.suppress_context_sep {
+        None
+    } else if let Some(ref s) = config.separators.context_sep {
+        Some(unescape_separator(s))
+    } else {
+        Some(b"--".to_vec())
+    };
+    let field_match_separator = config
+        .separators
+        .field_match
+        .as_ref()
+        .map_or_else(|| b":".to_vec(), |s| unescape_separator(s));
+    let field_context_separator = config
+        .separators
+        .field_context
+        .as_ref()
+        .map_or_else(|| b"-".to_vec(), |s| unescape_separator(s));
+    SearchSeparators {
+        context_separator,
+        field_match_separator,
+        field_context_separator,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grep::pattern::PatternArgv;
     use clap::Parser;
-    use sift_core::RecordTerminator;
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(ToString::to_string).collect()
     }
 
-    // ── parse_usize_token ──
-
-    #[test]
-    fn parse_usize_token_valid() {
-        assert_eq!(parse_usize_token("42"), Some(42));
+    fn out_argv(items: &[&str]) -> OutputArgv {
+        OutputArgv::resolve(&Argv::new(&args(items)))
     }
 
     #[test]
-    fn parse_usize_token_zero() {
-        assert_eq!(parse_usize_token("0"), Some(0));
+    fn output_argv_null_short() {
+        assert!(out_argv(&["sift", "-0", "pat"]).path.null_data);
     }
 
     #[test]
-    fn parse_usize_token_invalid() {
-        assert_eq!(parse_usize_token("abc"), None);
-    }
-
-    #[test]
-    fn parse_usize_token_empty() {
-        assert_eq!(parse_usize_token(""), None);
-    }
-
-    // ── parse_color_when ──
-
-    #[test]
-    fn parse_color_when_never() {
-        assert!(matches!(parse_color_when("never"), ColorChoice::Never));
-    }
-
-    #[test]
-    fn parse_color_when_always() {
-        assert!(matches!(parse_color_when("always"), ColorChoice::Always));
-    }
-
-    #[test]
-    fn parse_color_when_auto() {
-        assert!(matches!(parse_color_when("auto"), ColorChoice::Auto));
-    }
-
-    #[test]
-    fn parse_color_when_unknown_defaults_auto() {
-        assert!(matches!(parse_color_when("xyz"), ColorChoice::Auto));
-    }
-
-    // ── resolve_null_from_args ──
-
-    #[test]
-    fn resolve_null_no_null() {
-        assert!(!resolve_null_from_args(&args(&["sift", "pat"])));
-    }
-
-    #[test]
-    fn resolve_null_short() {
-        assert!(resolve_null_from_args(&args(&["sift", "-0", "pat"])));
-    }
-
-    #[test]
-    fn resolve_null_long() {
-        assert!(resolve_null_from_args(&args(&["sift", "--null", "pat"])));
-    }
-
-    // ── resolve_color_from_args ──
-
-    #[test]
-    fn resolve_color_default_auto() {
+    fn output_argv_color_last_wins() {
         assert!(matches!(
-            resolve_color_from_args(&args(&["sift", "pat"])),
-            ColorChoice::Auto
-        ));
-    }
-
-    #[test]
-    fn resolve_color_never_long() {
-        assert!(matches!(
-            resolve_color_from_args(&args(&["sift", "--color=never", "pat"])),
-            ColorChoice::Never
-        ));
-    }
-
-    #[test]
-    fn resolve_color_always_long() {
-        assert!(matches!(
-            resolve_color_from_args(&args(&["sift", "--color=always", "pat"])),
+            out_argv(&["sift", "--color=never", "--color=always", "pat"]).color,
             ColorChoice::Always
         ));
     }
 
     #[test]
-    fn resolve_color_separate_arg() {
-        assert!(matches!(
-            resolve_color_from_args(&args(&["sift", "--color", "never", "pat"])),
-            ColorChoice::Never
-        ));
+    fn output_argv_json_toggle() {
+        assert!(!out_argv(&["sift", "--json", "--no-json", "pat"]).mode.json);
     }
 
     #[test]
-    fn resolve_color_last_wins() {
-        assert!(matches!(
-            resolve_color_from_args(&args(&["sift", "--color=never", "--color=always", "pat"])),
-            ColorChoice::Always
-        ));
-    }
-
-    // ── resolve_stats_from_args ──
-
-    #[test]
-    fn resolve_stats_no_flag() {
-        assert!(!resolve_stats_from_args(&args(&["sift", "pat"])));
-    }
-
-    #[test]
-    fn resolve_stats_flag() {
-        assert!(resolve_stats_from_args(&args(&["sift", "--stats", "pat"])));
-    }
-
-    // ── resolve_json_from_args ──
-
-    #[test]
-    fn resolve_json_no_flag() {
-        assert!(!resolve_json_from_args(&args(&["sift", "pat"])));
-    }
-
-    #[test]
-    fn resolve_json_flag() {
-        assert!(resolve_json_from_args(&args(&["sift", "--json", "pat"])));
-    }
-
-    #[test]
-    fn resolve_json_last_wins_true() {
-        assert!(resolve_json_from_args(&args(&[
-            "sift",
-            "--no-json",
-            "--json",
-            "pat"
-        ])));
-    }
-
-    #[test]
-    fn resolve_json_last_wins_false() {
-        assert!(!resolve_json_from_args(&args(&[
-            "sift",
-            "--json",
-            "--no-json",
-            "pat"
-        ])));
-    }
-
-    // ── resolve_heading_from_args ──
-
-    #[test]
-    fn resolve_heading_no_flag() {
-        assert!(!resolve_heading_from_args(&args(&["sift", "pat"])));
-    }
-
-    #[test]
-    fn resolve_heading_flag() {
-        assert!(resolve_heading_from_args(&args(&[
-            "sift",
-            "--heading",
-            "pat"
-        ])));
-    }
-
-    #[test]
-    fn resolve_heading_no_heading_flag() {
-        assert!(!resolve_heading_from_args(&args(&[
-            "sift",
-            "--no-heading",
-            "pat"
-        ])));
-    }
-
-    #[test]
-    fn resolve_heading_last_wins() {
-        assert!(!resolve_heading_from_args(&args(&[
-            "sift",
-            "--heading",
-            "--no-heading",
-            "pat"
-        ])));
-    }
-
-    // ── resolve_line_number_from_args ──
-
-    #[test]
-    fn resolve_line_number_no_flag() {
-        assert_eq!(resolve_line_number_from_args(&args(&["sift", "pat"])), None);
-    }
-
-    #[test]
-    fn resolve_line_number_short_n() {
+    fn output_argv_line_number_last_wins() {
         assert_eq!(
-            resolve_line_number_from_args(&args(&["sift", "-n", "pat"])),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn resolve_line_number_short_n_upper() {
-        assert_eq!(
-            resolve_line_number_from_args(&args(&["sift", "-N", "pat"])),
+            out_argv(&["sift", "-n", "-N", "pat"]).line_number,
             Some(false)
         );
     }
 
     #[test]
-    fn resolve_line_number_long() {
+    fn context_lines_after_short() {
         assert_eq!(
-            resolve_line_number_from_args(&args(&["sift", "--line-number", "pat"])),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn resolve_line_number_no_long() {
-        assert_eq!(
-            resolve_line_number_from_args(&args(&["sift", "--no-line-number", "pat"])),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn resolve_line_number_last_wins() {
-        assert_eq!(
-            resolve_line_number_from_args(&args(&["sift", "-n", "-N", "pat"])),
-            Some(false)
-        );
-    }
-
-    // ── resolve_with_filename_from_args ──
-
-    #[test]
-    fn resolve_with_filename_no_flag() {
-        assert_eq!(
-            resolve_with_filename_from_args(&args(&["sift", "pat"])),
-            None
-        );
-    }
-
-    #[test]
-    fn resolve_with_filename_short_h() {
-        assert_eq!(
-            resolve_with_filename_from_args(&args(&["sift", "-H", "pat"])),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn resolve_with_filename_short_i() {
-        assert_eq!(
-            resolve_with_filename_from_args(&args(&["sift", "-I", "pat"])),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn resolve_with_filename_long_with() {
-        assert_eq!(
-            resolve_with_filename_from_args(&args(&["sift", "--with-filename", "pat"])),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn resolve_with_filename_long_no() {
-        assert_eq!(
-            resolve_with_filename_from_args(&args(&["sift", "--no-filename", "pat"])),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn resolve_with_filename_last_wins() {
-        assert_eq!(
-            resolve_with_filename_from_args(&args(&["sift", "-H", "-I", "pat"])),
-            Some(false)
-        );
-    }
-
-    // ── resolve_context_from_args ──
-
-    #[test]
-    fn resolve_context_default() {
-        assert_eq!(resolve_context_from_args(&args(&["sift", "pat"])), (0, 0));
-    }
-
-    #[test]
-    fn resolve_context_after_short() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-A", "5", "pat"])),
+            PatternArgv::context(&Argv::new(&args(&["sift", "-A", "5", "pat"]))),
             (0, 5)
         );
-    }
-
-    #[test]
-    fn resolve_context_before_short() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-B", "3", "pat"])),
-            (3, 0)
-        );
-    }
-
-    #[test]
-    fn resolve_context_both_short() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-C", "2", "pat"])),
-            (2, 2)
-        );
-    }
-
-    #[test]
-    fn resolve_context_combined() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-B1", "-A2", "pat"])),
-            (1, 2)
-        );
-    }
-
-    #[test]
-    fn resolve_context_last_wins() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-A1", "-A5", "pat"])),
-            (0, 5)
-        );
-    }
-
-    #[test]
-    fn resolve_context_context_overrides_individual() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-A5", "-C2", "pat"])),
-            (2, 2)
-        );
-    }
-
-    #[test]
-    fn resolve_context_after_long() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "--after-context=5", "pat"])),
-            (0, 5)
-        );
-    }
-
-    #[test]
-    fn resolve_context_before_long() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "--before-context=3", "pat"])),
-            (3, 0)
-        );
-    }
-
-    #[test]
-    fn resolve_context_context_long() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "--context=2", "pat"])),
-            (2, 2)
-        );
-    }
-
-    #[test]
-    fn resolve_context_inline_after() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-A5", "pat"])),
-            (0, 5)
-        );
-    }
-
-    #[test]
-    fn resolve_context_inline_before() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-B3", "pat"])),
-            (3, 0)
-        );
-    }
-
-    #[test]
-    fn resolve_context_inline_context() {
-        assert_eq!(
-            resolve_context_from_args(&args(&["sift", "-C2", "pat"])),
-            (2, 2)
-        );
-    }
-
-    // ── resolve_glob_case_insensitive_from_args ──
-
-    #[test]
-    fn glob_case_insensitive_default() {
-        assert!(!resolve_glob_case_insensitive_from_args(&args(&[
-            "sift", "pat"
-        ])));
-    }
-
-    #[test]
-    fn glob_case_insensitive_flag() {
-        assert!(resolve_glob_case_insensitive_from_args(&args(&[
-            "sift",
-            "--glob-case-insensitive",
-            "pat"
-        ])));
-    }
-
-    #[test]
-    fn glob_case_no_insensitive_flag() {
-        assert!(!resolve_glob_case_insensitive_from_args(&args(&[
-            "sift",
-            "--no-glob-case-insensitive",
-            "pat"
-        ])));
-    }
-
-    #[test]
-    fn glob_case_insensitive_last_wins() {
-        assert!(!resolve_glob_case_insensitive_from_args(&args(&[
-            "sift",
-            "--glob-case-insensitive",
-            "--no-glob-case-insensitive",
-            "pat"
-        ])));
-    }
-
-    // ── effective_filename_mode ──
-
-    #[test]
-    fn filename_mode_path_mode() {
-        assert!(matches!(
-            effective_filename_mode(None, FilenameContext::PathMode),
-            FilenameMode::Always
-        ));
-    }
-
-    #[test]
-    fn filename_mode_with_filename_true() {
-        assert!(matches!(
-            effective_filename_mode(Some(true), FilenameContext::DirectoryCorpus),
-            FilenameMode::Always
-        ));
-    }
-
-    #[test]
-    fn filename_mode_with_filename_false() {
-        assert!(matches!(
-            effective_filename_mode(Some(false), FilenameContext::DirectoryCorpus),
-            FilenameMode::Never
-        ));
-    }
-
-    #[test]
-    fn filename_mode_default() {
-        assert!(matches!(
-            effective_filename_mode(None, FilenameContext::DirectoryCorpus),
-            FilenameMode::Always
-        ));
     }
 
     #[test]
     fn filename_mode_single_file_defaults_to_never() {
         assert!(matches!(
-            effective_filename_mode(None, FilenameContext::SingleFileCorpus),
+            SearchOutputCtx::filename_mode(None, FilenameContext::SingleFileCorpus),
             FilenameMode::Never
         ));
     }
 
     #[test]
-    fn filename_mode_single_file_respects_explicit_true() {
-        assert!(matches!(
-            effective_filename_mode(Some(true), FilenameContext::SingleFileCorpus),
-            FilenameMode::Always
-        ));
-    }
-
-    // ── resolve_effective_line_number ──
-
-    #[test]
     fn effective_line_number_json() {
-        assert!(resolve_effective_line_number(
+        assert!(SearchOutputCtx::effective_line_number(
             false,
             None,
             SearchOutputFormat::Json
         ));
     }
 
-    #[test]
-    fn effective_line_number_override_true() {
-        assert!(resolve_effective_line_number(
-            false,
-            Some(true),
-            SearchOutputFormat::Text
-        ));
+    fn output_config(args: &[&str]) -> OutputConfig {
+        crate::cli::Cli::try_parse_from(args)
+            .unwrap()
+            .grep_config()
+            .output
     }
-
-    #[test]
-    fn effective_line_number_override_false() {
-        assert!(!resolve_effective_line_number(
-            true,
-            Some(false),
-            SearchOutputFormat::Text
-        ));
-    }
-
-    #[test]
-    fn effective_line_number_fallback_true() {
-        assert!(resolve_effective_line_number(
-            true,
-            None,
-            SearchOutputFormat::Text
-        ));
-    }
-
-    #[test]
-    fn effective_line_number_fallback_false() {
-        assert!(!resolve_effective_line_number(
-            false,
-            None,
-            SearchOutputFormat::Text
-        ));
-    }
-
-    // ── unescape_separator ──
-
-    #[test]
-    fn unescape_separator_plain() {
-        assert_eq!(unescape_separator("hello"), b"hello");
-    }
-
-    #[test]
-    fn unescape_separator_newline() {
-        assert_eq!(unescape_separator(r"\n"), b"\n");
-    }
-
-    #[test]
-    fn unescape_separator_tab() {
-        assert_eq!(unescape_separator(r"\t"), b"\t");
-    }
-
-    #[test]
-    fn unescape_separator_backslash() {
-        assert_eq!(unescape_separator(r"\\"), b"\\");
-    }
-
-    #[test]
-    fn unescape_separator_null() {
-        assert_eq!(unescape_separator(r"\0"), b"\0");
-    }
-
-    #[test]
-    fn unescape_separator_unknown_escape() {
-        assert_eq!(unescape_separator(r"\x"), b"\\x");
-    }
-
-    #[test]
-    fn unescape_separator_trailing_backslash() {
-        assert_eq!(unescape_separator(r"ab\"), b"ab\\");
-    }
-
-    #[test]
-    fn unescape_separator_mixed() {
-        assert_eq!(unescape_separator(r"a\nb\tc"), b"a\nb\tc");
-    }
-
-    // ── build_line_style_flags ──
-
-    fn ctx_with_lines(lines: SearchLineResolveCtx) -> SearchOutputCtx {
-        SearchOutputCtx {
-            mode: SearchModeCtx {
-                effective_mode: SearchMode::Standard,
-                quiet: false,
-            },
-            lines,
-            format: SearchFormatCtx {
-                null_data: false,
-                color: ColorChoice::Auto,
-            },
-            output_format: SearchOutputFormat::Text,
-            separators: SearchSeparators {
-                context_separator: None,
-                field_match_separator: vec![],
-                field_context_separator: vec![],
-            },
-            print_stats: false,
-            byte_offset: false,
-            trim: false,
-            include_zero: false,
-            path_separator: None,
-            max_columns: None,
-            max_columns_preview: false,
-        }
-    }
-
-    // Move search_output tests after this block
-
-    #[test]
-    fn line_style_flags_empty() {
-        let out = ctx_with_lines(SearchLineResolveCtx {
-            heading: false,
-            with_filename: None,
-            is_path_mode: false,
-            column: false,
-            line_number: None,
-        });
-        let flags = build_line_style_flags(&out, false);
-        assert!(flags.is_empty());
-    }
-
-    #[test]
-    fn line_style_flags_heading() {
-        let out = ctx_with_lines(SearchLineResolveCtx {
-            heading: true,
-            with_filename: None,
-            is_path_mode: false,
-            column: false,
-            line_number: None,
-        });
-        let flags = build_line_style_flags(&out, false);
-        assert!(flags.contains(LineStyleFlags::HEADING));
-        assert!(!flags.contains(LineStyleFlags::LINE_NUMBER));
-    }
-
-    #[test]
-    fn line_style_flags_line_number() {
-        let out = ctx_with_lines(SearchLineResolveCtx {
-            heading: false,
-            with_filename: None,
-            is_path_mode: false,
-            column: false,
-            line_number: None,
-        });
-        let flags = build_line_style_flags(&out, true);
-        assert!(flags.contains(LineStyleFlags::LINE_NUMBER));
-    }
-
-    #[test]
-    fn line_style_flags_column() {
-        let out = ctx_with_lines(SearchLineResolveCtx {
-            heading: false,
-            with_filename: None,
-            is_path_mode: false,
-            column: true,
-            line_number: None,
-        });
-        let flags = build_line_style_flags(&out, false);
-        assert!(flags.contains(LineStyleFlags::COLUMN));
-    }
-
-    #[test]
-    fn line_style_flags_byte_offset() {
-        let mut out = ctx_with_lines(SearchLineResolveCtx {
-            heading: false,
-            with_filename: None,
-            is_path_mode: false,
-            column: false,
-            line_number: None,
-        });
-        out.byte_offset = true;
-        let flags = build_line_style_flags(&out, false);
-        assert!(flags.contains(LineStyleFlags::BYTE_OFFSET));
-    }
-
-    #[test]
-    fn line_style_flags_trim() {
-        let mut out = ctx_with_lines(SearchLineResolveCtx {
-            heading: false,
-            with_filename: None,
-            is_path_mode: false,
-            column: false,
-            line_number: None,
-        });
-        out.trim = true;
-        let flags = build_line_style_flags(&out, false);
-        assert!(flags.contains(LineStyleFlags::TRIM));
-    }
-
-    #[test]
-    fn line_style_flags_all() {
-        let mut out = ctx_with_lines(SearchLineResolveCtx {
-            heading: true,
-            with_filename: None,
-            is_path_mode: false,
-            column: true,
-            line_number: None,
-        });
-        out.byte_offset = true;
-        out.trim = true;
-        let flags = build_line_style_flags(&out, true);
-        assert!(flags.contains(LineStyleFlags::HEADING));
-        assert!(flags.contains(LineStyleFlags::LINE_NUMBER));
-        assert!(flags.contains(LineStyleFlags::COLUMN));
-        assert!(flags.contains(LineStyleFlags::BYTE_OFFSET));
-        assert!(flags.contains(LineStyleFlags::TRIM));
-    }
-
-    // ── search_output ──
-
-    #[test]
-    fn search_output_quiet() {
-        let result = search_output(
-            SearchOutputFormat::Text,
-            SearchMode::Standard,
-            true,
-            SearchLineStyle {
-                filename_mode: FilenameMode::Always,
-                flags: LineStyleFlags::empty(),
-                path_display: sift_core::PathDisplay::Relative,
-                columns: None,
-            },
-            SearchRecordStyle {
-                terminator: RecordTerminator::Newline,
-                color: ColorChoice::Auto,
-                path_separator: None,
-            },
-            false,
-        );
-        assert!(matches!(result.emission, OutputEmission::Quiet));
-        assert!(matches!(result.passthru, PassthruMode::Disabled));
-    }
-
-    #[test]
-    fn search_output_normal() {
-        let result = search_output(
-            SearchOutputFormat::Text,
-            SearchMode::Standard,
-            false,
-            SearchLineStyle {
-                filename_mode: FilenameMode::Always,
-                flags: LineStyleFlags::empty(),
-                path_display: sift_core::PathDisplay::Relative,
-                columns: None,
-            },
-            SearchRecordStyle {
-                terminator: RecordTerminator::Newline,
-                color: ColorChoice::Auto,
-                path_separator: None,
-            },
-            true,
-        );
-        assert!(matches!(result.emission, OutputEmission::Normal));
-        assert!(matches!(result.include_zero, ZeroCountMode::Include));
-    }
-
-    // ── Cli::resolve_separators ──
 
     #[test]
     fn resolve_separators_default_context_sep() {
-        let cli = crate::cli::Cli::try_parse_from(["sift", "pat"]).unwrap();
-        let sep = cli.resolve_separators();
+        let sep = separators(&output_config(&["sift", "pat"]));
         assert_eq!(sep.context_separator, Some(b"--".to_vec()));
-    }
-
-    #[test]
-    fn resolve_separators_custom_separator() {
-        let cli =
-            crate::cli::Cli::try_parse_from(["sift", "--context-separator", "===", "pat"]).unwrap();
-        let sep = cli.resolve_separators();
-        assert_eq!(sep.context_separator, Some(b"===".to_vec()));
-    }
-
-    #[test]
-    fn resolve_separators_suppress_context_sep() {
-        let cli =
-            crate::cli::Cli::try_parse_from(["sift", "--no-context-separator", "pat"]).unwrap();
-        let sep = cli.resolve_separators();
-        assert_eq!(sep.context_separator, None);
-    }
-
-    #[test]
-    fn resolve_separators_field_match_default() {
-        let cli = crate::cli::Cli::try_parse_from(["sift", "pat"]).unwrap();
-        let sep = cli.resolve_separators();
-        assert_eq!(sep.field_match_separator, b":");
-    }
-
-    #[test]
-    fn resolve_separators_field_context_default() {
-        let cli = crate::cli::Cli::try_parse_from(["sift", "pat"]).unwrap();
-        let sep = cli.resolve_separators();
-        assert_eq!(sep.field_context_separator, b"-");
     }
 }

@@ -1,11 +1,13 @@
 //! Search (`sift PATTERN`) and related flag handling.
 
+pub mod argv;
 pub mod engine;
 pub mod filter;
 pub mod ignore;
 pub mod output;
 pub mod paths;
 pub mod pattern;
-pub mod search;
+pub mod run;
 
-pub use search::{run_files_mode, run_type_list};
+pub use argv::Argv;
+pub use run::{Grep, GrepConfig, GrepOutcome};

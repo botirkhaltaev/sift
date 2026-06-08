@@ -1,6 +1,8 @@
 use criterion::Criterion;
 use std::hint::black_box;
 
+use sift_grep::pattern::binary_mode;
+
 use crate::support::{build_index, make_small_corpus, parse_cli, run_sift};
 
 pub fn bench(c: &mut Criterion) {
@@ -16,11 +18,11 @@ pub fn bench(c: &mut Criterion) {
     let cli_default = parse_cli(&["pattern"]);
     let cli_text = parse_cli(&["-a", "pattern"]);
 
-    g.bench_function("resolve_binary_mode/default", |b| {
-        b.iter(|| black_box(cli_default.resolve_binary_mode()));
+    g.bench_function("binary_mode/default", |b| {
+        b.iter(|| black_box(binary_mode(black_box(&cli_default.pattern_config()))));
     });
-    g.bench_function("resolve_binary_mode/text", |b| {
-        b.iter(|| black_box(cli_text.resolve_binary_mode()));
+    g.bench_function("binary_mode/text", |b| {
+        b.iter(|| black_box(binary_mode(black_box(&cli_text.pattern_config()))));
     });
 
     // run_files_mode — subprocess

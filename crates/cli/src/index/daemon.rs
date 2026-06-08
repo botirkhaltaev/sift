@@ -7,8 +7,6 @@ use fslock::LockFile;
 use notify::{RecursiveMode, Watcher};
 use sift_core::{CorpusSpec, IndexConfig, IndexKind, IndexStore, StoreMeta, VisibilityConfig};
 
-use crate::config::DaemonSpawnConfig;
-
 const DEBOUNCE_MS: u64 = 250;
 /// Default idle timeout for the daemon (2 minutes).
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_mins(2);
@@ -89,6 +87,24 @@ pub struct SpawnRequest {
     pub init_root: Option<PathBuf>,
     /// Startup handshake file the child creates after the watcher is active.
     pub ready_file: Option<PathBuf>,
+}
+
+/// Spawn policy for the daemon background process.
+#[derive(Debug, Clone)]
+pub struct DaemonSpawnConfig {
+    pub enabled: bool,
+    pub sift_dir: PathBuf,
+    pub init_root: Option<PathBuf>,
+}
+
+impl Default for DaemonSpawnConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sift_dir: PathBuf::new(),
+            init_root: None,
+        }
+    }
 }
 
 /// Abstraction over process spawning for testability.
@@ -339,6 +355,17 @@ pub struct DaemonRunConfig {
     /// How long the daemon stays alive with no filesystem activity before
     /// exiting gracefully.  Defaults to 2 minutes.
     pub idle_timeout: Duration,
+}
+
+impl Default for DaemonRunConfig {
+    fn default() -> Self {
+        Self {
+            sift_dir: PathBuf::new(),
+            init_root: None,
+            ready_file: None,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+        }
+    }
 }
 
 /// The long-running daemon event loop with stoppable support for testing.
@@ -708,19 +735,15 @@ mod tests {
         DaemonSupervisor::new(s)
     }
 
-    fn spawn_config(enabled: bool, sift_dir: PathBuf) -> DaemonSpawnConfig {
-        DaemonSpawnConfig {
-            enabled,
-            sift_dir,
-            init_root: None,
-        }
-    }
-
     #[test]
     fn spawn_returns_disabled_from_config() {
         let dir = TempDir::new().unwrap();
         let sup = supervisor(fake_spawner());
-        let config = spawn_config(false, dir.path().to_path_buf());
+        let config = DaemonSpawnConfig {
+            enabled: false,
+            sift_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
         let outcome = sup.spawn(&config).unwrap();
         assert_eq!(outcome, SpawnOutcome::Disabled);
     }
@@ -730,7 +753,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let spawner = fake_spawner();
         let sup = supervisor(spawner.clone());
-        let config = spawn_config(true, dir.path().to_path_buf());
+        let config = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
         let outcome = sup.spawn(&config).unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
         assert_eq!(spawner.call_count(), 1);
@@ -745,7 +772,11 @@ mod tests {
 
         let spawner = fake_spawner();
         let sup = supervisor(spawner.clone());
-        let config = spawn_config(true, dir.path().to_path_buf());
+        let config = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
         let outcome = sup.spawn(&config).unwrap();
         assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
         assert_eq!(spawner.call_count(), 0);
@@ -760,7 +791,11 @@ mod tests {
 
         let spawner = fake_spawner();
         let sup = supervisor(spawner.clone());
-        let config = spawn_config(true, dir.path().to_path_buf());
+        let config = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
         let outcome = sup.spawn(&config).unwrap();
         assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
         assert_eq!(spawner.call_count(), 0);
@@ -794,7 +829,11 @@ mod tests {
         let mut spawn_lock = LockFile::open(&spawn_lock_path).unwrap();
         spawn_lock.try_lock().unwrap();
 
-        let config = spawn_config(true, dir.path().to_path_buf());
+        let config = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
         let outcome = sup.spawn(&config).unwrap();
         assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
         assert_eq!(spawner.call_count(), 0);
@@ -971,9 +1010,7 @@ mod tests {
 
         let config = DaemonRunConfig {
             sift_dir,
-            init_root: None,
-            ready_file: None,
-            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            ..Default::default()
         };
         let runner = DaemonRunner::new(config);
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -999,9 +1036,7 @@ mod tests {
 
         let config = DaemonRunConfig {
             sift_dir,
-            init_root: None,
-            ready_file: None,
-            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            ..Default::default()
         };
         let runner = DaemonRunner::new(config);
         runner.run_until(&AtomicBool::new(false)).unwrap();
@@ -1023,9 +1058,8 @@ mod tests {
 
         let config = DaemonRunConfig {
             sift_dir: sift_dir.clone(),
-            init_root: None,
-            ready_file: None,
             idle_timeout: Duration::from_secs(2),
+            ..Default::default()
         };
         let runner = DaemonRunner::new(config);
 
