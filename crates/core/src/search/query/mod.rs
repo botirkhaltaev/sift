@@ -10,7 +10,7 @@ use std::{
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 
 #[cfg(test)]
 use crate::candidate::Candidate;
@@ -48,7 +48,7 @@ pub struct Match {
 pub struct SearchQuery {
     pub patterns: Vec<String>,
     pub opts: SearchOptions,
-    pub matcher: OnceCell<RegexMatcher>,
+    pub matcher: OnceLock<RegexMatcher>,
     pub searcher_cache: Mutex<Option<SearcherCacheEntry>>,
 }
 
@@ -65,7 +65,7 @@ impl SearchQuery {
         Ok(Self {
             patterns: patterns.to_vec(),
             opts,
-            matcher: OnceCell::new(),
+            matcher: OnceLock::new(),
             searcher_cache: Mutex::new(None),
         })
     }
@@ -95,7 +95,7 @@ impl SearchQuery {
         }
 
         let search_start = Instant::now();
-        let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
+        let matcher = self.resolve_matcher()?;
 
         let (did_match, stats) = match output.format {
             SearchOutputFormat::Json => match output.mode {
@@ -126,6 +126,15 @@ impl SearchQuery {
             matched: did_match,
             stats,
         })
+    }
+
+    fn resolve_matcher(&self) -> Result<&RegexMatcher, SearchError> {
+        if let Some(m) = self.matcher.get() {
+            return Ok(m);
+        }
+        let m = self.build_matcher()?;
+        let _ = self.matcher.set(m);
+        Ok(self.matcher.get().expect("just initialised"))
     }
 
     fn build_query_spec(&self) -> QuerySpec<'_> {
@@ -243,7 +252,7 @@ impl SearchQuery {
         filter: &CandidateFilter,
         candidates: &[Candidate],
     ) -> crate::Result<Vec<crate::search::Match>> {
-        let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
+        let matcher = self.resolve_matcher()?;
         let mut out = Vec::new();
         let mut searcher = self.build_searcher(true, None, true);
         for candidate in candidates {
@@ -270,7 +279,7 @@ impl SearchQuery {
         &self,
         candidates: &[PathBuf],
     ) -> crate::Result<Vec<crate::search::Match>> {
-        let matcher = self.matcher.get_or_try_init(|| self.build_matcher())?;
+        let matcher = self.resolve_matcher()?;
         let mut out = Vec::new();
         let mut searcher = self.build_searcher(true, None, true);
         for candidate in candidates {

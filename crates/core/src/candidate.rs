@@ -1,5 +1,5 @@
-use once_cell::sync::OnceCell;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::search::output::style::PathDisplay;
 
@@ -17,7 +17,7 @@ pub struct Candidate {
     rel_path: PathBuf,
     /// Absolute filesystem path.
     abs_path: PathBuf,
-    rel_str: OnceCell<String>,
+    rel_str: OnceLock<String>,
 }
 
 impl Candidate {
@@ -26,7 +26,7 @@ impl Candidate {
         Self {
             rel_path,
             abs_path,
-            rel_str: OnceCell::new(),
+            rel_str: OnceLock::new(),
         }
     }
 
