@@ -3,28 +3,18 @@
 //! All fixtures are deterministic and use temporary directories that are
 //! automatically cleaned up. Search/open/candidate benches build fixtures
 //! outside `b.iter`; build benches materialize inside `b.iter`.
-
-#![allow(dead_code)]
+//!
+//! Only functions used by more than one bench binary live here.
+//! Bench-specific helpers live in the bench file itself so no binary
+//! compiles dead code.
 
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use sift_core::{
-    CandidateFilter, CandidateFilterConfig, ColorChoice, CorpusKind, CorpusSpec, GlobConfig,
-    HiddenMode, IgnoreConfig, IgnoreSources, IndexConfig, IndexKind, IndexStore, OutputEmission,
-    SearchMode, SearchOptions, SearchOutput, SearchQuery, SearchRecordStyle, TrigramIndex,
-    VisibilityConfig,
-};
+use sift_core::{CorpusKind, CorpusSpec, IndexConfig, TrigramIndex, VisibilityConfig};
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
-
-pub fn make_parity_corpus(root: &Path) {
-    fs::create_dir_all(root.join("a")).unwrap();
-    fs::create_dir_all(root.join("b")).unwrap();
-    fs::write(root.join("a/x.txt"), "alpha beta\n").unwrap();
-    fs::write(root.join("b/y.txt"), "gamma delta\n").unwrap();
-}
 
 pub fn make_filter_corpus(root: &Path) {
     fs::create_dir_all(root.join("a")).unwrap();
@@ -46,27 +36,6 @@ pub fn make_filter_corpus(root: &Path) {
 
     fs::write(root.join(".gitignore"), "skip/**\n").unwrap();
     fs::write(root.join(".ignore"), "also_skip/**\n").unwrap();
-}
-
-pub fn make_single_file_corpus(root: &Path) {
-    fs::create_dir_all(root).unwrap();
-    fs::write(
-        root.join("single.rs"),
-        "fn main() {\n    let x = 42;\n    println!(\"beta: {}\", x);\n}\n",
-    )
-    .unwrap();
-}
-
-pub fn make_many_files_corpus(root: &Path, n: usize) {
-    for i in 0..n {
-        let dir = root.join(format!("d{}", i % 10));
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join(format!("f{i}.txt")),
-            format!("line one line two content {i}\n"),
-        )
-        .unwrap();
-    }
 }
 
 pub fn materialize_large_corpus(
@@ -105,43 +74,7 @@ pub fn materialize_large_corpus(
     }
 }
 
-pub fn materialize_monorepo_corpus(
-    root: &Path,
-    files: usize,
-    lines_per_file: usize,
-    dir_fanout: usize,
-) {
-    materialize_large_corpus(root, files, lines_per_file, dir_fanout);
-}
-
 // ─── Index helpers ───────────────────────────────────────────────────────────
-
-pub fn standard_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -> IndexConfig<'a> {
-    IndexConfig {
-        corpus: CorpusSpec {
-            root,
-            kind: CorpusKind::Directory,
-            follow_links: false,
-            include_paths: &[],
-            exclude_paths,
-        },
-        visibility: VisibilityConfig::default(),
-    }
-}
-
-/// Full `sift build` path via [`IndexStore`] (production defaults).
-pub fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
-    let mut store = IndexStore::open_or_create(
-        sift_dir,
-        corpus,
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .unwrap();
-    let config = standard_build_config(corpus, &[]);
-    store.build(&[IndexKind::Trigram], &config).unwrap();
-}
 
 /// Trigram tables written directly under `idx_dir` (for open/candidate benches).
 pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
@@ -170,32 +103,6 @@ pub fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> TrigramIndex
     TrigramIndex::open(idx_dir, root, kind).unwrap()
 }
 
-pub fn open_parity_index() -> (tempfile::TempDir, TrigramIndex) {
-    let tmp = tempfile::tempdir().unwrap();
-    let corpus = tmp.path().join("corpus");
-    make_parity_corpus(&corpus);
-    let idx = tmp.path().join(".sift");
-    let built = build_index(&corpus, &idx);
-    let root = built.root().to_path_buf();
-    let kind = built.corpus_kind();
-    drop(built);
-    let index = open_index(&idx, &root, kind);
-    (tmp, index)
-}
-
-pub fn open_filter_index() -> (tempfile::TempDir, TrigramIndex) {
-    let tmp = tempfile::tempdir().unwrap();
-    let corpus = tmp.path().join("corpus");
-    make_filter_corpus(&corpus);
-    let idx = tmp.path().join(".sift");
-    let built = build_index(&corpus, &idx);
-    let root = built.root().to_path_buf();
-    let kind = built.corpus_kind();
-    drop(built);
-    let index = open_index(&idx, &root, kind);
-    (tmp, index)
-}
-
 pub fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
@@ -207,92 +114,4 @@ pub fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
     drop(built);
     let index = open_index(&idx, &root, kind);
     (tmp, index)
-}
-
-// ─── Filter configs ─────────────────────────────────────────────────────────
-
-pub fn glob_include_filter() -> CandidateFilterConfig {
-    CandidateFilterConfig {
-        glob: GlobConfig {
-            patterns: vec!["**/*.txt".to_string()],
-            case_insensitive: false,
-        },
-        ..Default::default()
-    }
-}
-
-pub fn glob_exclude_filter() -> CandidateFilterConfig {
-    CandidateFilterConfig {
-        glob: GlobConfig {
-            patterns: vec!["!**/*.txt".to_string()],
-            case_insensitive: false,
-        },
-        ..Default::default()
-    }
-}
-
-pub fn glob_casei_filter() -> CandidateFilterConfig {
-    CandidateFilterConfig {
-        glob: GlobConfig {
-            patterns: vec!["**/*.TXT".to_string()],
-            case_insensitive: true,
-        },
-        ..Default::default()
-    }
-}
-
-pub fn hidden_include_filter() -> CandidateFilterConfig {
-    CandidateFilterConfig {
-        visibility: VisibilityConfig {
-            hidden: HiddenMode::Include,
-            ..VisibilityConfig::default()
-        },
-        ..Default::default()
-    }
-}
-
-pub fn ignore_custom_filter() -> CandidateFilterConfig {
-    CandidateFilterConfig {
-        visibility: VisibilityConfig {
-            hidden: HiddenMode::Respect,
-            ignore: IgnoreConfig {
-                sources: IgnoreSources::empty(),
-                custom_files: vec![PathBuf::from(".ignore")],
-                require_git: false,
-            },
-        },
-        ..Default::default()
-    }
-}
-
-pub fn scoped_filter(subdir: &str) -> CandidateFilterConfig {
-    CandidateFilterConfig {
-        scopes: vec![PathBuf::from(subdir)],
-        ..Default::default()
-    }
-}
-
-// ─── Output helpers ─────────────────────────────────────────────────────────
-
-pub fn quiet_output(mode: SearchMode) -> SearchOutput {
-    SearchOutput {
-        mode,
-        emission: OutputEmission::Quiet,
-        records: SearchRecordStyle {
-            color: ColorChoice::Never,
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
-// ─── Search helpers ─────────────────────────────────────────────────────────
-
-pub fn make_search(patterns: &[&str], opts: SearchOptions) -> SearchQuery {
-    let pats: Vec<String> = patterns.iter().map(ToString::to_string).collect();
-    SearchQuery::new(&pats, opts).unwrap()
-}
-
-pub fn make_filter(config: &CandidateFilterConfig, root: &Path) -> CandidateFilter {
-    CandidateFilter::new(config, root).unwrap()
 }
