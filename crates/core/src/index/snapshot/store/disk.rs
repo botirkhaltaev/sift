@@ -153,10 +153,6 @@ impl SnapshotWriterSession for DiskSnapshotWriterSession<'_> {
     type Read = DiskSnapshotReader;
     type Write = DiskSnapshotWriter;
 
-    fn current_id(&self) -> Option<&SnapshotId> {
-        self.store.current_id.as_ref()
-    }
-
     fn current(&self) -> crate::Result<Option<Self::Read>> {
         let Some(ref current_id) = self.store.current_id else {
             return Ok(None);
@@ -278,10 +274,6 @@ pub struct DiskSnapshotReader {
 }
 
 impl SnapshotRead for DiskSnapshotReader {
-    fn id(&self) -> &SnapshotId {
-        &self.id
-    }
-
     fn manifest(&self) -> &SnapshotManifest {
         &self.manifest
     }

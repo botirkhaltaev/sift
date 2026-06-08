@@ -7,9 +7,8 @@ use super::artifact::ArtifactData;
 use super::identity::SnapshotId;
 use super::manifest::SnapshotManifest;
 
-/// A readable snapshot with access to its id, manifest, and named artifacts.
+/// A readable snapshot with access to its manifest and named artifacts.
 pub trait SnapshotRead {
-    fn id(&self) -> &SnapshotId;
     fn manifest(&self) -> &SnapshotManifest;
     fn artifact(&self, namespace: &str, name: &str) -> crate::Result<ArtifactData>;
 }
@@ -27,7 +26,6 @@ pub trait SnapshotWriterSession {
     type Read: SnapshotRead;
     type Write: SnapshotWrite;
 
-    fn current_id(&self) -> Option<&SnapshotId>;
     fn current(&self) -> crate::Result<Option<Self::Read>>;
     fn begin(&mut self) -> crate::Result<Self::Write>;
     fn publish(
