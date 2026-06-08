@@ -71,6 +71,16 @@ impl FileWatcher {
 // Spawn types
 // ---------------------------------------------------------------------------
 
+/// Whether the daemon should watch continuously or perform a single operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DaemonMode {
+    /// Long-running watch loop with filesystem monitoring.
+    #[default]
+    Watch,
+    /// Build/update once and exit. Fire-and-forget — no readiness handshake.
+    Once,
+}
+
 /// Outcome of a daemon spawn attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnOutcome {
@@ -87,6 +97,7 @@ pub struct SpawnRequest {
     pub init_root: Option<PathBuf>,
     /// Startup handshake file the child creates after the watcher is active.
     pub ready_file: Option<PathBuf>,
+    pub mode: DaemonMode,
 }
 
 /// Spawn policy for the daemon background process.
@@ -95,6 +106,7 @@ pub struct DaemonSpawnConfig {
     pub enabled: bool,
     pub sift_dir: PathBuf,
     pub init_root: Option<PathBuf>,
+    pub mode: DaemonMode,
 }
 
 impl Default for DaemonSpawnConfig {
@@ -103,6 +115,7 @@ impl Default for DaemonSpawnConfig {
             enabled: true,
             sift_dir: PathBuf::new(),
             init_root: None,
+            mode: DaemonMode::Watch,
         }
     }
 }
@@ -134,6 +147,9 @@ impl DaemonSpawner for ProcessDaemonSpawner {
         }
         if let Some(path) = &request.ready_file {
             cmd.arg("--ready-file").arg(path);
+        }
+        if request.mode == DaemonMode::Once {
+            cmd.arg("--once");
         }
         cmd.spawn()?;
         Ok(())
@@ -168,16 +184,19 @@ impl<S> DaemonSupervisor<S> {
 impl<S: DaemonSpawner> DaemonSupervisor<S> {
     /// Attempt to spawn the daemon according to `config`.
     ///
-    /// Returns [`SpawnOutcome::Disabled`] when config has spawning disabled.
-    /// Returns [`SpawnOutcome::AlreadyRunning`] when the spawn coordination
-    /// lock or the daemon lock is already held.
-    /// Returns [`SpawnOutcome::Spawned`] on successful launch after the child
-    /// signals startup readiness.
+    /// In [`DaemonMode::Watch`] mode, acquires the spawn coordination lock,
+    /// checks the daemon lock, spawns the child, and polls for startup
+    /// readiness.
+    ///
+    /// In [`DaemonMode::Once`] mode, spawns a fire-and-forget daemon that
+    /// builds/updates once and exits. No lock coordination or readiness
+    /// handshake — the child acquires the daemon lock internally.
     ///
     /// # Errors
     ///
-    /// Propagates lock-acquisition and process-spawn errors. Returns an error
-    /// if the child does not signal readiness within [`READY_TIMEOUT`].
+    /// Propagates lock-acquisition and process-spawn errors. In Watch mode,
+    /// returns an error if the child does not signal readiness within
+    /// [`READY_TIMEOUT`].
     pub fn spawn(&self, config: &DaemonSpawnConfig) -> anyhow::Result<SpawnOutcome> {
         if !config.enabled {
             return Ok(SpawnOutcome::Disabled);
@@ -189,6 +208,30 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
 
         let sift_dir = &config.sift_dir;
         std::fs::create_dir_all(sift_dir)?;
+
+        match config.mode {
+            DaemonMode::Once => {
+                let request = SpawnRequest {
+                    exe,
+                    sift_dir: sift_dir.clone(),
+                    init_root: config.init_root.clone(),
+                    ready_file: None,
+                    mode: DaemonMode::Once,
+                };
+                self.spawner.spawn(&request)?;
+                Ok(SpawnOutcome::Spawned)
+            }
+            DaemonMode::Watch => self.coordinate_launch(exe, config),
+        }
+    }
+
+    /// Acquire coordination locks, spawn the daemon, and poll for readiness.
+    fn coordinate_launch(
+        &self,
+        exe: PathBuf,
+        config: &DaemonSpawnConfig,
+    ) -> anyhow::Result<SpawnOutcome> {
+        let sift_dir = &config.sift_dir;
 
         // Acquire spawn coordination lock to prevent concurrent spawn attempts.
         let spawn_lock_path = sift_dir.join(SPAWN_LOCK);
@@ -226,6 +269,7 @@ impl<S: DaemonSpawner> DaemonSupervisor<S> {
             sift_dir: sift_dir.clone(),
             init_root: config.init_root.clone(),
             ready_file: Some(ready_path.clone()),
+            mode: DaemonMode::Watch,
         };
         self.spawner.spawn(&request)?;
 
@@ -811,6 +855,7 @@ mod tests {
             enabled: true,
             sift_dir: dir.path().to_path_buf(),
             init_root,
+            ..Default::default()
         };
         sup.spawn(&config).unwrap();
 
@@ -837,6 +882,46 @@ mod tests {
         let outcome = sup.spawn(&config).unwrap();
         assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
         assert_eq!(spawner.call_count(), 0);
+    }
+
+    #[test]
+    fn spawn_once_mode_skips_lock_and_readiness() {
+        let dir = TempDir::new().unwrap();
+        let spawner = fake_spawner();
+        let sup = supervisor(spawner.clone());
+        let config = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: dir.path().to_path_buf(),
+            mode: DaemonMode::Once,
+            ..Default::default()
+        };
+        let outcome = sup.spawn(&config).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+        assert_eq!(spawner.call_count(), 1);
+
+        let req = spawner.last_request().unwrap();
+        assert_eq!(req.mode, DaemonMode::Once);
+        assert!(req.ready_file.is_none());
+    }
+
+    #[test]
+    fn spawn_once_mode_succeeds_even_when_daemon_lock_held() {
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join(DAEMON_LOCK);
+        let mut lock = LockFile::open(&lock_path).unwrap();
+        lock.try_lock().unwrap();
+
+        let spawner = fake_spawner();
+        let sup = supervisor(spawner.clone());
+        let config = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: dir.path().to_path_buf(),
+            mode: DaemonMode::Once,
+            ..Default::default()
+        };
+        let outcome = sup.spawn(&config).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+        assert_eq!(spawner.call_count(), 1);
     }
 
     // -----------------------------------------------------------------------

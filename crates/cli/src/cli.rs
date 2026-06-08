@@ -20,7 +20,7 @@ use crate::grep::pattern::{
     BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope,
 };
 use crate::grep::run::{Grep, GrepConfig, GrepOutcome};
-use crate::index::{DaemonSpawnConfig, Index, IndexOperation, IndexRequest};
+use crate::index::{DaemonMode, DaemonSpawnConfig, Index, IndexOperation, IndexRequest};
 use crate::update;
 
 use clap::{Parser, Subcommand};
@@ -165,8 +165,17 @@ impl Cli {
             unreachable!("index_request called without index subcommand");
         };
         let (path, indexes, operation) = match command {
-            IndexCommands::Build { path, indexes } => {
-                (path.clone(), indexes.clone(), IndexOperation::Build)
+            IndexCommands::Build {
+                path,
+                indexes,
+                lazy,
+            } => {
+                let op = if *lazy {
+                    IndexOperation::Configure
+                } else {
+                    IndexOperation::Build
+                };
+                (path.clone(), indexes.clone(), op)
             }
             IndexCommands::Update { path, indexes } => {
                 (path.clone(), indexes.clone(), IndexOperation::Update)
@@ -186,6 +195,7 @@ impl Cli {
             enabled: std::env::var_os("SIFT_NO_DAEMON").is_none(),
             sift_dir: self.paths.sift_dir.clone(),
             init_root: None,
+            mode: DaemonMode::Watch,
         }
     }
 
@@ -299,6 +309,10 @@ pub enum IndexCommands {
         /// Available: trigram
         #[arg(short, long, value_delimiter = ',')]
         indexes: Option<Vec<sift_core::IndexKind>>,
+
+        /// Write index metadata only; the daemon builds asynchronously.
+        #[arg(long)]
+        lazy: bool,
     },
     /// Incrementally refresh an existing index (fails if no index exists).
     Update {
@@ -440,5 +454,27 @@ mod tests {
             cli.patterns.pattern_file.as_deref(),
             Some(Path::new("ignore.txt"))
         );
+    }
+
+    #[test]
+    fn cli_parses_index_build_lazy_flag() {
+        let cli = Cli::try_parse_from(["sift", "index", "build", "--lazy"]).unwrap();
+        match cli.command {
+            Some(Commands::Index {
+                command: IndexCommands::Build { lazy, .. },
+            }) => assert!(lazy),
+            _ => panic!("expected index build subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_index_build_without_lazy_flag() {
+        let cli = Cli::try_parse_from(["sift", "index", "build"]).unwrap();
+        match cli.command {
+            Some(Commands::Index {
+                command: IndexCommands::Build { lazy, .. },
+            }) => assert!(!lazy),
+            _ => panic!("expected index build subcommand"),
+        }
     }
 }
