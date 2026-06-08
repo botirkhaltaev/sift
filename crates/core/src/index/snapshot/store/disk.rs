@@ -297,12 +297,7 @@ impl SnapshotRead for DiskSnapshotReader {
                 ),
             )));
         }
-        let file = std::fs::File::open(&path)?;
-        // SAFETY: memmap2::Mmap::map is unsafe because it dereferences
-        // the raw OS mapping pointer. The OS manages bounds and the
-        // mapping outlives the closed File handle via refcount.
-        #[allow(unsafe_code)]
-        let mmap = unsafe { memmap2::Mmap::map(&file) }?;
+        let mmap = crate::index::trigram::storage::mmap::mmap_open(&path)?;
         Ok(ArtifactData::Mmap(mmap))
     }
 }
