@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod kinds;
 pub mod meta;
+pub mod mmap;
 pub mod registry;
 pub mod snapshot;
 pub mod store;

@@ -10,22 +10,9 @@
 
 use std::path::{Path, PathBuf};
 
-use memmap2::Mmap;
-
+use crate::index::mmap::mmap_open;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::FILES_MAGIC;
-
-/// Memory-map a file for read access.
-///
-/// # Safety invariant
-///
-/// `Mmap::map` dereferences the raw OS mapping pointer. The OS manages
-/// bounds and the mapping outlives the closed `File` handle via refcount.
-#[allow(unsafe_code)]
-fn mmap_open(path: &Path) -> std::io::Result<Mmap> {
-    let file = std::fs::File::open(path)?;
-    unsafe { Mmap::map(&file) }
-}
 
 /// Per-file fingerprint for change detection.
 #[derive(Debug, Clone, PartialEq, Eq)]
