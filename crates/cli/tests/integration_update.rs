@@ -4,7 +4,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use common::{assert_exit_code, assert_stdout_contains};
 use tempfile::TempDir;
@@ -65,6 +65,23 @@ fn install_layout(exe_src: &Path) -> (TempDir, PathBuf) {
     (tmp, runner)
 }
 
+/// Spawn a command, retrying on transient `ETXTBSY` (errno 26) which can
+/// occur when the OS hasn't fully released the binary after a recent copy.
+fn spawn_retry_on_busy(mut build: impl FnMut() -> Command) -> Output {
+    for attempt in 0..5_u32 {
+        match build().output() {
+            Ok(out) => return out,
+            Err(e) if e.raw_os_error() == Some(26) && attempt < 4 => {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    100 * u64::from(attempt + 1),
+                ));
+            }
+            Err(e) => panic!("failed to spawn command: {e}"),
+        }
+    }
+    unreachable!()
+}
+
 #[test]
 fn help_lists_binary_update_subcommand() {
     let out = Command::new(env!("CARGO_BIN_EXE_sift"))
@@ -76,6 +93,10 @@ fn help_lists_binary_update_subcommand() {
     assert_stdout_contains(&out, "install the latest release");
 }
 
+/// On Windows, `CreateProcessW` searches System32 regardless of PATH, so
+/// `curl.exe` (shipped with Windows 10+) is always reachable — the
+/// "curl not found" scenario cannot be isolated via PATH alone.
+#[cfg(not(windows))]
 #[test]
 fn binary_update_without_curl_exits_2() {
     let (tmpdir, sift) = install_layout(Path::new(env!("CARGO_BIN_EXE_sift")));
@@ -84,11 +105,13 @@ fn binary_update_without_curl_exits_2() {
     fs::create_dir_all(&path_bin).unwrap();
     write_stub_sh(&path_bin);
 
-    let out = Command::new(&sift)
-        .env("PATH", &path_bin)
-        .arg("update")
-        .output()
-        .unwrap();
+    let sift_clone = sift.clone();
+    let path_bin_clone = path_bin.clone();
+    let out = spawn_retry_on_busy(move || {
+        let mut cmd = Command::new(&sift_clone);
+        cmd.env("PATH", &path_bin_clone).arg("update");
+        cmd
+    });
 
     assert_exit_code(&out, 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -102,12 +125,14 @@ fn binary_update_without_curl_exits_2() {
 fn binary_update_runs_install_script() {
     let (_tmpdir, sift) = install_layout(Path::new(env!("CARGO_BIN_EXE_sift")));
 
-    let out = Command::new(&sift)
-        .env("SIFT_VERSION", "0.3.0")
-        .env("SIFT_REPO", "botirk38/sift")
-        .arg("update")
-        .output()
-        .unwrap();
+    let sift_clone = sift.clone();
+    let out = spawn_retry_on_busy(move || {
+        let mut cmd = Command::new(&sift_clone);
+        cmd.env("SIFT_VERSION", "0.3.0")
+            .env("SIFT_REPO", "botirk38/sift")
+            .arg("update");
+        cmd
+    });
 
     assert_exit_code(&out, 0);
     assert_stdout_contains(&out, "Installed sift");
