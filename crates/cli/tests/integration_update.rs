@@ -105,11 +105,9 @@ fn binary_update_without_curl_exits_2() {
     fs::create_dir_all(&path_bin).unwrap();
     write_stub_sh(&path_bin);
 
-    let sift_clone = sift.clone();
-    let path_bin_clone = path_bin.clone();
     let out = spawn_retry_on_busy(move || {
-        let mut cmd = Command::new(&sift_clone);
-        cmd.env("PATH", &path_bin_clone).arg("update");
+        let mut cmd = Command::new(&sift);
+        cmd.env("PATH", &path_bin).arg("update");
         cmd
     });
 
@@ -125,9 +123,8 @@ fn binary_update_without_curl_exits_2() {
 fn binary_update_runs_install_script() {
     let (_tmpdir, sift) = install_layout(Path::new(env!("CARGO_BIN_EXE_sift")));
 
-    let sift_clone = sift.clone();
     let out = spawn_retry_on_busy(move || {
-        let mut cmd = Command::new(&sift_clone);
+        let mut cmd = Command::new(&sift);
         cmd.env("SIFT_VERSION", "0.3.0")
             .env("SIFT_REPO", "botirk38/sift")
             .arg("update");
