@@ -15,13 +15,15 @@ pub mod daemon;
 
 use daemon::DaemonSupervisor;
 
-pub use daemon::DaemonSpawnConfig;
+pub use daemon::{DaemonMode, DaemonSpawnConfig};
 
 /// Which index subcommand was requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexOperation {
     Build,
     Update,
+    /// Write metadata only; delegate actual build to daemon.
+    Configure,
 }
 
 /// Parameters for resolving an index build or update.
@@ -74,7 +76,7 @@ impl Index {
         })
     }
 
-    /// Run `sift index build` or `sift index update`.
+    /// Run `sift index build`, `sift index update`, or `sift index build --lazy`.
     #[must_use]
     pub fn run(&self, spawn: &DaemonSpawnConfig, argv: &Argv<'_>) -> ExitCode {
         let ignore_res = IgnoreResolution::resolve(argv);
@@ -103,6 +105,13 @@ impl Index {
                 return ExitCode::from(2);
             }
             IndexOperation::Build => self.build(&mut store, ignore_res),
+            IndexOperation::Configure if has_snapshot => {
+                eprintln!("sift: index already exists at {}", self.sift_dir.display());
+                return ExitCode::SUCCESS;
+            }
+            IndexOperation::Configure => {
+                return self.run_configure();
+            }
             IndexOperation::Update if !has_snapshot => {
                 eprintln!(
                     "sift: no index at {}; run `sift index build` first",
@@ -125,9 +134,33 @@ impl Index {
         let verb = match self.operation {
             IndexOperation::Build => "indexed",
             IndexOperation::Update => "updated index for",
+            IndexOperation::Configure => unreachable!(),
         };
         eprintln!(
             "{verb} corpus {} → {}",
+            self.root.display(),
+            self.sift_dir.display()
+        );
+        ExitCode::SUCCESS
+    }
+
+    /// Write index metadata and spawn a one-shot daemon to build asynchronously.
+    fn run_configure(&self) -> ExitCode {
+        if std::env::var_os("SIFT_NO_DAEMON").is_some() {
+            eprintln!("sift: warning: --lazy requires the daemon; ignoring SIFT_NO_DAEMON");
+        }
+
+        let lazy_spawn = DaemonSpawnConfig {
+            enabled: true,
+            sift_dir: self.sift_dir.clone(),
+            init_root: None,
+            mode: DaemonMode::Once,
+        };
+        if let Err(e) = DaemonSupervisor::new_process().spawn(&lazy_spawn) {
+            eprintln!("sift: warning: daemon: {e}");
+        }
+        eprintln!(
+            "lazy index configured for {} \u{2192} {}; daemon will build in background",
             self.root.display(),
             self.sift_dir.display()
         );
