@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use sift_core::{Indexes, PathDisplay};
+use sift_core::{Indexes, PathDisplay, StoreMeta};
 
 #[derive(Args)]
 pub struct PathArgs {
@@ -11,6 +11,15 @@ pub struct PathArgs {
     pub sift_dir: PathBuf,
     #[arg(short = 'L', long = "follow")]
     pub follow: bool,
+}
+
+impl PathArgs {
+    #[must_use]
+    pub fn daemon(&self) -> Option<crate::index::Daemon> {
+        std::env::var_os("SIFT_NO_DAEMON")
+            .is_none()
+            .then(|| crate::index::Daemon::new(self.sift_dir.clone()))
+    }
 }
 
 /// Resolved corpus root, search prefixes, and index exclusions for a search run.
@@ -28,12 +37,16 @@ impl CorpusScope {
     /// Returns an error if path resolution fails.
     pub fn resolve(
         indexes: &Indexes,
+        meta: Option<&StoreMeta>,
         cwd: &Path,
         search_paths: &[PathBuf],
         sift_dir: &Path,
     ) -> anyhow::Result<Self> {
         if indexes.is_empty() {
-            let root = cwd.canonicalize()?;
+            let root = meta.map_or_else(
+                || cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),
+                |m| m.corpus.root.clone(),
+            );
             Ok(Self {
                 filter_root: root.clone(),
                 prefixes: Self::walk_prefixes(&root, search_paths)?,

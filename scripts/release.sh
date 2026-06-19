@@ -6,14 +6,13 @@
 #
 # What it does:
 #   1. Validates the version string
-#   2. Updates workspace version in Cargo.toml
+#   2. Updates workspace version in Cargo.toml and sift-core path-dep pin
 #   3. Regenerates Cargo.lock
 #   4. Updates SIFT_DEFAULT_VERSION in scripts/install.sh
-#   5. Updates the install URL in README.md
-#   6. Generates/prepends changelog via git-cliff
-#   7. Commits everything as "release: v<version>"
-#   8. Creates a git tag v<version>
-#   9. Prints push instructions
+#   5. Generates/prepends changelog via git-cliff
+#   6. Commits everything as "release: v<version>"
+#   7. Creates a git tag v<version>
+#   8. Prints push instructions
 set -euo pipefail
 
 if [ $# -ne 1 ]; then

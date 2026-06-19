@@ -11,7 +11,7 @@ Two-layer flag model:
 1. **`*Decl` structs (clap)** — declare flags for help and parsing.
 2. **Resolved domain types** — effective runtime values from raw argv (ripgrep last-wins ordering).
 
-`Argv` is collected once in `main_entry`. `Cli` builds domain configs (`PatternConfig`, `FilterConfig`, `OutputConfig`, `GrepConfig`, `IndexRequest`, `DaemonSpawnConfig`) and passes them to `Grep` / `Index`. Domain modules never import `Cli`. `Cli::dispatch` orchestrates only.
+`Argv` is collected once in `main_entry`. `Cli` builds domain configs (`PatternConfig`, `FilterConfig`, `OutputConfig`, `GrepConfig`, `IndexRequest`) and an optional `Daemon` handle, then passes them to `Grep` / `Index`. Domain modules never import `Cli`. `Cli::dispatch` orchestrates only.
 
 ### Module pairing (decl → config → resolve/run)
 
@@ -19,20 +19,20 @@ Two-layer flag model:
 |--------|------------|------------------------|-------------|
 | `grep/argv.rs` | — | `Argv` | `Argv::from_env`, `Argv::new` |
 | `grep/ignore.rs` | `Ignore*Decl`, … | `IgnoreResolution` | `IgnoreResolution::resolve` |
-| `grep/pattern.rs` | `PatternArgs`, … | `PatternConfig`, `PatternArgv`, `ResolvedPatterns` | `ResolvedPatterns::resolve`, `search_options` |
-| `grep/output.rs` | `LineNumberDecl`, … | `OutputConfig`, `OutputArgv`, `SearchOutputCtx` | `OutputArgv::resolve`, `SearchOutputCtx::resolve` |
-| `grep/filter.rs` | `FilterDecl`, … | `FilterConfig`, `TypeCatalog`, `SearchFilterCtx` | `candidate_config`, `SearchFilterCtx::resolve` |
+| `grep/pattern.rs` | `PatternArgs`, … | `PatternConfig`, `PatternArgv`, `ResolvedPatterns` | `ResolvedPatterns::resolve`, `PatternConfig::search_options` |
+| `grep/output.rs` | `LineNumberDecl`, … | `OutputConfig`, `OutputArgv`, `SearchOutputCtx` | `OutputArgv::resolve`, `SearchOutputCtx::resolve`, `OutputConfig::separators` |
+| `grep/filter.rs` | `FilterDecl`, … | `FilterConfig`, `TypeCatalog`, `SearchFilterCtx` | `FilterConfig::candidate_config`, `SearchFilterCtx::resolve` |
 | `grep/paths.rs` | `PathArgs` | `CorpusScope` | `CorpusScope::resolve` |
 | `grep/run.rs` | — | `GrepConfig`, `Grep`, `GrepOutcome` | `Grep::run` |
-| `index/mod.rs` | — | `IndexRequest`, `Index` | `Index::resolve`, `Index::run` |
-| `index/daemon.rs` | — | `DaemonSpawnConfig` | `DaemonSupervisor::spawn` |
+| `index/mod.rs` | — | `IndexRequest`, `IndexJob` | `IndexJob::resolve`, `IndexJob::run` |
+| `index/daemon.rs` | — | `Daemon`, `DaemonOp`, `DaemonError` | `Daemon::send`, `Daemon::serve`, `Daemon::ensure_running` |
 
 ## Structure
 
 - **`src/lib.rs`**: `main_entry`; re-exports `grep::*` and `index::daemon` for tests/benches.
 - **`src/cli.rs`**: `Cli` parser, config builders, `Cli::dispatch`.
 - **`src/update.rs`**: `sift update` (install script via curl).
-- **`src/index/`**: `Index` / `IndexRequest` (build & update), `daemon.rs` (background refresh).
+- **`src/index/`**: `IndexJob` / `IndexRequest` (build & update), `daemon.rs` (IPC, spawn, serve loop).
 - **`src/grep/`**: search domain — `argv`, `run`, `pattern`, `filter`, `output`, `paths`, `ignore`, `engine`.
 - **`src/main.rs`**: thin binary entrypoint calling `sift_grep::main_entry()`.
 - **`tests/common/mod.rs`**: shared test helpers: `TestProject`, assertion helpers, path normalization.

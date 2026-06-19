@@ -9,8 +9,8 @@ use std::path::Path;
 use sift_core::grep::GrepRequest;
 use sift_core::{
     CandidateFilter, CandidateFilterConfig, ColorChoice, Index, Indexes, OutputEmission,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchQuery, SearchRecordStyle,
-    SearchSeparators, TrigramIndex,
+    SearchCollection, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchQuery,
+    SearchRecordStyle, SearchSeparators, TrigramIndex,
 };
 
 mod common;
@@ -58,28 +58,38 @@ fn run_grep(
     filter: &CandidateFilter,
     query: &SearchQuery,
     mode: SearchMode,
-    collect_stats: bool,
+    collect: SearchCollection,
 ) -> bool {
     GrepRequest {
         indexes,
         filter,
         output: quiet_output(mode),
         separators: &SearchSeparators::default(),
-        collect_stats,
+        collect,
+        store_meta: None,
+        walk_unindexed: false,
     }
     .run(query)
     .unwrap()
+    .outcome
     .matched
 }
 
 fn run_standard(indexes: &Indexes, filter: &CandidateFilter, query: &SearchQuery) -> bool {
-    run_grep(indexes, filter, query, SearchMode::Standard, false)
+    run_grep(
+        indexes,
+        filter,
+        query,
+        SearchMode::Standard,
+        SearchCollection::none(),
+    )
 }
 
 // ─── Indexed search benches ──────────────────────────────────────────────────
 
 fn bench_indexed_search(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
     let indexes = wrap_index(index);
     let filter = make_filter(&CandidateFilterConfig::default(), indexes.root());
 
@@ -141,7 +151,7 @@ fn bench_indexed_search(c: &mut Criterion) {
                 &filter,
                 &query,
                 SearchMode::Standard,
-                true,
+                SearchCollection::stats(),
             ))
         });
     });
@@ -176,7 +186,8 @@ fn bench_walk_search(c: &mut Criterion) {
 // ─── Output mode benches ─────────────────────────────────────────────────────
 
 fn bench_output_modes(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
     let indexes = wrap_index(index);
     let filter = make_filter(&CandidateFilterConfig::default(), indexes.root());
     let query = make_search(&["beta"], SearchOptions::default());
@@ -190,7 +201,7 @@ fn bench_output_modes(c: &mut Criterion) {
                 &filter,
                 &query,
                 SearchMode::Count,
-                false,
+                SearchCollection::none(),
             ))
         });
     });
@@ -202,7 +213,7 @@ fn bench_output_modes(c: &mut Criterion) {
                 &filter,
                 &query,
                 SearchMode::FilesWithMatches,
-                false,
+                SearchCollection::none(),
             ));
         });
     });
@@ -214,7 +225,7 @@ fn bench_output_modes(c: &mut Criterion) {
                 &filter,
                 &query,
                 SearchMode::FilesWithoutMatch,
-                false,
+                SearchCollection::none(),
             ));
         });
     });

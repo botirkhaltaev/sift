@@ -1,6 +1,34 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [0.4.0](https://github.com/botirk38/sift/releases/tag/v0.4.0) — 2026-06-18
+
+### Breaking
+
+- `meta.json` layout changed (`corpus` / `walk` / `filters` nesting). Re-run `sift index build` after upgrading; old stores are not migrated automatically.
+- Daemon IPC types moved from `sift_core::DaemonOp` to `sift_grep::index::daemon::{Daemon, DaemonOp, DaemonError}`; core no longer exports daemon types.
+
+### Features
+
+- Modular index daemon with async `index update`, `--lazy` build, and search-triggered background indexing
+- MR-SW snapshot index store with unified `reconcile` and partial-path updates
+- Walk unindexed corpus paths during daemon-enabled search for files not yet in the snapshot
+
+### Refactor
+
+- Migrate grep/filter helpers to domain-type impls (`PatternConfig::search_options`, `FilterConfig::candidate_config`, `OutputConfig::separators`, `ByteSize`)
+- Migrate core search helpers to domain types (`CandidateFilter::collect`, `WalkOptions::discover_files`, `IgnoreConfig::matcher`)
+- Consolidate daemon into CLI-only `index/daemon.rs` (`Daemon::send`, `Daemon::serve`, `Daemon::ensure_running`); remove `Serve`, coordinator, and core IPC types
+- Remove no-op `DaemonOp::Watch` IPC opcode; reload store metadata before daemon reconciles; fail `serve` on startup reconcile errors; rebind filesystem watcher when corpus root changes
+- Unify `TrigramIndex::build(config, dir, paths)` API (empty paths = full corpus)
+
+### Documentation
+
+- Add LICENSE-MIT, LICENSE-APACHE-2.0, CONTRIBUTING.md, SECURITY.md
+- Add crate metadata and README release-scope section
+- Expand rg compatibility matrix and integration test coverage
+
 ## [0.3.0](https://github.com/botirk38/sift/releases/tag/v0.3.0) — 2026-06-02
 
 ### Bug Fixes

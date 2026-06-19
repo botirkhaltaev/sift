@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+    #[serde(transparent)]
     pub struct IgnoreSources: u8 {
         const DOT     = 1 << 0;
         const VCS     = 1 << 1;
@@ -54,21 +57,21 @@ impl Default for VisibilityConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum HiddenMode {
     #[default]
     Respect,
     Include,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IgnoreConfig {
     pub sources: IgnoreSources,
     pub custom_files: Vec<PathBuf>,
     pub require_git: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VisibilityConfig {
     pub hidden: HiddenMode,
     pub ignore: IgnoreConfig,

@@ -13,6 +13,7 @@ pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexConfig};
 pub use error::IndexError;
 pub use kinds::{FileId, Index, IndexId, IndexKind, PlanMode, QueryPlanOutput};
+pub use meta::{CorpusMeta, FilterMeta, WalkMeta};
 pub use registry::Indexes;
 
 #[cfg(test)]

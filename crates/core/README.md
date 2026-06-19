@@ -25,11 +25,19 @@ let index = TrigramIndexBuilder::new(&corpus_root).with_dir(&index_dir).build()?
 // Open
 let index = TrigramIndex::open(&index_dir)?;
 
-// Search
+// Search (via grep pipeline)
 let indexes = Indexes::open(&sift_dir)?;
-let search = SearchQuery::new(&patterns, SearchOptions::default())?;
-let candidates = indexes.candidates(&query.spec(), coverage);
-search.run(SearchExecution { candidates: &candidates, output, separators, collect_stats: false })?;
+let query = SearchQuery::new(&patterns, SearchOptions::default())?;
+let run = GrepRequest {
+    indexes: &indexes,
+    filter: &filter,
+    output,
+    separators: &separators,
+    collect: SearchCollection::none(),
+    store_meta: None,
+    walk_unindexed: false,
+}
+.run(&query)?;
 ```
 
 `SearchQuery` compiles the regex once; repeated `run` calls reuse the compiled matcher and searcher cache.

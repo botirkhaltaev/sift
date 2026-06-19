@@ -32,5 +32,63 @@ pub struct SearchExecution<'a> {
     pub candidates: Vec<Candidate>,
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
-    pub collect_stats: bool,
+    pub collect: SearchCollection,
+}
+
+/// Optional artifacts gathered during search beyond primary output.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchCollection {
+    pub stats: bool,
+    pub hits: bool,
+}
+
+impl Default for SearchCollection {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
+impl SearchCollection {
+    pub const fn none() -> Self {
+        Self {
+            stats: false,
+            hits: false,
+        }
+    }
+
+    pub const fn stats() -> Self {
+        Self {
+            stats: true,
+            hits: false,
+        }
+    }
+
+    pub const fn hits() -> Self {
+        Self {
+            stats: false,
+            hits: true,
+        }
+    }
+
+    pub const fn stats_and_hits() -> Self {
+        Self {
+            stats: true,
+            hits: true,
+        }
+    }
+
+    pub const fn with_stats(self, stats: bool) -> Self {
+        Self {
+            stats,
+            hits: self.hits,
+        }
+    }
+
+    pub const fn with_hits(self, hits: bool) -> Self {
+        Self {
+            stats: self.stats,
+            hits,
+        }
+    }
 }

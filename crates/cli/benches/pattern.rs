@@ -2,7 +2,7 @@ use criterion::{BatchSize, Criterion};
 use std::hint::black_box;
 
 use sift_grep::Argv;
-use sift_grep::pattern::{PatternArgv, ResolvedPatterns, search_options};
+use sift_grep::pattern::{PatternArgv, ResolvedPatterns};
 
 use crate::support::{args, parse_cli};
 
@@ -65,11 +65,11 @@ pub fn bench(c: &mut Criterion) {
     let pattern_argv = PatternArgv::resolve(&Argv::new(&argv_none));
     g.bench_function("search_options/default", |b| {
         b.iter(|| {
-            black_box(search_options(
-                black_box(&cli_default.pattern_config()),
-                black_box(&pattern_argv),
-                false,
-            ))
+            black_box(
+                cli_default
+                    .pattern_config()
+                    .search_options(black_box(&pattern_argv), false),
+            )
         });
     });
 

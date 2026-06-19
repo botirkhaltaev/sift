@@ -30,6 +30,34 @@ pub struct OutputConfig {
     pub search_paths: Vec<PathBuf>,
 }
 
+impl OutputConfig {
+    #[must_use]
+    pub fn separators(&self) -> SearchSeparators {
+        let context_separator = if self.separators.suppress_context_sep {
+            None
+        } else if let Some(ref s) = self.separators.context_sep {
+            Some(unescape_separator(s))
+        } else {
+            Some(b"--".to_vec())
+        };
+        let field_match_separator = self
+            .separators
+            .field_match
+            .as_ref()
+            .map_or_else(|| b":".to_vec(), |s| unescape_separator(s));
+        let field_context_separator = self
+            .separators
+            .field_context
+            .as_ref()
+            .map_or_else(|| b"-".to_vec(), |s| unescape_separator(s));
+        SearchSeparators {
+            context_separator,
+            field_match_separator,
+            field_context_separator,
+        }
+    }
+}
+
 // ── Clap declarations (output flags) ──
 
 #[derive(Args, Clone)]
@@ -474,7 +502,7 @@ impl SearchOutputCtx {
             } else {
                 SearchOutputFormat::Text
             },
-            separators: separators(config),
+            separators: config.separators(),
             print_stats,
             record: SearchRecordFlags {
                 byte_offset: config.extra.byte_offset,
@@ -625,32 +653,6 @@ impl SearchOutputCtx {
     }
 }
 
-#[must_use]
-pub fn separators(config: &OutputConfig) -> SearchSeparators {
-    let context_separator = if config.separators.suppress_context_sep {
-        None
-    } else if let Some(ref s) = config.separators.context_sep {
-        Some(unescape_separator(s))
-    } else {
-        Some(b"--".to_vec())
-    };
-    let field_match_separator = config
-        .separators
-        .field_match
-        .as_ref()
-        .map_or_else(|| b":".to_vec(), |s| unescape_separator(s));
-    let field_context_separator = config
-        .separators
-        .field_context
-        .as_ref()
-        .map_or_else(|| b"-".to_vec(), |s| unescape_separator(s));
-    SearchSeparators {
-        context_separator,
-        field_match_separator,
-        field_context_separator,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,7 +727,7 @@ mod tests {
 
     #[test]
     fn resolve_separators_default_context_sep() {
-        let sep = separators(&output_config(&["sift", "pat"]));
+        let sep = output_config(&["sift", "pat"]).separators();
         assert_eq!(sep.context_separator, Some(b"--".to_vec()));
     }
 }

@@ -6,9 +6,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    CorpusKind, CorpusSpec, IgnoreConfig, IndexConfig, IndexKind, IndexStore, Indexes,
-    TrigramIndex, VisibilityConfig,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IgnoreConfig, IndexConfig, IndexKind,
+    IndexStore, IndexWalkOptions, Indexes, StoreMeta, TrigramIndex, VisibilityConfig, WalkMeta,
 };
+
+pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexKind>) -> StoreMeta {
+    StoreMeta::new(
+        CorpusMeta {
+            root,
+            kind: CorpusKind::Directory,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
+        },
+        WalkMeta {
+            follow_links: false,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        },
+        FilterMeta {
+            visibility: VisibilityConfig::default(),
+        },
+        indexes,
+    )
+}
 
 pub fn make_parity_corpus(root: &Path) {
     fs::create_dir_all(root.join("a")).expect("create dir");
@@ -48,6 +69,7 @@ pub fn standard_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -
             include_paths: &[],
             exclude_paths,
         },
+        walk: IndexWalkOptions::new(false),
         visibility: VisibilityConfig::default(),
     }
 }
@@ -61,25 +83,23 @@ pub fn no_ignore_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) 
             include_paths: &[],
             exclude_paths,
         },
+        walk: IndexWalkOptions::new(false),
         visibility: VisibilityConfig {
             ignore: IgnoreConfig::disabled(),
-            ..Default::default()
+            ..VisibilityConfig::default()
         },
     }
 }
 
 pub fn build_store(corpus: &Path, sift_dir: &Path) -> IndexStore {
-    let mut store = IndexStore::open_or_create(
-        sift_dir,
-        corpus,
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .expect("open store");
+    let root = corpus
+        .canonicalize()
+        .unwrap_or_else(|_| corpus.to_path_buf());
+    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let mut store = IndexStore::open_or_create(sift_dir, &meta).expect("open store");
     let config = standard_build_config(corpus, &[]);
     store
-        .build(&[IndexKind::Trigram], &config)
+        .build(&[IndexKind::Trigram], &config, &[])
         .expect("build index");
     store
 }
@@ -104,9 +124,10 @@ pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> TrigramIndex {
             include_paths: &include_paths,
             exclude_paths: &[],
         },
+        walk: IndexWalkOptions::new(false),
         visibility: VisibilityConfig::default(),
     };
-    TrigramIndex::build(&config, trigram_dir).expect("build trigram index")
+    TrigramIndex::build(&config, trigram_dir, &[]).expect("build trigram index")
 }
 
 pub fn dir_size(path: &Path) -> u64 {

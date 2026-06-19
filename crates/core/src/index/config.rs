@@ -14,9 +14,31 @@ pub enum CorpusKind {
     SingleFile,
 }
 
+/// Filesystem walk behavior for index builds and updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalkOptions {
+    pub follow_links: bool,
+    pub one_file_system: bool,
+    pub max_depth: Option<usize>,
+    pub max_filesize: Option<u64>,
+}
+
+impl WalkOptions {
+    #[must_use]
+    pub const fn new(follow_links: bool) -> Self {
+        Self {
+            follow_links,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        }
+    }
+}
+
 /// Configuration for building or updating an index over a corpus.
 pub struct IndexConfig<'a> {
     pub corpus: CorpusSpec<'a>,
+    pub walk: WalkOptions,
     pub visibility: VisibilityConfig,
 }
 

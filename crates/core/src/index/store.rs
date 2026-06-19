@@ -1,17 +1,36 @@
 use std::path::{Path, PathBuf};
 
+use super::IndexError;
+use super::meta::StoreMeta;
 use super::snapshot::{
     DiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotRead, SnapshotStore,
     SnapshotWrite, SnapshotWriterSession,
 };
-use super::{CorpusKind, IndexError};
 
 /// Index lifecycle orchestrator backed by a [`SnapshotStore`] for atomic
 /// persistence and coordination.
 pub struct IndexStore<S: SnapshotStore = DiskSnapshotStore> {
     snapshots: S,
     sift_dir: PathBuf,
-    meta: Option<super::meta::StoreMeta>,
+    meta: Option<StoreMeta>,
+}
+
+impl IndexStore<DiskSnapshotStore> {
+    #[must_use]
+    pub const fn meta(&self) -> Option<&StoreMeta> {
+        self.meta.as_ref()
+    }
+
+    /// Persist updated metadata and refresh the in-memory copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing `meta.json` fails.
+    pub fn refresh_meta(&mut self, meta: &StoreMeta) -> crate::Result<()> {
+        meta.write(&self.sift_dir)?;
+        self.meta = Some(meta.clone());
+        Ok(())
+    }
 }
 
 impl IndexStore<DiskSnapshotStore> {
@@ -22,7 +41,7 @@ impl IndexStore<DiskSnapshotStore> {
     /// Returns an error if `CURRENT` exists but cannot be read.
     pub fn open(sift_dir: &Path) -> crate::Result<Self> {
         let snapshots = DiskSnapshotStore::open(sift_dir)?;
-        let meta = super::meta::StoreMeta::read(sift_dir).ok();
+        let meta = StoreMeta::read(sift_dir).ok();
         Ok(Self {
             snapshots,
             sift_dir: sift_dir.to_path_buf(),
@@ -36,27 +55,15 @@ impl IndexStore<DiskSnapshotStore> {
     ///
     /// Returns an error if the store directory cannot be created or metadata
     /// cannot be written.
-    pub fn open_or_create(
-        sift_dir: &Path,
-        root: &Path,
-        corpus_kind: CorpusKind,
-        follow_links: bool,
-        indexes: &[super::IndexKind],
-    ) -> crate::Result<Self> {
+    pub fn open_or_create(sift_dir: &Path, meta: &StoreMeta) -> crate::Result<Self> {
         std::fs::create_dir_all(sift_dir)?;
 
-        if !super::meta::StoreMeta::path(sift_dir).exists() {
-            let _guard = acquire_write_lock(sift_dir)?;
-            if !super::meta::StoreMeta::path(sift_dir).exists() {
-                let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-                let meta = super::meta::StoreMeta::new(
-                    canonical_root,
-                    corpus_kind,
-                    follow_links,
-                    indexes.to_vec(),
-                );
+        if !StoreMeta::path(sift_dir).exists() {
+            let guard = acquire_write_lock(sift_dir)?;
+            if !StoreMeta::path(sift_dir).exists() {
                 meta.write(sift_dir)?;
             }
+            drop(guard);
         }
 
         Self::open(sift_dir)
@@ -96,8 +103,8 @@ impl IndexStore<DiskSnapshotStore> {
                     ),
                 }));
             };
-            let root = meta.root.clone();
-            let corpus_kind = meta.corpus_kind;
+            let root = meta.corpus.root.clone();
+            let corpus_kind = meta.corpus.kind;
 
             let snap_dir = self.sift_dir.join("snapshots").join(&current_id);
 
@@ -177,6 +184,7 @@ impl<S: SnapshotStore> IndexStore<S> {
         &mut self,
         kinds: &[super::IndexKind],
         config: &super::IndexConfig<'_>,
+        paths: &[PathBuf],
     ) -> crate::Result<String> {
         let mut writer = self.snapshots.writer()?;
         let mut txn = writer.begin()?;
@@ -188,6 +196,7 @@ impl<S: SnapshotStore> IndexStore<S> {
                     writer: &mut txn,
                     namespace: kind.as_str(),
                 },
+                paths,
             )?;
         }
 
@@ -216,27 +225,18 @@ impl<S: SnapshotStore> IndexStore<S> {
         &mut self,
         kinds: &[super::IndexKind],
         config: &super::IndexConfig<'_>,
+        paths: &[PathBuf],
     ) -> crate::Result<Option<String>> {
         let mut writer = self.snapshots.writer()?;
 
         let Some(current) = writer.current()? else {
-            // No current snapshot — build from scratch.
-            let mut txn = writer.begin()?;
-            for kind in kinds {
-                kind.build(
-                    config,
-                    super::IndexDestination::Snapshot {
-                        writer: &mut txn,
-                        namespace: kind.as_str(),
-                    },
-                )?;
-            }
-            let manifest = SnapshotManifest {
-                id: txn.id().clone(),
-                indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
-            };
-            let id = writer.publish(txn, manifest)?;
-            return Ok(Some(id.to_string()));
+            return Err(crate::Error::Index(IndexError::Io {
+                path: self.sift_dir.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no current snapshot; run build first",
+                ),
+            }));
         };
 
         let mut txn = writer.begin()?;
@@ -254,6 +254,7 @@ impl<S: SnapshotStore> IndexStore<S> {
                         writer: &mut txn,
                         namespace: kind.as_str(),
                     },
+                    paths,
                 )
             })
             .collect::<crate::Result<_>>()?;
@@ -279,29 +280,102 @@ impl<S: SnapshotStore> IndexStore<S> {
         let id = writer.publish(txn, manifest)?;
         Ok(Some(id.to_string()))
     }
+
+    /// Rebuild or update index files.
+    ///
+    /// `paths` empty → full corpus. Non-empty → partial rel-paths only.
+    ///
+    /// # Errors
+    ///
+    /// Propagates build/update failures from the underlying index kinds.
+    pub fn reconcile(&mut self, meta: &StoreMeta, paths: &[PathBuf]) -> crate::Result<()> {
+        let config = meta.index_config();
+        let kinds = &meta.indexes;
+        if paths.is_empty() {
+            if self.current_id().is_none() {
+                self.build(kinds, &config, &[])?;
+            } else {
+                self.update(kinds, &config, &[])?;
+            }
+        } else if self.current_id().is_none() {
+            self.build(kinds, &config, paths)?;
+        } else {
+            self.update(kinds, &config, paths)?;
+        }
+        Ok(())
+    }
 }
 fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {
     let lock_path = sift_dir.join("write.lock");
     let mut lock_file = fslock::LockFile::open(&lock_path)?;
     lock_file.lock()?;
-    Ok(WriteLockGuard { _file: lock_file })
+    Ok(WriteLockGuard { file: lock_file })
 }
 
 /// Guard that releases the write lock when dropped.
 struct WriteLockGuard {
-    _file: fslock::LockFile,
+    file: fslock::LockFile,
+}
+
+impl Drop for WriteLockGuard {
+    fn drop(&mut self) {
+        let _ = &mut self.file;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::meta::StoreMeta;
+    use crate::index::config::WalkOptions;
+    use crate::index::meta::{CorpusMeta, FilterMeta, StoreMeta, WalkMeta};
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexKind};
     use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
 
     const MANIFEST_FILE: &str = "manifest.json";
+
+    fn test_meta(corpus: &Path) -> StoreMeta {
+        let root = corpus
+            .canonicalize()
+            .unwrap_or_else(|_| corpus.to_path_buf());
+        StoreMeta::new(
+            CorpusMeta {
+                root,
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: VisibilityConfig::default(),
+            },
+            vec![IndexKind::Trigram],
+        )
+    }
+
+    fn test_config(corpus: &Path) -> IndexConfig<'_> {
+        IndexConfig {
+            corpus: CorpusSpec {
+                root: corpus,
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
+            walk: WalkOptions::new(false),
+            visibility: VisibilityConfig::default(),
+        }
+    }
+
+    fn open_test_store(corpus: &Path, sift_dir: &Path) -> IndexStore {
+        IndexStore::open_or_create(sift_dir, &test_meta(corpus)).expect("open store")
+    }
 
     #[test]
     fn build_creates_store_layout() {
@@ -311,29 +385,10 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let mut store = IndexStore::open_or_create(
-            &sift_dir,
-            &corpus,
-            CorpusKind::Directory,
-            false,
-            &[IndexKind::Trigram],
-        )
-        .expect("open store");
+        let mut store = open_test_store(&corpus, &sift_dir);
 
         store
-            .build(
-                &[IndexKind::Trigram],
-                &IndexConfig {
-                    corpus: CorpusSpec {
-                        root: &corpus,
-                        kind: CorpusKind::Directory,
-                        follow_links: false,
-                        include_paths: &[],
-                        exclude_paths: &[],
-                    },
-                    visibility: VisibilityConfig::default(),
-                },
-            )
+            .build(&[IndexKind::Trigram], &test_config(&corpus), &[])
             .expect("build");
 
         assert!(StoreMeta::path(&sift_dir).exists());
@@ -359,29 +414,10 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let mut store = IndexStore::open_or_create(
-            &sift_dir,
-            &corpus,
-            CorpusKind::Directory,
-            false,
-            &[IndexKind::Trigram],
-        )
-        .expect("open store");
+        let mut store = open_test_store(&corpus, &sift_dir);
 
         store
-            .build(
-                &[IndexKind::Trigram],
-                &IndexConfig {
-                    corpus: CorpusSpec {
-                        root: &corpus,
-                        kind: CorpusKind::Directory,
-                        follow_links: false,
-                        include_paths: &[],
-                        exclude_paths: &[],
-                    },
-                    visibility: VisibilityConfig::default(),
-                },
-            )
+            .build(&[IndexKind::Trigram], &test_config(&corpus), &[])
             .expect("build");
 
         drop(store);
@@ -420,31 +456,17 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexConfig {
-            corpus: CorpusSpec {
-                root: &corpus,
-                kind: CorpusKind::Directory,
-                follow_links: false,
-                include_paths: &[],
-                exclude_paths: &[],
-            },
-            visibility: VisibilityConfig::default(),
-        };
+        let config = test_config(&corpus);
 
-        let mut store = IndexStore::open_or_create(
-            &sift_dir,
-            &corpus,
-            CorpusKind::Directory,
-            false,
-            &[IndexKind::Trigram],
-        )
-        .expect("open store");
-        store.build(&[IndexKind::Trigram], &config).expect("build");
+        let mut store = open_test_store(&corpus, &sift_dir);
+        store
+            .build(&[IndexKind::Trigram], &config, &[])
+            .expect("build");
 
         let id_after_build = store.current_id().expect("has id").to_string();
 
         let changed = store
-            .update(&[IndexKind::Trigram], &config)
+            .update(&[IndexKind::Trigram], &config, &[])
             .expect("update");
         assert_eq!(changed, None, "expected no rebuild when corpus unchanged");
         assert_eq!(store.current_id().unwrap(), id_after_build);
@@ -458,71 +480,40 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello world\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexConfig {
-            corpus: CorpusSpec {
-                root: &corpus,
-                kind: CorpusKind::Directory,
-                follow_links: false,
-                include_paths: &[],
-                exclude_paths: &[],
-            },
-            visibility: VisibilityConfig::default(),
-        };
+        let config = test_config(&corpus);
 
-        let mut store = IndexStore::open_or_create(
-            &sift_dir,
-            &corpus,
-            CorpusKind::Directory,
-            false,
-            &[IndexKind::Trigram],
-        )
-        .expect("open store");
-        store.build(&[IndexKind::Trigram], &config).expect("build");
+        let mut store = open_test_store(&corpus, &sift_dir);
+        store
+            .build(&[IndexKind::Trigram], &config, &[])
+            .expect("build");
 
         let id_after_build = store.current_id().expect("has id").to_string();
 
         fs::write(corpus.join("g.txt"), "new file\n").expect("write new file");
 
         let changed = store
-            .update(&[IndexKind::Trigram], &config)
+            .update(&[IndexKind::Trigram], &config, &[])
             .expect("update");
         assert!(changed.is_some(), "expected rebuild when file added");
         assert_ne!(store.current_id().unwrap(), id_after_build);
     }
 
     #[test]
-    fn update_builds_when_no_current_snapshot() {
+    fn update_errors_when_no_current_snapshot() {
         let tmp = TempDir::new().expect("create temp dir");
         let corpus = tmp.path().join("corpus");
         fs::create_dir_all(&corpus).expect("create corpus");
         fs::write(corpus.join("f.txt"), "hello\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexConfig {
-            corpus: CorpusSpec {
-                root: &corpus,
-                kind: CorpusKind::Directory,
-                follow_links: false,
-                include_paths: &[],
-                exclude_paths: &[],
-            },
-            visibility: VisibilityConfig::default(),
-        };
+        let config = test_config(&corpus);
 
-        let mut store = IndexStore::open_or_create(
-            &sift_dir,
-            &corpus,
-            CorpusKind::Directory,
-            false,
-            &[IndexKind::Trigram],
-        )
-        .expect("open store");
+        let mut store = open_test_store(&corpus, &sift_dir);
 
-        let changed = store
-            .update(&[IndexKind::Trigram], &config)
-            .expect("update");
-        assert!(changed.is_some(), "expected build when no snapshot exists");
-        assert!(store.current_id().is_some());
+        let err = store
+            .update(&[IndexKind::Trigram], &config, &[])
+            .expect_err("update without snapshot");
+        assert!(matches!(err, crate::Error::Index(_)));
     }
 
     #[test]
@@ -533,27 +524,13 @@ mod tests {
         fs::write(corpus.join("f.txt"), "content\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexConfig {
-            corpus: CorpusSpec {
-                root: &corpus,
-                kind: CorpusKind::Directory,
-                follow_links: false,
-                include_paths: &[],
-                exclude_paths: &[],
-            },
-            visibility: VisibilityConfig::default(),
-        };
+        let config = test_config(&corpus);
 
-        let mut store = IndexStore::open_or_create(
-            &sift_dir,
-            &corpus,
-            CorpusKind::Directory,
-            false,
-            &[IndexKind::Trigram],
-        )
-        .expect("open store");
+        let mut store = open_test_store(&corpus, &sift_dir);
 
-        store.build(&[IndexKind::Trigram], &config).expect("build");
+        store
+            .build(&[IndexKind::Trigram], &config, &[])
+            .expect("build");
 
         // Verify lock was released after build by acquiring it externally.
         let lock_path = sift_dir.join("write.lock");
@@ -573,34 +550,18 @@ mod tests {
         fs::write(corpus.join("f.txt"), "hello\n").expect("write file");
 
         let sift_dir = tmp.path().join(".sift");
-        let config = IndexConfig {
-            corpus: CorpusSpec {
-                root: &corpus,
-                kind: CorpusKind::Directory,
-                follow_links: false,
-                include_paths: &[],
-                exclude_paths: &[],
-            },
-            visibility: VisibilityConfig::default(),
-        };
+        let config = test_config(&corpus);
 
         // Store A builds.
-        let mut store_a = IndexStore::open_or_create(
-            &sift_dir,
-            &corpus,
-            CorpusKind::Directory,
-            false,
-            &[IndexKind::Trigram],
-        )
-        .expect("open store");
+        let mut store_a = open_test_store(&corpus, &sift_dir);
         store_a
-            .build(&[IndexKind::Trigram], &config)
+            .build(&[IndexKind::Trigram], &config, &[])
             .expect("build");
 
         // Store A publishes a new snapshot.
         fs::write(corpus.join("g.txt"), "new\n").expect("write");
         store_a
-            .update(&[IndexKind::Trigram], &config)
+            .update(&[IndexKind::Trigram], &config, &[])
             .expect("update");
 
         // Store B opens — it should see the same current (reads fresh from disk
@@ -616,7 +577,7 @@ mod tests {
         // its snapshot state.  Since the corpus is unchanged, no new snapshot
         // is published and current_id stays the same.
         let changed = store_b
-            .update(&[IndexKind::Trigram], &config)
+            .update(&[IndexKind::Trigram], &config, &[])
             .expect("update");
         assert_eq!(changed, None, "corpus unchanged after store_a update");
         assert_eq!(

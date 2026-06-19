@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, measurement::WallTime};
 use std::hint::black_box;
 
-use sift_grep::filter::{
-    FilterDecl, SearchFilterCtx, TypeCatalog, candidate_config, parse_size_suffix,
-};
+use std::str::FromStr;
+
+use sift_grep::filter::{ByteSize, FilterDecl, SearchFilterCtx, TypeCatalog};
 
 use crate::support::parse_cli;
 
@@ -34,12 +34,12 @@ fn bench_filter_type_defs_variants(g: &mut BenchmarkGroup<'_, WallTime>) {
 pub fn bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("filter");
 
-    g.bench_function("parse_size_suffix", |b| {
+    g.bench_function("ByteSize/from_str", |b| {
         b.iter(|| {
-            let _ = black_box(parse_size_suffix("42"));
-            let _ = black_box(parse_size_suffix("100K"));
-            let _ = black_box(parse_size_suffix("2MB"));
-            let _ = black_box(parse_size_suffix("1G"));
+            let _ = black_box(ByteSize::from_str("42"));
+            let _ = black_box(ByteSize::from_str("100K"));
+            let _ = black_box(ByteSize::from_str("2MB"));
+            let _ = black_box(ByteSize::from_str("1G"));
         });
     });
 
@@ -59,8 +59,7 @@ pub fn bench(c: &mut Criterion) {
 
     g.bench_function("candidate_config/default", |b| {
         b.iter(|| {
-            black_box(candidate_config(
-                black_box(&cli_plain.filter_config()),
+            black_box(cli_plain.filter_config().candidate_config(
                 filter_ctx_default,
                 vec![],
                 vec![],
@@ -87,8 +86,7 @@ pub fn bench(c: &mut Criterion) {
     };
     g.bench_function("candidate_config/with_glob_and_type", |b| {
         b.iter(|| {
-            black_box(candidate_config(
-                black_box(&cli_glob.filter_config()),
+            black_box(cli_glob.filter_config().candidate_config(
                 filter_ctx_glob,
                 vec![PathBuf::from("")],
                 vec![],

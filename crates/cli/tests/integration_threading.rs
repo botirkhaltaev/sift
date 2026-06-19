@@ -190,6 +190,38 @@ fn crlf_word_boundary_respects_cr_walk() {
 // ─── Index + walk consistency ──────────────────────────────────────────────────
 
 #[test]
+fn crlf_consistent_index_and_walk() {
+    let p = TestProject::new("crlf-consistency");
+    p.write("a.txt", "hello world\r\n");
+    p.build_index();
+    let index_out = p.index_output(["--crlf", "hello"]);
+    let walk_out = p.walk_output(["--crlf", "hello"]);
+    assert_success(&index_out);
+    assert_success(&walk_out);
+    assert_eq!(
+        normalize_stdout(&index_out),
+        normalize_stdout(&walk_out),
+        "index and walk --crlf results differ"
+    );
+}
+
+#[test]
+fn multiline_dotall_consistent_index_and_walk() {
+    let p = TestProject::new("dotall-consistency");
+    p.write("a.txt", "start\nend\n");
+    p.build_index();
+    let index_out = p.index_output(["-U", "--multiline-dotall", "start.end"]);
+    let walk_out = p.walk_output(["-U", "--multiline-dotall", "start.end"]);
+    assert_success(&index_out);
+    assert_success(&walk_out);
+    assert_eq!(
+        normalize_stdout(&index_out),
+        normalize_stdout(&walk_out),
+        "index and walk --multiline-dotall results differ"
+    );
+}
+
+#[test]
 fn multiline_consistent_index_and_walk() {
     let p = TestProject::new("multiline-consistency");
     p.write("a.txt", "foo\nbar\n");

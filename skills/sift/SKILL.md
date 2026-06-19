@@ -34,7 +34,9 @@ sift -l "pattern"
 sift -F "literal.string"
 ```
 
-Refresh the index after large changes: `sift --sift-dir .sift index update .`
+Refresh the index after large changes: `sift --sift-dir .sift index update .` (async) or `sift index update --wait .` (blocking).
+
+For non-blocking initial indexing in long sessions: `sift index build --lazy .` (requires the watch daemon).
 
 Default index directory is `.sift` (override with `--sift-dir` on every command).
 
@@ -43,8 +45,8 @@ Default index directory is `.sift` (override with `--sift-dir` on every command)
 ```text
 - [ ] cd to repository root
 - [ ] Check for .sift/ (or confirm --sift-dir)
-- [ ] If no index: sift --sift-dir .sift index build .
-- [ ] After repo changes: sift --sift-dir .sift index update .
+- [ ] If no index: sift --sift-dir .sift index build . (or --lazy with daemon)
+- [ ] After repo changes: sift --sift-dir .sift index update . (or --wait for blocking)
 - [ ] Narrow with sift -l "pattern" [PATH...]
 - [ ] Full search; use -F for literals with regex metacharacters
 - [ ] Use --json only when parsing output programmatically
@@ -59,7 +61,9 @@ Default index directory is `.sift` (override with `--sift-dir` on every command)
 ## Rules
 
 - Global `--sift-dir` before index commands: `sift --sift-dir .sift index build .`
-- `sift index build` creates an index; `sift index update` refreshes an existing one
+- `sift index build` creates an index (blocking); `--lazy` queues async work; `--wait` forces blocking
+- `sift index update` refreshes asynchronously; `--wait` blocks until done
+- Search auto-indexes unindexed files touched during a walk when the daemon is enabled
 - `sift update` upgrades the **binary**, not the index
 - Rust `regex` syntax by default; `-F` for fixed strings
 - Literal subcommand in pattern position: `sift -- index build` or `-e index`

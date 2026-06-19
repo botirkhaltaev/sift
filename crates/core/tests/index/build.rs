@@ -1,10 +1,12 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::{CorpusKind, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec};
+use sift_core::{IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec};
 use tempfile::TempDir;
 
-use super::common::{build_store, make_filter_corpus, no_ignore_build_config, open_indexes};
+use super::common::{
+    build_store, make_filter_corpus, no_ignore_build_config, open_indexes, sample_store_meta,
+};
 
 #[test]
 fn gitignore_honored_without_git_repo() {
@@ -39,16 +41,14 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
     make_filter_corpus(tmp.path());
 
     let sift_dir = tmp.path().join(".sift");
-    let mut store = IndexStore::open_or_create(
-        &sift_dir,
-        tmp.path(),
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .expect("open");
+    let tmp_path = tmp.path().to_path_buf();
+    let root = tmp_path.canonicalize().unwrap_or(tmp_path);
+    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let mut store = IndexStore::open_or_create(&sift_dir, &meta).expect("open");
     let config = no_ignore_build_config(tmp.path(), &[]);
-    store.build(&[IndexKind::Trigram], &config).expect("build");
+    store
+        .build(&[IndexKind::Trigram], &config, &[])
+        .expect("build");
 
     let spec = QuerySpec {
         patterns: &["beta".to_string()],
@@ -97,18 +97,15 @@ fn build_respects_hidden_files_by_default() {
     fs::write(corpus.path().join(".secret/hidden.txt"), "beta\n").expect("write");
 
     let sift_dir = TempDir::new().expect("sift tempdir");
-    let mut store = IndexStore::open_or_create(
-        sift_dir.path(),
-        corpus.path(),
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .expect("open");
+    let corpus_path = corpus.path().to_path_buf();
+    let root = corpus_path.canonicalize().unwrap_or(corpus_path);
+    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let mut store = IndexStore::open_or_create(sift_dir.path(), &meta).expect("open");
     store
         .build(
             &[IndexKind::Trigram],
             &super::common::standard_build_config(corpus.path(), &[]),
+            &[],
         )
         .expect("build");
 

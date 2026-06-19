@@ -6,8 +6,6 @@ pub mod type_filter;
 use std::path::{Path, PathBuf};
 
 use error::FilterError;
-use ignore::build_gitignore_matcher;
-use type_filter::build_type_glob;
 
 use crate::search::SearchError;
 
@@ -100,7 +98,7 @@ impl CandidateFilter {
             config.scopes.clone()
         };
 
-        let gitignore = build_gitignore_matcher(index_root, &config.visibility.ignore)?;
+        let gitignore = config.visibility.ignore.matcher(index_root)?;
 
         let glob_case_insensitive = config.glob.case_insensitive;
         let glob = if config.glob.patterns.is_empty() {
@@ -122,12 +120,7 @@ impl CandidateFilter {
             )
         };
 
-        let type_glob = build_type_glob(
-            index_root,
-            &config.type_definitions,
-            &config.type_include,
-            &config.type_exclude,
-        )?;
+        let type_glob = config.type_override(index_root)?;
 
         Ok(Self {
             root: index_root.to_path_buf(),

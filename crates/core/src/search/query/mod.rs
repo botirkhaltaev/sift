@@ -1,10 +1,8 @@
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
 #[cfg(test)]
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+use std::{io, path::Path};
 
 #[cfg(test)]
 use grep_matcher::Matcher;
@@ -13,12 +11,10 @@ use grep_searcher::Searcher;
 use std::sync::OnceLock;
 
 #[cfg(test)]
-use crate::candidate::Candidate;
-use crate::query::QueryFlags;
-use crate::query::QuerySpec;
+use crate::Candidate;
+use crate::query::{QueryFlags, QuerySpec};
 use crate::search::SearchError;
 use crate::search::SearchOutcome;
-use crate::search::emit::format::sum_candidate_file_bytes;
 use crate::search::emit::stats::{SearchStats, TextStatsCounters};
 #[cfg(test)]
 use crate::search::filter::CandidateFilter;
@@ -75,69 +71,7 @@ impl SearchQuery {
         &self.patterns
     }
 
-    pub(crate) fn spec(&self) -> QuerySpec<'_> {
-        self.build_query_spec()
-    }
-
-    pub(crate) fn search(&self, execution: &SearchExecution<'_>) -> crate::Result<SearchOutcome> {
-        if self.opts.max_results == Some(0) {
-            return Err(SearchError::InvalidMaxCount.into());
-        }
-
-        let output = execution.output;
-        let candidates = &execution.candidates;
-
-        if candidates.is_empty() {
-            return Ok(SearchOutcome {
-                matched: false,
-                stats: execution.collect_stats.then_some(SearchStats::default()),
-            });
-        }
-
-        let search_start = Instant::now();
-        let matcher = self.resolve_matcher()?;
-
-        let (did_match, stats) = match output.format {
-            SearchOutputFormat::Json => match output.mode {
-                SearchMode::Standard | SearchMode::OnlyMatching => {
-                    let mut stats = execution.collect_stats.then_some(SearchStats::default());
-                    let scan = crate::search::scan::json::JsonScan::new(
-                        self,
-                        matcher,
-                        output,
-                        search_start,
-                    );
-                    let json_matched = scan.run(candidates, stats.as_mut())?;
-                    (json_matched, stats)
-                }
-                _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),
-            },
-            SearchOutputFormat::Text => self.run_text_output(
-                candidates,
-                matcher,
-                output,
-                execution.separators,
-                search_start,
-                execution.collect_stats,
-            )?,
-        };
-
-        Ok(SearchOutcome {
-            matched: did_match,
-            stats,
-        })
-    }
-
-    fn resolve_matcher(&self) -> Result<&RegexMatcher, SearchError> {
-        if let Some(m) = self.matcher.get() {
-            return Ok(m);
-        }
-        let m = self.build_matcher()?;
-        let _ = self.matcher.set(m);
-        Ok(self.matcher.get().expect("just initialised"))
-    }
-
-    fn build_query_spec(&self) -> QuerySpec<'_> {
+    pub(crate) fn build_query_spec(&self) -> QuerySpec<'_> {
         let mut flags = QueryFlags::empty();
         if self.opts.fixed_strings() {
             flags |= QueryFlags::FIXED_STRINGS;
@@ -160,23 +94,91 @@ impl SearchQuery {
         }
     }
 
+    pub(crate) fn search(
+        &self,
+        execution: &SearchExecution<'_>,
+    ) -> crate::Result<(SearchOutcome, Vec<PathBuf>)> {
+        if self.opts.max_results == Some(0) {
+            return Err(SearchError::InvalidMaxCount.into());
+        }
+
+        let output = execution.output;
+        let candidates = &execution.candidates;
+
+        if candidates.is_empty() {
+            return Ok((
+                SearchOutcome {
+                    matched: false,
+                    stats: execution.collect.stats.then_some(SearchStats::default()),
+                },
+                Vec::new(),
+            ));
+        }
+
+        let search_start = Instant::now();
+        let matcher = self.resolve_matcher()?;
+
+        let (did_match, stats, hits) = match output.format {
+            SearchOutputFormat::Json => match output.mode {
+                SearchMode::Standard | SearchMode::OnlyMatching => {
+                    let mut stats = execution.collect.stats.then_some(SearchStats::default());
+                    let scan = crate::search::scan::json::JsonScan::new(
+                        self,
+                        matcher,
+                        output,
+                        search_start,
+                    );
+                    let json_matched = scan.run(candidates, stats.as_mut())?;
+                    (json_matched, stats, Vec::new())
+                }
+                _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),
+            },
+            SearchOutputFormat::Text => {
+                let (did_match, stats, hits) =
+                    self.run_text_output(candidates, matcher, execution, search_start)?;
+                (did_match, stats, hits)
+            }
+        };
+
+        Ok((
+            SearchOutcome {
+                matched: did_match,
+                stats,
+            },
+            hits,
+        ))
+    }
+
+    fn resolve_matcher(&self) -> Result<&RegexMatcher, SearchError> {
+        if let Some(m) = self.matcher.get() {
+            return Ok(m);
+        }
+        let m = self.build_matcher()?;
+        let _ = self.matcher.set(m);
+        Ok(self.matcher.get().expect("just initialised"))
+    }
+
     fn run_text_output(
         &self,
         candidates: &[crate::Candidate],
         matcher: &RegexMatcher,
-        output: crate::search::output::SearchOutput,
-        separators: &crate::search::output::style::SearchSeparators,
+        execution: &SearchExecution<'_>,
         search_start: Instant,
-        collect_stats: bool,
-    ) -> crate::Result<(bool, Option<SearchStats>)> {
-        let counters = TextStatsCounters::new(collect_stats);
+    ) -> crate::Result<(bool, Option<SearchStats>, Vec<PathBuf>)> {
+        let output = execution.output;
+        let collect = execution.collect;
+        let counters = TextStatsCounters::new(collect.stats);
 
-        let did_match = match output.mode {
+        let (did_match, hits) = match output.mode {
             SearchMode::Standard | SearchMode::OnlyMatching => {
                 let scan = crate::search::scan::standard::StandardScan::new(
-                    self, matcher, output, separators, &counters,
+                    self,
+                    matcher,
+                    output,
+                    execution.separators,
+                    &counters,
                 );
-                scan.run(candidates)?
+                scan.run(candidates, collect)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
@@ -185,17 +187,17 @@ impl SearchQuery {
                 let scan = crate::search::scan::summary::SummaryScan::new(
                     self, matcher, output, &counters,
                 );
-                scan.run(candidates)?
+                scan.run(candidates, collect)?
             }
         };
 
         let stats = counters.finish(
             candidates.len(),
-            sum_candidate_file_bytes(candidates),
+            crate::Candidate::total_file_bytes(candidates),
             search_start.elapsed(),
         );
 
-        Ok((did_match, stats))
+        Ok((did_match, stats, hits))
     }
 
     #[cfg(test)]
@@ -269,7 +271,7 @@ impl SearchQuery {
                 matcher.clone(),
             );
             let _ = searcher.search_path(matcher, candidate.abs_path(), &mut sink);
-            out.extend(sink.into_matches());
+            out.extend(sink.matches);
         }
         Ok(out)
     }
@@ -293,7 +295,7 @@ impl SearchQuery {
                 matcher.clone(),
             );
             let _ = searcher.search_path(matcher, candidate, &mut sink);
-            out.extend(sink.into_matches());
+            out.extend(sink.matches);
         }
         Ok(out)
     }
@@ -317,10 +319,6 @@ impl CollectSink {
             matches: Vec::new(),
         }
     }
-
-    fn into_matches(self) -> Vec<crate::search::Match> {
-        self.matches
-    }
 }
 
 #[cfg(test)]
@@ -329,9 +327,10 @@ impl grep_searcher::Sink for CollectSink {
 
     fn matched(
         &mut self,
-        _: &grep_searcher::Searcher,
+        searcher: &grep_searcher::Searcher,
         mat: &grep_searcher::SinkMatch<'_>,
     ) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
         if matches!(self.emission, MatchEmissionMode::OnlyMatching) {

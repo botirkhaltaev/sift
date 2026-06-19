@@ -23,7 +23,7 @@ Regex execution: pattern compilation, file scanning, output formatting, and para
 use sift_core::{SearchQuery, SearchOptions, CandidateFilter};
 
 let search = SearchQuery::new(&patterns, SearchOptions::default())?;
-search.run(SearchExecution { candidates: &candidates, output, separators, collect_stats: false })?;
+search.run(SearchExecution { candidates: &candidates, output, separators, collect: SearchCollection::none() })?;
 ```
 
 `SearchQuery` compiles the regex once; repeated calls reuse the compiled matcher and searcher cache.

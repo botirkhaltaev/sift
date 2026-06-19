@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::index::snapshot::ArtifactData;
 use crate::index::{CorpusKind, IndexConfig, IndexDestination, IndexSource};
@@ -54,7 +54,7 @@ impl TrigramIndex {
 
         let root = root.to_path_buf();
         let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
-        Self::validate_file_paths(&fingerprints, &files_path)?;
+        Self::validate_file_paths(&fingerprints)?;
         Self::validate_lexicon_postings(&lexicon, &postings)?;
 
         Ok(Self {
@@ -67,14 +67,17 @@ impl TrigramIndex {
         })
     }
 
-    /// Build a new trigram index from the corpus described in `config`,
-    /// writing artifact files into `output_dir`.
+    /// Build a trigram index from an explicit path list (or full walk when `paths` is empty).
     ///
     /// # Errors
     ///
     /// Returns an error if corpus walking, extraction, or encoding fails.
-    pub fn build(config: &IndexConfig<'_>, output_dir: &Path) -> crate::Result<Self> {
-        let tables = IndexTables::build(config)?;
+    pub fn build(
+        config: &IndexConfig<'_>,
+        output_dir: &Path,
+        paths: &[PathBuf],
+    ) -> crate::Result<Self> {
+        let tables = IndexTables::build(config, paths)?;
         let root = config.corpus.root.canonicalize()?;
         Self::persist_tables(
             &tables,
@@ -130,7 +133,7 @@ impl TrigramIndex {
                 writer.put_artifact(namespace, crate::TRIGRAMS_BIN, trigram_sets_bytes)?;
 
                 let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
-                Self::validate_file_paths(&fingerprints, Path::new(""))?;
+                Self::validate_file_paths(&fingerprints)?;
                 Self::validate_lexicon_postings(&lexicon, &postings)?;
 
                 Ok(Self {
@@ -167,8 +170,9 @@ impl TrigramIndex {
         &self,
         config: &IndexConfig<'_>,
         output_dir: &Path,
+        paths: &[PathBuf],
     ) -> crate::Result<Option<Self>> {
-        self.rebuild(config, IndexDestination::Directory(output_dir))
+        self.rebuild(config, IndexDestination::Directory(output_dir), paths)
     }
 
     /// Rebuild index tables for changed files and persist to `dest`.
@@ -176,14 +180,22 @@ impl TrigramIndex {
         &self,
         config: &IndexConfig<'_>,
         dest: IndexDestination,
+        paths: &[PathBuf],
     ) -> crate::Result<Option<Self>> {
         use rayon::prelude::*;
         use std::collections::HashMap;
 
-        let paths = crate::index::trigram::builder::CorpusWalker::new(config).collect()?;
-        let fingerprints =
-            crate::index::trigram::builder::FingerprintCollector::new(config.corpus.root, &paths)
-                .collect()?;
+        let fingerprints = if paths.is_empty() {
+            let corpus_paths =
+                crate::index::trigram::builder::CorpusWalker::new(config).collect()?;
+            crate::index::trigram::builder::FingerprintCollector::new(
+                config.corpus.root,
+                &corpus_paths,
+            )
+            .collect()?
+        } else {
+            Self::merge_partial_fingerprints(&self.fingerprints, config.corpus.root, paths)?
+        };
 
         if fingerprints == self.fingerprints {
             return Ok(None);
@@ -224,6 +236,37 @@ impl TrigramIndex {
         Ok(Some(index))
     }
 
+    fn merge_partial_fingerprints(
+        existing: &[super::file_table::FileFingerprint],
+        root: &Path,
+        paths: &[PathBuf],
+    ) -> crate::Result<Vec<super::file_table::FileFingerprint>> {
+        use std::collections::HashMap;
+
+        let mut by_path: HashMap<PathBuf, super::file_table::FileFingerprint> = existing
+            .iter()
+            .map(|fp| (fp.path.clone(), fp.clone()))
+            .collect();
+        for rel in paths {
+            let abs = root.join(rel);
+            let meta = std::fs::metadata(&abs).map_err(crate::Error::Io)?;
+            let mtime_secs = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+            let fp = super::file_table::FileFingerprint {
+                path: rel.clone(),
+                mtime_secs,
+                size: meta.len(),
+            };
+            by_path.insert(rel.clone(), fp);
+        }
+        let mut merged: Vec<_> = by_path.into_values().collect();
+        merged.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(merged)
+    }
+
     /// Open index tables from a storage source (directory or snapshot).
     pub(crate) fn open_tables(
         source: IndexSource,
@@ -245,7 +288,7 @@ impl TrigramIndex {
 
                 let files = FileTable::open(&files_path).map_err(TrigramIndexError::Io)?;
                 let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
-                Self::validate_file_paths(&fingerprints, &files_path)?;
+                Self::validate_file_paths(&fingerprints)?;
 
                 let lexicon = storage::lexicon::Lexicon::open(&lexicon_path)
                     .map_err(TrigramIndexError::Io)?;
@@ -268,7 +311,7 @@ impl TrigramIndex {
                 let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
                 let files = FileTable::from_artifact(files_data).map_err(TrigramIndexError::Io)?;
                 let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
-                Self::validate_file_paths(&fingerprints, Path::new(""))?;
+                Self::validate_file_paths(&fingerprints)?;
 
                 let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
                 let lexicon =
@@ -339,10 +382,7 @@ impl TrigramIndex {
         Ok(())
     }
 
-    fn validate_file_paths(
-        fingerprints: &[FileFingerprint],
-        _meta_path: &Path,
-    ) -> Result<(), TrigramIndexError> {
+    fn validate_file_paths(fingerprints: &[FileFingerprint]) -> Result<(), TrigramIndexError> {
         for fp in fingerprints {
             if fp.path.as_os_str().is_empty()
                 || fp.path.is_absolute()
@@ -380,7 +420,7 @@ mod tests {
                 size: 0,
             },
         ];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_ok());
     }
 
@@ -392,7 +432,7 @@ mod tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 
@@ -403,7 +443,7 @@ mod tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 
@@ -414,7 +454,7 @@ mod tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 }

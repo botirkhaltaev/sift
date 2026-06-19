@@ -422,7 +422,7 @@ mod tests {
     #[should_panic(expected = "postings validated at open")]
     fn intersect_sorted_slices_invalid_varint_panics() {
         let a = &[0xff];
-        let _ids = TrigramIndex::intersect_sorted_slices(&[a]);
+        TrigramIndex::intersect_sorted_slices(&[a]);
     }
 
     #[test]

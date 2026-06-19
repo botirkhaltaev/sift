@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::{Captures, Matcher};
@@ -17,6 +18,7 @@ use crate::search::output::style::{
     FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
 use crate::search::query::SearchQuery;
+use crate::search::request::SearchCollection;
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -67,7 +69,8 @@ impl<'a> StandardSink<'a> {
 impl Sink for StandardSink<'_> {
     type Error = io::Error;
 
-    fn matched(&mut self, _: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
         self.matched = true;
         self.match_count += 1;
 
@@ -101,7 +104,8 @@ impl Sink for StandardSink<'_> {
         self.write_line_content(mat.bytes())
     }
 
-    fn context(&mut self, _: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, Self::Error> {
+    fn context(&mut self, searcher: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
         if self.output.emission == OutputEmission::Quiet {
             return Ok(true);
         }
@@ -160,7 +164,8 @@ impl Sink for StandardSink<'_> {
         Ok(true)
     }
 
-    fn context_break(&mut self, _: &Searcher) -> Result<bool, Self::Error> {
+    fn context_break(&mut self, searcher: &Searcher) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
         if self.output.emission == OutputEmission::Quiet {
             return Ok(true);
         }
@@ -352,10 +357,11 @@ struct StandardWorker<'a> {
     path_display: crate::search::output::style::PathDisplay,
     path_separator: Option<u8>,
     emission: OutputEmission,
+    collect_hits: bool,
 }
 
 impl<'a> StandardWorker<'a> {
-    fn new(scan: &'a StandardScan<'a>) -> Self {
+    fn new(scan: &'a StandardScan<'a>, collect: SearchCollection) -> Self {
         Self {
             searcher: scan.search.build_searcher(
                 scan.output.lines.line_number(),
@@ -379,6 +385,7 @@ impl<'a> StandardWorker<'a> {
             path_display: scan.output.lines.path_display,
             path_separator: scan.output.records.path_separator,
             emission: scan.output.emission,
+            collect_hits: collect.hits,
         }
     }
 
@@ -388,6 +395,7 @@ impl<'a> StandardWorker<'a> {
             return FileResult {
                 output: ChunkOutput::empty(),
                 json_stats: None,
+                hit: None,
             };
         }
 
@@ -456,6 +464,7 @@ impl<'a> StandardWorker<'a> {
                     && self.emission != OutputEmission::Quiet,
             },
             json_stats: None,
+            hit: (matched && self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
         }
     }
 }
@@ -485,23 +494,35 @@ impl<'a> StandardScan<'a> {
         }
     }
 
-    pub fn run(&self, candidates: &[Candidate]) -> crate::Result<bool> {
+    pub fn run(
+        &self,
+        candidates: &[Candidate],
+        collect: SearchCollection,
+    ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
         let n = candidates.len();
         let mut files = Vec::with_capacity(n);
         candidates
             .par_iter()
             .map_init(
-                || StandardWorker::new(self),
+                || StandardWorker::new(self, collect),
                 |worker: &mut StandardWorker<'_>, candidate: &Candidate| {
                     worker.search_candidate(candidate, &stop)
                 },
             )
             .collect_into_vec(&mut files);
-        ChunkOutput::flush_all(
-            files.into_iter().map(|file| file.output),
-            self.counters.bytes_printed(),
-        )
+        let mut hits = Vec::new();
+        let mut outputs = Vec::with_capacity(files.len());
+        for file in files {
+            if collect.hits
+                && let Some(hit) = file.hit
+            {
+                hits.push(hit);
+            }
+            outputs.push(file.output);
+        }
+        let any_match = ChunkOutput::flush_all(outputs, self.counters.bytes_printed())?;
+        Ok((any_match, hits))
     }
 }
 

@@ -2,20 +2,33 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sift_core::{
-    Candidate, CandidateRequirement, CorpusKind, IndexConfig, IndexKind, IndexStore, Indexes,
-    QueryFlags, QueryPlanner, QuerySpec, VisibilityConfig,
+    Candidate, CandidateFilter, CandidateFilterConfig, CandidateRequirement, CorpusKind,
+    CorpusMeta, FilterMeta, GlobConfig, IndexConfig, IndexKind, IndexStore, IndexWalkOptions,
+    Indexes, QueryFlags, QueryPlanner, QuerySpec, StoreMeta, VisibilityConfig, WalkMeta,
 };
 use tempfile::TempDir;
 
 fn build_indexes(root: &Path, sift_dir: &Path) -> Indexes {
-    let mut store = IndexStore::open_or_create(
-        sift_dir,
-        root,
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .expect("open store");
+    let root_buf = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let meta = StoreMeta::new(
+        CorpusMeta {
+            root: root_buf,
+            kind: CorpusKind::Directory,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
+        },
+        WalkMeta {
+            follow_links: false,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        },
+        FilterMeta {
+            visibility: VisibilityConfig::default(),
+        },
+        vec![IndexKind::Trigram],
+    );
+    let mut store = IndexStore::open_or_create(sift_dir, &meta).expect("open store");
     store
         .build(
             &[IndexKind::Trigram],
@@ -27,11 +40,33 @@ fn build_indexes(root: &Path, sift_dir: &Path) -> Indexes {
                     include_paths: &[],
                     exclude_paths: &[],
                 },
+                walk: IndexWalkOptions::new(false),
                 visibility: VisibilityConfig::default(),
             },
+            &[],
         )
         .expect("build");
     Indexes::open(sift_dir).expect("open indexes")
+}
+
+fn default_filter(root: &Path) -> CandidateFilter {
+    CandidateFilter::new(
+        &CandidateFilterConfig {
+            scopes: vec![PathBuf::from("")],
+            exclude_paths: Vec::new(),
+            glob: GlobConfig::default(),
+            visibility: VisibilityConfig::default(),
+            follow_links: false,
+            max_depth: None,
+            max_filesize: None,
+            type_definitions: Vec::new(),
+            type_include: Vec::new(),
+            type_exclude: Vec::new(),
+            one_file_system: false,
+        },
+        root,
+    )
+    .expect("filter")
 }
 
 fn make_parity_corpus(root: &Path) {
@@ -58,10 +93,16 @@ fn potential_matches_narrowable_uses_index() {
         patterns: &["beta".to_string()],
         flags: QueryFlags::empty(),
     };
+    let filter = default_filter(&corpus);
     let result = QueryPlanner::new(spec)
-        .candidates(&indexes, CandidateRequirement::PotentialMatches, || {
-            panic!("base should not be called when index narrows")
-        })
+        .candidates(
+            &indexes,
+            CandidateRequirement::PotentialMatches,
+            &filter,
+            None,
+            false,
+            || panic!("base should not be called when index narrows"),
+        )
         .expect("candidates");
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rel_path(), Path::new("a/x.txt"));
@@ -78,11 +119,17 @@ fn potential_matches_non_narrowable_falls_back_to_base() {
         patterns: &[".*".to_string()],
         flags: QueryFlags::empty(),
     };
+    let filter = default_filter(&corpus);
     let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt"]);
     let result = QueryPlanner::new(spec)
-        .candidates(&indexes, CandidateRequirement::PotentialMatches, || {
-            Ok(base)
-        })
+        .candidates(
+            &indexes,
+            CandidateRequirement::PotentialMatches,
+            &filter,
+            None,
+            false,
+            || Ok(base),
+        )
         .expect("candidates");
     let mut paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
     paths.sort();
@@ -90,6 +137,35 @@ fn potential_matches_non_narrowable_falls_back_to_base() {
         paths,
         vec![PathBuf::from("a/x.txt"), PathBuf::from("b/y.txt")]
     );
+}
+
+#[test]
+fn potential_matches_includes_unindexed_walk_paths() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    make_parity_corpus(&corpus);
+    let sift_dir = tmp.path().join(".sift");
+    let indexes = build_indexes(&corpus, &sift_dir);
+    fs::write(corpus.join("new.txt"), "offline marker\n").expect("write new file");
+
+    let spec = QuerySpec {
+        patterns: &["offline marker".to_string()],
+        flags: QueryFlags::empty(),
+    };
+    let filter = default_filter(&corpus);
+    let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt", "new.txt"]);
+    let result = QueryPlanner::new(spec)
+        .candidates(
+            &indexes,
+            CandidateRequirement::PotentialMatches,
+            &filter,
+            None,
+            true,
+            || Ok(base),
+        )
+        .expect("candidates");
+    let paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+    assert_eq!(paths, vec![PathBuf::from("new.txt")]);
 }
 
 #[test]
@@ -103,9 +179,17 @@ fn complete_falls_back_to_base() {
         patterns: &["beta".to_string()],
         flags: QueryFlags::empty(),
     };
+    let filter = default_filter(&corpus);
     let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt"]);
     let result = QueryPlanner::new(spec)
-        .candidates(&indexes, CandidateRequirement::Complete, || Ok(base))
+        .candidates(
+            &indexes,
+            CandidateRequirement::Complete,
+            &filter,
+            None,
+            false,
+            || Ok(base),
+        )
         .expect("candidates");
     assert_eq!(result.len(), 2);
 }

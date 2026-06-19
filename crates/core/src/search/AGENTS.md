@@ -20,11 +20,11 @@ Regex execution: pattern compilation, file scanning, output formatting, and para
 ## Search Flow (orchestrated by `grep::run`)
 
 ```text
-grep::run(query, GrepRequest{ indexes, filter, output, separators, collect_stats })
-  -> QuerySpec from query.spec()
+grep::run(query, GrepRequest{ indexes, filter, output, separators, collect })
+  -> QuerySpec from `SearchQuery::build_query_spec()` (internal)
   -> candidates from Indexes::candidates(spec, coverage) or walk::collect_candidates
   -> candidate.matches(filter) via par_iter
-  -> SearchExecution { candidates, output, separators, collect_stats }
+  -> SearchExecution { candidates, output, separators, collect }
   -> query.search(SearchExecution)
   -> scan with regex engine
   -> emit output

@@ -2,8 +2,9 @@ use std::process::ExitCode;
 
 use crate::grep::Argv;
 use crate::grep::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
-use crate::grep::filter::FilterConfig;
+use crate::grep::filter::{FilterConfig, SearchFilterCtx};
 use crate::grep::filter::{FilterDecl, GlobFlags, TypeCatalog};
+use crate::grep::ignore::MessageFlags;
 use crate::grep::ignore::{
     ContextDecl, IgnoreDotDecl, IgnoreExcludeDecl, IgnoreFilesDecl, IgnoreGitDecl,
     IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreVcsDecl,
@@ -20,7 +21,7 @@ use crate::grep::pattern::{
     BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope,
 };
 use crate::grep::run::{Grep, GrepConfig, GrepOutcome};
-use crate::index::{DaemonMode, DaemonSpawnConfig, Index, IndexOperation, IndexRequest};
+use crate::index::{IndexExecution, IndexJob, IndexOperation, IndexRequest};
 use crate::update;
 
 use clap::{Parser, Subcommand};
@@ -164,38 +165,56 @@ impl Cli {
         let Commands::Index { command } = self.command.as_ref().expect("index subcommand") else {
             unreachable!("index_request called without index subcommand");
         };
-        let (path, indexes, operation) = match command {
+        let filter = self.filter_config();
+        let (path, indexes, operation, execution) = match command {
             IndexCommands::Build {
                 path,
                 indexes,
                 lazy,
+                wait,
             } => {
-                let op = if *lazy {
-                    IndexOperation::Configure
+                let execution = if *wait {
+                    IndexExecution::Blocking
+                } else if *lazy {
+                    IndexExecution::Background
                 } else {
-                    IndexOperation::Build
+                    IndexExecution::Blocking
                 };
-                (path.clone(), indexes.clone(), op)
+                (
+                    path.clone(),
+                    indexes.clone(),
+                    IndexOperation::Build,
+                    execution,
+                )
             }
-            IndexCommands::Update { path, indexes } => {
-                (path.clone(), indexes.clone(), IndexOperation::Update)
+            IndexCommands::Update {
+                path,
+                indexes,
+                wait,
+            } => {
+                let execution = if *wait {
+                    IndexExecution::Blocking
+                } else {
+                    IndexExecution::Background
+                };
+                (
+                    path.clone(),
+                    indexes.clone(),
+                    IndexOperation::Update,
+                    execution,
+                )
             }
         };
         IndexRequest {
             operation,
+            execution,
             path,
             indexes,
             sift_dir: self.paths.sift_dir.clone(),
             follow_links: self.paths.follow,
-        }
-    }
-
-    fn daemon_spawn(&self) -> DaemonSpawnConfig {
-        DaemonSpawnConfig {
-            enabled: std::env::var_os("SIFT_NO_DAEMON").is_none(),
-            sift_dir: self.paths.sift_dir.clone(),
-            init_root: None,
-            mode: DaemonMode::Watch,
+            one_file_system: self.walker_decl.one_file_system,
+            max_depth: filter.decl.max_depth,
+            max_filesize: filter.decl.max_filesize,
         }
     }
 
@@ -214,7 +233,7 @@ impl Cli {
     pub fn dispatch(&self, argv: &Argv<'_>) -> ExitCode {
         match self.dispatch_route() {
             DispatchRoute::TypeList => {
-                TypeCatalog::print_list(&self.filter_decl);
+                TypeCatalog::from_decl(&self.filter_decl).print_list();
                 ExitCode::SUCCESS
             }
             DispatchRoute::Update => Self::exit_update(),
@@ -234,29 +253,26 @@ impl Cli {
     }
 
     fn exit_index(&self, req: IndexRequest, argv: &Argv<'_>) -> ExitCode {
-        let spawn = self.daemon_spawn();
-        let index = match Index::resolve(req) {
+        let daemon = self.paths.daemon();
+        let index = match IndexJob::resolve(req) {
             Ok(index) => index,
             Err(e) => {
                 eprintln!("sift: {e}");
                 return ExitCode::from(2);
             }
         };
-        index.run(&spawn, argv)
+        index.run(daemon.as_ref(), argv)
     }
 
     fn exit_grep(&self, argv: &Argv<'_>) -> ExitCode {
-        let spawn = self.daemon_spawn();
+        let daemon = self.paths.daemon();
         let grep = Grep::new(self.grep_config());
 
-        if !self.filter_decl.files
-            && let Err(e) = crate::index::daemon::DaemonSupervisor::new_process().spawn(&spawn)
-        {
-            eprintln!("sift: warning: daemon not started: {e}");
-        }
-
-        let suppress_errors = grep.suppress_error_messages(argv);
-        Self::exit_from_grep(grep.run(argv), suppress_errors)
+        let suppress_errors = SearchFilterCtx::resolve(argv)
+            .ignore
+            .msg_flags
+            .contains(MessageFlags::NO_MESSAGES);
+        Self::exit_from_grep(grep.run(argv, daemon.as_ref()), suppress_errors)
     }
 
     fn exit_from_grep(
@@ -313,6 +329,10 @@ pub enum IndexCommands {
         /// Write index metadata only; the daemon builds asynchronously.
         #[arg(long)]
         lazy: bool,
+
+        /// Block until the index build completes.
+        #[arg(long)]
+        wait: bool,
     },
     /// Incrementally refresh an existing index (fails if no index exists).
     Update {
@@ -323,6 +343,10 @@ pub enum IndexCommands {
         /// Available: trigram
         #[arg(short, long, value_delimiter = ',')]
         indexes: Option<Vec<sift_core::IndexKind>>,
+
+        /// Block until the index update completes.
+        #[arg(long)]
+        wait: bool,
     },
 }
 

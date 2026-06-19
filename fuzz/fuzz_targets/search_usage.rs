@@ -4,8 +4,8 @@ use libfuzzer_sys::fuzz_target;
 use sift_core::grep::{GrepRequest, run as grep_run};
 use sift_core::{
     CandidateFilter, CandidateFilterConfig, CorpusKind, CorpusSpec, IndexConfig, Indexes,
-    PatternCompiler, SearchOutput, SearchOutputFormat, SearchQuery, SearchSeparators, TrigramIndex,
-    VisibilityConfig,
+    IndexWalkOptions, PatternCompiler, SearchCollection, SearchOutput, SearchOutputFormat,
+    SearchQuery, SearchSeparators, TrigramIndex, VisibilityConfig,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -13,37 +13,40 @@ use std::sync::OnceLock;
 const MAX_PATTERN_LEN: usize = 512;
 
 struct IndexHolder {
-    _tmp: tempfile::TempDir,
+    temp: tempfile::TempDir,
     indexes: Indexes,
 }
 
 static INDEXES: OnceLock<IndexHolder> = OnceLock::new();
 
 fn indexed() -> &'static Indexes {
-    &INDEXES
-        .get_or_init(|| {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let corpus = tmp.path().join("c");
-            fs::create_dir_all(&corpus).expect("mkdir");
-            fs::write(corpus.join("a.txt"), b"hello world\nfoo bar\n").expect("a.txt");
-            fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
-            let sift_dir = tmp.path().join(".sift");
-            let trigram_dir = sift_dir.join("trigram");
-            let config = IndexConfig {
-                corpus: CorpusSpec {
-                    root: &corpus,
-                    kind: CorpusKind::Directory,
-                    follow_links: false,
-                    include_paths: &[],
-                    exclude_paths: &[],
-                },
-                visibility: VisibilityConfig::default(),
-            };
-            TrigramIndex::build(&config, &trigram_dir).expect("build_index");
-            let indexes = Indexes::open(&sift_dir).expect("open_index");
-            IndexHolder { _tmp: tmp, indexes }
-        })
-        .indexes
+    let holder = INDEXES.get_or_init(|| {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let corpus = tmp.path().join("c");
+        fs::create_dir_all(&corpus).expect("mkdir");
+        fs::write(corpus.join("a.txt"), b"hello world\nfoo bar\n").expect("a.txt");
+        fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
+        let sift_dir = tmp.path().join(".sift");
+        let trigram_dir = sift_dir.join("trigram");
+        let config = IndexConfig {
+            corpus: CorpusSpec {
+                root: &corpus,
+                kind: CorpusKind::Directory,
+                follow_links: false,
+                include_paths: &[],
+                exclude_paths: &[],
+            },
+            walk: IndexWalkOptions::new(false),
+            visibility: VisibilityConfig::default(),
+        };
+        TrigramIndex::build(&config, &trigram_dir, &[]).expect("build_index");
+        let indexes = Indexes::open(&sift_dir).expect("open_index");
+        IndexHolder {
+            temp: tmp,
+            indexes,
+        }
+    });
+    &holder.indexes
 }
 
 fn lossy_pattern(data: &[u8]) -> String {
@@ -66,7 +69,11 @@ fn opts_from_bytes(data: &[u8]) -> sift_core::SearchOptions {
     }
 }
 
-fn run_search(indexes: &Indexes, patterns: &[String], opts: &sift_core::SearchOptions) {
+fn run_search(
+    indexes: &Indexes,
+    patterns: &[String],
+    opts: &sift_core::SearchOptions,
+) {
     let Ok(q) = SearchQuery::new(patterns, opts.clone()) else {
         return;
     };
@@ -80,7 +87,9 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &sift_core::SearchOp
             ..SearchOutput::default()
         },
         separators: &SearchSeparators::default(),
-        collect_stats: false,
+        collect: SearchCollection::none(),
+        store_meta: None,
+        walk_unindexed: false,
     });
 }
 

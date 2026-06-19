@@ -1,9 +1,9 @@
 use std::fs;
 
-use sift_core::{CorpusKind, IndexKind, IndexStore};
+use sift_core::{IndexKind, IndexStore};
 use tempfile::TempDir;
 
-use super::common::standard_build_config;
+use super::common::{sample_store_meta, standard_build_config};
 
 #[test]
 fn build_writes_current_snapshot() {
@@ -14,15 +14,13 @@ fn build_writes_current_snapshot() {
 
     let sift_dir = tmp.path().join(".sift");
     let config = standard_build_config(&corpus, &[]);
-    let mut store = IndexStore::open_or_create(
-        &sift_dir,
-        &corpus,
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .expect("open");
-    store.build(&[IndexKind::Trigram], &config).expect("build");
+    let corpus_path = corpus.clone();
+    let root = corpus.canonicalize().unwrap_or(corpus_path);
+    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let mut store = IndexStore::open_or_create(&sift_dir, &meta).expect("open");
+    store
+        .build(&[IndexKind::Trigram], &config, &[])
+        .expect("build");
 
     let id = store.current_id().expect("snapshot id");
     assert!(!id.is_empty());

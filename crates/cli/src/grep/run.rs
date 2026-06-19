@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use sift_core::{CandidateFilter, CorpusKind, Indexes, SearchMode, SearchQuery};
 
+use crate::index::daemon::{Daemon, DaemonOp};
+
 use super::argv::Argv;
-use super::filter::{FilterConfig, SearchFilterCtx, candidate_config};
-use super::ignore::MessageFlags;
+use super::filter::{FilterConfig, SearchFilterCtx};
 use super::output::{FilenameContext, OutputArgv, OutputConfig, SearchOutputCtx};
 use super::paths::CorpusScope;
-use super::pattern::{PatternArgv, PatternConfig, ResolvedPatterns, search_options};
+use super::pattern::{PatternArgv, PatternConfig, ResolvedPatterns};
 
 /// Resolved configuration for a grep invocation.
 #[derive(Clone)]
@@ -37,6 +38,7 @@ struct GrepSession {
     indexes: Indexes,
     scope: CorpusScope,
     search_filter: CandidateFilter,
+    store_meta: Option<sift_core::StoreMeta>,
 }
 
 impl GrepOutcome {
@@ -58,22 +60,14 @@ impl Grep {
     /// # Errors
     ///
     /// Returns an error if I/O operations fail, paths are invalid, or filter config building fails.
-    pub fn run(&self, argv: &Argv<'_>) -> anyhow::Result<GrepOutcome> {
+    pub fn run(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<GrepOutcome> {
         if self.config.files_mode {
             self.run_files(argv)
                 .map(|found| GrepOutcome::Files { found })
         } else {
-            self.run_search(argv)
+            self.run_search(argv, daemon)
                 .map(|matched| GrepOutcome::Search { matched })
         }
-    }
-
-    #[must_use]
-    pub fn suppress_error_messages(&self, argv: &Argv<'_>) -> bool {
-        SearchFilterCtx::resolve(argv)
-            .ignore
-            .msg_flags
-            .contains(MessageFlags::NO_MESSAGES)
     }
 
     fn configure_threads(&self) {
@@ -90,14 +84,15 @@ impl Grep {
         let filter = SearchFilterCtx::resolve(argv);
         let cwd = std::env::current_dir()?;
         let indexes = Indexes::open(&self.config.sift_dir)?;
+        let store_meta = sift_core::StoreMeta::read(&self.config.sift_dir).ok();
         let scope = CorpusScope::resolve(
             &indexes,
+            store_meta.as_ref(),
             &cwd,
             &self.config.search_paths,
             &self.config.sift_dir,
         )?;
-        let filter_config = candidate_config(
-            &self.config.filter,
+        let filter_config = self.config.filter.candidate_config(
             filter,
             scope.prefixes.clone(),
             scope.exclude_paths.clone(),
@@ -107,6 +102,7 @@ impl Grep {
             indexes,
             scope,
             search_filter,
+            store_meta,
         })
     }
 
@@ -151,7 +147,7 @@ impl Grep {
                     all_paths.push(rel);
                 }
             } else if scope_path.is_dir() {
-                let discovered = sift_core::discover_files(&scope_path, walk_opts)?;
+                let discovered = walk_opts.discover_files(&scope_path)?;
                 for rel_in_scope in discovered {
                     let full_rel = if prefix.as_os_str().is_empty() {
                         rel_in_scope
@@ -180,7 +176,7 @@ impl Grep {
         Ok(any)
     }
 
-    fn run_search(&self, argv: &Argv<'_>) -> anyhow::Result<bool> {
+    fn run_search(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<bool> {
         let patterns = ResolvedPatterns::resolve(&self.config.pattern)?;
         let pattern_argv = PatternArgv::resolve(argv);
         let output_argv = OutputArgv::resolve(argv);
@@ -214,15 +210,13 @@ impl Grep {
 
         let session = self.prepare_session(argv)?;
 
-        let opts = search_options(
-            &self.config.pattern,
-            &pattern_argv,
-            pattern_argv.only_matching,
-        );
-        let query =
-            SearchQuery::new(patterns.as_slice(), opts).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let opts = self
+            .config
+            .pattern
+            .search_options(&pattern_argv, pattern_argv.only_matching);
+        let query = SearchQuery::new(&patterns.0, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let (out, _filter) = SearchOutputCtx::resolve(
+        let (out, _) = SearchOutputCtx::resolve(
             &self.config.output,
             argv,
             effective_mode,
@@ -240,17 +234,27 @@ impl Grep {
         };
         let output = out.to_core_output(&self.config.output, filename_ctx);
 
-        let outcome = sift_core::grep::GrepRequest {
+        let grep_run = sift_core::grep::GrepRequest {
             indexes: &session.indexes,
             filter: &session.search_filter,
             output,
             separators: &out.separators,
-            collect_stats: out.print_stats,
+            collect: sift_core::SearchCollection::hits().with_stats(out.print_stats),
+            store_meta: session.store_meta.as_ref(),
+            walk_unindexed: daemon.is_some(),
         }
         .run(&query)?;
-        if let Some(s) = &outcome.stats {
+        if let Some(s) = &grep_run.outcome.stats {
             SearchOutputCtx::write_stats(s);
         }
-        Ok(outcome.matched)
+        if let Some(daemon) = daemon {
+            let paths = session.indexes.unindexed_hits(grep_run.hits);
+            if !paths.is_empty()
+                && let Err(e) = daemon.send(&DaemonOp::Index(paths))
+            {
+                eprintln!("sift: warning: index request failed: {e}");
+            }
+        }
+        Ok(grep_run.outcome.matched)
     }
 }

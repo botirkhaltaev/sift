@@ -9,11 +9,34 @@ use std::hint::black_box;
 use std::path::Path;
 
 use sift_core::{
-    CorpusKind, CorpusSpec, IndexConfig, IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec,
-    VisibilityConfig,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexKind, IndexStore,
+    IndexWalkOptions, Indexes, QueryFlags, QuerySpec, StoreMeta, VisibilityConfig, WalkMeta,
 };
 
 mod common;
+
+struct IndexOpenFixture {
+    temp: tempfile::TempDir,
+    idx_dir: std::path::PathBuf,
+    root: std::path::PathBuf,
+}
+
+struct SiftDirFixture {
+    temp: tempfile::TempDir,
+    sift_dir: std::path::PathBuf,
+}
+
+impl Drop for IndexOpenFixture {
+    fn drop(&mut self) {
+        let _ = &mut self.temp;
+    }
+}
+
+impl Drop for SiftDirFixture {
+    fn drop(&mut self) {
+        let _ = &mut self.temp;
+    }
+}
 
 fn sift_criterion() -> Criterion {
     Criterion::default()
@@ -78,22 +101,36 @@ fn standard_build_config<'a>(
             include_paths: &[],
             exclude_paths,
         },
+        walk: IndexWalkOptions::new(false),
         visibility: VisibilityConfig::default(),
     }
 }
 
 /// Full `sift build` path via [`IndexStore`] (production defaults).
 fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
-    let mut store = IndexStore::open_or_create(
-        sift_dir,
-        corpus,
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .unwrap();
+    let corpus_path = corpus.to_path_buf();
+    let root = corpus.canonicalize().unwrap_or(corpus_path);
+    let meta = sift_core::StoreMeta::new(
+        CorpusMeta {
+            root,
+            kind: CorpusKind::Directory,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
+        },
+        WalkMeta {
+            follow_links: false,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        },
+        FilterMeta {
+            visibility: VisibilityConfig::default(),
+        },
+        vec![IndexKind::Trigram],
+    );
+    let mut store = IndexStore::open_or_create(sift_dir, &meta).unwrap();
     let config = standard_build_config(corpus, &[]);
-    store.build(&[IndexKind::Trigram], &config).unwrap();
+    store.build(&[IndexKind::Trigram], &config, &[]).unwrap();
 }
 
 // ─── Build benchmarks ────────────────────────────────────────────────────────
@@ -160,7 +197,7 @@ fn bench_index_open(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_open");
 
     g.bench_function("small", |b| {
-        let (_tmp, idx_dir, root) = {
+        let fixture = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             make_parity_corpus(&corpus);
@@ -168,15 +205,23 @@ fn bench_index_open(c: &mut Criterion) {
             let built = common::build_index(&corpus, &idx);
             let root = built.root().to_path_buf();
             drop(built);
-            (tmp, idx, root)
+            IndexOpenFixture {
+                temp: tmp,
+                idx_dir: idx,
+                root,
+            }
         };
         b.iter(|| {
-            black_box(common::open_index(&idx_dir, &root, CorpusKind::Directory));
+            black_box(common::open_index(
+                &fixture.idx_dir,
+                &fixture.root,
+                CorpusKind::Directory,
+            ));
         });
     });
 
     g.bench_function("large", |b| {
-        let (_tmp, idx_dir, root) = {
+        let fixture = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             common::materialize_large_corpus(&corpus, 8_000, 100, 256);
@@ -184,10 +229,18 @@ fn bench_index_open(c: &mut Criterion) {
             let built = common::build_index(&corpus, &idx);
             let root = built.root().to_path_buf();
             drop(built);
-            (tmp, idx, root)
+            IndexOpenFixture {
+                temp: tmp,
+                idx_dir: idx,
+                root,
+            }
         };
         b.iter(|| {
-            black_box(common::open_index(&idx_dir, &root, CorpusKind::Directory));
+            black_box(common::open_index(
+                &fixture.idx_dir,
+                &fixture.root,
+                CorpusKind::Directory,
+            ));
         });
     });
 
@@ -209,19 +262,32 @@ fn bench_indexes_open(c: &mut Criterion) {
     });
 
     g.bench_function("one_trigram_index", |b| {
-        let (_tmp, sift_dir) = {
+        let fixture = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             make_parity_corpus(&corpus);
             let sift = tmp.path().join(".sift");
-            let mut store = IndexStore::open_or_create(
-                &sift,
-                &corpus,
-                CorpusKind::Directory,
-                false,
-                &[IndexKind::Trigram],
-            )
-            .expect("open store");
+            let corpus_path = corpus.clone();
+            let root = corpus.canonicalize().unwrap_or(corpus_path);
+            let meta = StoreMeta::new(
+                CorpusMeta {
+                    root,
+                    kind: CorpusKind::Directory,
+                    include_paths: Vec::new(),
+                    exclude_paths: Vec::new(),
+                },
+                WalkMeta {
+                    follow_links: false,
+                    one_file_system: false,
+                    max_depth: None,
+                    max_filesize: None,
+                },
+                FilterMeta {
+                    visibility: VisibilityConfig::default(),
+                },
+                vec![IndexKind::Trigram],
+            );
+            let mut store = IndexStore::open_or_create(&sift, &meta).expect("open store");
             store
                 .build(
                     &[IndexKind::Trigram],
@@ -233,15 +299,20 @@ fn bench_indexes_open(c: &mut Criterion) {
                             include_paths: &[],
                             exclude_paths: &[],
                         },
+                        walk: IndexWalkOptions::new(false),
                         visibility: VisibilityConfig::default(),
                     },
+                    &[],
                 )
                 .expect("build");
             drop(store);
-            (tmp, sift)
+            SiftDirFixture {
+                temp: tmp,
+                sift_dir: sift,
+            }
         };
         b.iter(|| {
-            black_box(Indexes::open(&sift_dir).unwrap());
+            black_box(Indexes::open(&fixture.sift_dir).unwrap());
         });
     });
 
@@ -273,7 +344,8 @@ fn bench_index_save_reopen(c: &mut Criterion) {
 // ─── TrigramIndex inherent method benches ────────────────────────────────────
 
 fn bench_trigram_index_methods(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
 
     let mut g = c.benchmark_group("trigram_index");
 
@@ -291,7 +363,8 @@ fn bench_trigram_index_methods(c: &mut Criterion) {
 // ─── Candidate benches ───────────────────────────────────────────────────────
 
 fn bench_candidates(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
 
     let mut g = c.benchmark_group("index_candidates");
 
@@ -341,7 +414,8 @@ fn bench_candidates(c: &mut Criterion) {
 // ─── Explain benches ─────────────────────────────────────────────────────────
 
 fn bench_explain(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
 
     let mut g = c.benchmark_group("index_explain");
 

@@ -1,558 +1,187 @@
+//! Background index refresh daemon: IPC, spawn, and serve loop.
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use fslock::LockFile;
-use notify::{RecursiveMode, Watcher};
-use sift_core::{CorpusSpec, IndexConfig, IndexKind, IndexStore, StoreMeta, VisibilityConfig};
+use interprocess::local_socket::traits::{ListenerExt, Stream as _};
+use interprocess::local_socket::{GenericNamespaced, ListenerOptions, Stream, ToNsName};
+use notify::RecursiveMode;
+use notify::Watcher;
+use sift_core::{CorpusKind, CorpusMeta, FilterMeta, IndexKind, IndexStore, StoreMeta, WalkMeta};
+use thiserror::Error;
+
+use crate::grep::paths::CorpusScope;
 
 const DEBOUNCE_MS: u64 = 250;
-/// Default idle timeout for the daemon (2 minutes).
-pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_mins(2);
-/// Maximum `recv_timeout` — keeps the event loop responsive to the
-/// `shutdown` flag even when the next state deadline is far away.
-const SHUTDOWN_POLL: Duration = Duration::from_secs(1);
-const SPAWN_LOCK: &str = "daemon-spawn.lock";
 const DAEMON_LOCK: &str = "lock";
 const READY_DIR: &str = "daemon-ready";
-const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_POLL: Duration = Duration::from_secs(1);
+const SPAWN_LOCK: &str = "daemon-spawn.lock";
 
-/// Platform-specific watcher chosen by cfg.
-///
-/// On Linux and macOS the native `notify` backend is used (inotify, `FSEvent`).
-/// On Windows the polling backend is used as a workaround for `ReadDirectoryChangesWatcher`
-/// not reliably delivering file-creation events in recursive temp-directory watches
-/// under CI (GitHub Actions `windows-latest`).
-#[cfg(windows)]
-type PlatformWatcher = notify::PollWatcher;
+#[derive(Debug, Error)]
+pub enum DaemonError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 
-#[cfg(not(windows))]
-type PlatformWatcher = notify::RecommendedWatcher;
-
-#[cfg(windows)]
-fn watcher_config() -> notify::Config {
-    notify::Config::default().with_poll_interval(Duration::from_millis(250))
+    #[error("daemon error: {0}")]
+    Message(String),
 }
 
-#[cfg(not(windows))]
-fn watcher_config() -> notify::Config {
-    notify::Config::default()
-}
-
-/// A cross-platform filesystem watcher.
-///
-/// Wraps the platform-specific `notify` backend and provides the same
-/// [`notify::Watcher`] interface.  Linux and macOS use native inotify /
-/// `FSEvent`; Windows uses `PollWatcher` to work around
-/// [`ReadDirectoryChangesWatcher` failing to deliver creation events in
-/// recursive temp-directory watches on CI](https://github.com/notify-rs/notify/issues/935).
-struct FileWatcher {
-    inner: PlatformWatcher,
-}
-
-impl FileWatcher {
-    fn new<F>(event_handler: F) -> notify::Result<Self>
-    where
-        F: notify::EventHandler,
-    {
-        Ok(Self {
-            inner: PlatformWatcher::new(event_handler, watcher_config())?,
-        })
-    }
-
-    fn watch(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
-        self.inner.watch(path, mode)
+impl DaemonError {
+    fn message(msg: impl Into<String>) -> Self {
+        Self::Message(msg.into())
     }
 }
 
-// ---------------------------------------------------------------------------
-// Spawn types
-// ---------------------------------------------------------------------------
-
-/// Whether the daemon should watch continuously or perform a single operation.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum DaemonMode {
-    /// Long-running watch loop with filesystem monitoring.
-    #[default]
-    Watch,
-    /// Build/update once and exit. Fire-and-forget — no readiness handshake.
-    Once,
-}
-
-/// Outcome of a daemon spawn attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpawnOutcome {
-    Disabled,
-    AlreadyRunning,
-    Spawned,
-}
-
-/// Parameters for launching a daemon child process.
-#[derive(Debug, Clone)]
-pub struct SpawnRequest {
-    pub exe: PathBuf,
-    pub sift_dir: PathBuf,
-    pub init_root: Option<PathBuf>,
-    /// Startup handshake file the child creates after the watcher is active.
-    pub ready_file: Option<PathBuf>,
-    pub mode: DaemonMode,
-}
-
-/// Spawn policy for the daemon background process.
-#[derive(Debug, Clone)]
-pub struct DaemonSpawnConfig {
-    pub enabled: bool,
-    pub sift_dir: PathBuf,
-    pub init_root: Option<PathBuf>,
-    pub mode: DaemonMode,
-}
-
-impl Default for DaemonSpawnConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            sift_dir: PathBuf::new(),
-            init_root: None,
-            mode: DaemonMode::Watch,
-        }
+impl From<anyhow::Error> for DaemonError {
+    fn from(value: anyhow::Error) -> Self {
+        Self::Message(value.to_string())
     }
 }
 
-/// Abstraction over process spawning for testability.
-pub trait DaemonSpawner {
-    /// Spawn a daemon process.
+impl From<sift_core::Error> for DaemonError {
+    fn from(value: sift_core::Error) -> Self {
+        Self::Message(value.to_string())
+    }
+}
+
+/// IPC operation sent to the index daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonOp {
+    /// Rel-paths to index. Empty vec = full corpus.
+    Index(Vec<PathBuf>),
+}
+
+impl DaemonOp {
+    const INDEX_OPCODE: u8 = 0x02;
+    const STATUS_OK: u8 = 0x00;
+    const STATUS_ERR: u8 = 0x01;
+
+    /// Encode this operation for IPC.
     ///
     /// # Errors
     ///
-    /// Returns an error if the process cannot be launched.
-    fn spawn(&self, request: &SpawnRequest) -> anyhow::Result<()>;
-}
-
-/// Real spawner using `std::process::Command`.
-#[derive(Debug, Default)]
-pub struct ProcessDaemonSpawner;
-
-impl DaemonSpawner for ProcessDaemonSpawner {
-    fn spawn(&self, request: &SpawnRequest) -> anyhow::Result<()> {
-        let mut cmd = std::process::Command::new(&request.exe);
-        cmd.arg("--sift-dir")
-            .arg(&request.sift_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .stdin(std::process::Stdio::null());
-        if let Some(root) = &request.init_root {
-            cmd.arg("--init-root").arg(root);
-        }
-        if let Some(path) = &request.ready_file {
-            cmd.arg("--ready-file").arg(path);
-        }
-        if request.mode == DaemonMode::Once {
-            cmd.arg("--once");
-        }
-        cmd.spawn()?;
-        Ok(())
-    }
-}
-
-/// Lock-based gate for daemon spawn decisions.
-///
-/// Uses a spawn coordination lock to serialise concurrent parent processes and
-/// checks the daemon lock to detect an already-running daemon.
-pub struct DaemonSupervisor<S = ProcessDaemonSpawner> {
-    spawner: S,
-}
-
-impl DaemonSupervisor {
-    /// Convenience constructor using the real process spawner.
-    #[must_use]
-    pub const fn new_process() -> Self {
-        Self {
-            spawner: ProcessDaemonSpawner,
-        }
-    }
-}
-
-impl<S> DaemonSupervisor<S> {
-    #[must_use]
-    pub const fn new(spawner: S) -> Self {
-        Self { spawner }
-    }
-}
-
-impl<S: DaemonSpawner> DaemonSupervisor<S> {
-    /// Attempt to spawn the daemon according to `config`.
-    ///
-    /// In [`DaemonMode::Watch`] mode, acquires the spawn coordination lock,
-    /// checks the daemon lock, spawns the child, and polls for startup
-    /// readiness.
-    ///
-    /// In [`DaemonMode::Once`] mode, spawns a fire-and-forget daemon that
-    /// builds/updates once and exits. No lock coordination or readiness
-    /// handshake — the child acquires the daemon lock internally.
-    ///
-    /// # Errors
-    ///
-    /// Propagates lock-acquisition and process-spawn errors. In Watch mode,
-    /// returns an error if the child does not signal readiness within
-    /// [`READY_TIMEOUT`].
-    pub fn spawn(&self, config: &DaemonSpawnConfig) -> anyhow::Result<SpawnOutcome> {
-        if !config.enabled {
-            return Ok(SpawnOutcome::Disabled);
-        }
-
-        let exe = std::env::current_exe()
-            .map(|p| p.with_file_name("sift-daemon"))
-            .map_err(|e| anyhow::anyhow!("cannot resolve current executable path: {e}"))?;
-
-        let sift_dir = &config.sift_dir;
-        std::fs::create_dir_all(sift_dir)?;
-
-        match config.mode {
-            DaemonMode::Once => {
-                let request = SpawnRequest {
-                    exe,
-                    sift_dir: sift_dir.clone(),
-                    init_root: config.init_root.clone(),
-                    ready_file: None,
-                    mode: DaemonMode::Once,
-                };
-                self.spawner.spawn(&request)?;
-                Ok(SpawnOutcome::Spawned)
-            }
-            DaemonMode::Watch => self.coordinate_launch(exe, config),
-        }
-    }
-
-    /// Acquire coordination locks, spawn the daemon, and poll for readiness.
-    fn coordinate_launch(
-        &self,
-        exe: PathBuf,
-        config: &DaemonSpawnConfig,
-    ) -> anyhow::Result<SpawnOutcome> {
-        let sift_dir = &config.sift_dir;
-
-        // Acquire spawn coordination lock to prevent concurrent spawn attempts.
-        let spawn_lock_path = sift_dir.join(SPAWN_LOCK);
-        let mut spawn_lock = LockFile::open(&spawn_lock_path)?;
-        if !spawn_lock.try_lock()? {
-            return Ok(SpawnOutcome::AlreadyRunning);
-        }
-
-        // Check whether the daemon lock is already held (another daemon is
-        // running).  Keep the probe lock released — the child will acquire the
-        // daemon lock after starting.
-        {
-            let daemon_lock_path = sift_dir.join(DAEMON_LOCK);
-            let mut daemon_lock = LockFile::open(&daemon_lock_path)?;
-            if !daemon_lock.try_lock()? {
-                return Ok(SpawnOutcome::AlreadyRunning);
-            }
-        }
-
-        // Generate a unique ready-file path for this spawn attempt.
-        let ready_dir = sift_dir.join(READY_DIR);
-        std::fs::create_dir_all(&ready_dir)?;
-        let pid = std::process::id();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let ready_path = ready_dir.join(format!("{pid}-{now}"));
-
-        // Remove any stale ready file at this path.
-        let _ = std::fs::remove_file(&ready_path);
-
-        let request = SpawnRequest {
-            exe,
-            sift_dir: sift_dir.clone(),
-            init_root: config.init_root.clone(),
-            ready_file: Some(ready_path.clone()),
-            mode: DaemonMode::Watch,
-        };
-        self.spawner.spawn(&request)?;
-
-        // Poll for readiness while holding the spawn lock.
-        let deadline = Instant::now() + READY_TIMEOUT;
-        loop {
-            if ready_path.exists() {
-                // Child signalled readiness — clean up and confirm.
-                let _ = std::fs::remove_file(&ready_path);
-                return Ok(SpawnOutcome::Spawned);
-            }
-            if Instant::now() >= deadline {
-                anyhow::bail!("daemon did not signal readiness within {READY_TIMEOUT:?}");
-            }
-            std::thread::sleep(READY_POLL_INTERVAL);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Coordinator types
-// ---------------------------------------------------------------------------
-
-/// Messages sent through the coordinator channel.
-enum CoordinatorMessage {
-    FsChange(notify::Event),
-    RefreshComplete,
-}
-
-/// Input to the coordinator state machine.
-enum CoordinatorInput {
-    FsChange,
-    RefreshComplete,
-    DeadlineReached,
-}
-
-/// Action produced by a state transition.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum CoordinatorAction {
-    None,
-    StartRefresh,
-    Exit,
-}
-
-/// Phase of the coordinator loop.
-enum CoordinatorState {
-    Idle { deadline: Instant },
-    Debouncing { deadline: Instant },
-    Refreshing { follow_up: bool },
-}
-
-impl CoordinatorState {
-    fn new_idle(idle_timeout: Duration) -> Self {
-        Self::Idle {
-            deadline: Instant::now() + idle_timeout,
-        }
-    }
-
-    /// The deadline at which a [`CoordinatorInput::DeadlineReached`] input
-    /// should be generated.  Returns `None` when the state has no deadline
-    /// (i.e. `Refreshing`, which waits for `RefreshComplete`).
-    const fn deadline(&self) -> Option<Instant> {
+    /// Returns an error if writing fails.
+    pub fn encode(&self, writer: &mut impl Write) -> io::Result<()> {
         match self {
-            Self::Idle { deadline } | Self::Debouncing { deadline } => Some(*deadline),
-            Self::Refreshing { .. } => None,
+            Self::Index(paths) => {
+                writer.write_all(&[Self::INDEX_OPCODE])?;
+                for path in paths {
+                    let line = path.to_string_lossy();
+                    writer.write_all(line.as_bytes())?;
+                    writer.write_all(b"\n")?;
+                }
+                writer.write_all(b"\n")?;
+            }
         }
+        writer.flush()
     }
 
-    /// Pure state transition.  `debounce` and `idle_timeout` are loop config.
-    fn transition(
-        self,
-        input: CoordinatorInput,
-        debounce: Duration,
-        idle_timeout: Duration,
-    ) -> (Self, CoordinatorAction) {
-        match (self, input) {
-            (Self::Idle { .. } | Self::Debouncing { .. }, CoordinatorInput::FsChange) => (
-                Self::Debouncing {
-                    deadline: Instant::now() + debounce,
-                },
-                CoordinatorAction::None,
-            ),
-            (Self::Debouncing { .. }, CoordinatorInput::DeadlineReached)
-            | (Self::Refreshing { follow_up: true }, CoordinatorInput::RefreshComplete) => (
-                Self::Refreshing { follow_up: false },
-                CoordinatorAction::StartRefresh,
-            ),
-            (Self::Idle { .. }, CoordinatorInput::DeadlineReached) => {
-                (Self::new_idle(idle_timeout), CoordinatorAction::Exit)
+    /// Decode a daemon operation from IPC.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload is malformed.
+    pub fn decode(mut reader: impl Read) -> io::Result<Self> {
+        let mut opcode = [0_u8; 1];
+        reader.read_exact(&mut opcode)?;
+        match opcode[0] {
+            Self::INDEX_OPCODE => {
+                let mut paths = Vec::new();
+                loop {
+                    let mut buf = Vec::new();
+                    loop {
+                        let mut byte = [0_u8; 1];
+                        let n = reader.read(&mut byte)?;
+                        if n == 0 || byte[0] == b'\n' {
+                            break;
+                        }
+                        buf.push(byte[0]);
+                    }
+                    if buf.is_empty() {
+                        break;
+                    }
+                    let line = String::from_utf8(buf).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "index path is not valid utf-8")
+                    })?;
+                    paths.push(PathBuf::from(line));
+                }
+                Ok(Self::Index(paths))
             }
-            (Self::Refreshing { .. }, CoordinatorInput::FsChange) => (
-                Self::Refreshing { follow_up: true },
-                CoordinatorAction::None,
-            ),
-            (Self::Refreshing { follow_up: false }, CoordinatorInput::RefreshComplete) => {
-                (Self::new_idle(idle_timeout), CoordinatorAction::None)
-            }
-            (state, _) => (state, CoordinatorAction::None),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unknown daemon opcode: {other}"),
+            )),
         }
-    }
-
-    const fn is_refreshing(&self) -> bool {
-        matches!(self, Self::Refreshing { .. })
     }
 }
 
-// ---------------------------------------------------------------------------
-// Daemon runner
-// ---------------------------------------------------------------------------
-
-/// Loaded daemon metadata extracted from the store.
-struct DaemonMeta {
-    root: PathBuf,
-    corpus_kind: sift_core::CorpusKind,
-    follow_links: bool,
-    kinds: Vec<IndexKind>,
-}
-
-/// Configuration for the long-running daemon process.
+/// Handle to the index daemon for a `.sift` store directory.
 #[derive(Debug, Clone)]
-pub struct DaemonRunConfig {
+pub struct Daemon {
     pub sift_dir: PathBuf,
     pub init_root: Option<PathBuf>,
-    /// Internal startup handshake: after the watcher is active, the child
-    /// atomically creates this file to signal readiness to the parent.
-    pub ready_file: Option<PathBuf>,
-    /// How long the daemon stays alive with no filesystem activity before
-    /// exiting gracefully.  Defaults to 2 minutes.
-    pub idle_timeout: Duration,
 }
 
-impl Default for DaemonRunConfig {
-    fn default() -> Self {
-        Self {
-            sift_dir: PathBuf::new(),
-            init_root: None,
-            ready_file: None,
-            idle_timeout: DEFAULT_IDLE_TIMEOUT,
-        }
-    }
-}
-
-/// The long-running daemon event loop with stoppable support for testing.
-///
-/// Uses a coordinator loop that receives filesystem events and manages a
-/// background refresh worker. The coordinator can keep processing events
-/// while the worker is running, and schedules a follow-up refresh if events
-/// arrive during an active refresh.
-pub struct DaemonRunner {
-    config: DaemonRunConfig,
-}
-
-impl DaemonRunner {
+impl Daemon {
     #[must_use]
-    pub const fn new(config: DaemonRunConfig) -> Self {
-        Self { config }
+    pub const fn new(sift_dir: PathBuf) -> Self {
+        Self {
+            sift_dir,
+            init_root: None,
+        }
     }
 
-    /// Run a single build or update, then exit.
-    ///
-    /// Acquires the daemon lock, loads metadata, and builds the initial
-    /// snapshot if none exists.  Returns without entering the watch loop.
+    /// Send an IPC operation to the daemon, spawning it when needed.
     ///
     /// # Errors
     ///
-    /// Propagates lock-acquisition, metadata, and build errors.
-    pub fn run_once(&self) -> anyhow::Result<()> {
-        let sift_dir = &self.config.sift_dir;
-        std::fs::create_dir_all(sift_dir)?;
-
-        let lock_path = sift_dir.join(DAEMON_LOCK);
-        let mut lock_file = LockFile::open(&lock_path)?;
-        if !lock_file.try_lock()? {
-            return Ok(());
-        }
-
-        let (root, corpus_kind, follow_links, stored_kinds) =
-            match (StoreMeta::read(sift_dir), &self.config.init_root) {
-                (Ok(meta), _) => (meta.root, meta.corpus_kind, meta.follow_links, meta.indexes),
-                (Err(_), Some(init_root)) => {
-                    let root = init_root.canonicalize()?;
-                    (root, sift_core::CorpusKind::Directory, false, Vec::new())
-                }
-                (Err(e), None) => {
-                    anyhow::bail!("no store metadata: {e}");
-                }
-            };
-        let kinds: &[IndexKind] = if stored_kinds.is_empty() {
-            IndexKind::ALL
+    /// Propagates spawn and IPC failures.
+    pub fn send(&self, op: &DaemonOp) -> Result<(), DaemonError> {
+        self.ensure_daemon_running()?;
+        let mut stream = Stream::connect(self.ipc_name()?).map_err(DaemonError::Io)?;
+        op.encode(&mut stream)?;
+        let mut status = [0_u8; 1];
+        stream.read_exact(&mut status).map_err(DaemonError::Io)?;
+        if status[0] == DaemonOp::STATUS_OK {
+            Ok(())
         } else {
-            &stored_kinds
-        };
-
-        let mut store =
-            IndexStore::open_or_create(sift_dir, &root, corpus_kind, follow_links, kinds)?;
-
-        let exclude = sift_dir
-            .strip_prefix(&root)
-            .unwrap_or(sift_dir)
-            .to_path_buf();
-        let build_config = IndexConfig {
-            corpus: CorpusSpec {
-                root: &root,
-                kind: corpus_kind,
-                follow_links,
-                include_paths: &[],
-                exclude_paths: &[exclude],
-            },
-            visibility: VisibilityConfig::default(),
-        };
-
-        if store.current_id().is_none() {
-            store.build(kinds, &build_config)?;
-        } else {
-            store.update(kinds, &build_config)?;
-        }
-
-        Ok(())
-    }
-
-    fn load_daemon_meta(
-        sift_dir: &Path,
-        init_root: Option<&PathBuf>,
-    ) -> anyhow::Result<DaemonMeta> {
-        match (StoreMeta::read(sift_dir), init_root) {
-            (Ok(meta), _) => Ok(DaemonMeta {
-                root: meta.root,
-                corpus_kind: meta.corpus_kind,
-                follow_links: meta.follow_links,
-                kinds: if meta.indexes.is_empty() {
-                    IndexKind::ALL.to_vec()
-                } else {
-                    meta.indexes
-                },
-            }),
-            (Err(_), Some(init_root)) => {
-                let root = init_root.canonicalize()?;
-                Ok(DaemonMeta {
-                    root,
-                    corpus_kind: sift_core::CorpusKind::Directory,
-                    follow_links: false,
-                    kinds: IndexKind::ALL.to_vec(),
-                })
-            }
-            (Err(e), None) => {
-                anyhow::bail!("no store metadata: {e}");
-            }
+            Err(DaemonError::message("daemon rejected request"))
         }
     }
 
-    /// Run the daemon forever (production use).
-    ///
-    /// Lock-acquisition, metadata, and watcher errors are propagated
-    /// immediately.  Index build/update failures during background
-    /// refreshes are logged to stderr and do not propagate — the
-    /// daemon stays running and retries on the next file change.
+    /// Ensure the background daemon is running for this store.
     ///
     /// # Errors
     ///
-    /// Propagates lock-acquisition, metadata, and watcher setup errors.
-    pub fn run(&self) -> anyhow::Result<()> {
-        self.run_until(&AtomicBool::new(false))
+    /// Propagates spawn and readiness failures.
+    pub fn ensure_running(&self) -> Result<(), DaemonError> {
+        self.ensure_daemon_running()
     }
 
-    /// Run the daemon until `shutdown` becomes `true`.
-    ///
-    /// Lifecycle: lock → metadata → reconcile → ready signal → watcher → loop.
-    /// Reconciliation runs synchronously **before** the watcher starts, so
-    /// index writes never generate spurious watcher events.
+    /// Run the daemon event loop until idle timeout or shutdown.
     ///
     /// # Errors
     ///
-    /// Propagates lock-acquisition, metadata, and watcher setup errors.
-    pub fn run_until(&self, shutdown: &AtomicBool) -> anyhow::Result<()> {
-        std::fs::create_dir_all(&self.config.sift_dir)?;
+    /// Propagates lock-acquisition, metadata, watcher, and IPC setup errors.
+    pub fn serve(
+        &self,
+        ready_file: Option<PathBuf>,
+        idle_timeout: Duration,
+        shutdown: &AtomicBool,
+    ) -> Result<(), DaemonError> {
+        std::fs::create_dir_all(&self.sift_dir)?;
 
-        // Keep both the raw and canonical forms of `sift_dir`.  On macOS
-        // temp directories are symlinked (`/var/folders` →
-        // `/private/var/folders`).  FSEvent returns raw (symlink) paths,
-        // while `IndexStore` needs the canonical path.  Checking both in
-        // `should_ignore` avoids calling `canonicalize()` on each event
-        // path (which fails for already-deleted temp files).
-        let sift_dir_raw = self.config.sift_dir.clone();
+        let sift_dir_raw = self.sift_dir.clone();
         let sift_dir = sift_dir_raw
             .canonicalize()
             .unwrap_or_else(|_| sift_dir_raw.clone());
@@ -563,57 +192,487 @@ impl DaemonRunner {
             return Ok(());
         }
 
-        let meta = Self::load_daemon_meta(&sift_dir, self.config.init_root.as_ref())?;
+        let meta = self.load_meta(&sift_dir)?;
+        IndexStore::open_or_create(&sift_dir, &meta)
+            .and_then(|mut store| store.reconcile(&meta, &[]))?;
 
-        // Reconcile synchronously before setting up the watcher.  This
-        // guarantees the index is up-to-date and avoids the watcher seeing
-        // its own index-write events (the root cause of macOS CI hangs).
-        Self::refresh_index(&sift_dir, &meta);
+        let pending = Arc::new(Mutex::new(PendingIndex::None));
+        let (tx, rx) = mpsc::channel::<Event>();
 
-        // Signal readiness after lock + reconciliation.
-        if let Some(ready) = &self.config.ready_file {
+        let ipc_tx = tx.clone();
+        let ipc_daemon = Self {
+            sift_dir: sift_dir.clone(),
+            init_root: None,
+        };
+        std::thread::spawn(move || {
+            if let Err(e) = ipc_daemon.listen(move |op| ipc_tx.send(Event::Client(op)).is_ok()) {
+                eprintln!("sift-daemon: ipc listener stopped: {e}");
+            }
+        });
+
+        if let Some(ready) = ready_file {
             let tmp = ready.with_extension("tmp");
             std::fs::write(&tmp, "")?;
-            std::fs::rename(&tmp, ready)?;
+            std::fs::rename(&tmp, &ready)?;
         }
 
-        // Start the watcher AFTER reconciliation so it never sees the
-        // index writes from the initial build/update.
-        let (tx, rx) = mpsc::channel::<CoordinatorMessage>();
         let watcher_tx = tx.clone();
-        let mut watcher = FileWatcher::new(move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                let _ = watcher_tx.send(CoordinatorMessage::FsChange(event));
-            }
-        })?;
-        watcher.watch(&meta.root, RecursiveMode::Recursive)?;
+        let mut watcher = new_platform_watcher(watcher_tx)?;
+        let watched_root = meta.corpus.root;
+        watch_corpus(&mut watcher, &watched_root)?;
 
         let debounce = Duration::from_millis(DEBOUNCE_MS);
-        let idle_timeout = self.config.idle_timeout;
-        let mut state = CoordinatorState::new_idle(idle_timeout);
+        let mut phase = Phase::idle(idle_timeout);
+        ServeLoop {
+            _lock: lock_file,
+            watcher,
+            watched_root,
+            rx: &rx,
+            tx: &tx,
+            sift_dir: &sift_dir,
+            sift_dir_raw: &sift_dir_raw,
+            pending: &pending,
+            idle_timeout,
+            shutdown,
+            phase: &mut phase,
+            debounce,
+        }
+        .run()
+    }
 
+    fn daemon_reachable(&self) -> Result<bool, DaemonError> {
+        let name = self.ipc_name()?;
+        Ok(Stream::connect(name).is_ok())
+    }
+
+    fn wait_for_daemon(&self, deadline: Instant) -> Result<(), DaemonError> {
         loop {
-            if shutdown.load(Ordering::Relaxed) {
-                Self::drain_active_refresh(&rx, &mut state);
+            if self.daemon_reachable()? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(DaemonError::message(format!(
+                    "daemon did not become reachable within {READY_TIMEOUT:?}"
+                )));
+            }
+            std::thread::sleep(READY_POLL_INTERVAL);
+        }
+    }
+
+    fn ipc_name(&self) -> Result<interprocess::local_socket::Name<'static>, DaemonError> {
+        let canonical = self
+            .sift_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.sift_dir.clone());
+        let mut hasher = DefaultHasher::new();
+        canonical.hash(&mut hasher);
+        format!("sift-{:016x}", hasher.finish())
+            .to_ns_name::<GenericNamespaced>()
+            .map_err(DaemonError::Io)
+    }
+
+    fn listen(
+        &self,
+        mut handler: impl FnMut(DaemonOp) -> bool + Send + 'static,
+    ) -> Result<(), DaemonError> {
+        let listener = ListenerOptions::new()
+            .name(self.ipc_name()?)
+            .try_overwrite(true)
+            .create_sync()
+            .map_err(DaemonError::Io)?;
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let op = match DaemonOp::decode(&mut stream) {
+                Ok(op) => op,
+                Err(e) => {
+                    let _ = stream.write_all(&[DaemonOp::STATUS_ERR]);
+                    eprintln!("sift-daemon: ipc decode failed: {e}");
+                    continue;
+                }
+            };
+            let status = if handler(op) {
+                DaemonOp::STATUS_OK
+            } else {
+                DaemonOp::STATUS_ERR
+            };
+            let _ = stream.write_all(&[status]);
+        }
+        Ok(())
+    }
+
+    fn ensure_daemon_running(&self) -> Result<(), DaemonError> {
+        if self.daemon_reachable()? {
+            return Ok(());
+        }
+
+        let sift_dir = &self.sift_dir;
+        let init_root = self.init_root.as_deref();
+        let exe = {
+            if let Some(path) = std::env::var_os("CARGO_BIN_EXE_sift-daemon") {
+                PathBuf::from(path)
+            } else {
+                let sift = std::env::current_exe().map_err(DaemonError::Io)?;
+                let sibling = sift.with_file_name("sift-daemon");
+                if sibling.exists() {
+                    sibling
+                } else if let Some(debug_bin) = sift
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.join("sift-daemon"))
+                    .filter(|p| p.exists())
+                {
+                    debug_bin
+                } else {
+                    sibling
+                }
+            }
+        };
+
+        std::fs::create_dir_all(sift_dir)?;
+
+        let spawn_lock_path = sift_dir.join(SPAWN_LOCK);
+        let mut spawn_lock = LockFile::open(&spawn_lock_path)?;
+        if !spawn_lock.try_lock()? {
+            return self.wait_for_daemon(Instant::now() + READY_TIMEOUT);
+        }
+
+        {
+            let daemon_lock_path = sift_dir.join(DAEMON_LOCK);
+            let mut daemon_lock = LockFile::open(&daemon_lock_path)?;
+            if !daemon_lock.try_lock()? {
+                return self.wait_for_daemon(Instant::now() + READY_TIMEOUT);
+            }
+        }
+
+        if self.daemon_reachable()? {
+            return Ok(());
+        }
+
+        let ready_dir = sift_dir.join(READY_DIR);
+        std::fs::create_dir_all(&ready_dir)?;
+        let pid = std::process::id();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let ready_path = ready_dir.join(format!("{pid}-{now}"));
+        let _ = std::fs::remove_file(&ready_path);
+
+        let log_path = sift_dir.join("daemon-spawn.log");
+        let stderr = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(DaemonError::Io)?;
+
+        let mut cmd = Command::new(&exe);
+        cmd.arg("--sift-dir")
+            .arg(sift_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .stdin(std::process::Stdio::null());
+        if let Some(root) = init_root {
+            cmd.arg("--init-root").arg(root);
+        }
+        cmd.arg("--ready-file").arg(&ready_path);
+        cmd.spawn()?;
+
+        let deadline = Instant::now() + READY_TIMEOUT;
+        loop {
+            if ready_path.exists() {
+                let _ = std::fs::remove_file(&ready_path);
+                return Ok(());
+            }
+            if self.daemon_reachable()? {
+                let _ = std::fs::remove_file(&ready_path);
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                let log_tail = std::fs::read_to_string(&log_path)
+                    .ok()
+                    .map(|s| {
+                        s.lines()
+                            .rev()
+                            .take(5)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .filter(|s| !s.is_empty());
+                let detail = log_tail
+                    .map(|tail| format!("\nlast daemon log lines:\n{tail}"))
+                    .unwrap_or_default();
+                return Err(DaemonError::message(format!(
+                    "daemon did not signal readiness within {READY_TIMEOUT:?}{detail}"
+                )));
+            }
+            std::thread::sleep(READY_POLL_INTERVAL);
+        }
+    }
+
+    fn load_meta(&self, sift_dir: &Path) -> Result<StoreMeta, DaemonError> {
+        match (read_store_meta(sift_dir), self.init_root.as_deref()) {
+            (Ok(meta), _) => Ok(meta),
+            (Err(_), Some(init_root)) => {
+                let root = init_root.canonicalize()?;
+                Ok(StoreMeta::new(
+                    CorpusMeta {
+                        root: root.clone(),
+                        kind: CorpusKind::Directory,
+                        include_paths: Vec::new(),
+                        exclude_paths: CorpusScope::excluded_paths(&root, sift_dir),
+                    },
+                    WalkMeta {
+                        follow_links: false,
+                        one_file_system: false,
+                        max_depth: None,
+                        max_filesize: None,
+                    },
+                    FilterMeta {
+                        visibility: sift_core::VisibilityConfig::default(),
+                    },
+                    IndexKind::ALL.to_vec(),
+                ))
+            }
+            (Err(e), None) => Err(e),
+        }
+    }
+}
+
+enum Event {
+    FsChange(notify::Event),
+    RefreshComplete,
+    Client(DaemonOp),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PhaseInput {
+    FsChange,
+    RefreshComplete,
+    DeadlineReached,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopAction {
+    None,
+    StartRefresh,
+    Exit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshFollowUp {
+    None,
+    Queued,
+}
+
+enum Phase {
+    Idle { deadline: Instant },
+    Debouncing { deadline: Instant },
+    Refreshing { follow_up: RefreshFollowUp },
+}
+
+impl Phase {
+    fn idle(idle_timeout: Duration) -> Self {
+        Self::Idle {
+            deadline: Instant::now() + idle_timeout,
+        }
+    }
+
+    const fn deadline(&self) -> Option<Instant> {
+        match self {
+            Self::Idle { deadline } | Self::Debouncing { deadline } => Some(*deadline),
+            Self::Refreshing { .. } => None,
+        }
+    }
+
+    const fn is_refreshing(&self) -> bool {
+        matches!(self, Self::Refreshing { .. })
+    }
+
+    fn advance(
+        &mut self,
+        input: PhaseInput,
+        debounce: Duration,
+        idle_timeout: Duration,
+    ) -> LoopAction {
+        let (next, action) = match (std::mem::replace(self, Self::idle(idle_timeout)), input) {
+            (Self::Idle { .. } | Self::Debouncing { .. }, PhaseInput::FsChange) => (
+                Self::Debouncing {
+                    deadline: Instant::now() + debounce,
+                },
+                LoopAction::None,
+            ),
+            (Self::Debouncing { .. }, PhaseInput::DeadlineReached)
+            | (
+                Self::Refreshing {
+                    follow_up: RefreshFollowUp::Queued,
+                },
+                PhaseInput::RefreshComplete,
+            ) => (
+                Self::Refreshing {
+                    follow_up: RefreshFollowUp::None,
+                },
+                LoopAction::StartRefresh,
+            ),
+            (Self::Idle { .. }, PhaseInput::DeadlineReached) => {
+                (Self::idle(idle_timeout), LoopAction::Exit)
+            }
+            (Self::Refreshing { .. }, PhaseInput::FsChange) => (
+                Self::Refreshing {
+                    follow_up: RefreshFollowUp::Queued,
+                },
+                LoopAction::None,
+            ),
+            (
+                Self::Refreshing {
+                    follow_up: RefreshFollowUp::None,
+                },
+                PhaseInput::RefreshComplete,
+            ) => (Self::idle(idle_timeout), LoopAction::None),
+            (state, _) => (state, LoopAction::None),
+        };
+        *self = next;
+        action
+    }
+}
+
+enum PendingIndex {
+    None,
+    Full,
+    Paths(Vec<PathBuf>),
+}
+
+impl PendingIndex {
+    fn push(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            *self = Self::Full;
+            return;
+        }
+        match self {
+            Self::Full => {}
+            Self::None => *self = Self::Paths(paths),
+            Self::Paths(existing) => {
+                for path in paths {
+                    if !existing.contains(&path) {
+                        existing.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    const fn is_pending(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    fn take(&mut self) -> Option<Vec<PathBuf>> {
+        match std::mem::replace(self, Self::None) {
+            Self::None => None,
+            Self::Full => Some(Vec::new()),
+            Self::Paths(paths) => Some(paths),
+        }
+    }
+
+    fn reconcile(&mut self, sift_dir: &Path, meta: &StoreMeta) {
+        let Some(paths) = self.take() else {
+            return;
+        };
+        let result = IndexStore::open_or_create(sift_dir, meta)
+            .and_then(|mut store| store.reconcile(meta, &paths));
+        if let Err(e) = result {
+            eprintln!("sift-daemon: refresh failed: {e}");
+            self.push(paths);
+        }
+    }
+}
+
+fn read_store_meta(sift_dir: &Path) -> Result<StoreMeta, DaemonError> {
+    let mut meta = StoreMeta::read(sift_dir)
+        .map_err(|e| DaemonError::message(format!("no store metadata: {e}")))?;
+    if meta.indexes.is_empty() {
+        meta.indexes = IndexKind::ALL.to_vec();
+    }
+    Ok(meta)
+}
+
+enum RefreshScope {
+    CorpusAndPending,
+    PendingOnly,
+}
+
+fn pending_lock(
+    pending: &Mutex<PendingIndex>,
+) -> Result<std::sync::MutexGuard<'_, PendingIndex>, DaemonError> {
+    pending
+        .lock()
+        .map_err(|_| DaemonError::message("daemon pending queue lock poisoned"))
+}
+
+struct ServeLoop<'a> {
+    _lock: LockFile,
+    watcher: PlatformWatcher,
+    watched_root: PathBuf,
+    rx: &'a mpsc::Receiver<Event>,
+    tx: &'a mpsc::Sender<Event>,
+    sift_dir: &'a Path,
+    sift_dir_raw: &'a Path,
+    pending: &'a Arc<Mutex<PendingIndex>>,
+    idle_timeout: Duration,
+    shutdown: &'a AtomicBool,
+    phase: &'a mut Phase,
+    debounce: Duration,
+}
+
+impl ServeLoop<'_> {
+    fn run(mut self) -> Result<(), DaemonError> {
+        loop {
+            if self.shutdown.load(Ordering::Relaxed) {
+                drain_refresh(self.rx, self.phase, self.idle_timeout);
                 return Ok(());
             }
 
-            let timeout = state.deadline().map_or(SHUTDOWN_POLL, |d| {
+            let timeout = self.phase.deadline().map_or(SHUTDOWN_POLL, |d| {
                 d.saturating_duration_since(Instant::now())
                     .min(SHUTDOWN_POLL)
             });
 
-            let input = match rx.recv_timeout(timeout) {
-                Ok(CoordinatorMessage::FsChange(event)) => {
-                    if Self::should_ignore(&event, &sift_dir, &sift_dir_raw) {
+            let input = match self.rx.recv_timeout(timeout) {
+                Ok(Event::FsChange(event)) => {
+                    let internal = matches!(event.kind, notify::EventKind::Access(_))
+                        || event.paths.iter().any(|p| {
+                            p.starts_with(self.sift_dir) || p.starts_with(self.sift_dir_raw)
+                        });
+                    if internal {
                         continue;
                     }
-                    CoordinatorInput::FsChange
+                    Some(PhaseInput::FsChange)
                 }
-                Ok(CoordinatorMessage::RefreshComplete) => CoordinatorInput::RefreshComplete,
+                Ok(Event::RefreshComplete) => Some(PhaseInput::RefreshComplete),
+                Ok(Event::Client(DaemonOp::Index(paths))) => {
+                    rebind_watcher(&mut self.watcher, &mut self.watched_root, self.sift_dir)?;
+                    pending_lock(self.pending)?.push(paths);
+                    if self.phase.is_refreshing() {
+                        *self.phase = Phase::Refreshing {
+                            follow_up: RefreshFollowUp::Queued,
+                        };
+                    } else {
+                        spawn_refresh(
+                            RefreshScope::CorpusAndPending,
+                            self.tx,
+                            self.sift_dir,
+                            Arc::clone(self.pending),
+                        );
+                        *self.phase = Phase::Refreshing {
+                            follow_up: RefreshFollowUp::None,
+                        };
+                    }
+                    continue;
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if state.deadline().is_some_and(|d| Instant::now() >= d) {
-                        CoordinatorInput::DeadlineReached
+                    if self.phase.deadline().is_some_and(|d| Instant::now() >= d) {
+                        Some(PhaseInput::DeadlineReached)
                     } else {
                         continue;
                     }
@@ -621,488 +680,470 @@ impl DaemonRunner {
                 Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             };
 
-            let (next, action) = state.transition(input, debounce, idle_timeout);
-            if !Self::execute(action, &tx, &sift_dir, &meta) {
-                return Ok(());
+            let idle_deadline = matches!(self.phase, Phase::Idle { .. });
+
+            if idle_deadline
+                && matches!(input, Some(PhaseInput::DeadlineReached))
+                && pending_lock(self.pending)?.is_pending()
+            {
+                spawn_refresh(
+                    RefreshScope::PendingOnly,
+                    self.tx,
+                    self.sift_dir,
+                    Arc::clone(self.pending),
+                );
+                *self.phase = Phase::Refreshing {
+                    follow_up: RefreshFollowUp::None,
+                };
+                continue;
             }
-            state = next;
-        }
-    }
 
-    /// Drain any active refresh worker before releasing the daemon lock.
-    fn drain_active_refresh(rx: &mpsc::Receiver<CoordinatorMessage>, state: &mut CoordinatorState) {
-        while state.is_refreshing() {
-            match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(CoordinatorMessage::RefreshComplete) => {
-                    *state = CoordinatorState::new_idle(DEFAULT_IDLE_TIMEOUT);
-                }
-                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-    }
-
-    /// Execute a coordinator action.  Returns `true` when the loop should
-    /// continue, `false` when the daemon should exit.
-    fn execute(
-        action: CoordinatorAction,
-        tx: &mpsc::Sender<CoordinatorMessage>,
-        sift_dir: &Path,
-        meta: &DaemonMeta,
-    ) -> bool {
-        match action {
-            CoordinatorAction::None => true,
-            CoordinatorAction::StartRefresh => {
-                Self::spawn_refresh(tx.clone(), sift_dir, meta);
-                true
-            }
-            CoordinatorAction::Exit => false,
-        }
-    }
-
-    /// Returns `true` when a filesystem event should be ignored.
-    ///
-    /// Checks event paths against both the canonical and raw `sift_dir`
-    /// paths.  On macOS, `FSEvent` delivers symlink-based paths that won't
-    /// match the canonical form; checking the raw form avoids calling
-    /// `canonicalize()` on each event path (which fails for temp files
-    /// deleted during index builds).
-    fn should_ignore(event: &notify::Event, canonical: &Path, raw: &Path) -> bool {
-        matches!(event.kind, notify::EventKind::Access(_))
-            || event
-                .paths
-                .iter()
-                .any(|p| p.starts_with(canonical) || p.starts_with(raw))
-    }
-
-    /// Build or update the index for the watched corpus.
-    fn refresh_index(sift_dir: &Path, meta: &DaemonMeta) {
-        let exclude = sift_dir
-            .strip_prefix(&meta.root)
-            .unwrap_or(sift_dir)
-            .to_path_buf();
-        let config = IndexConfig {
-            corpus: CorpusSpec {
-                root: &meta.root,
-                kind: meta.corpus_kind,
-                follow_links: meta.follow_links,
-                include_paths: &[],
-                exclude_paths: &[exclude],
-            },
-            visibility: VisibilityConfig::default(),
-        };
-
-        let result = (|| -> anyhow::Result<()> {
-            let mut store = IndexStore::open_or_create(
-                sift_dir,
-                &meta.root,
-                meta.corpus_kind,
-                meta.follow_links,
-                &meta.kinds,
-            )?;
-            store.update(&meta.kinds, &config)?;
-            Ok(())
-        })();
-
-        if let Err(e) = result {
-            eprintln!("sift-daemon: refresh failed: {e}");
-        }
-    }
-
-    /// Spawn a background refresh worker thread.
-    fn spawn_refresh(tx: mpsc::Sender<CoordinatorMessage>, sift_dir: &Path, meta: &DaemonMeta) {
-        let sift_dir = sift_dir.to_path_buf();
-        let root = meta.root.clone();
-        let corpus_kind = meta.corpus_kind;
-        let follow_links = meta.follow_links;
-        let kinds = meta.kinds.clone();
-
-        std::thread::spawn(move || {
-            let meta = DaemonMeta {
-                root,
-                corpus_kind,
-                follow_links,
-                kinds,
+            let Some(input) = input else {
+                continue;
             };
-            Self::refresh_index(&sift_dir, &meta);
-            let _ = tx.send(CoordinatorMessage::RefreshComplete);
-        });
+
+            let action = self.phase.advance(input, self.debounce, self.idle_timeout);
+
+            match action {
+                LoopAction::None => {}
+                LoopAction::StartRefresh => {
+                    spawn_refresh(
+                        RefreshScope::CorpusAndPending,
+                        self.tx,
+                        self.sift_dir,
+                        Arc::clone(self.pending),
+                    );
+                    *self.phase = Phase::Refreshing {
+                        follow_up: RefreshFollowUp::None,
+                    };
+                }
+                LoopAction::Exit => return Ok(()),
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+type PlatformWatcher = notify::PollWatcher;
+
+#[cfg(not(windows))]
+type PlatformWatcher = notify::RecommendedWatcher;
+
+fn new_platform_watcher(watcher_tx: mpsc::Sender<Event>) -> Result<PlatformWatcher, DaemonError> {
+    #[cfg(windows)]
+    let config = notify::Config::default().with_poll_interval(Duration::from_millis(DEBOUNCE_MS));
+    #[cfg(not(windows))]
+    let config = notify::Config::default();
+    PlatformWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = watcher_tx.send(Event::FsChange(event));
+            }
+        },
+        config,
+    )
+    .map_err(|e| DaemonError::message(e.to_string()))
+}
+
+fn watch_corpus(watcher: &mut PlatformWatcher, root: &Path) -> Result<(), DaemonError> {
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|e| DaemonError::message(e.to_string()))
+}
+
+fn rebind_watcher(
+    watcher: &mut PlatformWatcher,
+    watched_root: &mut PathBuf,
+    sift_dir: &Path,
+) -> Result<(), DaemonError> {
+    let meta = read_store_meta(sift_dir)?;
+    let root = meta.corpus.root;
+    if root == *watched_root {
+        return Ok(());
+    }
+    let _ = watcher.unwatch(watched_root.as_path());
+    watch_corpus(watcher, &root)?;
+    *watched_root = root;
+    Ok(())
+}
+
+fn spawn_refresh(
+    scope: RefreshScope,
+    tx: &mpsc::Sender<Event>,
+    sift_dir: &Path,
+    pending: Arc<Mutex<PendingIndex>>,
+) {
+    let tx = tx.clone();
+    let sift_dir = sift_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let meta = match read_store_meta(&sift_dir) {
+            Ok(meta) => meta,
+            Err(e) => {
+                eprintln!("sift-daemon: {e}");
+                let _ = tx.send(Event::RefreshComplete);
+                return;
+            }
+        };
+        if matches!(scope, RefreshScope::CorpusAndPending) {
+            let result = IndexStore::open_or_create(&sift_dir, &meta)
+                .and_then(|mut store| store.reconcile(&meta, &[]));
+            if let Err(e) = result {
+                eprintln!("sift-daemon: refresh failed: {e}");
+            }
+        }
+        match pending.lock() {
+            Ok(mut queue) => queue.reconcile(&sift_dir, &meta),
+            Err(_) => eprintln!("sift-daemon: pending queue lock poisoned"),
+        }
+        let _ = tx.send(Event::RefreshComplete);
+    });
+}
+
+fn drain_refresh(rx: &mpsc::Receiver<Event>, phase: &mut Phase, idle_timeout: Duration) {
+    while phase.is_refreshing() {
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(Event::RefreshComplete) => *phase = Phase::idle(idle_timeout),
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sift_core::CorpusKind;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
+    use fslock::LockFile;
+    use std::sync::atomic::AtomicBool;
     use tempfile::TempDir;
-
-    /// A fake spawner that records calls.
-    #[derive(Clone, Default)]
-    struct FakeSpawner {
-        calls: Arc<AtomicUsize>,
-        last_request: Arc<std::sync::Mutex<Option<SpawnRequest>>>,
-    }
-
-    impl FakeSpawner {
-        fn call_count(&self) -> usize {
-            self.calls.load(Ordering::SeqCst)
-        }
-
-        fn last_request(&self) -> Option<SpawnRequest> {
-            self.last_request.lock().unwrap().clone()
-        }
-    }
-
-    impl DaemonSpawner for FakeSpawner {
-        fn spawn(&self, request: &SpawnRequest) -> anyhow::Result<()> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            *self.last_request.lock().unwrap() = Some(request.clone());
-            // Simulate daemon startup: create the ready file so the parent
-            // doesn't time out waiting for the real daemon.
-            if let Some(path) = &request.ready_file {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                std::fs::write(path, "")?;
-            }
-            Ok(())
-        }
-    }
-
-    fn fake_spawner() -> FakeSpawner {
-        FakeSpawner::default()
-    }
-
-    fn supervisor(s: FakeSpawner) -> DaemonSupervisor<FakeSpawner> {
-        DaemonSupervisor::new(s)
-    }
-
-    #[test]
-    fn spawn_returns_disabled_from_config() {
-        let dir = TempDir::new().unwrap();
-        let sup = supervisor(fake_spawner());
-        let config = DaemonSpawnConfig {
-            enabled: false,
-            sift_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let outcome = sup.spawn(&config).unwrap();
-        assert_eq!(outcome, SpawnOutcome::Disabled);
-    }
-
-    #[test]
-    fn spawn_invokes_spawner_when_lock_free() {
-        let dir = TempDir::new().unwrap();
-        let spawner = fake_spawner();
-        let sup = supervisor(spawner.clone());
-        let config = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let outcome = sup.spawn(&config).unwrap();
-        assert_eq!(outcome, SpawnOutcome::Spawned);
-        assert_eq!(spawner.call_count(), 1);
-    }
-
-    #[test]
-    fn spawn_returns_already_running_when_daemon_lock_held() {
-        let dir = TempDir::new().unwrap();
-        let lock_path = dir.path().join(DAEMON_LOCK);
-        let mut lock = LockFile::open(&lock_path).unwrap();
-        lock.try_lock().unwrap();
-
-        let spawner = fake_spawner();
-        let sup = supervisor(spawner.clone());
-        let config = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let outcome = sup.spawn(&config).unwrap();
-        assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
-        assert_eq!(spawner.call_count(), 0);
-    }
-
-    #[test]
-    fn spawn_returns_already_running_when_spawn_lock_held() {
-        let dir = TempDir::new().unwrap();
-        let spawn_lock_path = dir.path().join(SPAWN_LOCK);
-        let mut spawn_lock = LockFile::open(&spawn_lock_path).unwrap();
-        spawn_lock.try_lock().unwrap();
-
-        let spawner = fake_spawner();
-        let sup = supervisor(spawner.clone());
-        let config = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let outcome = sup.spawn(&config).unwrap();
-        assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
-        assert_eq!(spawner.call_count(), 0);
-    }
-
-    #[test]
-    fn spawn_passes_sift_dir_and_init_root() {
-        let dir = TempDir::new().unwrap();
-        let init_root = Some(PathBuf::from("/tmp/init"));
-        let spawner = fake_spawner();
-        let sup = supervisor(spawner.clone());
-        let config = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: dir.path().to_path_buf(),
-            init_root,
-            ..Default::default()
-        };
-        sup.spawn(&config).unwrap();
-
-        let req = spawner.last_request().unwrap();
-        assert_eq!(req.sift_dir, config.sift_dir);
-        assert_eq!(req.init_root, config.init_root);
-    }
-
-    #[test]
-    fn spawn_lock_prevents_concurrent_attempts() {
-        let dir = TempDir::new().unwrap();
-        let spawner = fake_spawner();
-        let sup = supervisor(spawner.clone());
-
-        let spawn_lock_path = dir.path().join(SPAWN_LOCK);
-        let mut spawn_lock = LockFile::open(&spawn_lock_path).unwrap();
-        spawn_lock.try_lock().unwrap();
-
-        let config = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let outcome = sup.spawn(&config).unwrap();
-        assert_eq!(outcome, SpawnOutcome::AlreadyRunning);
-        assert_eq!(spawner.call_count(), 0);
-    }
-
-    #[test]
-    fn spawn_once_mode_skips_lock_and_readiness() {
-        let dir = TempDir::new().unwrap();
-        let spawner = fake_spawner();
-        let sup = supervisor(spawner.clone());
-        let config = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: dir.path().to_path_buf(),
-            mode: DaemonMode::Once,
-            ..Default::default()
-        };
-        let outcome = sup.spawn(&config).unwrap();
-        assert_eq!(outcome, SpawnOutcome::Spawned);
-        assert_eq!(spawner.call_count(), 1);
-
-        let req = spawner.last_request().unwrap();
-        assert_eq!(req.mode, DaemonMode::Once);
-        assert!(req.ready_file.is_none());
-    }
-
-    #[test]
-    fn spawn_once_mode_succeeds_even_when_daemon_lock_held() {
-        let dir = TempDir::new().unwrap();
-        let lock_path = dir.path().join(DAEMON_LOCK);
-        let mut lock = LockFile::open(&lock_path).unwrap();
-        lock.try_lock().unwrap();
-
-        let spawner = fake_spawner();
-        let sup = supervisor(spawner.clone());
-        let config = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: dir.path().to_path_buf(),
-            mode: DaemonMode::Once,
-            ..Default::default()
-        };
-        let outcome = sup.spawn(&config).unwrap();
-        assert_eq!(outcome, SpawnOutcome::Spawned);
-        assert_eq!(spawner.call_count(), 1);
-    }
-
-    // -----------------------------------------------------------------------
-    // CoordinatorState::transition tests
-    // -----------------------------------------------------------------------
 
     const DEBOUNCE: Duration = Duration::from_mins(1);
     const IDLE: Duration = Duration::from_mins(10);
 
-    fn idle_state() -> CoordinatorState {
-        CoordinatorState::new_idle(IDLE)
+    #[test]
+    fn round_trip_index_paths() {
+        let paths = vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")];
+        let mut buf = Vec::new();
+        DaemonOp::Index(paths.clone()).encode(&mut buf).unwrap();
+        let op = DaemonOp::decode(buf.as_slice()).unwrap();
+        assert_eq!(op, DaemonOp::Index(paths));
     }
 
     #[test]
-    fn idle_fs_change_transitions_to_debouncing() {
-        let (next, action) = idle_state().transition(CoordinatorInput::FsChange, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Debouncing { .. }));
-        assert_eq!(action, CoordinatorAction::None);
+    fn round_trip_index_full() {
+        let mut buf = Vec::new();
+        DaemonOp::Index(Vec::new()).encode(&mut buf).unwrap();
+        let op = DaemonOp::decode(buf.as_slice()).unwrap();
+        assert_eq!(op, DaemonOp::Index(Vec::new()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_round_trip_over_unix_stream() {
+        use std::os::unix::net::UnixStream;
+        use std::thread;
+
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let paths = vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")];
+        let expected = DaemonOp::Index(paths.clone());
+
+        let handle = thread::spawn(move || {
+            let mut server = server;
+            let op = DaemonOp::decode(&mut server).unwrap();
+            assert_eq!(op, DaemonOp::Index(paths));
+            server.write_all(&[DaemonOp::STATUS_OK]).unwrap();
+        });
+
+        expected.encode(&mut client).unwrap();
+        let mut status = [0_u8; 1];
+        client.read_exact(&mut status).unwrap();
+        assert_eq!(status[0], DaemonOp::STATUS_OK);
+        handle.join().unwrap();
     }
 
     #[test]
-    fn idle_deadline_reached_exits() {
-        let (next, action) =
-            idle_state().transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Idle { .. }));
-        assert_eq!(action, CoordinatorAction::Exit);
+    fn pending_index_merge_partial_paths() {
+        let mut pending = PendingIndex::None;
+        pending.push(vec![PathBuf::from("a.rs")]);
+        pending.push(vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
+        assert_eq!(
+            pending.take(),
+            Some(vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")])
+        );
     }
 
     #[test]
-    fn idle_refresh_complete_stays_idle() {
-        let (next, action) =
-            idle_state().transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Idle { .. }));
-        assert_eq!(action, CoordinatorAction::None);
+    fn pending_index_full_promotes_and_clears_partials() {
+        let mut pending = PendingIndex::None;
+        pending.push(vec![PathBuf::from("a.rs")]);
+        pending.push(Vec::new());
+        assert_eq!(pending.take(), Some(Vec::new()));
+        assert!(!pending.is_pending());
     }
 
     #[test]
-    fn debouncing_fs_change_resets_debounce() {
-        let state = CoordinatorState::Debouncing {
+    fn phase_idle_fs_change_transitions_to_debouncing() {
+        let mut phase = Phase::idle(IDLE);
+        let action = phase.advance(PhaseInput::FsChange, DEBOUNCE, IDLE);
+        assert!(matches!(phase, Phase::Debouncing { .. }));
+        assert_eq!(action, LoopAction::None);
+    }
+
+    #[test]
+    fn phase_idle_deadline_reached_exits() {
+        let mut phase = Phase::idle(IDLE);
+        let action = phase.advance(PhaseInput::DeadlineReached, DEBOUNCE, IDLE);
+        assert!(matches!(phase, Phase::Idle { .. }));
+        assert_eq!(action, LoopAction::Exit);
+    }
+
+    #[test]
+    fn phase_debouncing_deadline_reached_starts_refresh() {
+        let mut phase = Phase::Debouncing {
             deadline: Instant::now(),
         };
-        let (next, action) = state.transition(CoordinatorInput::FsChange, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Debouncing { .. }));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn debouncing_deadline_reached_starts_refresh() {
-        let state = CoordinatorState::Debouncing {
-            deadline: Instant::now(),
-        };
-        let (next, action) = state.transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
-        assert_eq!(action, CoordinatorAction::StartRefresh);
-    }
-
-    #[test]
-    fn debouncing_refresh_complete_stays_debouncing() {
-        let state = CoordinatorState::Debouncing {
-            deadline: Instant::now() + DEBOUNCE,
-        };
-        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Debouncing { .. }));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn debouncing_deadline_reached_stays_debouncing_on_catch_all() {
-        let state = CoordinatorState::Debouncing {
-            deadline: Instant::now() + DEBOUNCE,
-        };
-        let (next, action) = state.transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
-        assert_eq!(action, CoordinatorAction::StartRefresh);
-    }
-
-    #[test]
-    fn refreshing_fs_change_requests_follow_up() {
-        let state = CoordinatorState::Refreshing { follow_up: false };
-        let (next, action) = state.transition(CoordinatorInput::FsChange, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if follow_up));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_deadline_reached_stays_refreshing() {
-        let state = CoordinatorState::Refreshing { follow_up: false };
-        let (next, action) = state.transition(CoordinatorInput::DeadlineReached, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_complete_without_follow_up_returns_to_idle() {
-        let state = CoordinatorState::Refreshing { follow_up: false };
-        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Idle { .. }));
-        assert_eq!(action, CoordinatorAction::None);
-    }
-
-    #[test]
-    fn refreshing_complete_with_follow_up_restarts_refresh() {
-        let state = CoordinatorState::Refreshing { follow_up: true };
-        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
-        assert!(matches!(next, CoordinatorState::Refreshing { follow_up } if !follow_up));
-        assert_eq!(action, CoordinatorAction::StartRefresh);
-    }
-
-    #[test]
-    fn refreshing_complete_with_follow_up_clears_flag() {
-        let state = CoordinatorState::Refreshing { follow_up: true };
-        let (next, _action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
-        match next {
-            CoordinatorState::Refreshing { follow_up } => {
-                assert!(!follow_up, "follow_up should be false after restart");
+        let action = phase.advance(PhaseInput::DeadlineReached, DEBOUNCE, IDLE);
+        assert!(matches!(
+            phase,
+            Phase::Refreshing {
+                follow_up: RefreshFollowUp::None
             }
-            _ => panic!("expected Refreshing state"),
-        }
+        ));
+        assert_eq!(action, LoopAction::StartRefresh);
     }
 
     #[test]
-    fn coordinator_state_is_refreshing_returns_true_for_refreshing() {
-        let state = CoordinatorState::Refreshing { follow_up: false };
-        assert!(state.is_refreshing());
-    }
-
-    #[test]
-    fn coordinator_state_is_refreshing_returns_false_for_idle() {
-        assert!(!idle_state().is_refreshing());
-    }
-
-    #[test]
-    fn coordinator_state_is_refreshing_returns_false_for_debouncing() {
-        let state = CoordinatorState::Debouncing {
-            deadline: Instant::now(),
+    fn phase_refreshing_complete_with_follow_up_restarts_refresh() {
+        let mut phase = Phase::Refreshing {
+            follow_up: RefreshFollowUp::Queued,
         };
-        assert!(!state.is_refreshing());
-    }
-
-    #[test]
-    fn refreshing_complete_resets_idle_deadline() {
-        let state = CoordinatorState::Refreshing { follow_up: false };
-        let before = Instant::now();
-        let (next, action) = state.transition(CoordinatorInput::RefreshComplete, DEBOUNCE, IDLE);
-        assert_eq!(action, CoordinatorAction::None);
-        match next {
-            CoordinatorState::Idle { deadline } => {
-                assert!(deadline >= before + IDLE);
+        let action = phase.advance(PhaseInput::RefreshComplete, DEBOUNCE, IDLE);
+        assert!(matches!(
+            phase,
+            Phase::Refreshing {
+                follow_up: RefreshFollowUp::None
             }
-            _ => panic!("expected Idle state"),
-        }
+        ));
+        assert_eq!(action, LoopAction::StartRefresh);
     }
 
-    // -----------------------------------------------------------------------
-    // DaemonRunner integration tests
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn run_until_stops_on_shutdown() {
+    fn ensure_running_skips_spawn_when_ipc_reachable() {
         let dir = TempDir::new().unwrap();
         let sift_dir = dir.path().join(".sift");
 
-        let meta = sift_core::StoreMeta::new(
-            dir.path().to_path_buf(),
-            CorpusKind::Directory,
-            false,
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: dir.path().to_path_buf(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
             vec![IndexKind::Trigram],
         );
         std::fs::create_dir_all(&sift_dir).unwrap();
-        sift_core::StoreMeta::write(&meta, &sift_dir).unwrap();
+        StoreMeta::write(&meta, &sift_dir).unwrap();
 
-        let config = DaemonRunConfig {
-            sift_dir,
-            ..Default::default()
-        };
-        let runner = DaemonRunner::new(config);
+        let daemon = Daemon::new(sift_dir.clone());
         let shutdown = Arc::new(AtomicBool::new(false));
-        let s = Arc::clone(&shutdown);
+        let handle = std::thread::spawn({
+            let shutdown = Arc::clone(&shutdown);
+            move || {
+                daemon
+                    .serve(None, Duration::from_mins(2), shutdown.as_ref())
+                    .unwrap();
+            }
+        });
 
-        let handle = std::thread::spawn(move || {
-            runner.run_until(&s).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !Daemon::new(sift_dir.clone()).daemon_reachable().unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "daemon ipc did not become reachable"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        Daemon::new(sift_dir).ensure_running().unwrap();
+
+        shutdown.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn pending_paths_restored_on_reconcile_failure() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+        std::fs::create_dir_all(&sift_dir).unwrap();
+
+        let mut pending = PendingIndex::Paths(vec![PathBuf::from("missing.rs")]);
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: dir.path().to_path_buf(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
+            vec![IndexKind::Trigram],
+        );
+        StoreMeta::write(&meta, &sift_dir).unwrap();
+
+        pending.reconcile(&sift_dir, &meta);
+        assert!(pending.is_pending());
+    }
+
+    #[test]
+    fn rebind_watcher_skips_when_root_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+        std::fs::create_dir_all(&sift_dir).unwrap();
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: dir.path().to_path_buf(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
+            vec![IndexKind::Trigram],
+        );
+        StoreMeta::write(&meta, &sift_dir).unwrap();
+
+        let (tx, _rx) = mpsc::channel();
+        let mut watcher = new_platform_watcher(tx).unwrap();
+        let mut watched_root = dir.path().to_path_buf();
+        watch_corpus(&mut watcher, &watched_root).unwrap();
+
+        rebind_watcher(&mut watcher, &mut watched_root, &sift_dir).unwrap();
+        assert_eq!(watched_root, dir.path());
+    }
+
+    #[test]
+    fn rebind_watcher_switches_to_new_corpus_root() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+        let old_root = dir.path().join("old");
+        let new_root = dir.path().join("new");
+        std::fs::create_dir_all(&old_root).unwrap();
+        std::fs::create_dir_all(&new_root).unwrap();
+        std::fs::create_dir_all(&sift_dir).unwrap();
+
+        StoreMeta::write(
+            &StoreMeta::new(
+                CorpusMeta {
+                    root: old_root.clone(),
+                    kind: CorpusKind::Directory,
+                    include_paths: Vec::new(),
+                    exclude_paths: Vec::new(),
+                },
+                WalkMeta {
+                    follow_links: false,
+                    one_file_system: false,
+                    max_depth: None,
+                    max_filesize: None,
+                },
+                FilterMeta {
+                    visibility: sift_core::VisibilityConfig::default(),
+                },
+                vec![IndexKind::Trigram],
+            ),
+            &sift_dir,
+        )
+        .unwrap();
+
+        let (tx, _rx) = mpsc::channel();
+        let mut watcher = new_platform_watcher(tx).unwrap();
+        let mut watched_root = old_root;
+        watch_corpus(&mut watcher, &watched_root).unwrap();
+
+        StoreMeta::write(
+            &StoreMeta::new(
+                CorpusMeta {
+                    root: new_root.clone(),
+                    kind: CorpusKind::Directory,
+                    include_paths: Vec::new(),
+                    exclude_paths: Vec::new(),
+                },
+                WalkMeta {
+                    follow_links: false,
+                    one_file_system: false,
+                    max_depth: None,
+                    max_filesize: None,
+                },
+                FilterMeta {
+                    visibility: sift_core::VisibilityConfig::default(),
+                },
+                vec![IndexKind::Trigram],
+            ),
+            &sift_dir,
+        )
+        .unwrap();
+
+        rebind_watcher(&mut watcher, &mut watched_root, &sift_dir).unwrap();
+        assert_eq!(watched_root, new_root);
+    }
+
+    #[test]
+    fn serve_stops_on_shutdown() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: dir.path().to_path_buf(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
+            vec![IndexKind::Trigram],
+        );
+        std::fs::create_dir_all(&sift_dir).unwrap();
+        StoreMeta::write(&meta, &sift_dir).unwrap();
+
+        let daemon = Daemon::new(sift_dir);
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let handle = std::thread::spawn({
+            let shutdown = Arc::clone(&shutdown);
+            move || {
+                daemon
+                    .serve(None, Duration::from_mins(2), shutdown.as_ref())
+                    .unwrap();
+            }
         });
 
         std::thread::sleep(Duration::from_millis(100));
@@ -1111,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn run_until_returns_early_when_lock_held() {
+    fn serve_returns_early_when_lock_held() {
         let dir = TempDir::new().unwrap();
         let sift_dir = dir.path().join(".sift");
         std::fs::create_dir_all(&sift_dir).unwrap();
@@ -1119,51 +1160,10 @@ mod tests {
         let mut lock = LockFile::open(&lock_path).unwrap();
         lock.try_lock().unwrap();
 
-        let config = DaemonRunConfig {
-            sift_dir,
-            ..Default::default()
-        };
-        let runner = DaemonRunner::new(config);
-        runner.run_until(&AtomicBool::new(false)).unwrap();
-    }
-
-    #[test]
-    fn run_until_exits_on_idle_timeout() {
-        let dir = TempDir::new().unwrap();
-        let sift_dir = dir.path().join(".sift");
-
-        let meta = sift_core::StoreMeta::new(
-            dir.path().to_path_buf(),
-            CorpusKind::Directory,
-            false,
-            vec![IndexKind::Trigram],
-        );
-        std::fs::create_dir_all(&sift_dir).unwrap();
-        sift_core::StoreMeta::write(&meta, &sift_dir).unwrap();
-
-        let config = DaemonRunConfig {
-            sift_dir: sift_dir.clone(),
-            idle_timeout: Duration::from_secs(2),
-            ..Default::default()
-        };
-        let runner = DaemonRunner::new(config);
-
-        let start = Instant::now();
-        runner.run_until(&AtomicBool::new(false)).unwrap();
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed >= Duration::from_secs(1),
-            "daemon exited too early: {elapsed:?}"
-        );
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "daemon took too long to exit: {elapsed:?}"
-        );
-
-        // Verify the daemon lock is released.
-        let lock_path = sift_dir.join(DAEMON_LOCK);
-        let mut lock = LockFile::open(&lock_path).unwrap();
-        assert!(lock.try_lock().unwrap(), "daemon lock should be released");
+        let daemon = Daemon::new(sift_dir);
+        let shutdown = AtomicBool::new(false);
+        daemon
+            .serve(None, Duration::from_mins(2), &shutdown)
+            .unwrap();
     }
 }

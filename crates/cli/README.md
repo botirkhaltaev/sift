@@ -5,11 +5,17 @@ Grep-like CLI for indexed codebase search. Thin wrapper over `sift-core`: parses
 ## Usage
 
 ```bash
-# Create an index
+# Create an index (blocking)
 sift --sift-dir .sift index build /path/to/corpus
 
-# Refresh an existing index
+# Create an index asynchronously (watch daemon required)
+sift --sift-dir .sift index build --lazy /path/to/corpus
+
+# Refresh an existing index (async by default)
 sift --sift-dir .sift index update .
+
+# Refresh synchronously
+sift --sift-dir .sift index update --wait .
 
 # Upgrade the binary
 sift update

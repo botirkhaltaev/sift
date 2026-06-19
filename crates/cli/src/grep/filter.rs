@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
 use sift_core::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig};
@@ -13,6 +14,76 @@ pub struct FilterConfig {
     pub glob_patterns: Vec<String>,
     pub follow_links: bool,
     pub one_file_system: bool,
+}
+
+impl FilterConfig {
+    /// Build a [`CandidateFilterConfig`] from CLI declarations and resolved filter context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `max_filesize` parsing fails.
+    pub fn candidate_config(
+        &self,
+        filter: SearchFilterCtx,
+        scopes: Vec<PathBuf>,
+        exclude_paths: Vec<PathBuf>,
+    ) -> anyhow::Result<CandidateFilterConfig> {
+        let max_filesize = self
+            .decl
+            .max_filesize
+            .as_ref()
+            .map(|s| s.parse::<ByteSize>().map(ByteSize::bytes))
+            .transpose()?;
+
+        let mut glob_patterns = self.glob_patterns.clone();
+        for ig in &self.decl.iglob {
+            glob_patterns.push(ig.clone());
+        }
+
+        let glob_ci = filter.glob_case_insensitive || !self.decl.iglob.is_empty();
+
+        let needs_type_defs = !self.decl.type_include.is_empty()
+            || !self.decl.type_exclude.is_empty()
+            || !self.decl.type_add.is_empty()
+            || !self.decl.type_clear.is_empty();
+        let type_definitions = if needs_type_defs {
+            TypeCatalog::from_decl(&self.decl).into_definitions()
+        } else {
+            Vec::new()
+        };
+
+        Ok(CandidateFilterConfig {
+            scopes,
+            exclude_paths,
+            glob: GlobConfig {
+                patterns: glob_patterns,
+                case_insensitive: glob_ci,
+            },
+            visibility: VisibilityConfig {
+                hidden: filter.ignore.hidden_mode(),
+                ignore: IgnoreConfig {
+                    sources: filter.ignore.sources,
+                    custom_files: if filter
+                        .ignore
+                        .msg_flags
+                        .contains(MessageFlags::NO_IGNORE_FILES)
+                    {
+                        Vec::new()
+                    } else {
+                        self.decl.ignore_file.clone()
+                    },
+                    require_git: filter.ignore.require_git,
+                },
+            },
+            follow_links: self.follow_links,
+            max_depth: self.decl.max_depth,
+            max_filesize,
+            type_definitions,
+            type_include: self.decl.type_include.clone(),
+            type_exclude: self.decl.type_exclude.clone(),
+            one_file_system: self.one_file_system,
+        })
+    }
 }
 
 #[derive(Args, Clone, Default)]
@@ -130,28 +201,38 @@ impl Default for GlobFlags {
     }
 }
 
-/// Parses a size suffix like "10K" or "2MB" into bytes.
-///
-/// # Errors
-///
-/// Returns an error if the input is not a valid size string.
-pub fn parse_size_suffix(s: &str) -> anyhow::Result<u64> {
-    let s = s.trim();
-    let (num_part, suffix) = s.find(|c: char| c.is_ascii_alphabetic()).map_or_else(
-        || (s, String::new()),
-        |i| (&s[..i], s[i..].to_ascii_uppercase()),
-    );
-    let base: u64 = num_part
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid size: '{s}'"))?;
-    let multiplier: u64 = match suffix.as_str() {
-        "" | "B" => 1,
-        "K" | "KB" => 1024,
-        "M" | "MB" => 1024 * 1024,
-        "G" | "GB" => 1024 * 1024 * 1024,
-        _ => anyhow::bail!("unknown size suffix: '{suffix}'"),
-    };
-    Ok(base * multiplier)
+/// Parsed byte size from CLI strings like `10K` or `2MB`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByteSize(u64);
+
+impl ByteSize {
+    #[must_use]
+    pub const fn bytes(self) -> u64 {
+        self.0
+    }
+}
+
+impl FromStr for ByteSize {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        let (num_part, suffix) = s.find(|c: char| c.is_ascii_alphabetic()).map_or_else(
+            || (s, String::new()),
+            |i| (&s[..i], s[i..].to_ascii_uppercase()),
+        );
+        let base: u64 = num_part
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid size: '{s}'"))?;
+        let multiplier: u64 = match suffix.as_str() {
+            "" | "B" => 1,
+            "K" | "KB" => 1024,
+            "M" | "MB" => 1024 * 1024,
+            "G" | "GB" => 1024 * 1024 * 1024,
+            _ => anyhow::bail!("unknown size suffix: '{suffix}'"),
+        };
+        Ok(Self(base * multiplier))
+    }
 }
 
 /// Built-in and user-defined file type definitions.
@@ -161,8 +242,76 @@ pub struct TypeCatalog {
 
 impl TypeCatalog {
     #[must_use]
+    fn builtin() -> Vec<TypeDef> {
+        [
+            ("rust", &["*.rs"][..]),
+            ("py", &["*.py", "*.pyi"]),
+            ("js", &["*.js", "*.mjs", "*.cjs"]),
+            ("ts", &["*.ts", "*.tsx", "*.mts", "*.cts"]),
+            ("c", &["*.c", "*.h"]),
+            ("cpp", &["*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hxx", "*.h"]),
+            ("java", &["*.java"]),
+            ("go", &["*.go"]),
+            ("html", &["*.html", "*.htm", "*.xhtml"]),
+            ("css", &["*.css", "*.scss", "*.less"]),
+            ("json", &["*.json", "*.jsonl"]),
+            ("yaml", &["*.yaml", "*.yml"]),
+            ("toml", &["*.toml"]),
+            ("xml", &["*.xml", "*.xsl", "*.xslt", "*.svg"]),
+            ("md", &["*.md", "*.markdown", "*.mdown"]),
+            ("txt", &["*.txt"]),
+            ("sh", &["*.sh", "*.bash", "*.zsh", "*.fish"]),
+            ("ruby", &["*.rb", "*.erb", "*.gemspec", "Gemfile"]),
+            ("php", &["*.php"]),
+            ("swift", &["*.swift"]),
+            ("kotlin", &["*.kt", "*.kts"]),
+            ("scala", &["*.scala", "*.sbt"]),
+            ("lua", &["*.lua"]),
+            ("perl", &["*.pl", "*.pm"]),
+            ("r", &["*.r", "*.R", "*.Rmd"]),
+            ("sql", &["*.sql"]),
+            ("protobuf", &["*.proto"]),
+            ("make", &["Makefile", "*.mk"]),
+            ("cmake", &["CMakeLists.txt", "*.cmake"]),
+            ("docker", &["Dockerfile", "*.dockerfile"]),
+            ("tf", &["*.tf", "*.tfvars"]),
+            ("hcl", &["*.hcl"]),
+            ("nix", &["*.nix"]),
+            ("zig", &["*.zig"]),
+            ("elixir", &["*.ex", "*.exs"]),
+            ("erlang", &["*.erl", "*.hrl"]),
+            ("haskell", &["*.hs", "*.lhs"]),
+            ("ocaml", &["*.ml", "*.mli"]),
+            ("clojure", &["*.clj", "*.cljs", "*.cljc", "*.edn"]),
+            ("csv", &["*.csv", "*.tsv"]),
+            ("log", &["*.log"]),
+            ("config", &["*.cfg", "*.conf", "*.ini"]),
+            ("lock", &["*.lock"]),
+            ("graphql", &["*.graphql", "*.gql"]),
+            ("wasm", &["*.wasm", "*.wat"]),
+            ("csharp", &["*.cs"]),
+            ("fsharp", &["*.fs", "*.fsi", "*.fsx"]),
+            ("dart", &["*.dart"]),
+            ("vim", &["*.vim"]),
+            ("tex", &["*.tex", "*.sty", "*.cls"]),
+            ("rst", &["*.rst"]),
+            ("org", &["*.org"]),
+            ("asm", &["*.asm", "*.s", "*.S"]),
+            ("bazel", &["*.bzl", "BUILD", "WORKSPACE"]),
+            ("readme", &["README*"]),
+            ("license", &["LICENSE*", "LICENCE*"]),
+        ]
+        .into_iter()
+        .map(|(name, globs)| TypeDef {
+            name: name.to_string(),
+            globs: globs.iter().map(|s| (*s).to_string()).collect(),
+        })
+        .collect()
+    }
+
+    #[must_use]
     pub fn from_decl(decl: &FilterDecl) -> Self {
-        let mut defs = builtin_type_defs();
+        let mut defs = Self::builtin();
 
         for spec in &decl.type_clear {
             defs.retain(|d| d.name != *spec);
@@ -217,148 +366,13 @@ impl TypeCatalog {
     }
 
     /// Print sorted type definitions for `--type-list`.
-    pub fn print_list(decl: &FilterDecl) {
-        let mut defs = Self::from_decl(decl).into_definitions();
+    pub fn print_list(&self) {
+        let mut defs = self.definitions().to_vec();
         defs.sort_by(|a, b| a.name.cmp(&b.name));
         for def in &defs {
             println!("{}: {}", def.name, def.globs.join(", "));
         }
     }
-}
-
-fn builtin_type_defs() -> Vec<TypeDef> {
-    [
-        ("rust", &["*.rs"][..]),
-        ("py", &["*.py", "*.pyi"]),
-        ("js", &["*.js", "*.mjs", "*.cjs"]),
-        ("ts", &["*.ts", "*.tsx", "*.mts", "*.cts"]),
-        ("c", &["*.c", "*.h"]),
-        ("cpp", &["*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hxx", "*.h"]),
-        ("java", &["*.java"]),
-        ("go", &["*.go"]),
-        ("html", &["*.html", "*.htm", "*.xhtml"]),
-        ("css", &["*.css", "*.scss", "*.less"]),
-        ("json", &["*.json", "*.jsonl"]),
-        ("yaml", &["*.yaml", "*.yml"]),
-        ("toml", &["*.toml"]),
-        ("xml", &["*.xml", "*.xsl", "*.xslt", "*.svg"]),
-        ("md", &["*.md", "*.markdown", "*.mdown"]),
-        ("txt", &["*.txt"]),
-        ("sh", &["*.sh", "*.bash", "*.zsh", "*.fish"]),
-        ("ruby", &["*.rb", "*.erb", "*.gemspec", "Gemfile"]),
-        ("php", &["*.php"]),
-        ("swift", &["*.swift"]),
-        ("kotlin", &["*.kt", "*.kts"]),
-        ("scala", &["*.scala", "*.sbt"]),
-        ("lua", &["*.lua"]),
-        ("perl", &["*.pl", "*.pm"]),
-        ("r", &["*.r", "*.R", "*.Rmd"]),
-        ("sql", &["*.sql"]),
-        ("protobuf", &["*.proto"]),
-        ("make", &["Makefile", "*.mk"]),
-        ("cmake", &["CMakeLists.txt", "*.cmake"]),
-        ("docker", &["Dockerfile", "*.dockerfile"]),
-        ("tf", &["*.tf", "*.tfvars"]),
-        ("hcl", &["*.hcl"]),
-        ("nix", &["*.nix"]),
-        ("zig", &["*.zig"]),
-        ("elixir", &["*.ex", "*.exs"]),
-        ("erlang", &["*.erl", "*.hrl"]),
-        ("haskell", &["*.hs", "*.lhs"]),
-        ("ocaml", &["*.ml", "*.mli"]),
-        ("clojure", &["*.clj", "*.cljs", "*.cljc", "*.edn"]),
-        ("csv", &["*.csv", "*.tsv"]),
-        ("log", &["*.log"]),
-        ("config", &["*.cfg", "*.conf", "*.ini"]),
-        ("lock", &["*.lock"]),
-        ("graphql", &["*.graphql", "*.gql"]),
-        ("wasm", &["*.wasm", "*.wat"]),
-        ("csharp", &["*.cs"]),
-        ("fsharp", &["*.fs", "*.fsi", "*.fsx"]),
-        ("dart", &["*.dart"]),
-        ("vim", &["*.vim"]),
-        ("tex", &["*.tex", "*.sty", "*.cls"]),
-        ("rst", &["*.rst"]),
-        ("org", &["*.org"]),
-        ("asm", &["*.asm", "*.s", "*.S"]),
-        ("bazel", &["*.bzl", "BUILD", "WORKSPACE"]),
-        ("readme", &["README*"]),
-        ("license", &["LICENSE*", "LICENCE*"]),
-    ]
-    .into_iter()
-    .map(|(name, globs)| TypeDef {
-        name: name.to_string(),
-        globs: globs.iter().map(|s| (*s).to_string()).collect(),
-    })
-    .collect()
-}
-
-/// Build a [`CandidateFilterConfig`] from CLI declarations and resolved filter context.
-///
-/// # Errors
-///
-/// Returns an error if `max_filesize` parsing fails.
-pub fn candidate_config(
-    config: &FilterConfig,
-    filter: SearchFilterCtx,
-    scopes: Vec<PathBuf>,
-    exclude_paths: Vec<PathBuf>,
-) -> anyhow::Result<CandidateFilterConfig> {
-    let max_filesize = config
-        .decl
-        .max_filesize
-        .as_ref()
-        .map(|s| parse_size_suffix(s))
-        .transpose()?;
-
-    let mut glob_patterns = config.glob_patterns.clone();
-    for ig in &config.decl.iglob {
-        glob_patterns.push(ig.clone());
-    }
-
-    let glob_ci = filter.glob_case_insensitive || !config.decl.iglob.is_empty();
-
-    let needs_type_defs = !config.decl.type_include.is_empty()
-        || !config.decl.type_exclude.is_empty()
-        || !config.decl.type_add.is_empty()
-        || !config.decl.type_clear.is_empty();
-    let type_definitions = if needs_type_defs {
-        TypeCatalog::from_decl(&config.decl).into_definitions()
-    } else {
-        Vec::new()
-    };
-
-    Ok(CandidateFilterConfig {
-        scopes,
-        exclude_paths,
-        glob: GlobConfig {
-            patterns: glob_patterns,
-            case_insensitive: glob_ci,
-        },
-        visibility: VisibilityConfig {
-            hidden: filter.ignore.hidden_mode(),
-            ignore: IgnoreConfig {
-                sources: filter.ignore.sources,
-                custom_files: if filter
-                    .ignore
-                    .msg_flags
-                    .contains(MessageFlags::NO_IGNORE_FILES)
-                {
-                    Vec::new()
-                } else {
-                    config.decl.ignore_file.clone()
-                },
-                require_git: filter.ignore.require_git,
-            },
-        },
-        follow_links: config.follow_links,
-        max_depth: config.decl.max_depth,
-        max_filesize,
-        type_definitions,
-        type_include: config.decl.type_include.clone(),
-        type_exclude: config.decl.type_exclude.clone(),
-        one_file_system: config.one_file_system,
-    })
 }
 
 #[cfg(test)]
@@ -367,39 +381,42 @@ mod tests {
 
     #[test]
     fn size_suffix_plain_number() {
-        assert_eq!(parse_size_suffix("42").unwrap(), 42);
+        assert_eq!(ByteSize::from_str("42").unwrap().bytes(), 42);
     }
 
     #[test]
     fn size_suffix_bytes() {
-        assert_eq!(parse_size_suffix("100B").unwrap(), 100);
+        assert_eq!(ByteSize::from_str("100B").unwrap().bytes(), 100);
     }
 
     #[test]
     fn size_suffix_kilobytes() {
-        assert_eq!(parse_size_suffix("2K").unwrap(), 2048);
-        assert_eq!(parse_size_suffix("2KB").unwrap(), 2048);
+        assert_eq!(ByteSize::from_str("2K").unwrap().bytes(), 2048);
+        assert_eq!(ByteSize::from_str("2KB").unwrap().bytes(), 2048);
     }
 
     #[test]
     fn size_suffix_megabytes() {
-        assert_eq!(parse_size_suffix("3M").unwrap(), 3 * 1024 * 1024);
-        assert_eq!(parse_size_suffix("3MB").unwrap(), 3 * 1024 * 1024);
+        assert_eq!(ByteSize::from_str("3M").unwrap().bytes(), 3 * 1024 * 1024);
+        assert_eq!(ByteSize::from_str("3MB").unwrap().bytes(), 3 * 1024 * 1024);
     }
 
     #[test]
     fn size_suffix_gigabytes() {
-        assert_eq!(parse_size_suffix("1G").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(
+            ByteSize::from_str("1G").unwrap().bytes(),
+            1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn size_suffix_unknown_unit() {
-        assert!(parse_size_suffix("5X").is_err());
+        assert!(ByteSize::from_str("5X").is_err());
     }
 
     #[test]
     fn size_suffix_invalid_number() {
-        assert!(parse_size_suffix("abc").is_err());
+        assert!(ByteSize::from_str("abc").is_err());
     }
 
     #[test]

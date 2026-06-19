@@ -35,6 +35,7 @@ struct CorpusPathCollector<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
+    max_filesize: Option<u64>,
     thread_paths: Vec<PathBuf>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
@@ -78,6 +79,11 @@ impl ParallelVisitor for CorpusPathCollector<'_> {
         }
 
         if entry.file_type().is_some_and(|ft| ft.is_file()) && !self.is_excluded(rel) {
+            if let Some(limit) = self.max_filesize
+                && entry.metadata().is_ok_and(|m| m.len() > limit)
+            {
+                return WalkState::Continue;
+            }
             self.thread_paths.push(rel.to_path_buf());
         }
         WalkState::Continue
@@ -114,6 +120,7 @@ struct CorpusPathCollectorBuilder<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
+    max_filesize: Option<u64>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
 }
@@ -124,6 +131,7 @@ impl<'a> ParallelVisitorBuilder<'a> for CorpusPathCollectorBuilder<'a> {
             root: self.root.clone(),
             exclude_paths: self.exclude_paths,
             include_paths: self.include_paths,
+            max_filesize: self.max_filesize,
             thread_paths: Vec::new(),
             walk_error: Arc::clone(&self.walk_error),
             consolidated_paths: Arc::clone(&self.consolidated_paths),
@@ -145,6 +153,7 @@ impl<'a> CorpusWalker<'a> {
         let sources = self.config.visibility.ignore.sources;
         let mut wb = WalkBuilder::new(self.config.corpus.root);
         wb.follow_links(self.config.corpus.follow_links)
+            .same_file_system(self.config.walk.one_file_system)
             .hidden(matches!(self.config.visibility.hidden, HiddenMode::Respect))
             .parents(sources.contains(IgnoreSources::PARENT))
             .ignore(sources.contains(IgnoreSources::DOT))
@@ -152,6 +161,9 @@ impl<'a> CorpusWalker<'a> {
             .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
             .git_global(sources.contains(IgnoreSources::GLOBAL))
             .require_git(self.config.visibility.ignore.require_git);
+        if let Some(d) = self.config.walk.max_depth {
+            wb.max_depth(Some(d + 1));
+        }
         wb
     }
 
@@ -163,6 +175,7 @@ impl<'a> CorpusWalker<'a> {
             root: self.config.corpus.root.to_path_buf(),
             exclude_paths: self.config.corpus.exclude_paths,
             include_paths: self.config.corpus.include_paths,
+            max_filesize: self.config.walk.max_filesize,
             walk_error: Arc::clone(&walk_error),
             consolidated_paths: Arc::clone(&consolidated_paths),
         };
@@ -365,9 +378,10 @@ impl<'a> PostingAssembler<'a> {
 
 /// Build in-memory index tables from a corpus configuration.
 ///
-/// Orchestrates: corpus walk → fingerprint → trigram extraction → posting assembly.
+/// When `paths` is empty, discovers files via [`CorpusWalker`]. Otherwise indexes
+/// exactly the given corpus-relative paths.
 impl IndexTables {
-    pub fn build(config: &IndexConfig<'_>) -> crate::Result<Self> {
+    pub fn build(config: &IndexConfig<'_>, paths: &[PathBuf]) -> crate::Result<Self> {
         use rayon::prelude::*;
 
         let (paths, root) = match config.corpus.kind {
@@ -382,7 +396,11 @@ impl IndexTables {
                 (paths, config.corpus.root)
             }
             CorpusKind::Directory => {
-                let paths = CorpusWalker::new(config).collect()?;
+                let paths = if paths.is_empty() {
+                    CorpusWalker::new(config).collect()?
+                } else {
+                    paths.to_vec()
+                };
                 (paths, config.corpus.root)
             }
         };
@@ -416,6 +434,7 @@ impl IndexTables {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::config::WalkOptions;
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig};
     use crate::search::filter::IgnoreConfig;
     use crate::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
@@ -435,6 +454,7 @@ mod tests {
                     include_paths: &[],
                     exclude_paths: &[],
                 },
+                walk: WalkOptions::new(false),
                 visibility: VisibilityConfig {
                     ignore: IgnoreConfig::disabled(),
                     ..Default::default()
@@ -444,7 +464,7 @@ mod tests {
 
         fn build(root: &Path) -> IndexTables {
             let config = Self::no_ignore_config(root);
-            IndexTables::build(&config).expect("build tables")
+            IndexTables::build(&config, &[]).expect("build tables")
         }
     }
 
@@ -557,12 +577,13 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[PathBuf::from("excluded")],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -600,6 +621,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
         let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
@@ -621,6 +643,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
@@ -644,6 +667,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
         let indexed = CorpusWalker::new(&config).collect().expect("walk corpus");
@@ -674,12 +698,13 @@ mod tests {
                 include_paths: &[PathBuf::from("keep.txt")],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -700,9 +725,10 @@ mod tests {
                 include_paths: &[only_txt],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(
             tables.fingerprints[0].path,
@@ -739,9 +765,10 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             !paths.iter().any(|p| p == "skip.ignored"),
@@ -770,9 +797,10 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             paths.iter().any(|p| p == Path::new("src/keep.txt")),
