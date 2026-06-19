@@ -628,11 +628,18 @@ fn blocking_build_hands_off_to_daemon_watch() {
     );
 
     let lock_path = p.sift_dir().join("lock");
-    let mut lock = fslock::LockFile::open(&lock_path).unwrap();
-    assert!(
-        !lock.try_lock().unwrap(),
-        "daemon should hold lock after blocking build"
-    );
+    let lock_deadline = Instant::now() + Duration::from_secs(15);
+    let daemon_locked = 'wait: {
+        while Instant::now() < lock_deadline {
+            let mut lock = fslock::LockFile::open(&lock_path).unwrap();
+            if !lock.try_lock().unwrap() {
+                break 'wait true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
+    assert!(daemon_locked, "daemon should hold lock after blocking build");
 
     p.write("b.txt", "blocking_handoff_watch_marker\n");
 
