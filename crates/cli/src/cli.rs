@@ -20,7 +20,7 @@ use crate::grep::pattern::{
     BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope,
 };
 use crate::grep::run::{Grep, GrepConfig, GrepOutcome};
-use crate::index::{Daemon, IndexExecution, IndexJob, IndexOperation, IndexRequest};
+use crate::index::{IndexExecution, IndexJob, IndexOperation, IndexRequest};
 use crate::update;
 
 use clap::{Parser, Subcommand};
@@ -217,14 +217,6 @@ impl Cli {
         }
     }
 
-    fn daemon(&self) -> Option<Daemon> {
-        if std::env::var_os("SIFT_NO_DAEMON").is_some() {
-            None
-        } else {
-            Some(Daemon::new(self.paths.sift_dir.clone()))
-        }
-    }
-
     fn dispatch_route(&self) -> DispatchRoute {
         if self.filter_decl.type_list {
             return DispatchRoute::TypeList;
@@ -260,7 +252,7 @@ impl Cli {
     }
 
     fn exit_index(&self, req: IndexRequest, argv: &Argv<'_>) -> ExitCode {
-        let daemon = self.daemon();
+        let daemon = self.paths.daemon();
         let index = match IndexJob::resolve(req) {
             Ok(index) => index,
             Err(e) => {
@@ -272,7 +264,7 @@ impl Cli {
     }
 
     fn exit_grep(&self, argv: &Argv<'_>) -> ExitCode {
-        let daemon = self.daemon();
+        let daemon = self.paths.daemon();
         let grep = Grep::new(self.grep_config());
 
         let suppress_errors = grep.suppress_error_messages(argv);

@@ -258,12 +258,7 @@ impl Grep {
             SearchOutputCtx::write_stats(s);
         }
         if let Some(daemon) = daemon {
-            let indexed_paths = session.indexes.indexed_rel_paths();
-            let paths: Vec<PathBuf> = grep_run
-                .hits
-                .into_iter()
-                .filter(|p| !indexed_paths.contains(p))
-                .collect();
+            let paths = session.indexes.unindexed_hits(grep_run.hits);
             if !paths.is_empty()
                 && let Err(e) = daemon.send(&DaemonOp::Index(paths))
             {

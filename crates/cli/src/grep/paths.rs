@@ -13,6 +13,15 @@ pub struct PathArgs {
     pub follow: bool,
 }
 
+impl PathArgs {
+    #[must_use]
+    pub fn daemon(&self) -> Option<crate::index::Daemon> {
+        std::env::var_os("SIFT_NO_DAEMON")
+            .is_none()
+            .then(|| crate::index::Daemon::new(self.sift_dir.clone()))
+    }
+}
+
 /// Resolved corpus root, search prefixes, and index exclusions for a search run.
 pub struct CorpusScope {
     pub filter_root: PathBuf,

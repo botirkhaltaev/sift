@@ -115,6 +115,15 @@ impl Indexes {
         paths
     }
 
+    /// Corpus-relative search hits not yet present in the current snapshot.
+    #[must_use]
+    pub fn unindexed_hits(&self, hits: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+        let indexed = self.indexed_rel_paths();
+        hits.into_iter()
+            .filter(|path| !indexed.contains(path))
+            .collect()
+    }
+
     /// Return all indexed candidates across all registered indexes.
     #[must_use]
     pub(crate) fn complete_candidates(&self) -> Vec<crate::Candidate> {

@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use sift_core::{IndexStore, StoreMeta};
+
 /// Merges rapid partial index requests. Empty `paths` means full corpus.
 #[derive(Debug, Default)]
 pub struct IndexCoalesce {
@@ -38,6 +40,17 @@ impl IndexCoalesce {
             None
         } else {
             Some(std::mem::take(&mut self.paths))
+        }
+    }
+
+    /// Take pending paths and reconcile them against the store.
+    pub fn reconcile(&mut self, sift_dir: &std::path::Path, meta: &StoreMeta) {
+        if let Some(paths) = self.take() {
+            let result = IndexStore::open_or_create(sift_dir, meta)
+                .and_then(|mut store| store.reconcile(meta, &paths));
+            if let Err(e) = result {
+                eprintln!("sift-daemon: refresh failed: {e}");
+            }
         }
     }
 }

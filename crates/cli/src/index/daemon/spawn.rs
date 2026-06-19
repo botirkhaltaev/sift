@@ -9,30 +9,29 @@ use super::error::DaemonError;
 use super::watch::{DAEMON_LOCK, READY_DIR, READY_POLL_INTERVAL, READY_TIMEOUT, SPAWN_LOCK};
 
 impl Daemon {
-    fn executable() -> Result<PathBuf, DaemonError> {
-        if let Some(path) = std::env::var_os("CARGO_BIN_EXE_sift-daemon") {
-            return Ok(PathBuf::from(path));
-        }
-        let sift = std::env::current_exe().map_err(DaemonError::Io)?;
-        let sibling = sift.with_file_name("sift-daemon");
-        if sibling.exists() {
-            return Ok(sibling);
-        }
-        if let Some(debug_bin) = sift
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("sift-daemon"))
-            .filter(|p| p.exists())
-        {
-            return Ok(debug_bin);
-        }
-        Ok(sibling)
-    }
-
     pub(super) fn ensure_running(&self) -> Result<(), DaemonError> {
         let sift_dir = &self.sift_dir;
         let init_root = self.init_root.as_deref();
-        let exe = Self::executable()?;
+        let exe = {
+            if let Some(path) = std::env::var_os("CARGO_BIN_EXE_sift-daemon") {
+                PathBuf::from(path)
+            } else {
+                let sift = std::env::current_exe().map_err(DaemonError::Io)?;
+                let sibling = sift.with_file_name("sift-daemon");
+                if sibling.exists() {
+                    sibling
+                } else if let Some(debug_bin) = sift
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.join("sift-daemon"))
+                    .filter(|p| p.exists())
+                {
+                    debug_bin
+                } else {
+                    sibling
+                }
+            }
+        };
 
         std::fs::create_dir_all(sift_dir)?;
 

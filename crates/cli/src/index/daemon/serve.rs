@@ -34,54 +34,18 @@ struct ServeRuntime {
     rx: mpsc::Receiver<ServeMessage>,
 }
 
-impl Daemon {
-    /// Send an IPC operation to the daemon, spawning it when needed.
-    ///
-    /// # Errors
-    ///
-    /// Propagates spawn and IPC failures.
-    pub fn send(&self, op: &DaemonOp) -> Result<(), DaemonError> {
-        self.ensure_running()?;
-        self.transmit(op)
-    }
-
-    /// Run the daemon event loop until idle timeout or shutdown.
-    ///
-    /// # Errors
-    ///
-    /// Propagates lock-acquisition, metadata, watcher, and IPC setup errors.
-    pub fn serve(&self, options: Serve) -> Result<(), DaemonError> {
-        let shutdown = options
-            .shutdown
-            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        self.serve_until(options.ready_file, options.idle_timeout, &shutdown)
-    }
-
-    fn serve_until(
+impl ServeRuntime {
+    fn run(
         &self,
-        ready_file: Option<PathBuf>,
         idle_timeout: Duration,
+        debounce: Duration,
         shutdown: &AtomicBool,
     ) -> Result<(), DaemonError> {
-        let Some(runtime) = self.start_runtime(ready_file)? else {
-            return Ok(());
-        };
-
-        let debounce = Duration::from_millis(super::DEBOUNCE_MS);
         let mut state = CoordinatorState::new_idle(idle_timeout);
-        let ServeRuntime {
-            sift_dir,
-            sift_dir_raw,
-            meta,
-            coalesce,
-            tx,
-            rx,
-            ..
-        } = runtime;
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
-                Self::drain_active_refresh(&rx, &mut state);
+                self.drain_active_refresh(&mut state);
                 return Ok(());
             }
 
@@ -90,9 +54,13 @@ impl Daemon {
                     .min(SHUTDOWN_POLL)
             });
 
-            let input = match rx.recv_timeout(timeout) {
+            let input = match self.rx.recv_timeout(timeout) {
                 Ok(ServeMessage::FsChange(event)) => {
-                    if Self::should_ignore(&event, &sift_dir, &sift_dir_raw) {
+                    let internal = matches!(event.kind, notify::EventKind::Access(_))
+                        || event.paths.iter().any(|p| {
+                            p.starts_with(&self.sift_dir) || p.starts_with(&self.sift_dir_raw)
+                        });
+                    if internal {
                         continue;
                     }
                     CoordinatorInput::FsChange
@@ -101,19 +69,13 @@ impl Daemon {
                 Ok(ServeMessage::Client(DaemonOp::Watch)) => continue,
                 Ok(ServeMessage::Client(DaemonOp::Index(paths))) => {
                     {
-                        let mut pending = coalesce.lock().expect("coalesce lock");
+                        let mut pending = self.coalesce.lock().expect("coalesce lock");
                         pending.push(paths);
                     }
                     if state.is_refreshing() {
                         state = CoordinatorState::Refreshing { follow_up: true };
                     } else {
-                        Self::spawn_refresh(
-                            tx.clone(),
-                            sift_dir.clone(),
-                            meta.clone(),
-                            Arc::clone(&coalesce),
-                            true,
-                        );
+                        self.spawn_refresh(true);
                         state = CoordinatorState::Refreshing { follow_up: false };
                     }
                     continue;
@@ -135,17 +97,11 @@ impl Daemon {
 
             if idle_deadline
                 && matches!(input, CoordinatorInput::DeadlineReached)
-                && coalesce.lock().expect("coalesce lock").is_pending()
+                && self.coalesce.lock().expect("coalesce lock").is_pending()
             {
                 // Drain queued IPC index work before exiting; idle timeout is not
                 // a hard guarantee while coalesce still has pending paths.
-                Self::spawn_refresh(
-                    tx.clone(),
-                    sift_dir.clone(),
-                    meta.clone(),
-                    Arc::clone(&coalesce),
-                    true,
-                );
+                self.spawn_refresh(true);
                 state = CoordinatorState::Refreshing { follow_up: false };
                 continue;
             }
@@ -153,23 +109,74 @@ impl Daemon {
             match action {
                 CoordinatorAction::None => {}
                 CoordinatorAction::StartRefresh => {
-                    Self::spawn_refresh(
-                        tx.clone(),
-                        sift_dir.clone(),
-                        meta.clone(),
-                        Arc::clone(&coalesce),
-                        false,
-                    );
+                    self.spawn_refresh(false);
                     state = CoordinatorState::Refreshing { follow_up: false };
                     continue;
                 }
                 CoordinatorAction::Exit => return Ok(()),
             }
             if debouncing_deadline && matches!(input, CoordinatorInput::DeadlineReached) {
-                Self::reconcile_coalesce(&sift_dir, &meta, &coalesce);
+                self.coalesce
+                    .lock()
+                    .expect("coalesce lock")
+                    .reconcile(&self.sift_dir, &self.meta);
             }
             state = next;
         }
+    }
+
+    fn spawn_refresh(&self, index_only: bool) {
+        let tx = self.tx.clone();
+        let sift_dir = self.sift_dir.clone();
+        let meta = self.meta.clone();
+        let coalesce = Arc::clone(&self.coalesce);
+        std::thread::spawn(move || {
+            if !index_only {
+                let result = IndexStore::open_or_create(&sift_dir, &meta)
+                    .and_then(|mut store| store.reconcile(&meta, &[]));
+                if let Err(e) = result {
+                    eprintln!("sift-daemon: refresh failed: {e}");
+                }
+            }
+            coalesce
+                .lock()
+                .expect("coalesce lock")
+                .reconcile(&sift_dir, &meta);
+            let _ = tx.send(ServeMessage::RefreshComplete);
+        });
+    }
+
+    fn drain_active_refresh(&self, state: &mut CoordinatorState) {
+        while state.is_refreshing() {
+            match self.rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(ServeMessage::RefreshComplete) => {
+                    *state = CoordinatorState::new_idle(DEFAULT_IDLE_TIMEOUT);
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    }
+}
+
+impl Daemon {
+    /// Run the daemon event loop until idle timeout or shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Propagates lock-acquisition, metadata, watcher, and IPC setup errors.
+    pub fn serve(&self, options: Serve) -> Result<(), DaemonError> {
+        let shutdown = options
+            .shutdown
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        let Some(runtime) = self.start_runtime(options.ready_file)? else {
+            return Ok(());
+        };
+        runtime.run(
+            options.idle_timeout,
+            Duration::from_millis(super::DEBOUNCE_MS),
+            &shutdown,
+        )
     }
 
     fn start_runtime(
@@ -189,8 +196,12 @@ impl Daemon {
             return Ok(None);
         }
 
-        let meta = Self::load_store_meta(&sift_dir, self.init_root.as_deref())?;
-        Self::reconcile_paths(&sift_dir, &meta, &[]);
+        let meta = self.load_meta(&sift_dir)?;
+        let result = IndexStore::open_or_create(&sift_dir, &meta)
+            .and_then(|mut store| store.reconcile(&meta, &[]));
+        if let Err(e) = result {
+            eprintln!("sift-daemon: refresh failed: {e}");
+        }
 
         let coalesce = Arc::new(Mutex::new(IndexCoalesce::default()));
         let (tx, rx) = mpsc::channel::<ServeMessage>();
@@ -237,11 +248,8 @@ impl Daemon {
         }))
     }
 
-    fn load_store_meta(
-        sift_dir: &Path,
-        init_root: Option<&Path>,
-    ) -> Result<StoreMeta, DaemonError> {
-        match (StoreMeta::read(sift_dir), init_root) {
+    fn load_meta(&self, sift_dir: &Path) -> Result<StoreMeta, DaemonError> {
+        match (StoreMeta::read(sift_dir), self.init_root.as_deref()) {
             (Ok(mut meta), _) => {
                 if meta.indexes.is_empty() {
                     meta.indexes = IndexKind::ALL.to_vec();
@@ -272,60 +280,6 @@ impl Daemon {
             (Err(e), None) => Err(DaemonError::message(format!("no store metadata: {e}"))),
         }
     }
-
-    fn reconcile_paths(sift_dir: &Path, meta: &StoreMeta, paths: &[PathBuf]) {
-        let result = (|| -> Result<(), DaemonError> {
-            let mut store = IndexStore::open_or_create(sift_dir, meta)?;
-            store.reconcile(meta, paths)?;
-            Ok(())
-        })();
-        if let Err(e) = result {
-            eprintln!("sift-daemon: refresh failed: {e}");
-        }
-    }
-
-    fn reconcile_coalesce(sift_dir: &Path, meta: &StoreMeta, coalesce: &Mutex<IndexCoalesce>) {
-        let paths = coalesce.lock().expect("coalesce lock").take();
-        if let Some(paths) = paths {
-            Self::reconcile_paths(sift_dir, meta, &paths);
-        }
-    }
-
-    fn drain_active_refresh(rx: &mpsc::Receiver<ServeMessage>, state: &mut CoordinatorState) {
-        while state.is_refreshing() {
-            match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(ServeMessage::RefreshComplete) => {
-                    *state = CoordinatorState::new_idle(DEFAULT_IDLE_TIMEOUT);
-                }
-                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-    }
-
-    fn spawn_refresh(
-        tx: mpsc::Sender<ServeMessage>,
-        sift_dir: PathBuf,
-        meta: StoreMeta,
-        coalesce: Arc<Mutex<IndexCoalesce>>,
-        index_only: bool,
-    ) {
-        std::thread::spawn(move || {
-            if !index_only {
-                Self::reconcile_paths(&sift_dir, &meta, &[]);
-            }
-            Self::reconcile_coalesce(&sift_dir, &meta, &coalesce);
-            let _ = tx.send(ServeMessage::RefreshComplete);
-        });
-    }
-
-    fn should_ignore(event: &notify::Event, canonical: &Path, raw: &Path) -> bool {
-        matches!(event.kind, notify::EventKind::Access(_))
-            || event
-                .paths
-                .iter()
-                .any(|p| p.starts_with(canonical) || p.starts_with(raw))
-    }
 }
 
 #[cfg(test)]
@@ -336,7 +290,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn serve_until_stops_on_shutdown() {
+    fn serve_stops_on_shutdown() {
         let dir = TempDir::new().unwrap();
         let sift_dir = dir.path().join(".sift");
 
@@ -366,7 +320,13 @@ mod tests {
         let s = Arc::clone(&shutdown);
 
         let handle = std::thread::spawn(move || {
-            daemon.serve_until(None, DEFAULT_IDLE_TIMEOUT, &s).unwrap();
+            daemon
+                .serve(Serve {
+                    ready_file: None,
+                    idle_timeout: DEFAULT_IDLE_TIMEOUT,
+                    shutdown: Some(s),
+                })
+                .unwrap();
         });
 
         std::thread::sleep(Duration::from_millis(100));
@@ -375,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn serve_until_returns_early_when_lock_held() {
+    fn serve_returns_early_when_lock_held() {
         let dir = TempDir::new().unwrap();
         let sift_dir = dir.path().join(".sift");
         std::fs::create_dir_all(&sift_dir).unwrap();
@@ -385,7 +345,11 @@ mod tests {
 
         let daemon = Daemon::new(sift_dir);
         daemon
-            .serve_until(None, DEFAULT_IDLE_TIMEOUT, &AtomicBool::new(false))
+            .serve(Serve {
+                ready_file: None,
+                idle_timeout: DEFAULT_IDLE_TIMEOUT,
+                shutdown: None,
+            })
             .unwrap();
     }
 }

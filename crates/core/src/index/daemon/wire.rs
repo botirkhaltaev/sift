@@ -40,10 +40,21 @@ impl DaemonOp {
             Self::INDEX_OPCODE => {
                 let mut paths = Vec::new();
                 loop {
-                    let line = read_line(&mut reader)?;
-                    if line.is_empty() {
+                    let mut buf = Vec::new();
+                    loop {
+                        let mut byte = [0_u8; 1];
+                        let n = reader.read(&mut byte)?;
+                        if n == 0 || byte[0] == b'\n' {
+                            break;
+                        }
+                        buf.push(byte[0]);
+                    }
+                    if buf.is_empty() {
                         break;
                     }
+                    let line = String::from_utf8(buf).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "index path is not valid utf-8")
+                    })?;
                     paths.push(PathBuf::from(line));
                 }
                 Ok(Self::Index(paths))
@@ -54,23 +65,6 @@ impl DaemonOp {
             )),
         }
     }
-}
-
-fn read_line(reader: &mut impl Read) -> io::Result<String> {
-    let mut buf = Vec::new();
-    loop {
-        let mut byte = [0_u8; 1];
-        let n = reader.read(&mut byte)?;
-        if n == 0 {
-            break;
-        }
-        if byte[0] == b'\n' {
-            break;
-        }
-        buf.push(byte[0]);
-    }
-    String::from_utf8(buf)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "index path is not valid utf-8"))
 }
 
 #[cfg(test)]
