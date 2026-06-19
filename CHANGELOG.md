@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.0.0](https://github.com/botirk38/sift/releases/tag/v1.0.0) — 2026-06-18
+## [0.4.0](https://github.com/botirk38/sift/releases/tag/v0.4.0) — 2026-06-18
 
 ### Features
 
@@ -20,7 +20,7 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - Add LICENSE-MIT, LICENSE-APACHE-2.0, CONTRIBUTING.md, SECURITY.md
-- Add crate metadata and README "What v1.0 guarantees" section
+- Add crate metadata and README release-scope section
 - Expand rg compatibility matrix and integration test coverage
 
 ## [0.3.0](https://github.com/botirk38/sift/releases/tag/v0.3.0) — 2026-06-02

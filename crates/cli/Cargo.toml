@@ -37,7 +37,7 @@ fslock = "0.2"
 interprocess = "2"
 notify = "9.0.0-rc.4"
 rayon = "1"
-sift-core = { version = "1.0.0", path = "../core" }
+sift-core = { version = "0.4.0", path = "../core" }
 thiserror = "2"
 
 [dev-dependencies]

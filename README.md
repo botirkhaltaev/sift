@@ -106,9 +106,9 @@ CI runs fmt, clippy (`-D warnings`), and tests on Linux, macOS, and Windows. See
 
 Contributing and security reporting: [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
-## What v1.0 guarantees
+## Release scope
 
-v1.0 is a stable baseline for indexed search, not a full ripgrep drop-in.
+This release is a stable baseline for indexed search, not a full ripgrep drop-in.
 
 **In scope**
 
@@ -116,13 +116,13 @@ v1.0 is a stable baseline for indexed search, not a full ripgrep drop-in.
 - **Index lifecycle** — `sift index build`, `sift index build --lazy`, async `sift index update`, and the watch daemon for background reconciliation.
 - **Documented rg flags** — behavior tracked in [`docs/rg-compat-matrix.md`](docs/rg-compat-matrix.md) with golden CLI tests for implemented rows.
 
-**Out of scope for v1.0**
+**Out of scope**
 
 - Full ripgrep parity (ignore overrides, multiline/encoding, `--vimgrep`, `--debug`, and other matrix rows marked Missing or Partial).
 - PCRE2 / `-P` and other engine-specific ripgrep features.
 - A prior index is still required; sift is not a zero-setup replacement for `rg`.
 
-Post-v1.0 work continues toward broader rg compatibility without breaking the v1.0 index format or documented CLI contracts.
+Future work continues toward broader rg compatibility without breaking the index format or documented CLI contracts.
 
 ## License
 
