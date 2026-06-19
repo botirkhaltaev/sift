@@ -136,69 +136,76 @@ impl ignore::ParallelVisitor for CandidateCollector {
 }
 
 /// Collect candidate files across all scopes by walking the filesystem.
-pub fn collect_candidates(filter: &CandidateFilter) -> crate::Result<Vec<Candidate>> {
-    let filter_root = filter
-        .root()
-        .canonicalize()
-        .unwrap_or_else(|_| filter.root().to_path_buf());
-    let mut out = Vec::new();
-    for scope in filter.scopes() {
-        let path = if scope.as_os_str().is_empty() {
-            filter_root.clone()
-        } else {
-            filter_root.join(scope)
-        };
-        if !path.exists() {
-            continue;
+impl CandidateFilter {
+    /// # Errors
+    ///
+    /// Returns an error if walking the corpus fails.
+    pub fn collect(&self) -> crate::Result<Vec<Candidate>> {
+        let filter_root = self
+            .root()
+            .canonicalize()
+            .unwrap_or_else(|_| self.root().to_path_buf());
+        let mut out = Vec::new();
+        for scope in self.scopes() {
+            let path = if scope.as_os_str().is_empty() {
+                filter_root.clone()
+            } else {
+                filter_root.join(scope)
+            };
+            if !path.exists() {
+                continue;
+            }
+            let path = path.canonicalize().unwrap_or(path);
+            if path.is_file() {
+                let rel_path = path
+                    .strip_prefix(&filter_root)
+                    .unwrap_or(&path)
+                    .to_path_buf();
+                out.push(Candidate::new(rel_path, path));
+            } else if path.is_dir() {
+                let mut walk = CandidateWalk::new(&path, self)?;
+                out.extend(walk.collect()?);
+            }
         }
-        let path = path.canonicalize().unwrap_or(path);
-        if path.is_file() {
-            let rel_path = path
-                .strip_prefix(&filter_root)
-                .unwrap_or(&path)
-                .to_path_buf();
-            out.push(Candidate::new(rel_path, path));
-        } else if path.is_dir() {
-            let mut walk = CandidateWalk::new(&path, filter)?;
-            out.extend(walk.collect()?);
-        }
+        out.sort_by(|a, b| a.rel_path().cmp(b.rel_path()));
+        out.dedup();
+        Ok(out)
     }
-    out.sort_by(|a, b| a.rel_path().cmp(b.rel_path()));
-    out.dedup();
-    Ok(out)
 }
 
-/// Discovers files under the given root matching the walk options.
-///
-/// # Errors
-///
-/// Returns an error if the root path cannot be canonicalized or
-/// the walk encounters an inaccessible directory.
-pub fn discover_files(root: &Path, options: WalkOptions) -> crate::Result<HashSet<PathBuf>> {
-    let root = root.canonicalize()?;
-    let mut set = HashSet::new();
-    let follow = matches!(options.links, LinkTraversal::Follow);
-    let mut builder = ignore::WalkBuilder::new(&root);
-    builder.follow_links(follow);
-    if let Some(depth) = options.max_depth {
-        builder.max_depth(Some(depth + 1));
-    }
-    builder.same_file_system(options.one_file_system);
-    let walker = builder.build();
-    for entry in walker {
-        let entry = entry.map_err(crate::Error::Ignore)?;
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
+impl WalkOptions {
+    /// Discovers files under the given root matching these walk options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the root path cannot be canonicalized or
+    /// the walk encounters an inaccessible directory.
+    pub fn discover_files(&self, root: &Path) -> crate::Result<HashSet<PathBuf>> {
+        let root = root.canonicalize()?;
+        let mut set = HashSet::new();
+        let follow = matches!(self.links, LinkTraversal::Follow);
+        let mut builder = ignore::WalkBuilder::new(&root);
+        builder.follow_links(follow);
+        if let Some(depth) = self.max_depth {
+            builder.max_depth(Some(depth + 1));
         }
-        let path = entry.path();
-        if options
-            .max_filesize
-            .is_some_and(|limit| std::fs::metadata(path).is_ok_and(|m| m.len() > limit))
-        {
-            continue;
+        builder.same_file_system(self.one_file_system);
+        let walker = builder.build();
+        for entry in walker {
+            let entry = entry.map_err(crate::Error::Ignore)?;
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+            let path = entry.path();
+            if self
+                .max_filesize
+                .is_some_and(|limit| std::fs::metadata(path).is_ok_and(|m| m.len() > limit))
+            {
+                continue;
+            }
+            let display = path.strip_prefix(&root).unwrap_or(path).to_path_buf();
+            set.insert(display);
         }
-        let display = path.strip_prefix(&root).unwrap_or(path).to_path_buf();
-        set.insert(display);
+        Ok(set)
     }
-    Ok(set)
 }

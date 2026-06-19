@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use sift_core::{Indexes, PathDisplay};
+use sift_core::{Indexes, PathDisplay, StoreMeta, WalkMeta};
 
 #[derive(Args)]
 pub struct PathArgs {
@@ -28,12 +28,16 @@ impl CorpusScope {
     /// Returns an error if path resolution fails.
     pub fn resolve(
         indexes: &Indexes,
+        meta: Option<&StoreMeta>,
         cwd: &Path,
         search_paths: &[PathBuf],
         sift_dir: &Path,
     ) -> anyhow::Result<Self> {
         if indexes.is_empty() {
-            let root = cwd.canonicalize()?;
+            let root = meta.map_or_else(
+                || cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),
+                |m| m.corpus.root.clone(),
+            );
             Ok(Self {
                 filter_root: root.clone(),
                 prefixes: Self::walk_prefixes(&root, search_paths)?,
@@ -47,6 +51,12 @@ impl CorpusScope {
                 exclude_paths: Self::excluded_paths(root, sift_dir),
             })
         }
+    }
+
+    /// Build walk options from store metadata when searching before a snapshot exists.
+    #[must_use]
+    pub const fn walk_from_meta(meta: &StoreMeta) -> WalkMeta {
+        meta.walk
     }
 
     #[must_use]

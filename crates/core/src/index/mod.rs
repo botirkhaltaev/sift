@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod config;
+pub mod daemon;
 pub mod error;
 pub mod kinds;
 pub mod meta;
@@ -11,8 +12,10 @@ pub mod trigram;
 
 pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexConfig};
+pub use daemon::DaemonOp;
 pub use error::IndexError;
 pub use kinds::{FileId, Index, IndexId, IndexKind, PlanMode, QueryPlanOutput};
+pub use meta::{CorpusMeta, FilterMeta, WalkMeta};
 pub use registry::Indexes;
 
 #[cfg(test)]

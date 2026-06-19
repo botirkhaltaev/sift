@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct FileResult {
     pub output: ChunkOutput,
     pub json_stats: Option<grep_printer::Stats>,
+    pub hit: Option<std::path::PathBuf>,
 }
 
 pub struct ChunkOutput {

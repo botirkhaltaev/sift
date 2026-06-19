@@ -80,7 +80,8 @@ Correctness parity: **11/11** benchmarks. See [`crates/core/benches/README.md`](
 
 ## Differences from ripgrep
 
-- Requires a **prior index** (`sift index build`) before searching; refresh with `sift index update`.
+- Requires a **prior index** (`sift index build`, or `sift index build --lazy` with the watch daemon) before searching; refresh with `sift index update` (async by default) or `sift index update --wait`.
+- Search automatically queues background indexing for unindexed files touched during a walk (disable the daemon with `SIFT_NO_DAEMON=1` to skip).
 - Search paths must sit **under** the indexed corpus root.
 - Uses `--no-filename` instead of `-h` (which is help).
 
@@ -103,6 +104,26 @@ cargo test --workspace --all-features
 
 CI runs fmt, clippy (`-D warnings`), and tests on Linux, macOS, and Windows. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
+Contributing and security reporting: [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
+
+## What v1.0 guarantees
+
+v1.0 is a stable baseline for indexed search, not a full ripgrep drop-in.
+
+**In scope**
+
+- **Indexed search** — trigram-backed candidate narrowing with full-scan fallback when the planner cannot extract literals.
+- **Index lifecycle** — `sift index build`, `sift index build --lazy`, async `sift index update`, and the watch daemon for background reconciliation.
+- **Documented rg flags** — behavior tracked in [`docs/rg-compat-matrix.md`](docs/rg-compat-matrix.md) with golden CLI tests for implemented rows.
+
+**Out of scope for v1.0**
+
+- Full ripgrep parity (ignore overrides, multiline/encoding, `--vimgrep`, `--debug`, and other matrix rows marked Missing or Partial).
+- PCRE2 / `-P` and other engine-specific ripgrep features.
+- A prior index is still required; sift is not a zero-setup replacement for `rg`.
+
+Post-v1.0 work continues toward broader rg compatibility without breaking the v1.0 index format or documented CLI contracts.
+
 ## License
 
-MIT OR Apache-2.0. See [`Cargo.toml`](Cargo.toml).
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE-2.0), at your option.

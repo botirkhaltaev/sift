@@ -78,7 +78,6 @@ impl From<ExecutionError> for SearchError {
     }
 }
 
-pub use candidates::walk::discover_files;
 pub use emit::stats::SearchStats;
 pub use filter::{
     CandidateFilter, CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
@@ -96,7 +95,7 @@ pub use output::{SearchOutput, SearchOutputFormat};
 pub use pattern::PatternCompiler;
 pub use query::Match;
 pub use query::SearchQuery;
-pub use request::{LinkTraversal, WalkOptions};
+pub use request::{LinkTraversal, SearchCollection, WalkOptions};
 
 #[derive(Debug)]
 pub struct SearchOutcome {

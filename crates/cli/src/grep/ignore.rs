@@ -52,7 +52,7 @@ impl IgnoreResolution {
             .union(IgnoreSources::PARENT);
 
         let mut sources = DEFAULT_SOURCES;
-        let mut require_git = true;
+        let mut require_git = false;
         let mut hidden = false;
         let mut u_count: u8 = 0;
         let mut msg_flags = MessageFlags::empty();
@@ -234,7 +234,7 @@ mod tests {
     fn default_resolution() {
         let r = IgnoreResolution::resolve(&Argv::new(&args(&["sift", "pat"])));
         assert!(!r.hidden);
-        assert!(r.require_git);
+        assert!(!r.require_git);
         assert!(r.sources.contains(IgnoreSources::DOT));
         assert!(r.sources.contains(IgnoreSources::VCS));
         assert!(r.sources.contains(IgnoreSources::EXCLUDE));

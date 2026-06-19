@@ -98,6 +98,150 @@ fn no_ignore_disables_gitignore() {
     );
 }
 
+// ─── --no-ignore-vcs ─────────────────────────────────────────────────────────
+
+#[test]
+fn no_ignore_vcs_disables_gitignore() {
+    let p = TestProject::new("no-ignore-vcs-walk");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "findme in txt\n");
+    p.write("skip.log", "findme in log\n");
+    let status = Command::new("git")
+        .args(["init"])
+        .current_dir(p.root())
+        .status()
+        .expect("git");
+    assert!(status.success());
+
+    let out = p.walk_output(["findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("keep.txt"), "should find txt");
+    assert!(!stdout.contains("skip.log"), "gitignore should hide .log");
+
+    let out = p.walk_output(["--no-ignore-vcs", "findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("keep.txt"), "should find txt");
+    assert!(
+        stdout.contains("skip.log"),
+        "--no-ignore-vcs should search gitignored paths: {stdout}"
+    );
+}
+
+#[test]
+fn no_ignore_vcs_index() {
+    let p = TestProject::new("no-ignore-vcs-index");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "findme in txt\n");
+    p.write("skip.log", "findme in log\n");
+    p.build_index_with(p.root(), false, ["--no-ignore-vcs"]);
+
+    let out = p.index_output(["--no-ignore-vcs", "findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("keep.txt"), "should find txt");
+    assert!(
+        stdout.contains("skip.log"),
+        "--no-ignore-vcs should search gitignored paths in index mode: {stdout}"
+    );
+}
+
+// ─── -u / --unrestricted ─────────────────────────────────────────────────────
+
+#[test]
+fn unrestricted_disables_gitignore_walk() {
+    let p = TestProject::new("unrestricted-walk");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "findme in txt\n");
+    p.write("skip.log", "findme in log\n");
+    let status = Command::new("git")
+        .args(["init"])
+        .current_dir(p.root())
+        .status()
+        .expect("git");
+    assert!(status.success());
+
+    let out = p.walk_output(["findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("keep.txt"), "should find txt");
+    assert!(!stdout.contains("skip.log"), "gitignore should hide .log");
+
+    let out = p.walk_output(["-u", "findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("keep.txt"), "should find txt");
+    assert!(
+        stdout.contains("skip.log"),
+        "-u should search gitignored paths: {stdout}"
+    );
+}
+
+#[test]
+fn unrestricted_disables_gitignore_index() {
+    let p = TestProject::new("unrestricted-index");
+    p.write(".gitignore", "*.log\n");
+    p.write("keep.txt", "findme in txt\n");
+    p.write("skip.log", "findme in log\n");
+    p.build_index_with(p.root(), false, ["-u"]);
+
+    let out = p.index_output(["-u", "findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("keep.txt"), "should find txt");
+    assert!(
+        stdout.contains("skip.log"),
+        "-u should search gitignored paths in index mode: {stdout}"
+    );
+}
+
+// ─── --no-ignore-dot ─────────────────────────────────────────────────────────
+
+#[test]
+fn no_ignore_dot_disables_dot_ignore_files() {
+    let p = TestProject::new("no-ignore-dot-walk");
+    p.write(".ignore", "secret.txt\n");
+    p.write("secret.txt", "findme secret\n");
+    p.write("public.txt", "findme public\n");
+
+    let out = p.walk_output(["findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("public.txt"), "should find public");
+    assert!(
+        !stdout.contains("secret.txt"),
+        ".ignore should hide secret.txt"
+    );
+
+    let out = p.walk_output(["--no-ignore-dot", "findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("public.txt"), "should find public");
+    assert!(
+        stdout.contains("secret.txt"),
+        "--no-ignore-dot should search .ignore targets: {stdout}"
+    );
+}
+
+#[test]
+fn no_ignore_dot_index() {
+    let p = TestProject::new("no-ignore-dot-index");
+    p.write(".ignore", "secret.txt\n");
+    p.write("secret.txt", "findme secret\n");
+    p.write("public.txt", "findme public\n");
+    p.build_index_with(p.root(), false, ["--no-ignore-dot"]);
+
+    let out = p.index_output(["--no-ignore-dot", "findme"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("public.txt"), "should find public");
+    assert!(
+        stdout.contains("secret.txt"),
+        "--no-ignore-dot should search .ignore targets in index mode: {stdout}"
+    );
+}
+
 // ─── --no-ignore-parent ──────────────────────────────────────────────────────
 
 #[test]

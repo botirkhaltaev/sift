@@ -2,9 +2,12 @@
 name = "sift-grep"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 description = "Grep-like CLI for sift-core"
 readme = "README.md"
 license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/sift-grep"
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -31,9 +34,11 @@ bitflags = "2"
 clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 fslock = "0.2"
+interprocess = "2"
 notify = "9.0.0-rc.4"
 rayon = "1"
-sift-core = { version = "0.3.0", path = "../core" }
+sift-core = { version = "1.0.0", path = "../core" }
+thiserror = "2"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

@@ -1,9 +1,9 @@
 use std::fs;
 
-use sift_core::{CorpusKind, IndexKind, IndexStore, QueryFlags, QuerySpec};
+use sift_core::{IndexKind, IndexStore, QueryFlags, QuerySpec};
 use tempfile::TempDir;
 
-use super::common::{build_store, open_indexes, standard_build_config};
+use super::common::{build_store, open_indexes, sample_store_meta, standard_build_config};
 
 #[test]
 fn build_and_reopen_indexes() {
@@ -35,19 +35,17 @@ fn update_skips_rebuild_when_unchanged() {
 
     let sift_dir = tmp.path().join(".sift");
     let config = standard_build_config(&corpus, &[]);
-    let mut store = IndexStore::open_or_create(
-        &sift_dir,
-        &corpus,
-        CorpusKind::Directory,
-        false,
-        &[IndexKind::Trigram],
-    )
-    .expect("open");
-    store.build(&[IndexKind::Trigram], &config).expect("build");
+    let corpus_path = corpus.clone();
+    let root = corpus.canonicalize().unwrap_or(corpus_path);
+    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let mut store = IndexStore::open_or_create(&sift_dir, &meta).expect("open");
+    store
+        .build(&[IndexKind::Trigram], &config, &[])
+        .expect("build");
     let id = store.current_id().expect("id").to_string();
 
     let changed = store
-        .update(&[IndexKind::Trigram], &config)
+        .update(&[IndexKind::Trigram], &config, &[])
         .expect("update");
     assert_eq!(changed, None, "expected no rebuild when corpus unchanged");
     assert_eq!(store.current_id().unwrap(), id);

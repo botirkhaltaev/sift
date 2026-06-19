@@ -4,11 +4,14 @@ members = ["crates/core", "crates/cli"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.3.0"
+version = "1.0.0"
 edition = "2024"
+authors = ["Botir Khaltaev <btrghstk@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "Indexed regex search over codebases (library + grep-like CLI)"
 readme = "README.md"
+homepage = "https://github.com/botirk38/sift"
+documentation = "https://docs.rs/sift-core"
 repository = "https://github.com/botirk38/sift"
 keywords = ["grep", "regex", "search", "index", "codebase"]
 categories = ["command-line-utilities", "development-tools"]

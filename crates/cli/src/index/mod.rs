@@ -4,90 +4,112 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sift_core::{
-    CorpusKind, CorpusSpec, IgnoreConfig, IndexConfig, IndexKind, IndexStore, VisibilityConfig,
+    CorpusMeta, FilterMeta, IndexKind, IndexStore, StoreMeta, VisibilityConfig, WalkMeta,
 };
 
 use crate::grep::Argv;
+use std::str::FromStr;
+
+use crate::grep::filter::ByteSize;
 use crate::grep::ignore::IgnoreResolution;
 use crate::grep::paths::CorpusScope;
 
 pub mod daemon;
 
-use daemon::DaemonSupervisor;
-
-pub use daemon::{DaemonMode, DaemonSpawnConfig};
+pub use daemon::{Daemon, DaemonError, Serve};
 
 /// Which index subcommand was requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexOperation {
     Build,
     Update,
-    /// Write metadata only; delegate actual build to daemon.
-    Configure,
+}
+
+/// Whether index work runs in-process or is delegated to the daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexExecution {
+    Blocking,
+    Background,
 }
 
 /// Parameters for resolving an index build or update.
 pub struct IndexRequest {
     pub operation: IndexOperation,
+    pub execution: IndexExecution,
     pub path: PathBuf,
     pub indexes: Option<Vec<IndexKind>>,
     pub sift_dir: PathBuf,
     pub follow_links: bool,
+    pub one_file_system: bool,
+    pub max_depth: Option<usize>,
+    pub max_filesize: Option<String>,
 }
 
 /// Resolved `sift index build` / `sift index update` request.
-pub struct Index {
+pub struct IndexJob {
     pub operation: IndexOperation,
+    pub execution: IndexExecution,
     pub root: PathBuf,
     pub include_paths: Vec<PathBuf>,
-    pub corpus_kind: CorpusKind,
+    pub corpus_kind: sift_core::CorpusKind,
     pub indexes: Vec<IndexKind>,
     pub follow_links: bool,
+    pub one_file_system: bool,
+    pub max_depth: Option<usize>,
+    pub max_filesize: Option<u64>,
     pub exclude_paths: Vec<PathBuf>,
     pub sift_dir: PathBuf,
 }
 
-impl Index {
+impl IndexJob {
     /// Resolve an index request from parsed CLI args.
     ///
     /// # Errors
     ///
     /// Returns an error if the index path cannot be canonicalised.
-    pub fn resolve(req: IndexRequest) -> Result<Self, std::io::Error> {
+    pub fn resolve(req: IndexRequest) -> anyhow::Result<Self> {
         let canonical = req.path.canonicalize()?;
         let (root, include_paths, corpus_kind) = if canonical.is_file() {
             let parent = canonical.parent().unwrap_or(&canonical).to_path_buf();
             let filename = PathBuf::from(canonical.file_name().unwrap_or_default());
-            (parent, vec![filename], CorpusKind::SingleFile)
+            (parent, vec![filename], sift_core::CorpusKind::SingleFile)
         } else {
-            (canonical, Vec::new(), CorpusKind::Directory)
+            (canonical, Vec::new(), sift_core::CorpusKind::Directory)
         };
         let indexes: Vec<IndexKind> = req.indexes.as_deref().unwrap_or(IndexKind::ALL).to_vec();
         let exclude_paths = CorpusScope::excluded_paths(&root, &req.sift_dir);
+        let max_filesize = req
+            .max_filesize
+            .as_ref()
+            .map(|s| ByteSize::from_str(s).map(ByteSize::bytes))
+            .transpose()?;
         Ok(Self {
             operation: req.operation,
+            execution: req.execution,
             root,
             include_paths,
             corpus_kind,
             indexes,
             follow_links: req.follow_links,
+            one_file_system: req.one_file_system,
+            max_depth: req.max_depth,
+            max_filesize,
             exclude_paths,
             sift_dir: req.sift_dir,
         })
     }
 
-    /// Run `sift index build`, `sift index update`, or `sift index build --lazy`.
+    /// Run `sift index build` or `sift index update`.
     #[must_use]
-    pub fn run(&self, spawn: &DaemonSpawnConfig, argv: &Argv<'_>) -> ExitCode {
-        let ignore_res = IgnoreResolution::resolve(argv);
+    pub fn run(&self, daemon: Option<&Daemon>, argv: &Argv<'_>) -> ExitCode {
+        if self.execution == IndexExecution::Background {
+            return self.run_background(daemon, argv);
+        }
 
-        let mut store = match IndexStore::open_or_create(
-            &self.sift_dir,
-            &self.root,
-            self.corpus_kind,
-            self.follow_links,
-            &self.indexes,
-        ) {
+        let ignore_res = IgnoreResolution::resolve(argv);
+        let meta = self.store_meta(ignore_res);
+
+        let mut store = match IndexStore::open_or_create(&self.sift_dir, &meta) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("sift: {e}");
@@ -95,22 +117,19 @@ impl Index {
             }
         };
 
+        if let Err(e) = store.refresh_meta(&meta) {
+            eprintln!("sift: {e}");
+            return ExitCode::from(2);
+        }
+
         let has_snapshot = store.current_id().is_some();
-        let result = match self.operation {
+        match self.operation {
             IndexOperation::Build if has_snapshot => {
                 eprintln!(
                     "sift: index already exists at {}; run `sift index update` to refresh it",
                     self.sift_dir.display()
                 );
                 return ExitCode::from(2);
-            }
-            IndexOperation::Build => self.build(&mut store, ignore_res),
-            IndexOperation::Configure if has_snapshot => {
-                eprintln!("sift: index already exists at {}", self.sift_dir.display());
-                return ExitCode::SUCCESS;
-            }
-            IndexOperation::Configure => {
-                return self.run_configure();
             }
             IndexOperation::Update if !has_snapshot => {
                 eprintln!(
@@ -119,22 +138,23 @@ impl Index {
                 );
                 return ExitCode::from(2);
             }
-            IndexOperation::Update => self.update(&mut store, ignore_res),
-        };
+            IndexOperation::Build | IndexOperation::Update => {}
+        }
 
-        if let Err(e) = result {
+        if let Err(e) = store.reconcile(&meta, &[]) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
 
-        if let Err(e) = DaemonSupervisor::new_process().spawn(spawn) {
+        if let Some(daemon) = daemon
+            && let Err(e) = daemon.send(&sift_core::DaemonOp::Watch)
+        {
             eprintln!("sift: warning: daemon not started: {e}");
         }
 
         let verb = match self.operation {
             IndexOperation::Build => "indexed",
             IndexOperation::Update => "updated index for",
-            IndexOperation::Configure => unreachable!(),
         };
         eprintln!(
             "{verb} corpus {} → {}",
@@ -144,62 +164,94 @@ impl Index {
         ExitCode::SUCCESS
     }
 
-    /// Write index metadata and spawn a one-shot daemon to build asynchronously.
-    fn run_configure(&self) -> ExitCode {
-        if std::env::var_os("SIFT_NO_DAEMON").is_some() {
-            eprintln!("sift: warning: --lazy requires the daemon; ignoring SIFT_NO_DAEMON");
+    fn run_background(&self, daemon: Option<&Daemon>, argv: &Argv<'_>) -> ExitCode {
+        let ignore_res = IgnoreResolution::resolve(argv);
+        let meta = self.store_meta(ignore_res);
+
+        let store = match IndexStore::open_or_create(&self.sift_dir, &meta) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("sift: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let has_snapshot = store.current_id().is_some();
+        match self.operation {
+            IndexOperation::Build if has_snapshot => {
+                eprintln!(
+                    "sift: index already exists at {}; run `sift index update` to refresh it",
+                    self.sift_dir.display()
+                );
+                return ExitCode::from(2);
+            }
+            IndexOperation::Update if !has_snapshot => {
+                eprintln!(
+                    "sift: no index at {}; run `sift index build` first",
+                    self.sift_dir.display()
+                );
+                return ExitCode::from(2);
+            }
+            IndexOperation::Build | IndexOperation::Update => {}
         }
 
-        let lazy_spawn = DaemonSpawnConfig {
-            enabled: true,
-            sift_dir: self.sift_dir.clone(),
-            init_root: None,
-            mode: DaemonMode::Once,
+        let Some(daemon) = daemon else {
+            eprintln!(
+                "sift: error: background index requires the daemon; unset SIFT_NO_DAEMON or use --wait"
+            );
+            return ExitCode::from(2);
         };
-        if let Err(e) = DaemonSupervisor::new_process().spawn(&lazy_spawn) {
-            eprintln!("sift: warning: daemon: {e}");
+
+        if let Err(e) = std::fs::create_dir_all(&self.sift_dir) {
+            eprintln!("sift: {e}");
+            return ExitCode::from(2);
         }
+        if let Err(e) = meta.write(&self.sift_dir) {
+            eprintln!("sift: {e}");
+            return ExitCode::from(2);
+        }
+
+        if let Err(e) = daemon.send(&sift_core::DaemonOp::Index(Vec::new())) {
+            eprintln!("sift: {e}");
+            return ExitCode::from(2);
+        }
+
+        let verb = match self.operation {
+            IndexOperation::Build => "queued build for",
+            IndexOperation::Update => "queued update for",
+        };
         eprintln!(
-            "lazy index configured for {} \u{2192} {}; daemon will build in background",
+            "{verb} corpus {} → {}",
             self.root.display(),
             self.sift_dir.display()
         );
         ExitCode::SUCCESS
     }
 
-    fn build(&self, store: &mut IndexStore, ignore_res: IgnoreResolution) -> sift_core::Result<()> {
-        store
-            .build(&self.indexes, &core_config(self, ignore_res))
-            .map(|_| ())
-    }
-
-    fn update(
-        &self,
-        store: &mut IndexStore,
-        ignore_res: IgnoreResolution,
-    ) -> sift_core::Result<()> {
-        store
-            .update(&self.indexes, &core_config(self, ignore_res))
-            .map(|_| ())
-    }
-}
-
-fn core_config(index: &Index, ignore_res: IgnoreResolution) -> IndexConfig<'_> {
-    IndexConfig {
-        corpus: CorpusSpec {
-            root: &index.root,
-            kind: index.corpus_kind,
-            follow_links: index.follow_links,
-            include_paths: &index.include_paths,
-            exclude_paths: &index.exclude_paths,
-        },
-        visibility: VisibilityConfig {
-            hidden: ignore_res.hidden_mode(),
-            ignore: IgnoreConfig {
-                sources: ignore_res.sources,
-                require_git: false,
-                ..IgnoreConfig::default()
+    fn store_meta(&self, ignore_res: IgnoreResolution) -> StoreMeta {
+        StoreMeta::new(
+            CorpusMeta {
+                root: self.root.clone(),
+                kind: self.corpus_kind,
+                include_paths: self.include_paths.clone(),
+                exclude_paths: self.exclude_paths.clone(),
             },
-        },
+            WalkMeta {
+                follow_links: self.follow_links,
+                one_file_system: self.one_file_system,
+                max_depth: self.max_depth,
+                max_filesize: self.max_filesize,
+            },
+            FilterMeta {
+                visibility: VisibilityConfig {
+                    hidden: ignore_res.hidden_mode(),
+                    ignore: sift_core::IgnoreConfig {
+                        sources: ignore_res.sources,
+                        require_git: ignore_res.require_git,
+                        custom_files: Vec::new(),
+                    },
+                },
+            },
+            self.indexes.clone(),
+        )
     }
 }

@@ -2,9 +2,12 @@
 name = "sift-core"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 description.workspace = true
 readme = "README.md"
 license.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -13,7 +16,7 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-bitflags = "2"
+bitflags = { version = "2", features = ["serde"] }
 bstr = "1"
 fslock = "0.2"
 grep-cli = "0.1"

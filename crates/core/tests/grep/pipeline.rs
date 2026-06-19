@@ -1,7 +1,7 @@
 use sift_core::grep::GrepRequest;
 use sift_core::{
-    CandidateFilter, CandidateFilterConfig, SearchOptions, SearchOutput, SearchQuery,
-    SearchSeparators,
+    CandidateFilter, CandidateFilterConfig, SearchCollection, SearchOptions, SearchOutput,
+    SearchQuery, SearchSeparators,
 };
 use tempfile::TempDir;
 
@@ -19,14 +19,16 @@ fn grep_finds_match_in_indexed_corpus() {
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
     let query = SearchQuery::new(&["beta".to_string()], SearchOptions::default()).expect("query");
-    let outcome = GrepRequest {
+    let grep_run = GrepRequest {
         indexes: &indexes,
         filter: &filter,
         output: SearchOutput::default(),
         separators: &SearchSeparators::default(),
-        collect_stats: false,
+        collect: SearchCollection::none(),
+        store_meta: None,
+        walk_unindexed: false,
     }
     .run(&query)
     .expect("grep run");
-    assert!(outcome.matched);
+    assert!(grep_run.outcome.matched);
 }

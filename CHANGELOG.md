@@ -1,6 +1,28 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [1.0.0](https://github.com/botirk38/sift/releases/tag/v1.0.0) — 2026-06-18
+
+### Features
+
+- Modular index daemon with async `index update`, `--lazy` build, and search-triggered background indexing
+- MR-SW snapshot index store with unified `reconcile` and partial-path updates
+- Walk unindexed corpus paths during daemon-enabled search for files not yet in the snapshot
+
+### Refactor
+
+- Migrate grep/filter helpers to domain-type impls (`PatternConfig::search_options`, `FilterConfig::candidate_config`, `OutputConfig::separators`, `ByteSize`)
+- Migrate core search helpers to domain types (`CandidateFilter::collect`, `WalkOptions::discover_files`, `IgnoreConfig::matcher`, `DaemonOp::encode/decode`)
+- Consolidate daemon IPC onto `Daemon::send(DaemonOp)` with `Serve` options
+- Unify `TrigramIndex::build(config, dir, paths)` API (empty paths = full corpus)
+
+### Documentation
+
+- Add LICENSE-MIT, LICENSE-APACHE-2.0, CONTRIBUTING.md, SECURITY.md
+- Add crate metadata and README "What v1.0 guarantees" section
+- Expand rg compatibility matrix and integration test coverage
+
 ## [0.3.0](https://github.com/botirk38/sift/releases/tag/v0.3.0) — 2026-06-02
 
 ### Bug Fixes

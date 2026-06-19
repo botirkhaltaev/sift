@@ -372,6 +372,23 @@ fn vimgrep_walk_mode() {
     assert_eq!(normalize_stdout(&out).trim(), "a.txt:1:7:hello world");
 }
 
+#[test]
+fn vimgrep_consistent_index_and_walk() {
+    let p = TestProject::new("output-vimgrep-consistent");
+    p.write("a.txt", "hello world\n");
+    p.build_index();
+    let index_out = p.index_output(["--vimgrep", "world"]);
+    let walk_out = p.walk_output(["--vimgrep", "world"]);
+    assert_success(&index_out);
+    assert_success(&walk_out);
+    assert_eq!(
+        normalize_stdout(&index_out).trim(),
+        normalize_stdout(&walk_out).trim(),
+        "index and walk --vimgrep results differ"
+    );
+    assert_eq!(normalize_stdout(&index_out).trim(), "a.txt:1:7:hello world");
+}
+
 // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──
 //  --pretty / -p
 // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──

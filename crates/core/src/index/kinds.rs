@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,10 +57,11 @@ impl IndexKind {
         self,
         config: &IndexConfig<'_>,
         dest: IndexDestination,
+        paths: &[PathBuf],
     ) -> crate::Result<()> {
         match self {
             Self::Trigram => {
-                let tables = trigram::builder::IndexTables::build(config)?;
+                let tables = trigram::builder::IndexTables::build(config, paths)?;
                 let root = config.corpus.root.canonicalize()?;
                 trigram::TrigramIndex::persist_tables(&tables, &root, config.corpus.kind, dest)?;
                 Ok(())
@@ -93,6 +94,7 @@ impl IndexKind {
         current: IndexSource,
         config: &IndexConfig<'_>,
         dest: IndexDestination,
+        paths: &[PathBuf],
     ) -> crate::Result<bool> {
         let is_present = match &current {
             IndexSource::Directory(dir) => dir.exists(),
@@ -101,7 +103,7 @@ impl IndexKind {
             }
         };
         if !is_present {
-            self.build(config, dest)?;
+            self.build(config, dest, paths)?;
             return Ok(true);
         }
 
@@ -114,7 +116,7 @@ impl IndexKind {
             Self::Trigram => {
                 let existing =
                     trigram::TrigramIndex::open_tables(current, &root, config.corpus.kind)?;
-                let output = existing.rebuild(config, dest)?;
+                let output = existing.rebuild(config, dest, paths)?;
                 Ok(output.is_some())
             }
         }

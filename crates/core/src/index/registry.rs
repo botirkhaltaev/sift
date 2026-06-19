@@ -86,6 +86,35 @@ impl Indexes {
         }
     }
 
+    /// Corpus-relative paths present in the current snapshot.
+    #[must_use]
+    pub fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
+        let indexes = self.snapshot.indexes();
+        let Some(first) = indexes.first() else {
+            return HashSet::new();
+        };
+
+        let mut paths: HashSet<PathBuf> = first
+            .all_files()
+            .into_iter()
+            .map(|c| c.rel_path().to_path_buf())
+            .collect();
+
+        for index in indexes.iter().skip(1) {
+            let next: HashSet<PathBuf> = index
+                .all_files()
+                .into_iter()
+                .map(|c| c.rel_path().to_path_buf())
+                .collect();
+            paths.retain(|p| next.contains(p));
+            if paths.is_empty() {
+                break;
+            }
+        }
+
+        paths
+    }
+
     /// Return all indexed candidates across all registered indexes.
     #[must_use]
     pub(crate) fn complete_candidates(&self) -> Vec<crate::Candidate> {

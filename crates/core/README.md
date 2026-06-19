@@ -29,7 +29,7 @@ let index = TrigramIndex::open(&index_dir)?;
 let indexes = Indexes::open(&sift_dir)?;
 let search = SearchQuery::new(&patterns, SearchOptions::default())?;
 let candidates = indexes.candidates(&query.spec(), coverage);
-search.run(SearchExecution { candidates: &candidates, output, separators, collect_stats: false })?;
+search.run(SearchExecution { candidates: &candidates, output, separators, collect: SearchCollection::none() })?;
 ```
 
 `SearchQuery` compiles the regex once; repeated `run` calls reuse the compiled matcher and searcher cache.

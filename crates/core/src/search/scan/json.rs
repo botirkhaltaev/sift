@@ -49,6 +49,7 @@ impl<'a> JsonWorker<'a> {
             return FileResult {
                 output: ChunkOutput::empty(),
                 json_stats: None,
+                hit: None,
             };
         }
         let (bytes, file_stats) = if quiet {
@@ -80,6 +81,7 @@ impl<'a> JsonWorker<'a> {
                 heading: false,
             },
             json_stats: Some(file_stats),
+            hit: None,
         }
     }
 }
@@ -159,11 +161,10 @@ impl<'a> JsonScan<'a> {
         stdout.write_all(summary_line.as_bytes())?;
         stdout.write_all(b"\n")?;
         if let Some(s) = stats {
-            use crate::search::emit::format::sum_candidate_file_bytes;
             s.fill_from_json(
                 &merged,
                 candidates.len(),
-                sum_candidate_file_bytes(candidates),
+                crate::Candidate::total_file_bytes(candidates),
                 self.wall_start.elapsed(),
                 summary_bytes,
             );

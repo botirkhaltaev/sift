@@ -5,7 +5,7 @@ use sift_core::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOption
 
 use super::argv::Argv;
 use super::engine::{EngineDecl, MultilineDecl};
-use super::filter::parse_size_suffix;
+use super::filter::ByteSize;
 use super::output::ReplaceDecl;
 
 #[derive(Args, Clone)]
@@ -58,6 +58,80 @@ pub struct PatternConfig {
     pub binary: BinaryDecl,
     pub replace: ReplaceDecl,
     pub max_count: Option<usize>,
+}
+
+impl PatternConfig {
+    #[must_use]
+    const fn binary_mode(&self) -> BinaryMode {
+        if self.binary.text {
+            BinaryMode::AsText
+        } else if self.binary.binary {
+            BinaryMode::SearchBinary
+        } else {
+            BinaryMode::Quit
+        }
+    }
+
+    #[must_use]
+    pub fn search_options(&self, pattern_argv: &PatternArgv, only_matching: bool) -> SearchOptions {
+        let mut opts = SearchOptions {
+            case_mode: pattern_argv.case_mode,
+            max_results: self.max_count,
+            ..SearchOptions::default()
+        };
+        if self.search_flags.fixed_strings {
+            opts.flags |= SearchMatchFlags::FIXED_STRINGS;
+        }
+        if pattern_argv.invert_match {
+            opts.flags |= SearchMatchFlags::INVERT_MATCH;
+        }
+        if self.regex1.word_regexp {
+            opts.flags |= SearchMatchFlags::WORD_REGEXP;
+        }
+        if self.regex2.line_regexp {
+            opts.flags |= SearchMatchFlags::LINE_REGEXP;
+        }
+        if only_matching {
+            opts.flags |= SearchMatchFlags::ONLY_MATCHING;
+        }
+        if self.multiline.multiline {
+            opts.flags |= SearchMatchFlags::MULTILINE;
+        }
+        if self.multiline.multiline_dotall {
+            opts.flags |= SearchMatchFlags::MULTILINE_DOTALL;
+        }
+        if self.multiline.crlf {
+            opts.flags |= SearchMatchFlags::CRLF;
+        }
+        if self.engine.no_unicode {
+            opts.unicode = false;
+        } else if self.engine.unicode {
+            opts.unicode = true;
+        }
+        if let Some(ref limit) = self.engine.regex_size_limit
+            && let Ok(bytes) = limit.parse::<ByteSize>().map(ByteSize::bytes)
+        {
+            opts.regex_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
+        }
+        if let Some(ref limit) = self.engine.dfa_size_limit
+            && let Ok(bytes) = limit.parse::<ByteSize>().map(ByteSize::bytes)
+        {
+            opts.dfa_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
+        }
+        opts.replace.clone_from(&self.replace.replace);
+        opts.before_context = pattern_argv.before_context;
+        opts.after_context = pattern_argv.after_context;
+        if self.replace.passthru {
+            opts.before_context = usize::MAX;
+            opts.after_context = usize::MAX;
+        }
+        if only_matching {
+            opts.before_context = 0;
+            opts.after_context = 0;
+        }
+        opts.binary_mode = self.binary_mode();
+        opts
+    }
 }
 
 #[derive(Clone)]
@@ -453,84 +527,6 @@ impl ResolvedPatterns {
     }
 }
 
-// ── Search option builders ──
-
-#[must_use]
-pub const fn binary_mode(config: &PatternConfig) -> BinaryMode {
-    if config.binary.text {
-        BinaryMode::AsText
-    } else if config.binary.binary {
-        BinaryMode::SearchBinary
-    } else {
-        BinaryMode::Quit
-    }
-}
-
-#[must_use]
-pub fn search_options(
-    config: &PatternConfig,
-    pattern_argv: &PatternArgv,
-    only_matching: bool,
-) -> SearchOptions {
-    let mut opts = SearchOptions {
-        case_mode: pattern_argv.case_mode,
-        max_results: config.max_count,
-        ..SearchOptions::default()
-    };
-    if config.search_flags.fixed_strings {
-        opts.flags |= SearchMatchFlags::FIXED_STRINGS;
-    }
-    if pattern_argv.invert_match {
-        opts.flags |= SearchMatchFlags::INVERT_MATCH;
-    }
-    if config.regex1.word_regexp {
-        opts.flags |= SearchMatchFlags::WORD_REGEXP;
-    }
-    if config.regex2.line_regexp {
-        opts.flags |= SearchMatchFlags::LINE_REGEXP;
-    }
-    if only_matching {
-        opts.flags |= SearchMatchFlags::ONLY_MATCHING;
-    }
-    if config.multiline.multiline {
-        opts.flags |= SearchMatchFlags::MULTILINE;
-    }
-    if config.multiline.multiline_dotall {
-        opts.flags |= SearchMatchFlags::MULTILINE_DOTALL;
-    }
-    if config.multiline.crlf {
-        opts.flags |= SearchMatchFlags::CRLF;
-    }
-    if config.engine.no_unicode {
-        opts.unicode = false;
-    } else if config.engine.unicode {
-        opts.unicode = true;
-    }
-    if let Some(ref limit) = config.engine.regex_size_limit
-        && let Ok(bytes) = parse_size_suffix(limit)
-    {
-        opts.regex_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
-    }
-    if let Some(ref limit) = config.engine.dfa_size_limit
-        && let Ok(bytes) = parse_size_suffix(limit)
-    {
-        opts.dfa_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
-    }
-    opts.replace.clone_from(&config.replace.replace);
-    opts.before_context = pattern_argv.before_context;
-    opts.after_context = pattern_argv.after_context;
-    if config.replace.passthru {
-        opts.before_context = usize::MAX;
-        opts.after_context = usize::MAX;
-    }
-    if only_matching {
-        opts.before_context = 0;
-        opts.after_context = 0;
-    }
-    opts.binary_mode = binary_mode(config);
-    opts
-}
-
 // ── Tests ──
 
 #[cfg(test)]
@@ -800,14 +796,14 @@ mod tests {
     #[test]
     fn search_options_case_mode_from_argv() {
         let config = pattern_config(&["sift", "pat"]);
-        let opts = search_options(&config, &pat(&["sift", "-i", "pat"]), false);
+        let opts = config.search_options(&pat(&["sift", "-i", "pat"]), false);
         assert!(matches!(opts.case_mode, CaseMode::Insensitive));
     }
 
     #[test]
     fn search_options_applies_fixed_strings() {
         let config = pattern_config(&["sift", "-F", "pat"]);
-        let opts = search_options(&config, &pat(&["sift", "pat"]), false);
+        let opts = config.search_options(&pat(&["sift", "pat"]), false);
         assert!(opts.flags.contains(SearchMatchFlags::FIXED_STRINGS));
     }
 
@@ -816,7 +812,7 @@ mod tests {
     #[test]
     fn binary_mode_default_quit() {
         assert!(matches!(
-            binary_mode(&pattern_config(&["sift", "pat"])),
+            pattern_config(&["sift", "pat"]).binary_mode(),
             BinaryMode::Quit
         ));
     }
@@ -824,7 +820,7 @@ mod tests {
     #[test]
     fn binary_mode_text() {
         assert!(matches!(
-            binary_mode(&pattern_config(&["sift", "-a", "pat"])),
+            pattern_config(&["sift", "-a", "pat"]).binary_mode(),
             BinaryMode::AsText
         ));
     }
@@ -832,7 +828,7 @@ mod tests {
     #[test]
     fn binary_mode_binary() {
         assert!(matches!(
-            binary_mode(&pattern_config(&["sift", "--binary", "pat"])),
+            pattern_config(&["sift", "--binary", "pat"]).binary_mode(),
             BinaryMode::SearchBinary
         ));
     }

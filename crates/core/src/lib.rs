@@ -4,6 +4,7 @@
 
 pub mod candidate;
 pub mod grep;
+pub use grep::GrepRun;
 mod index;
 pub mod query;
 mod search;
@@ -14,20 +15,21 @@ pub use search::{
     BinaryMode, CandidateFilter, CandidateFilterConfig, CaseMode, ColorChoice, ColumnLimit,
     ColumnOverflow, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
     LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
-    PathDisplay, PatternCompiler, RecordTerminator, SearchError, SearchLineStyle, SearchMatchFlags,
-    SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat, SearchQuery,
-    SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig, WalkOptions,
-    ZeroCountMode, discover_files,
+    PathDisplay, PatternCompiler, RecordTerminator, SearchCollection, SearchError, SearchLineStyle,
+    SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat,
+    SearchQuery, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig,
+    WalkOptions, ZeroCountMode,
 };
 
 pub use ignore::{Walk, WalkBuilder};
 
+pub use index::config::WalkOptions as IndexWalkOptions;
 pub use index::meta::StoreMeta;
 pub use index::store::IndexStore;
 pub use index::trigram::{TrigramIndex, TrigramIndexError};
 pub use index::{
-    CorpusKind, CorpusSpec, FileId, Index, IndexConfig, IndexError, IndexId, IndexKind, Indexes,
-    PlanMode, QueryPlanOutput,
+    CorpusKind, CorpusMeta, CorpusSpec, DaemonOp, FileId, FilterMeta, Index, IndexConfig,
+    IndexError, IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, WalkMeta,
 };
 
 pub use query::{CandidateRequirement, QueryFlags, QueryPlanner, QuerySpec};
@@ -84,9 +86,10 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: IndexWalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
-        TrigramIndex::build(&config, &trigram_dir).expect("build index")
+        TrigramIndex::build(&config, &trigram_dir, &[]).expect("build index")
     }
 
     fn build_index_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> Index {

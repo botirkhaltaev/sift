@@ -14,5 +14,5 @@ fn store_meta_written_on_create() {
     build_store(&corpus, &sift_dir);
 
     let meta = StoreMeta::read(&sift_dir).expect("read meta");
-    assert_eq!(meta.root, corpus.canonicalize().unwrap_or(corpus));
+    assert_eq!(meta.corpus.root, corpus.canonicalize().unwrap_or(corpus));
 }

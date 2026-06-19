@@ -77,11 +77,11 @@ impl IndexKind {
 
 ### Search Flow
 ```text
-grep::run(query, GrepRequest { indexes, filter, output, separators, collect_stats })
+grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
   -> QuerySpec from query.spec()
   -> Indexes::candidates(spec, coverage) or walk::collect_candidates
   -> candidate.matches(filter) via par_iter
-  -> SearchExecution { candidates, output, separators, collect_stats }
+  -> SearchExecution { candidates, output, separators, collect }
   -> query.search(SearchExecution)
   -> scan with regex engine
   -> emit output

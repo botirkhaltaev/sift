@@ -1,9 +1,39 @@
 use criterion::Criterion;
 use std::hint::black_box;
 
-use sift_grep::pattern::binary_mode;
+use crate::support::{args, build_index, make_small_corpus, parse_cli, run_sift};
 
-use crate::support::{build_index, make_small_corpus, parse_cli, run_sift};
+fn bench_binary_mode(g: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+    let cli_default = parse_cli(&["pattern"]);
+    let cli_text = parse_cli(&["-a", "pattern"]);
+    let argv_storage_default = args(&["sift", "pattern"]);
+    let argv_storage_text = args(&["sift", "-a", "pattern"]);
+    let argv_default = sift_grep::Argv::new(&argv_storage_default);
+    let argv_text = sift_grep::Argv::new(&argv_storage_text);
+    let pat_default = sift_grep::pattern::PatternArgv::resolve(&argv_default);
+    let pat_text = sift_grep::pattern::PatternArgv::resolve(&argv_text);
+
+    g.bench_function("binary_mode/default", |b| {
+        let config = cli_default.pattern_config();
+        b.iter(|| {
+            black_box(
+                config
+                    .search_options(black_box(&pat_default), false)
+                    .binary_mode,
+            )
+        });
+    });
+    g.bench_function("binary_mode/text", |b| {
+        let config = cli_text.pattern_config();
+        b.iter(|| {
+            black_box(
+                config
+                    .search_options(black_box(&pat_text), false)
+                    .binary_mode,
+            )
+        });
+    });
+}
 
 pub fn bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_dispatch");
@@ -14,16 +44,7 @@ pub fn bench(c: &mut Criterion) {
         b.iter(|| run_sift(&["--type-list"], tmp.path()));
     });
 
-    // Cli::resolve_binary_mode
-    let cli_default = parse_cli(&["pattern"]);
-    let cli_text = parse_cli(&["-a", "pattern"]);
-
-    g.bench_function("binary_mode/default", |b| {
-        b.iter(|| black_box(binary_mode(black_box(&cli_default.pattern_config()))));
-    });
-    g.bench_function("binary_mode/text", |b| {
-        b.iter(|| black_box(binary_mode(black_box(&cli_text.pattern_config()))));
-    });
+    bench_binary_mode(&mut g);
 
     // run_files_mode — subprocess
     let tmp_files = tempfile::tempdir().unwrap();

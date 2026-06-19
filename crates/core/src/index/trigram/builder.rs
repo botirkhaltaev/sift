@@ -145,6 +145,7 @@ impl<'a> CorpusWalker<'a> {
         let sources = self.config.visibility.ignore.sources;
         let mut wb = WalkBuilder::new(self.config.corpus.root);
         wb.follow_links(self.config.corpus.follow_links)
+            .same_file_system(self.config.walk.one_file_system)
             .hidden(matches!(self.config.visibility.hidden, HiddenMode::Respect))
             .parents(sources.contains(IgnoreSources::PARENT))
             .ignore(sources.contains(IgnoreSources::DOT))
@@ -365,9 +366,10 @@ impl<'a> PostingAssembler<'a> {
 
 /// Build in-memory index tables from a corpus configuration.
 ///
-/// Orchestrates: corpus walk → fingerprint → trigram extraction → posting assembly.
+/// When `paths` is empty, discovers files via [`CorpusWalker`]. Otherwise indexes
+/// exactly the given corpus-relative paths.
 impl IndexTables {
-    pub fn build(config: &IndexConfig<'_>) -> crate::Result<Self> {
+    pub fn build(config: &IndexConfig<'_>, paths: &[PathBuf]) -> crate::Result<Self> {
         use rayon::prelude::*;
 
         let (paths, root) = match config.corpus.kind {
@@ -382,7 +384,11 @@ impl IndexTables {
                 (paths, config.corpus.root)
             }
             CorpusKind::Directory => {
-                let paths = CorpusWalker::new(config).collect()?;
+                let paths = if paths.is_empty() {
+                    CorpusWalker::new(config).collect()?
+                } else {
+                    paths.to_vec()
+                };
                 (paths, config.corpus.root)
             }
         };
@@ -416,6 +422,7 @@ impl IndexTables {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::config::WalkOptions;
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig};
     use crate::search::filter::IgnoreConfig;
     use crate::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
@@ -435,6 +442,7 @@ mod tests {
                     include_paths: &[],
                     exclude_paths: &[],
                 },
+                walk: WalkOptions::new(false),
                 visibility: VisibilityConfig {
                     ignore: IgnoreConfig::disabled(),
                     ..Default::default()
@@ -444,7 +452,7 @@ mod tests {
 
         fn build(root: &Path) -> IndexTables {
             let config = Self::no_ignore_config(root);
-            IndexTables::build(&config).expect("build tables")
+            IndexTables::build(&config, &[]).expect("build tables")
         }
     }
 
@@ -557,12 +565,13 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[PathBuf::from("excluded")],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -600,6 +609,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
         let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
@@ -621,6 +631,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
@@ -644,6 +655,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
         let indexed = CorpusWalker::new(&config).collect().expect("walk corpus");
@@ -674,12 +686,13 @@ mod tests {
                 include_paths: &[PathBuf::from("keep.txt")],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -700,9 +713,10 @@ mod tests {
                 include_paths: &[only_txt],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(
             tables.fingerprints[0].path,
@@ -739,9 +753,10 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             !paths.iter().any(|p| p == "skip.ignored"),
@@ -770,9 +785,10 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
+            walk: WalkOptions::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config).expect("build tables");
+        let tables = IndexTables::build(&config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             paths.iter().any(|p| p == Path::new("src/keep.txt")),
