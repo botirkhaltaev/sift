@@ -1,46 +1,39 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use interprocess::local_socket::traits::{ListenerExt, Stream as _};
-use interprocess::local_socket::{GenericFilePath, ListenerOptions, Stream, ToFsName};
+use interprocess::local_socket::{GenericNamespaced, ListenerOptions, Stream, ToNsName};
 use sift_core::DaemonOp;
 
 use super::Daemon;
 use super::error::DaemonError;
 
-/// Filesystem socket path for daemon IPC.
-///
-/// On Unix, use a short `/tmp` path so macOS `sockaddr_un` limits are not
-/// exceeded when `.sift` lives under a long temp directory.
-fn socket_path_for(sift_dir: &Path) -> PathBuf {
-    #[cfg(unix)]
-    {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+fn socket_id(sift_dir: &Path) -> u64 {
+    let canonical = sift_dir
+        .canonicalize()
+        .unwrap_or_else(|_| sift_dir.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    hasher.finish()
+}
 
-        let canonical = sift_dir
-            .canonicalize()
-            .unwrap_or_else(|_| sift_dir.to_path_buf());
-        let mut hasher = DefaultHasher::new();
-        canonical.hash(&mut hasher);
-        PathBuf::from(format!("/tmp/sift-{:016x}.sock", hasher.finish()))
-    }
-    #[cfg(not(unix))]
-    {
-        sift_dir.join("daemon.sock")
-    }
+fn socket_name_for(sift_dir: &Path) -> Result<interprocess::local_socket::Name<'_>, DaemonError> {
+    format!("sift-{:016x}", socket_id(sift_dir))
+        .to_ns_name::<GenericNamespaced>()
+        .map_err(DaemonError::Io)
 }
 
 impl Daemon {
+    /// Namespaced IPC endpoint derived from the `.sift` directory.
     #[must_use]
     pub fn socket_path(&self) -> PathBuf {
-        socket_path_for(&self.sift_dir)
+        PathBuf::from(format!("sift-{:016x}", socket_id(&self.sift_dir)))
     }
 
     fn socket_name(&self) -> Result<interprocess::local_socket::Name<'_>, DaemonError> {
-        self.socket_path()
-            .to_fs_name::<GenericFilePath>()
-            .map_err(DaemonError::Io)
+        socket_name_for(&self.sift_dir)
     }
 
     /// Listen for IPC requests and dispatch them to `handler`.
