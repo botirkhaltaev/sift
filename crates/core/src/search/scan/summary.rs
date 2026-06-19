@@ -82,7 +82,8 @@ impl SummarySink {
 impl Sink for SummarySink {
     type Error = io::Error;
 
-    fn matched(&mut self, _: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
         self.matched = true;
         if self.mode == SearchMode::CountMatches {
             if let Some(ref matcher) = self.matcher {
@@ -204,10 +205,6 @@ impl<'a> SummaryWorker<'a> {
         }
     }
 
-    fn search_file(&mut self, path: &Path) -> FileSummary {
-        summary_search_file(&mut self.searcher, self.matcher, self.output.mode, path)
-    }
-
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -217,7 +214,12 @@ impl<'a> SummaryWorker<'a> {
             };
         }
 
-        let result = self.search_file(candidate.abs_path());
+        let result = summary_search_file(
+            &mut self.searcher,
+            self.matcher,
+            self.output.mode,
+            candidate.abs_path(),
+        );
         if let Some(c) = self.summary_counter {
             c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
         }

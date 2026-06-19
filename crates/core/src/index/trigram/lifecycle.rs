@@ -54,7 +54,7 @@ impl TrigramIndex {
 
         let root = root.to_path_buf();
         let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
-        Self::validate_file_paths(&fingerprints, &files_path)?;
+        Self::validate_file_paths(&fingerprints)?;
         Self::validate_lexicon_postings(&lexicon, &postings)?;
 
         Ok(Self {
@@ -133,7 +133,7 @@ impl TrigramIndex {
                 writer.put_artifact(namespace, crate::TRIGRAMS_BIN, trigram_sets_bytes)?;
 
                 let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
-                Self::validate_file_paths(&fingerprints, Path::new(""))?;
+                Self::validate_file_paths(&fingerprints)?;
                 Self::validate_lexicon_postings(&lexicon, &postings)?;
 
                 Ok(Self {
@@ -288,7 +288,7 @@ impl TrigramIndex {
 
                 let files = FileTable::open(&files_path).map_err(TrigramIndexError::Io)?;
                 let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
-                Self::validate_file_paths(&fingerprints, &files_path)?;
+                Self::validate_file_paths(&fingerprints)?;
 
                 let lexicon = storage::lexicon::Lexicon::open(&lexicon_path)
                     .map_err(TrigramIndexError::Io)?;
@@ -311,7 +311,7 @@ impl TrigramIndex {
                 let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
                 let files = FileTable::from_artifact(files_data).map_err(TrigramIndexError::Io)?;
                 let fingerprints = files.to_fingerprints().map_err(TrigramIndexError::Io)?;
-                Self::validate_file_paths(&fingerprints, Path::new(""))?;
+                Self::validate_file_paths(&fingerprints)?;
 
                 let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
                 let lexicon =
@@ -382,10 +382,7 @@ impl TrigramIndex {
         Ok(())
     }
 
-    fn validate_file_paths(
-        fingerprints: &[FileFingerprint],
-        _meta_path: &Path,
-    ) -> Result<(), TrigramIndexError> {
+    fn validate_file_paths(fingerprints: &[FileFingerprint]) -> Result<(), TrigramIndexError> {
         for fp in fingerprints {
             if fp.path.as_os_str().is_empty()
                 || fp.path.is_absolute()
@@ -423,7 +420,7 @@ mod tests {
                 size: 0,
             },
         ];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_ok());
     }
 
@@ -435,7 +432,7 @@ mod tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 
@@ -446,7 +443,7 @@ mod tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 
@@ -457,7 +454,7 @@ mod tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramIndex::validate_file_paths(&fps, Path::new("/meta.json"));
+        let result = TrigramIndex::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 }

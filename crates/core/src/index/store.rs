@@ -59,10 +59,11 @@ impl IndexStore<DiskSnapshotStore> {
         std::fs::create_dir_all(sift_dir)?;
 
         if !StoreMeta::path(sift_dir).exists() {
-            let _guard = acquire_write_lock(sift_dir)?;
+            let guard = acquire_write_lock(sift_dir)?;
             if !StoreMeta::path(sift_dir).exists() {
                 meta.write(sift_dir)?;
             }
+            drop(guard);
         }
 
         Self::open(sift_dir)
@@ -308,12 +309,18 @@ fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {
     let lock_path = sift_dir.join("write.lock");
     let mut lock_file = fslock::LockFile::open(&lock_path)?;
     lock_file.lock()?;
-    Ok(WriteLockGuard { _file: lock_file })
+    Ok(WriteLockGuard { file: lock_file })
 }
 
 /// Guard that releases the write lock when dropped.
 struct WriteLockGuard {
-    _file: fslock::LockFile,
+    file: fslock::LockFile,
+}
+
+impl Drop for WriteLockGuard {
+    fn drop(&mut self) {
+        let _ = &mut self.file;
+    }
 }
 
 #[cfg(test)]

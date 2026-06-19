@@ -113,7 +113,8 @@ fn binary_update_without_curl_exits_2() {
 
 #[test]
 fn binary_update_runs_install_script() {
-    let (_tmpdir, sift) = install_layout(Path::new(env!("CARGO_BIN_EXE_sift")));
+    let layout = install_layout(Path::new(env!("CARGO_BIN_EXE_sift")));
+    let sift = layout.1;
 
     let out = spawn_retry_on_busy(move || {
         let mut cmd = Command::new(&sift);

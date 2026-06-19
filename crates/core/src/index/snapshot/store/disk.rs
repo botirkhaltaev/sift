@@ -140,12 +140,12 @@ impl DiskSnapshotStore {
 /// A writer session that holds the write lock for a [`DiskSnapshotStore`].
 pub struct DiskSnapshotWriterSession<'a> {
     store: &'a mut DiskSnapshotStore,
-    _lock: fslock::LockFile,
+    lock: fslock::LockFile,
 }
 
 impl Drop for DiskSnapshotWriterSession<'_> {
     fn drop(&mut self) {
-        // Lock is released when `_lock` is dropped.
+        let _ = &mut self.lock;
     }
 }
 
@@ -178,7 +178,7 @@ impl SnapshotWriterSession for DiskSnapshotWriterSession<'_> {
             id: current_id.clone(),
             dir: snap_dir,
             manifest,
-            _lease: lease,
+            lease,
         }))
     }
 
@@ -270,7 +270,13 @@ pub struct DiskSnapshotReader {
     id: SnapshotId,
     dir: PathBuf,
     manifest: SnapshotManifest,
-    _lease: SnapshotLease,
+    lease: SnapshotLease,
+}
+
+impl Drop for DiskSnapshotReader {
+    fn drop(&mut self) {
+        let _ = &mut self.lease;
+    }
 }
 
 impl SnapshotRead for DiskSnapshotReader {
@@ -332,7 +338,7 @@ impl SnapshotStore for DiskSnapshotStore {
             id: current_id.clone(),
             dir: snap_dir,
             manifest,
-            _lease: lease,
+            lease,
         }))
     }
 
@@ -340,9 +346,6 @@ impl SnapshotStore for DiskSnapshotStore {
         let lock_path = self.dir.join(WRITE_LOCK);
         let mut lock = fslock::LockFile::open(&lock_path)?;
         lock.lock()?;
-        Ok(DiskSnapshotWriterSession {
-            store: self,
-            _lock: lock,
-        })
+        Ok(DiskSnapshotWriterSession { store: self, lock })
     }
 }

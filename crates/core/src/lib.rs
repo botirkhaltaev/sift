@@ -28,8 +28,8 @@ pub use index::meta::StoreMeta;
 pub use index::store::IndexStore;
 pub use index::trigram::{TrigramIndex, TrigramIndexError};
 pub use index::{
-    CorpusKind, CorpusMeta, CorpusSpec, DaemonOp, FileId, FilterMeta, Index, IndexConfig,
-    IndexError, IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig, IndexError,
+    IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, WalkMeta,
 };
 
 pub use query::{CandidateRequirement, QueryFlags, QueryPlanner, QuerySpec};

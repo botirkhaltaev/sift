@@ -21,10 +21,12 @@ categories = ["command-line-utilities", "development-tools"]
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
-# No blanket allows — fix code or adjust workspace defaults here, not with #[allow].
-pedantic = "warn"
-nursery = "warn"
-cargo = "warn"
+# Deny here so `cargo clippy` matches CI; `-D warnings` still catches rustc lints.
+# Group priority -1 lets individual lint overrides (e.g. below) take precedence.
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+no_effect_underscore_binding = "deny"
 
 # Line tables for Criterion / `cargo bench` without full debug info bloat.
 [profile.bench]

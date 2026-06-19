@@ -15,6 +15,29 @@ use sift_core::{
 
 mod common;
 
+struct IndexOpenFixture {
+    temp: tempfile::TempDir,
+    idx_dir: std::path::PathBuf,
+    root: std::path::PathBuf,
+}
+
+struct SiftDirFixture {
+    temp: tempfile::TempDir,
+    sift_dir: std::path::PathBuf,
+}
+
+impl Drop for IndexOpenFixture {
+    fn drop(&mut self) {
+        let _ = &mut self.temp;
+    }
+}
+
+impl Drop for SiftDirFixture {
+    fn drop(&mut self) {
+        let _ = &mut self.temp;
+    }
+}
+
 fn sift_criterion() -> Criterion {
     Criterion::default()
         .warm_up_time(std::time::Duration::from_secs(3))
@@ -174,7 +197,7 @@ fn bench_index_open(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_open");
 
     g.bench_function("small", |b| {
-        let (_tmp, idx_dir, root) = {
+        let fixture = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             make_parity_corpus(&corpus);
@@ -182,15 +205,23 @@ fn bench_index_open(c: &mut Criterion) {
             let built = common::build_index(&corpus, &idx);
             let root = built.root().to_path_buf();
             drop(built);
-            (tmp, idx, root)
+            IndexOpenFixture {
+                temp: tmp,
+                idx_dir: idx,
+                root,
+            }
         };
         b.iter(|| {
-            black_box(common::open_index(&idx_dir, &root, CorpusKind::Directory));
+            black_box(common::open_index(
+                &fixture.idx_dir,
+                &fixture.root,
+                CorpusKind::Directory,
+            ));
         });
     });
 
     g.bench_function("large", |b| {
-        let (_tmp, idx_dir, root) = {
+        let fixture = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             common::materialize_large_corpus(&corpus, 8_000, 100, 256);
@@ -198,10 +229,18 @@ fn bench_index_open(c: &mut Criterion) {
             let built = common::build_index(&corpus, &idx);
             let root = built.root().to_path_buf();
             drop(built);
-            (tmp, idx, root)
+            IndexOpenFixture {
+                temp: tmp,
+                idx_dir: idx,
+                root,
+            }
         };
         b.iter(|| {
-            black_box(common::open_index(&idx_dir, &root, CorpusKind::Directory));
+            black_box(common::open_index(
+                &fixture.idx_dir,
+                &fixture.root,
+                CorpusKind::Directory,
+            ));
         });
     });
 
@@ -223,7 +262,7 @@ fn bench_indexes_open(c: &mut Criterion) {
     });
 
     g.bench_function("one_trigram_index", |b| {
-        let (_tmp, sift_dir) = {
+        let fixture = {
             let tmp = tempfile::tempdir().unwrap();
             let corpus = tmp.path().join("corpus");
             make_parity_corpus(&corpus);
@@ -267,10 +306,13 @@ fn bench_indexes_open(c: &mut Criterion) {
                 )
                 .expect("build");
             drop(store);
-            (tmp, sift)
+            SiftDirFixture {
+                temp: tmp,
+                sift_dir: sift,
+            }
         };
         b.iter(|| {
-            black_box(Indexes::open(&sift_dir).unwrap());
+            black_box(Indexes::open(&fixture.sift_dir).unwrap());
         });
     });
 
@@ -302,7 +344,8 @@ fn bench_index_save_reopen(c: &mut Criterion) {
 // ─── TrigramIndex inherent method benches ────────────────────────────────────
 
 fn bench_trigram_index_methods(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
 
     let mut g = c.benchmark_group("trigram_index");
 
@@ -320,7 +363,8 @@ fn bench_trigram_index_methods(c: &mut Criterion) {
 // ─── Candidate benches ───────────────────────────────────────────────────────
 
 fn bench_candidates(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
 
     let mut g = c.benchmark_group("index_candidates");
 
@@ -370,7 +414,8 @@ fn bench_candidates(c: &mut Criterion) {
 // ─── Explain benches ─────────────────────────────────────────────────────────
 
 fn bench_explain(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
 
     let mut g = c.benchmark_group("index_explain");
 

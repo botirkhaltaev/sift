@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 const MAX_PATTERN_LEN: usize = 512;
 
 struct IndexHolder {
-    _tmp: tempfile::TempDir,
+    temp: tempfile::TempDir,
     indexes: Indexes,
 }
 
@@ -42,7 +42,7 @@ fn indexed() -> &'static Indexes {
         TrigramIndex::build(&config, &trigram_dir, &[]).expect("build_index");
         let indexes = Indexes::open(&sift_dir).expect("open_index");
         IndexHolder {
-            _tmp: tmp,
+            temp: tmp,
             indexes,
         }
     });

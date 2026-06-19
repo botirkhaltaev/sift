@@ -2,7 +2,8 @@ use std::process::ExitCode;
 
 use crate::grep::Argv;
 use crate::grep::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
-use crate::grep::filter::FilterConfig;
+use crate::grep::filter::{FilterConfig, SearchFilterCtx};
+use crate::grep::ignore::MessageFlags;
 use crate::grep::filter::{FilterDecl, GlobFlags, TypeCatalog};
 use crate::grep::ignore::{
     ContextDecl, IgnoreDotDecl, IgnoreExcludeDecl, IgnoreFilesDecl, IgnoreGitDecl,
@@ -267,7 +268,10 @@ impl Cli {
         let daemon = self.paths.daemon();
         let grep = Grep::new(self.grep_config());
 
-        let suppress_errors = grep.suppress_error_messages(argv);
+        let suppress_errors = SearchFilterCtx::resolve(argv)
+            .ignore
+            .msg_flags
+            .contains(MessageFlags::NO_MESSAGES);
         Self::exit_from_grep(grep.run(argv, daemon.as_ref()), suppress_errors)
     }
 

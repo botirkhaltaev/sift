@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
-use sift_core::{CandidateFilter, CorpusKind, DaemonOp, Indexes, SearchMode, SearchQuery};
+use sift_core::{CandidateFilter, CorpusKind, Indexes, SearchMode, SearchQuery};
 
-use crate::index::daemon::Daemon;
+use crate::index::daemon::{Daemon, DaemonOp};
 
 use super::argv::Argv;
 use super::filter::{FilterConfig, SearchFilterCtx};
-use super::ignore::MessageFlags;
 use super::output::{FilenameContext, OutputArgv, OutputConfig, SearchOutputCtx};
 use super::paths::CorpusScope;
 use super::pattern::{PatternArgv, PatternConfig, ResolvedPatterns};
@@ -69,14 +68,6 @@ impl Grep {
             self.run_search(argv, daemon)
                 .map(|matched| GrepOutcome::Search { matched })
         }
-    }
-
-    #[must_use]
-    pub fn suppress_error_messages(&self, argv: &Argv<'_>) -> bool {
-        SearchFilterCtx::resolve(argv)
-            .ignore
-            .msg_flags
-            .contains(MessageFlags::NO_MESSAGES)
     }
 
     fn configure_threads(&self) {
@@ -224,9 +215,9 @@ impl Grep {
             .pattern
             .search_options(&pattern_argv, pattern_argv.only_matching);
         let query =
-            SearchQuery::new(patterns.as_slice(), opts).map_err(|e| anyhow::anyhow!("{e}"))?;
+            SearchQuery::new(&patterns.0, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let (out, _filter) = SearchOutputCtx::resolve(
+        let (out, _) = SearchOutputCtx::resolve(
             &self.config.output,
             argv,
             effective_mode,

@@ -47,7 +47,7 @@ impl GrepRequest<'_> {
             return Err(crate::Error::Search(SearchError::InvalidMaxCount));
         }
 
-        let spec = query.spec();
+        let spec = query.build_query_spec();
         let output = self.output;
         let requirement = output.candidate_requirement();
 

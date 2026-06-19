@@ -88,7 +88,8 @@ fn run_standard(indexes: &Indexes, filter: &CandidateFilter, query: &SearchQuery
 // ─── Indexed search benches ──────────────────────────────────────────────────
 
 fn bench_indexed_search(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
     let indexes = wrap_index(index);
     let filter = make_filter(&CandidateFilterConfig::default(), indexes.root());
 
@@ -185,7 +186,8 @@ fn bench_walk_search(c: &mut Criterion) {
 // ─── Output mode benches ─────────────────────────────────────────────────────
 
 fn bench_output_modes(c: &mut Criterion) {
-    let (_tmp, index) = common::open_large_index();
+    let fixture = common::open_large_index();
+    let index = fixture.1;
     let indexes = wrap_index(index);
     let filter = make_filter(&CandidateFilterConfig::default(), indexes.root());
     let query = make_search(&["beta"], SearchOptions::default());

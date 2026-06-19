@@ -117,9 +117,10 @@ mod tests {
 
         fn matched(
             &mut self,
-            _: &grep_searcher::Searcher,
+            searcher: &grep_searcher::Searcher,
             mat: &grep_searcher::SinkMatch<'_>,
         ) -> Result<bool, Self::Error> {
+            std::hint::black_box(searcher);
             self.hits
                 .push(String::from_utf8_lossy(mat.bytes()).into_owned());
             Ok(true)

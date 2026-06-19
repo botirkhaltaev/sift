@@ -21,7 +21,7 @@ Regex execution: pattern compilation, file scanning, output formatting, and para
 
 ```text
 grep::run(query, GrepRequest{ indexes, filter, output, separators, collect })
-  -> QuerySpec from query.spec()
+  -> QuerySpec from `SearchQuery::build_query_spec()` (internal)
   -> candidates from Indexes::candidates(spec, coverage) or walk::collect_candidates
   -> candidate.matches(filter) via par_iter
   -> SearchExecution { candidates, output, separators, collect }

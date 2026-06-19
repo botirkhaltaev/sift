@@ -71,8 +71,27 @@ impl SearchQuery {
         &self.patterns
     }
 
-    pub(crate) fn spec(&self) -> QuerySpec<'_> {
-        self.build_query_spec()
+    pub(crate) fn build_query_spec(&self) -> QuerySpec<'_> {
+        let mut flags = QueryFlags::empty();
+        if self.opts.fixed_strings() {
+            flags |= QueryFlags::FIXED_STRINGS;
+        }
+        if self.opts.case_insensitive() {
+            flags |= QueryFlags::CASE_INSENSITIVE;
+        }
+        if self.opts.word_regexp() {
+            flags |= QueryFlags::WORD_REGEXP;
+        }
+        if self.opts.line_regexp() {
+            flags |= QueryFlags::LINE_REGEXP;
+        }
+        if self.opts.invert_match() {
+            flags |= QueryFlags::INVERT_MATCH;
+        }
+        QuerySpec {
+            patterns: &self.patterns,
+            flags,
+        }
     }
 
     pub(crate) fn search(
@@ -137,29 +156,6 @@ impl SearchQuery {
         let m = self.build_matcher()?;
         let _ = self.matcher.set(m);
         Ok(self.matcher.get().expect("just initialised"))
-    }
-
-    fn build_query_spec(&self) -> QuerySpec<'_> {
-        let mut flags = QueryFlags::empty();
-        if self.opts.fixed_strings() {
-            flags |= QueryFlags::FIXED_STRINGS;
-        }
-        if self.opts.case_insensitive() {
-            flags |= QueryFlags::CASE_INSENSITIVE;
-        }
-        if self.opts.word_regexp() {
-            flags |= QueryFlags::WORD_REGEXP;
-        }
-        if self.opts.line_regexp() {
-            flags |= QueryFlags::LINE_REGEXP;
-        }
-        if self.opts.invert_match() {
-            flags |= QueryFlags::INVERT_MATCH;
-        }
-        QuerySpec {
-            patterns: &self.patterns,
-            flags,
-        }
     }
 
     fn run_text_output(
@@ -275,7 +271,7 @@ impl SearchQuery {
                 matcher.clone(),
             );
             let _ = searcher.search_path(matcher, candidate.abs_path(), &mut sink);
-            out.extend(sink.into_matches());
+            out.extend(sink.matches);
         }
         Ok(out)
     }
@@ -299,7 +295,7 @@ impl SearchQuery {
                 matcher.clone(),
             );
             let _ = searcher.search_path(matcher, candidate, &mut sink);
-            out.extend(sink.into_matches());
+            out.extend(sink.matches);
         }
         Ok(out)
     }
@@ -324,9 +320,6 @@ impl CollectSink {
         }
     }
 
-    fn into_matches(self) -> Vec<crate::search::Match> {
-        self.matches
-    }
 }
 
 #[cfg(test)]
@@ -335,9 +328,10 @@ impl grep_searcher::Sink for CollectSink {
 
     fn matched(
         &mut self,
-        _: &grep_searcher::Searcher,
+        searcher: &grep_searcher::Searcher,
         mat: &grep_searcher::SinkMatch<'_>,
     ) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
         if matches!(self.emission, MatchEmissionMode::OnlyMatching) {

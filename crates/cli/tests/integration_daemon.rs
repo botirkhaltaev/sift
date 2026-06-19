@@ -23,7 +23,7 @@ use common::normalize_stdout;
 use sift_core::{
     CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, VisibilityConfig, WalkMeta,
 };
-use sift_grep::daemon::{Daemon, Serve};
+use sift_grep::daemon::Daemon;
 
 fn spawn_daemon(
     sift_dir: PathBuf,
@@ -33,12 +33,9 @@ fn spawn_daemon(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let daemon = Daemon::new(sift_dir);
-        let serve = Serve {
-            ready_file: Some(ready_path),
-            idle_timeout,
-            shutdown: Some(shutdown),
-        };
-        daemon.serve(serve).expect("daemon serve");
+        daemon
+            .serve(Some(ready_path), idle_timeout, shutdown.as_ref())
+            .expect("daemon serve");
     })
 }
 
@@ -402,12 +399,10 @@ fn daemon_exits_after_idle_timeout() {
         let ready_path = ready_path.clone();
         move || {
             let daemon = Daemon::new(sift_dir);
-            let serve = Serve {
-                ready_file: Some(ready_path),
-                idle_timeout: Duration::from_secs(2),
-                shutdown: None,
-            };
-            daemon.serve(serve).expect("daemon serve");
+            let shutdown = AtomicBool::new(false);
+            daemon
+                .serve(Some(ready_path), Duration::from_secs(2), &shutdown)
+                .expect("daemon serve");
         }
     });
 

@@ -16,7 +16,7 @@ use crate::grep::paths::CorpusScope;
 
 pub mod daemon;
 
-pub use daemon::{Daemon, DaemonError, Serve};
+pub use daemon::{Daemon, DaemonError, DaemonOp};
 
 /// Which index subcommand was requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +147,7 @@ impl IndexJob {
         }
 
         if let Some(daemon) = daemon
-            && let Err(e) = daemon.send(&sift_core::DaemonOp::Watch)
+            && let Err(e) = daemon.send(&DaemonOp::Watch)
         {
             eprintln!("sift: warning: daemon not started: {e}");
         }
@@ -210,7 +210,7 @@ impl IndexJob {
             return ExitCode::from(2);
         }
 
-        if let Err(e) = daemon.send(&sift_core::DaemonOp::Index(Vec::new())) {
+        if let Err(e) = daemon.send(&DaemonOp::Index(Vec::new())) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }

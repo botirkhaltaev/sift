@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Breaking
 
 - `meta.json` layout changed (`corpus` / `walk` / `filters` nesting). Re-run `sift index build` after upgrading; old stores are not migrated automatically.
+- Daemon IPC types moved from `sift_core::DaemonOp` to `sift_grep::index::daemon::{Daemon, DaemonOp, DaemonError}`; core no longer exports daemon types.
 
 ### Features
 
@@ -17,8 +18,8 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - Migrate grep/filter helpers to domain-type impls (`PatternConfig::search_options`, `FilterConfig::candidate_config`, `OutputConfig::separators`, `ByteSize`)
-- Migrate core search helpers to domain types (`CandidateFilter::collect`, `WalkOptions::discover_files`, `IgnoreConfig::matcher`, `DaemonOp::encode/decode`)
-- Consolidate daemon IPC onto `Daemon::send(DaemonOp)` with `Serve` options
+- Migrate core search helpers to domain types (`CandidateFilter::collect`, `WalkOptions::discover_files`, `IgnoreConfig::matcher`)
+- Consolidate daemon into CLI-only `index/daemon.rs` (`Daemon::send`, `Daemon::serve`); remove `Serve`, coordinator, and core IPC types
 - Unify `TrigramIndex::build(config, dir, paths)` API (empty paths = full corpus)
 
 ### Documentation

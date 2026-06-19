@@ -28,7 +28,13 @@ enum SnapshotState {
 
 struct CurrentSnapshot {
     indexes: Vec<Index>,
-    _lease: SnapshotLease,
+    lease: SnapshotLease,
+}
+
+impl Drop for CurrentSnapshot {
+    fn drop(&mut self) {
+        let _ = &mut self.lease;
+    }
 }
 
 impl Snapshot {
@@ -46,7 +52,7 @@ impl Snapshot {
             root,
             state: SnapshotState::Current(CurrentSnapshot {
                 indexes,
-                _lease: SnapshotLease::InMemory,
+                lease: SnapshotLease::InMemory,
             }),
         }
     }
@@ -55,10 +61,7 @@ impl Snapshot {
     pub(crate) const fn current(root: PathBuf, indexes: Vec<Index>, lease: SnapshotLease) -> Self {
         Self {
             root,
-            state: SnapshotState::Current(CurrentSnapshot {
-                indexes,
-                _lease: lease,
-            }),
+            state: SnapshotState::Current(CurrentSnapshot { indexes, lease }),
         }
     }
 

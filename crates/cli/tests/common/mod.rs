@@ -298,16 +298,6 @@ pub fn assert_stderr_empty(out: &Output) {
     );
 }
 
-// ── Legacy aliases (for incremental migration) ────────────────────────────────
-
-pub fn normalized_stdout(out: &Output) -> String {
-    normalize_stdout(out)
-}
-
-pub fn abs(root: &Path, rel: &str) -> String {
-    abs_path(root, rel)
-}
-
 pub fn fresh_dir(name: &str) -> PathBuf {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(

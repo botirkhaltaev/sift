@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use sift_core::{Indexes, PathDisplay, StoreMeta, WalkMeta};
+use sift_core::{Indexes, PathDisplay, StoreMeta};
 
 #[derive(Args)]
 pub struct PathArgs {
@@ -60,12 +60,6 @@ impl CorpusScope {
                 exclude_paths: Self::excluded_paths(root, sift_dir),
             })
         }
-    }
-
-    /// Build walk options from store metadata when searching before a snapshot exists.
-    #[must_use]
-    pub const fn walk_from_meta(meta: &StoreMeta) -> WalkMeta {
-        meta.walk
     }
 
     #[must_use]

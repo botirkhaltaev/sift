@@ -520,11 +520,6 @@ impl ResolvedPatterns {
         }
         Ok(Self(patterns))
     }
-
-    #[must_use]
-    pub fn as_slice(&self) -> &[String] {
-        &self.0
-    }
 }
 
 // ── Tests ──
@@ -719,7 +714,7 @@ mod tests {
 
     #[test]
     fn output_mode_count_and_only_matching_becomes_count_matches() {
-        let (mode, only_matching, _quiet) =
+        let (mode, only_matching, _) =
             PatternArgv::output_mode(&Argv::new(&args(&["sift", "-c", "-o", "pat"])), false);
         assert_eq!(mode, SearchMode::CountMatches);
         assert!(!only_matching);

@@ -1,10 +1,9 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use clap::Parser;
-use sift_grep::index::daemon::{Daemon, Serve};
+use sift_grep::index::daemon::Daemon;
 
 #[derive(Parser)]
 #[command(version, about = "Background index refresher for sift")]
@@ -36,12 +35,8 @@ fn main() {
         sift_dir: args.sift_dir,
         init_root: args.init_root,
     };
-    let serve = Serve {
-        ready_file: args.ready_file,
-        idle_timeout,
-        shutdown: Some(Arc::new(AtomicBool::new(false))),
-    };
-    if let Err(e) = daemon.serve(serve) {
+    let shutdown = AtomicBool::new(false);
+    if let Err(e) = daemon.serve(args.ready_file, idle_timeout, &shutdown) {
         eprintln!("sift-daemon: {e}");
         std::process::exit(1);
     }
