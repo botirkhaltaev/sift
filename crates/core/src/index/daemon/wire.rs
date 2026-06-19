@@ -102,6 +102,7 @@ mod tests {
         assert_eq!(op, DaemonOp::Index(Vec::new()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn index_round_trip_over_unix_stream() {
         use std::os::unix::net::UnixStream;

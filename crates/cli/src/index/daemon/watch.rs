@@ -1,7 +1,6 @@
 use notify::Watcher;
 
 pub(super) const DAEMON_LOCK: &str = "lock";
-pub(super) const DAEMON_SOCKET: &str = "daemon.sock";
 pub(super) const DEFAULT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 pub(super) const READY_DIR: &str = "daemon-ready";
 pub(super) const READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
