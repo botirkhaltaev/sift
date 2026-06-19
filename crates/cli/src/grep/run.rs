@@ -258,25 +258,18 @@ impl Grep {
             SearchOutputCtx::write_stats(s);
         }
         if let Some(daemon) = daemon {
-            queue_index_hits(daemon, grep_run.hits, &session.indexes);
+            let indexed_paths = session.indexes.indexed_rel_paths();
+            let paths: Vec<PathBuf> = grep_run
+                .hits
+                .into_iter()
+                .filter(|p| !indexed_paths.contains(p))
+                .collect();
+            if !paths.is_empty()
+                && let Err(e) = daemon.send(&DaemonOp::Index(paths))
+            {
+                eprintln!("sift: warning: index request failed: {e}");
+            }
         }
         Ok(grep_run.outcome.matched)
-    }
-}
-
-fn queue_index_hits(daemon: &Daemon, hits: Vec<PathBuf>, indexes: &Indexes) {
-    if hits.is_empty() {
-        return;
-    }
-    let indexed_paths = indexes.indexed_rel_paths();
-    let paths: Vec<PathBuf> = hits
-        .into_iter()
-        .filter(|p| !indexed_paths.contains(p))
-        .collect();
-    if paths.is_empty() {
-        return;
-    }
-    if let Err(e) = daemon.send(&DaemonOp::Index(paths)) {
-        eprintln!("sift: warning: index request failed: {e}");
     }
 }
