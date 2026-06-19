@@ -3,8 +3,8 @@ use std::process::ExitCode;
 use crate::grep::Argv;
 use crate::grep::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
 use crate::grep::filter::{FilterConfig, SearchFilterCtx};
-use crate::grep::ignore::MessageFlags;
 use crate::grep::filter::{FilterDecl, GlobFlags, TypeCatalog};
+use crate::grep::ignore::MessageFlags;
 use crate::grep::ignore::{
     ContextDecl, IgnoreDotDecl, IgnoreExcludeDecl, IgnoreFilesDecl, IgnoreGitDecl,
     IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreVcsDecl,

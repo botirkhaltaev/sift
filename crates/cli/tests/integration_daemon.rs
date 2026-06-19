@@ -604,7 +604,7 @@ fn search_walk_hit_queues_partial_index() {
 }
 
 #[test]
-fn blocking_build_hands_off_to_daemon_watch() {
+fn blocking_build_starts_daemon_for_watch() {
     let p = TestProject::new("daemon-blocking-handoff");
     p.write("a.txt", "blocking_handoff_initial\n");
 

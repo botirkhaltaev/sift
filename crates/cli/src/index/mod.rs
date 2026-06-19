@@ -147,7 +147,7 @@ impl IndexJob {
         }
 
         if let Some(daemon) = daemon
-            && let Err(e) = daemon.send(&DaemonOp::Watch)
+            && let Err(e) = daemon.ensure_running()
         {
             eprintln!("sift: warning: daemon not started: {e}");
         }

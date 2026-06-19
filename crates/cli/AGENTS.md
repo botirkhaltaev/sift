@@ -25,7 +25,7 @@ Two-layer flag model:
 | `grep/paths.rs` | `PathArgs` | `CorpusScope` | `CorpusScope::resolve` |
 | `grep/run.rs` | — | `GrepConfig`, `Grep`, `GrepOutcome` | `Grep::run` |
 | `index/mod.rs` | — | `IndexRequest`, `IndexJob` | `IndexJob::resolve`, `IndexJob::run` |
-| `index/daemon.rs` | — | `Daemon`, `DaemonOp`, `DaemonError` | `Daemon::send`, `Daemon::serve` |
+| `index/daemon.rs` | — | `Daemon`, `DaemonOp`, `DaemonError` | `Daemon::send`, `Daemon::serve`, `Daemon::ensure_running` |
 
 ## Structure
 

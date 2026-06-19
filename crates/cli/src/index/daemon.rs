@@ -57,13 +57,11 @@ impl From<sift_core::Error> for DaemonError {
 /// IPC operation sent to the index daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonOp {
-    Watch,
     /// Rel-paths to index. Empty vec = full corpus.
     Index(Vec<PathBuf>),
 }
 
 impl DaemonOp {
-    const WATCH_OPCODE: u8 = 0x01;
     const INDEX_OPCODE: u8 = 0x02;
     const STATUS_OK: u8 = 0x00;
     const STATUS_ERR: u8 = 0x01;
@@ -75,9 +73,6 @@ impl DaemonOp {
     /// Returns an error if writing fails.
     pub fn encode(&self, writer: &mut impl Write) -> io::Result<()> {
         match self {
-            Self::Watch => {
-                writer.write_all(&[Self::WATCH_OPCODE])?;
-            }
             Self::Index(paths) => {
                 writer.write_all(&[Self::INDEX_OPCODE])?;
                 for path in paths {
@@ -100,7 +95,6 @@ impl DaemonOp {
         let mut opcode = [0_u8; 1];
         reader.read_exact(&mut opcode)?;
         match opcode[0] {
-            Self::WATCH_OPCODE => Ok(Self::Watch),
             Self::INDEX_OPCODE => {
                 let mut paths = Vec::new();
                 loop {
@@ -153,7 +147,7 @@ impl Daemon {
     ///
     /// Propagates spawn and IPC failures.
     pub fn send(&self, op: &DaemonOp) -> Result<(), DaemonError> {
-        self.ensure_running()?;
+        self.ensure_daemon_running()?;
         let mut stream = Stream::connect(self.ipc_name()?).map_err(DaemonError::Io)?;
         op.encode(&mut stream)?;
         let mut status = [0_u8; 1];
@@ -163,6 +157,15 @@ impl Daemon {
         } else {
             Err(DaemonError::message("daemon rejected request"))
         }
+    }
+
+    /// Ensure the background daemon is running for this store.
+    ///
+    /// # Errors
+    ///
+    /// Propagates spawn and readiness failures.
+    pub fn ensure_running(&self) -> Result<(), DaemonError> {
+        self.ensure_daemon_running()
     }
 
     /// Run the daemon event loop until idle timeout or shutdown.
@@ -235,19 +238,15 @@ impl Daemon {
             .watch(&meta.corpus.root, RecursiveMode::Recursive)
             .map_err(|e| DaemonError::message(e.to_string()))?;
 
-        let guards = ServeGuards {
-            lock: lock_file,
-            watcher,
-        };
         let debounce = Duration::from_millis(DEBOUNCE_MS);
         let mut phase = Phase::idle(idle_timeout);
         ServeLoop {
-            guards,
+            _lock: lock_file,
+            _watcher: watcher,
             rx: &rx,
             tx: &tx,
             sift_dir: &sift_dir,
             sift_dir_raw: &sift_dir_raw,
-            meta: &meta,
             pending: &pending,
             idle_timeout,
             shutdown,
@@ -255,6 +254,25 @@ impl Daemon {
             debounce,
         }
         .run()
+    }
+
+    fn daemon_reachable(&self) -> Result<bool, DaemonError> {
+        let name = self.ipc_name()?;
+        Ok(Stream::connect(name).is_ok())
+    }
+
+    fn wait_for_daemon(&self, deadline: Instant) -> Result<(), DaemonError> {
+        loop {
+            if self.daemon_reachable()? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(DaemonError::message(format!(
+                    "daemon did not become reachable within {READY_TIMEOUT:?}"
+                )));
+            }
+            std::thread::sleep(READY_POLL_INTERVAL);
+        }
     }
 
     fn ipc_name(&self) -> Result<interprocess::local_socket::Name<'static>, DaemonError> {
@@ -298,7 +316,11 @@ impl Daemon {
         Ok(())
     }
 
-    fn ensure_running(&self) -> Result<(), DaemonError> {
+    fn ensure_daemon_running(&self) -> Result<(), DaemonError> {
+        if self.daemon_reachable()? {
+            return Ok(());
+        }
+
         let sift_dir = &self.sift_dir;
         let init_root = self.init_root.as_deref();
         let exe = {
@@ -327,15 +349,19 @@ impl Daemon {
         let spawn_lock_path = sift_dir.join(SPAWN_LOCK);
         let mut spawn_lock = LockFile::open(&spawn_lock_path)?;
         if !spawn_lock.try_lock()? {
-            return Ok(());
+            return self.wait_for_daemon(Instant::now() + READY_TIMEOUT);
         }
 
         {
             let daemon_lock_path = sift_dir.join(DAEMON_LOCK);
             let mut daemon_lock = LockFile::open(&daemon_lock_path)?;
             if !daemon_lock.try_lock()? {
-                return Ok(());
+                return self.wait_for_daemon(Instant::now() + READY_TIMEOUT);
             }
+        }
+
+        if self.daemon_reachable()? {
+            return Ok(());
         }
 
         let ready_dir = sift_dir.join(READY_DIR);
@@ -348,11 +374,18 @@ impl Daemon {
         let ready_path = ready_dir.join(format!("{pid}-{now}"));
         let _ = std::fs::remove_file(&ready_path);
 
+        let log_path = sift_dir.join("daemon-spawn.log");
+        let stderr = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(DaemonError::Io)?;
+
         let mut cmd = Command::new(&exe);
         cmd.arg("--sift-dir")
             .arg(sift_dir)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(stderr)
             .stdin(std::process::Stdio::null());
         if let Some(root) = init_root {
             cmd.arg("--init-root").arg(root);
@@ -366,9 +399,29 @@ impl Daemon {
                 let _ = std::fs::remove_file(&ready_path);
                 return Ok(());
             }
+            if self.daemon_reachable()? {
+                let _ = std::fs::remove_file(&ready_path);
+                return Ok(());
+            }
             if Instant::now() >= deadline {
+                let log_tail = std::fs::read_to_string(&log_path)
+                    .ok()
+                    .map(|s| {
+                        s.lines()
+                            .rev()
+                            .take(5)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .filter(|s| !s.is_empty());
+                let detail = log_tail
+                    .map(|tail| format!("\nlast daemon log lines:\n{tail}"))
+                    .unwrap_or_default();
                 return Err(DaemonError::message(format!(
-                    "daemon did not signal readiness within {READY_TIMEOUT:?}"
+                    "daemon did not signal readiness within {READY_TIMEOUT:?}{detail}"
                 )));
             }
             std::thread::sleep(READY_POLL_INTERVAL);
@@ -376,13 +429,8 @@ impl Daemon {
     }
 
     fn load_meta(&self, sift_dir: &Path) -> Result<StoreMeta, DaemonError> {
-        match (StoreMeta::read(sift_dir), self.init_root.as_deref()) {
-            (Ok(mut meta), _) => {
-                if meta.indexes.is_empty() {
-                    meta.indexes = IndexKind::ALL.to_vec();
-                }
-                Ok(meta)
-            }
+        match (read_store_meta(sift_dir), self.init_root.as_deref()) {
+            (Ok(meta), _) => Ok(meta),
             (Err(_), Some(init_root)) => {
                 let root = init_root.canonicalize()?;
                 Ok(StoreMeta::new(
@@ -404,7 +452,7 @@ impl Daemon {
                     IndexKind::ALL.to_vec(),
                 ))
             }
-            (Err(e), None) => Err(DaemonError::message(format!("no store metadata: {e}"))),
+            (Err(e), None) => Err(e),
         }
     }
 }
@@ -528,14 +576,30 @@ impl PendingIndex {
     }
 
     fn reconcile(&mut self, sift_dir: &Path, meta: &StoreMeta) {
-        if let Some(paths) = self.take() {
-            let result = IndexStore::open_or_create(sift_dir, meta)
-                .and_then(|mut store| store.reconcile(meta, &paths));
-            if let Err(e) = result {
-                eprintln!("sift-daemon: refresh failed: {e}");
-            }
+        let Some(paths) = self.take() else {
+            return;
+        };
+        let result = IndexStore::open_or_create(sift_dir, meta)
+            .and_then(|mut store| store.reconcile(meta, &paths));
+        if let Err(e) = result {
+            eprintln!("sift-daemon: refresh failed: {e}");
+            self.push(paths);
         }
     }
+}
+
+fn read_store_meta(sift_dir: &Path) -> Result<StoreMeta, DaemonError> {
+    let mut meta = StoreMeta::read(sift_dir)
+        .map_err(|e| DaemonError::message(format!("no store metadata: {e}")))?;
+    if meta.indexes.is_empty() {
+        meta.indexes = IndexKind::ALL.to_vec();
+    }
+    Ok(meta)
+}
+
+enum RefreshScope {
+    CorpusAndPending,
+    PendingOnly,
 }
 
 fn pending_lock(
@@ -546,24 +610,13 @@ fn pending_lock(
         .map_err(|_| DaemonError::message("daemon pending queue lock poisoned"))
 }
 
-struct ServeGuards {
-    lock: LockFile,
-    watcher: PlatformWatcher,
-}
-
-impl Drop for ServeGuards {
-    fn drop(&mut self) {
-        let _ = (&mut self.lock, &mut self.watcher);
-    }
-}
-
 struct ServeLoop<'a> {
-    guards: ServeGuards,
+    _lock: LockFile,
+    _watcher: PlatformWatcher,
     rx: &'a mpsc::Receiver<Event>,
     tx: &'a mpsc::Sender<Event>,
     sift_dir: &'a Path,
     sift_dir_raw: &'a Path,
-    meta: &'a StoreMeta,
     pending: &'a Arc<Mutex<PendingIndex>>,
     idle_timeout: Duration,
     shutdown: &'a AtomicBool,
@@ -573,7 +626,6 @@ struct ServeLoop<'a> {
 
 impl ServeLoop<'_> {
     fn run(self) -> Result<(), DaemonError> {
-        let _ = &self.guards;
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
                 drain_refresh(self.rx, self.phase, self.idle_timeout);
@@ -597,17 +649,15 @@ impl ServeLoop<'_> {
                     Some(PhaseInput::FsChange)
                 }
                 Ok(Event::RefreshComplete) => Some(PhaseInput::RefreshComplete),
-                Ok(Event::Client(DaemonOp::Watch)) => continue,
                 Ok(Event::Client(DaemonOp::Index(paths))) => {
                     pending_lock(self.pending)?.push(paths);
                     if self.phase.is_refreshing() {
                         *self.phase = Phase::Refreshing { follow_up: true };
                     } else {
                         spawn_refresh(
-                            false,
+                            RefreshScope::CorpusAndPending,
                             self.tx,
                             self.sift_dir,
-                            self.meta,
                             Arc::clone(self.pending),
                         );
                         *self.phase = Phase::Refreshing { follow_up: false };
@@ -625,17 +675,15 @@ impl ServeLoop<'_> {
             };
 
             let idle_deadline = matches!(self.phase, Phase::Idle { .. });
-            let debouncing_deadline = matches!(self.phase, Phase::Debouncing { .. });
 
             if idle_deadline
                 && matches!(input, Some(PhaseInput::DeadlineReached))
                 && pending_lock(self.pending)?.is_pending()
             {
                 spawn_refresh(
-                    true,
+                    RefreshScope::PendingOnly,
                     self.tx,
                     self.sift_dir,
-                    self.meta,
                     Arc::clone(self.pending),
                 );
                 *self.phase = Phase::Refreshing { follow_up: false };
@@ -652,20 +700,14 @@ impl ServeLoop<'_> {
                 LoopAction::None => {}
                 LoopAction::StartRefresh => {
                     spawn_refresh(
-                        false,
+                        RefreshScope::CorpusAndPending,
                         self.tx,
                         self.sift_dir,
-                        self.meta,
                         Arc::clone(self.pending),
                     );
                     *self.phase = Phase::Refreshing { follow_up: false };
-                    continue;
                 }
                 LoopAction::Exit => return Ok(()),
-            }
-
-            if debouncing_deadline && matches!(input, PhaseInput::DeadlineReached) {
-                pending_lock(self.pending)?.reconcile(self.sift_dir, self.meta);
             }
         }
     }
@@ -678,25 +720,32 @@ type PlatformWatcher = notify::PollWatcher;
 type PlatformWatcher = notify::RecommendedWatcher;
 
 fn spawn_refresh(
-    index_only: bool,
+    scope: RefreshScope,
     tx: &mpsc::Sender<Event>,
     sift_dir: &Path,
-    meta: &StoreMeta,
     pending: Arc<Mutex<PendingIndex>>,
 ) {
     let tx = tx.clone();
     let sift_dir = sift_dir.to_path_buf();
-    let meta = meta.clone();
     std::thread::spawn(move || {
-        if !index_only {
+        let meta = match read_store_meta(&sift_dir) {
+            Ok(meta) => meta,
+            Err(e) => {
+                eprintln!("sift-daemon: {e}");
+                let _ = tx.send(Event::RefreshComplete);
+                return;
+            }
+        };
+        if matches!(scope, RefreshScope::CorpusAndPending) {
             let result = IndexStore::open_or_create(&sift_dir, &meta)
                 .and_then(|mut store| store.reconcile(&meta, &[]));
             if let Err(e) = result {
                 eprintln!("sift-daemon: refresh failed: {e}");
             }
         }
-        if let Ok(mut queue) = pending.lock() {
-            queue.reconcile(&sift_dir, &meta);
+        match pending.lock() {
+            Ok(mut queue) => queue.reconcile(&sift_dir, &meta),
+            Err(_) => eprintln!("sift-daemon: pending queue lock poisoned"),
         }
         let _ = tx.send(Event::RefreshComplete);
     });
@@ -721,14 +770,6 @@ mod tests {
 
     const DEBOUNCE: Duration = Duration::from_mins(1);
     const IDLE: Duration = Duration::from_mins(10);
-
-    #[test]
-    fn round_trip_watch() {
-        let mut buf = Vec::new();
-        DaemonOp::Watch.encode(&mut buf).unwrap();
-        let op = DaemonOp::decode(buf.as_slice()).unwrap();
-        assert_eq!(op, DaemonOp::Watch);
-    }
 
     #[test]
     fn round_trip_index_paths() {
@@ -826,27 +867,86 @@ mod tests {
     }
 
     #[test]
-    fn ensure_running_returns_when_daemon_lock_held() {
+    fn ensure_running_skips_spawn_when_ipc_reachable() {
         let dir = TempDir::new().unwrap();
-        let lock_path = dir.path().join(DAEMON_LOCK);
-        let mut lock = LockFile::open(&lock_path).unwrap();
-        lock.try_lock().unwrap();
+        let sift_dir = dir.path().join(".sift");
 
-        Daemon::new(dir.path().to_path_buf())
-            .ensure_running()
-            .unwrap();
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: dir.path().to_path_buf(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
+            vec![IndexKind::Trigram],
+        );
+        std::fs::create_dir_all(&sift_dir).unwrap();
+        StoreMeta::write(&meta, &sift_dir).unwrap();
+
+        let daemon = Daemon::new(sift_dir.clone());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let shutdown = Arc::clone(&shutdown);
+            move || {
+                daemon
+                    .serve(None, Duration::from_mins(2), shutdown.as_ref())
+                    .unwrap();
+            }
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !Daemon::new(sift_dir.clone()).daemon_reachable().unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "daemon ipc did not become reachable"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        Daemon::new(sift_dir).ensure_running().unwrap();
+
+        shutdown.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
     }
 
     #[test]
-    fn ensure_running_returns_when_spawn_lock_held() {
+    fn pending_paths_restored_on_reconcile_failure() {
         let dir = TempDir::new().unwrap();
-        let spawn_lock_path = dir.path().join(SPAWN_LOCK);
-        let mut spawn_lock = LockFile::open(&spawn_lock_path).unwrap();
-        spawn_lock.try_lock().unwrap();
+        let sift_dir = dir.path().join(".sift");
+        std::fs::create_dir_all(&sift_dir).unwrap();
 
-        Daemon::new(dir.path().to_path_buf())
-            .ensure_running()
-            .unwrap();
+        let mut pending = PendingIndex::Paths(vec![PathBuf::from("missing.rs")]);
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: dir.path().to_path_buf(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
+            vec![IndexKind::Trigram],
+        );
+        StoreMeta::write(&meta, &sift_dir).unwrap();
+
+        pending.reconcile(&sift_dir, &meta);
+        assert!(pending.is_pending());
     }
 
     #[test]

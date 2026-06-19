@@ -19,7 +19,8 @@ All notable changes to this project will be documented in this file.
 
 - Migrate grep/filter helpers to domain-type impls (`PatternConfig::search_options`, `FilterConfig::candidate_config`, `OutputConfig::separators`, `ByteSize`)
 - Migrate core search helpers to domain types (`CandidateFilter::collect`, `WalkOptions::discover_files`, `IgnoreConfig::matcher`)
-- Consolidate daemon into CLI-only `index/daemon.rs` (`Daemon::send`, `Daemon::serve`); remove `Serve`, coordinator, and core IPC types
+- Consolidate daemon into CLI-only `index/daemon.rs` (`Daemon::send`, `Daemon::serve`, `Daemon::ensure_running`); remove `Serve`, coordinator, and core IPC types
+- Remove no-op `DaemonOp::Watch` IPC opcode; reload store metadata before daemon reconciles
 - Unify `TrigramIndex::build(config, dir, paths)` API (empty paths = full corpus)
 
 ### Documentation

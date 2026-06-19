@@ -214,8 +214,7 @@ impl Grep {
             .config
             .pattern
             .search_options(&pattern_argv, pattern_argv.only_matching);
-        let query =
-            SearchQuery::new(&patterns.0, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let query = SearchQuery::new(&patterns.0, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let (out, _) = SearchOutputCtx::resolve(
             &self.config.output,

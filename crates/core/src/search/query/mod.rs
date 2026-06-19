@@ -319,7 +319,6 @@ impl CollectSink {
             matches: Vec::new(),
         }
     }
-
 }
 
 #[cfg(test)]
