@@ -24,6 +24,7 @@ use sift_core::{
     CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, VisibilityConfig, WalkMeta,
 };
 use sift_grep::daemon::Daemon;
+use sift_grep::index::daemon::DaemonOp;
 
 fn spawn_daemon(
     sift_dir: PathBuf,
@@ -644,6 +645,40 @@ fn blocking_build_starts_daemon_for_watch() {
     poll_until(
         p.sift_dir(),
         "blocking_handoff_watch_marker",
+        Duration::from_secs(20),
+        |out| out.status.success() && normalize_stdout(out).contains("b.txt"),
+    );
+}
+
+#[test]
+fn daemon_rebinds_watcher_when_corpus_root_changes() {
+    let p = TestProject::new("daemon-watcher-rebind");
+    let old_root = p.root().join("old");
+    let new_root = p.root().join("new");
+    fs::create_dir_all(&old_root).unwrap();
+    fs::create_dir_all(&new_root).unwrap();
+    p.write("old/a.txt", "watcher_rebind_initial\n");
+
+    let out = p
+        .sift_with_daemon()
+        .arg("--sift-dir")
+        .arg(p.sift_dir())
+        .args(["index", "build", "--wait"])
+        .arg(&old_root)
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    p.write("new/b.txt", "watcher_rebind_new_marker\n");
+    StoreMeta::write(&sample_meta(new_root), p.sift_dir()).unwrap();
+
+    Daemon::new(p.sift_dir().to_path_buf())
+        .send(&DaemonOp::Index(Vec::new()))
+        .expect("daemon index op");
+
+    poll_until(
+        p.sift_dir(),
+        "watcher_rebind_new_marker",
         Duration::from_secs(20),
         |out| out.status.success() && normalize_stdout(out).contains("b.txt"),
     );

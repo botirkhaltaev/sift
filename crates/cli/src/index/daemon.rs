@@ -193,11 +193,8 @@ impl Daemon {
         }
 
         let meta = self.load_meta(&sift_dir)?;
-        let result = IndexStore::open_or_create(&sift_dir, &meta)
-            .and_then(|mut store| store.reconcile(&meta, &[]));
-        if let Err(e) = result {
-            eprintln!("sift-daemon: refresh failed: {e}");
-        }
+        IndexStore::open_or_create(&sift_dir, &meta)
+            .and_then(|mut store| store.reconcile(&meta, &[]))?;
 
         let pending = Arc::new(Mutex::new(PendingIndex::None));
         let (tx, rx) = mpsc::channel::<Event>();
@@ -220,29 +217,16 @@ impl Daemon {
         }
 
         let watcher_tx = tx.clone();
-        #[cfg(windows)]
-        let watcher_config =
-            notify::Config::default().with_poll_interval(Duration::from_millis(DEBOUNCE_MS));
-        #[cfg(not(windows))]
-        let watcher_config = notify::Config::default();
-        let mut watcher = PlatformWatcher::new(
-            move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    let _ = watcher_tx.send(Event::FsChange(event));
-                }
-            },
-            watcher_config,
-        )
-        .map_err(|e| DaemonError::message(e.to_string()))?;
-        watcher
-            .watch(&meta.corpus.root, RecursiveMode::Recursive)
-            .map_err(|e| DaemonError::message(e.to_string()))?;
+        let mut watcher = new_platform_watcher(watcher_tx)?;
+        let watched_root = meta.corpus.root;
+        watch_corpus(&mut watcher, &watched_root)?;
 
         let debounce = Duration::from_millis(DEBOUNCE_MS);
         let mut phase = Phase::idle(idle_timeout);
         ServeLoop {
             _lock: lock_file,
-            _watcher: watcher,
+            watcher,
+            watched_root,
             rx: &rx,
             tx: &tx,
             sift_dir: &sift_dir,
@@ -477,10 +461,16 @@ enum LoopAction {
     Exit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshFollowUp {
+    None,
+    Queued,
+}
+
 enum Phase {
     Idle { deadline: Instant },
     Debouncing { deadline: Instant },
-    Refreshing { follow_up: bool },
+    Refreshing { follow_up: RefreshFollowUp },
 }
 
 impl Phase {
@@ -515,19 +505,29 @@ impl Phase {
                 LoopAction::None,
             ),
             (Self::Debouncing { .. }, PhaseInput::DeadlineReached)
-            | (Self::Refreshing { follow_up: true }, PhaseInput::RefreshComplete) => (
-                Self::Refreshing { follow_up: false },
+            | (
+                Self::Refreshing {
+                    follow_up: RefreshFollowUp::Queued,
+                },
+                PhaseInput::RefreshComplete,
+            ) => (
+                Self::Refreshing {
+                    follow_up: RefreshFollowUp::None,
+                },
                 LoopAction::StartRefresh,
             ),
             (Self::Idle { .. }, PhaseInput::DeadlineReached) => {
                 (Self::idle(idle_timeout), LoopAction::Exit)
             }
-            (Self::Refreshing { .. }, PhaseInput::FsChange) => {
-                (Self::Refreshing { follow_up: true }, LoopAction::None)
-            }
+            (Self::Refreshing { .. }, PhaseInput::FsChange) => (
+                Self::Refreshing {
+                    follow_up: RefreshFollowUp::Queued,
+                },
+                LoopAction::None,
+            ),
             (
                 Self::Refreshing {
-                    follow_up: false, ..
+                    follow_up: RefreshFollowUp::None,
                 },
                 PhaseInput::RefreshComplete,
             ) => (Self::idle(idle_timeout), LoopAction::None),
@@ -612,7 +612,8 @@ fn pending_lock(
 
 struct ServeLoop<'a> {
     _lock: LockFile,
-    _watcher: PlatformWatcher,
+    watcher: PlatformWatcher,
+    watched_root: PathBuf,
     rx: &'a mpsc::Receiver<Event>,
     tx: &'a mpsc::Sender<Event>,
     sift_dir: &'a Path,
@@ -625,7 +626,7 @@ struct ServeLoop<'a> {
 }
 
 impl ServeLoop<'_> {
-    fn run(self) -> Result<(), DaemonError> {
+    fn run(mut self) -> Result<(), DaemonError> {
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
                 drain_refresh(self.rx, self.phase, self.idle_timeout);
@@ -650,9 +651,12 @@ impl ServeLoop<'_> {
                 }
                 Ok(Event::RefreshComplete) => Some(PhaseInput::RefreshComplete),
                 Ok(Event::Client(DaemonOp::Index(paths))) => {
+                    rebind_watcher(&mut self.watcher, &mut self.watched_root, self.sift_dir)?;
                     pending_lock(self.pending)?.push(paths);
                     if self.phase.is_refreshing() {
-                        *self.phase = Phase::Refreshing { follow_up: true };
+                        *self.phase = Phase::Refreshing {
+                            follow_up: RefreshFollowUp::Queued,
+                        };
                     } else {
                         spawn_refresh(
                             RefreshScope::CorpusAndPending,
@@ -660,7 +664,9 @@ impl ServeLoop<'_> {
                             self.sift_dir,
                             Arc::clone(self.pending),
                         );
-                        *self.phase = Phase::Refreshing { follow_up: false };
+                        *self.phase = Phase::Refreshing {
+                            follow_up: RefreshFollowUp::None,
+                        };
                     }
                     continue;
                 }
@@ -686,7 +692,9 @@ impl ServeLoop<'_> {
                     self.sift_dir,
                     Arc::clone(self.pending),
                 );
-                *self.phase = Phase::Refreshing { follow_up: false };
+                *self.phase = Phase::Refreshing {
+                    follow_up: RefreshFollowUp::None,
+                };
                 continue;
             }
 
@@ -705,7 +713,9 @@ impl ServeLoop<'_> {
                         self.sift_dir,
                         Arc::clone(self.pending),
                     );
-                    *self.phase = Phase::Refreshing { follow_up: false };
+                    *self.phase = Phase::Refreshing {
+                        follow_up: RefreshFollowUp::None,
+                    };
                 }
                 LoopAction::Exit => return Ok(()),
             }
@@ -718,6 +728,44 @@ type PlatformWatcher = notify::PollWatcher;
 
 #[cfg(not(windows))]
 type PlatformWatcher = notify::RecommendedWatcher;
+
+fn new_platform_watcher(watcher_tx: mpsc::Sender<Event>) -> Result<PlatformWatcher, DaemonError> {
+    #[cfg(windows)]
+    let config = notify::Config::default().with_poll_interval(Duration::from_millis(DEBOUNCE_MS));
+    #[cfg(not(windows))]
+    let config = notify::Config::default();
+    PlatformWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = watcher_tx.send(Event::FsChange(event));
+            }
+        },
+        config,
+    )
+    .map_err(|e| DaemonError::message(e.to_string()))
+}
+
+fn watch_corpus(watcher: &mut PlatformWatcher, root: &Path) -> Result<(), DaemonError> {
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|e| DaemonError::message(e.to_string()))
+}
+
+fn rebind_watcher(
+    watcher: &mut PlatformWatcher,
+    watched_root: &mut PathBuf,
+    sift_dir: &Path,
+) -> Result<(), DaemonError> {
+    let meta = read_store_meta(sift_dir)?;
+    let root = meta.corpus.root;
+    if root == *watched_root {
+        return Ok(());
+    }
+    let _ = watcher.unwatch(watched_root.as_path());
+    watch_corpus(watcher, &root)?;
+    *watched_root = root;
+    Ok(())
+}
 
 fn spawn_refresh(
     scope: RefreshScope,
@@ -854,15 +902,27 @@ mod tests {
             deadline: Instant::now(),
         };
         let action = phase.advance(PhaseInput::DeadlineReached, DEBOUNCE, IDLE);
-        assert!(matches!(phase, Phase::Refreshing { follow_up: false }));
+        assert!(matches!(
+            phase,
+            Phase::Refreshing {
+                follow_up: RefreshFollowUp::None
+            }
+        ));
         assert_eq!(action, LoopAction::StartRefresh);
     }
 
     #[test]
     fn phase_refreshing_complete_with_follow_up_restarts_refresh() {
-        let mut phase = Phase::Refreshing { follow_up: true };
+        let mut phase = Phase::Refreshing {
+            follow_up: RefreshFollowUp::Queued,
+        };
         let action = phase.advance(PhaseInput::RefreshComplete, DEBOUNCE, IDLE);
-        assert!(matches!(phase, Phase::Refreshing { follow_up: false }));
+        assert!(matches!(
+            phase,
+            Phase::Refreshing {
+                follow_up: RefreshFollowUp::None
+            }
+        ));
         assert_eq!(action, LoopAction::StartRefresh);
     }
 
@@ -947,6 +1007,105 @@ mod tests {
 
         pending.reconcile(&sift_dir, &meta);
         assert!(pending.is_pending());
+    }
+
+    #[test]
+    fn rebind_watcher_skips_when_root_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+        std::fs::create_dir_all(&sift_dir).unwrap();
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: dir.path().to_path_buf(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
+            vec![IndexKind::Trigram],
+        );
+        StoreMeta::write(&meta, &sift_dir).unwrap();
+
+        let (tx, _rx) = mpsc::channel();
+        let mut watcher = new_platform_watcher(tx).unwrap();
+        let mut watched_root = dir.path().to_path_buf();
+        watch_corpus(&mut watcher, &watched_root).unwrap();
+
+        rebind_watcher(&mut watcher, &mut watched_root, &sift_dir).unwrap();
+        assert_eq!(watched_root, dir.path());
+    }
+
+    #[test]
+    fn rebind_watcher_switches_to_new_corpus_root() {
+        let dir = TempDir::new().unwrap();
+        let sift_dir = dir.path().join(".sift");
+        let old_root = dir.path().join("old");
+        let new_root = dir.path().join("new");
+        std::fs::create_dir_all(&old_root).unwrap();
+        std::fs::create_dir_all(&new_root).unwrap();
+        std::fs::create_dir_all(&sift_dir).unwrap();
+
+        StoreMeta::write(
+            &StoreMeta::new(
+                CorpusMeta {
+                    root: old_root.clone(),
+                    kind: CorpusKind::Directory,
+                    include_paths: Vec::new(),
+                    exclude_paths: Vec::new(),
+                },
+                WalkMeta {
+                    follow_links: false,
+                    one_file_system: false,
+                    max_depth: None,
+                    max_filesize: None,
+                },
+                FilterMeta {
+                    visibility: sift_core::VisibilityConfig::default(),
+                },
+                vec![IndexKind::Trigram],
+            ),
+            &sift_dir,
+        )
+        .unwrap();
+
+        let (tx, _rx) = mpsc::channel();
+        let mut watcher = new_platform_watcher(tx).unwrap();
+        let mut watched_root = old_root;
+        watch_corpus(&mut watcher, &watched_root).unwrap();
+
+        StoreMeta::write(
+            &StoreMeta::new(
+                CorpusMeta {
+                    root: new_root.clone(),
+                    kind: CorpusKind::Directory,
+                    include_paths: Vec::new(),
+                    exclude_paths: Vec::new(),
+                },
+                WalkMeta {
+                    follow_links: false,
+                    one_file_system: false,
+                    max_depth: None,
+                    max_filesize: None,
+                },
+                FilterMeta {
+                    visibility: sift_core::VisibilityConfig::default(),
+                },
+                vec![IndexKind::Trigram],
+            ),
+            &sift_dir,
+        )
+        .unwrap();
+
+        rebind_watcher(&mut watcher, &mut watched_root, &sift_dir).unwrap();
+        assert_eq!(watched_root, new_root);
     }
 
     #[test]
