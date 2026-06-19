@@ -35,6 +35,7 @@ struct CorpusPathCollector<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
+    max_filesize: Option<u64>,
     thread_paths: Vec<PathBuf>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
@@ -78,6 +79,11 @@ impl ParallelVisitor for CorpusPathCollector<'_> {
         }
 
         if entry.file_type().is_some_and(|ft| ft.is_file()) && !self.is_excluded(rel) {
+            if let Some(limit) = self.max_filesize
+                && entry.metadata().is_ok_and(|m| m.len() > limit)
+            {
+                return WalkState::Continue;
+            }
             self.thread_paths.push(rel.to_path_buf());
         }
         WalkState::Continue
@@ -114,6 +120,7 @@ struct CorpusPathCollectorBuilder<'a> {
     root: PathBuf,
     exclude_paths: &'a [PathBuf],
     include_paths: &'a [PathBuf],
+    max_filesize: Option<u64>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
 }
@@ -124,6 +131,7 @@ impl<'a> ParallelVisitorBuilder<'a> for CorpusPathCollectorBuilder<'a> {
             root: self.root.clone(),
             exclude_paths: self.exclude_paths,
             include_paths: self.include_paths,
+            max_filesize: self.max_filesize,
             thread_paths: Vec::new(),
             walk_error: Arc::clone(&self.walk_error),
             consolidated_paths: Arc::clone(&self.consolidated_paths),
@@ -153,6 +161,9 @@ impl<'a> CorpusWalker<'a> {
             .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
             .git_global(sources.contains(IgnoreSources::GLOBAL))
             .require_git(self.config.visibility.ignore.require_git);
+        if let Some(d) = self.config.walk.max_depth {
+            wb.max_depth(Some(d + 1));
+        }
         wb
     }
 
@@ -164,6 +175,7 @@ impl<'a> CorpusWalker<'a> {
             root: self.config.corpus.root.to_path_buf(),
             exclude_paths: self.config.corpus.exclude_paths,
             include_paths: self.config.corpus.include_paths,
+            max_filesize: self.config.walk.max_filesize,
             walk_error: Arc::clone(&walk_error),
             consolidated_paths: Arc::clone(&consolidated_paths),
         };

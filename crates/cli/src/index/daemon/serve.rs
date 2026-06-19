@@ -137,6 +137,8 @@ impl Daemon {
                 && matches!(input, CoordinatorInput::DeadlineReached)
                 && coalesce.lock().expect("coalesce lock").is_pending()
             {
+                // Drain queued IPC index work before exiting; idle timeout is not
+                // a hard guarantee while coalesce still has pending paths.
                 Self::spawn_refresh(
                     tx.clone(),
                     sift_dir.clone(),
@@ -322,7 +324,7 @@ impl Daemon {
             || event
                 .paths
                 .iter()
-                .all(|p| p.starts_with(canonical) || p.starts_with(raw))
+                .any(|p| p.starts_with(canonical) || p.starts_with(raw))
     }
 }
 

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.4.0](https://github.com/botirk38/sift/releases/tag/v0.4.0) — 2026-06-18
 
+### Breaking
+
+- `meta.json` layout changed (`corpus` / `walk` / `filters` nesting). Re-run `sift index build` after upgrading; old stores are not migrated automatically.
+
 ### Features
 
 - Modular index daemon with async `index update`, `--lazy` build, and search-triggered background indexing

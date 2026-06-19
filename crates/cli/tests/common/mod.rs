@@ -125,6 +125,7 @@ impl TestProject {
     pub fn sift_with_daemon(&self) -> Command {
         let mut cmd = Command::new(exe());
         cmd.current_dir(&self.root);
+        cmd.env_remove("SIFT_NO_DAEMON");
         cmd
     }
 

@@ -152,6 +152,7 @@ fn poll_until_indexed(sift_dir: &Path, rel: &str, timeout: Duration) {
 
 fn daemon_search(sift_dir: &Path, pattern: &str) -> Output {
     Command::new(sift_bin())
+        .env_remove("SIFT_NO_DAEMON")
         .arg("--sift-dir")
         .arg(sift_dir)
         .arg(pattern)
