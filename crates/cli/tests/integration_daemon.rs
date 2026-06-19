@@ -639,7 +639,10 @@ fn blocking_build_hands_off_to_daemon_watch() {
         }
         false
     };
-    assert!(daemon_locked, "daemon should hold lock after blocking build");
+    assert!(
+        daemon_locked,
+        "daemon should hold lock after blocking build"
+    );
 
     p.write("b.txt", "blocking_handoff_watch_marker\n");
 
