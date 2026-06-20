@@ -622,10 +622,7 @@ fn blocking_build_starts_daemon_for_watch() {
     let sift_dir = p.sift_dir().to_path_buf();
     let reachable_deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < reachable_deadline {
-        if Daemon::new(sift_dir.clone())
-            .ensure_running()
-            .is_ok()
-        {
+        if Daemon::new(sift_dir.clone()).ensure_running().is_ok() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
