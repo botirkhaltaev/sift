@@ -25,14 +25,14 @@ Two-layer flag model:
 | `grep/paths.rs` | `PathArgs` | `CorpusScope` | `CorpusScope::resolve` |
 | `grep/run.rs` | — | `GrepConfig`, `Grep`, `GrepOutcome` | `Grep::run` |
 | `index/mod.rs` | — | `IndexRequest`, `IndexJob` | `IndexJob::resolve`, `IndexJob::run` |
-| `index/daemon.rs` | — | `Daemon`, `DaemonOp`, `DaemonError` | `Daemon::send`, `Daemon::serve`, `Daemon::ensure_running` |
+| `index/daemon/mod.rs` | — | `Daemon`, `ServeConfig`, `DaemonError` | `Daemon::index`, `Daemon::ensure_running`, `Daemon::serve` |
 
 ## Structure
 
 - **`src/lib.rs`**: `main_entry`; re-exports `grep::*` and `index::daemon` for tests/benches.
 - **`src/cli.rs`**: `Cli` parser, config builders, `Cli::dispatch`.
 - **`src/update.rs`**: `sift update` (install script via curl).
-- **`src/index/`**: `IndexJob` / `IndexRequest` (build & update), `daemon.rs` (IPC, spawn, serve loop).
+- **`src/index/`**: `IndexJob` / `IndexRequest` (build & update), `index/daemon/mod.rs` (IPC, spawn, serve loop).
 - **`src/grep/`**: search domain — `argv`, `run`, `pattern`, `filter`, `output`, `paths`, `ignore`, `engine`.
 - **`src/main.rs`**: thin binary entrypoint calling `sift_grep::main_entry()`.
 - **`tests/common/mod.rs`**: shared test helpers: `TestProject`, assertion helpers, path normalization.

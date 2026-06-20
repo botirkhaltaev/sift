@@ -59,6 +59,8 @@ sift update
 curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/install.sh | sh
 ```
 
+Installs both `sift` and `sift-daemon` to `$PREFIX/bin` (default `$HOME/.local/bin`). Background indexing requires `sift-daemon` as a sibling of `sift` on PATH.
+
 Environment: `SIFT_REPO`, `SIFT_VERSION`, `PREFIX`, `BIN_DIR` (same as install.sh).
 
 ## Daemon
@@ -92,4 +94,4 @@ Full matrix: [docs/rg-compat-matrix.md](../../docs/rg-compat-matrix.md).
 cargo build --release -p sift-grep
 ```
 
-Binary name: `sift` (package `sift-grep` on crates.io).
+Produces `sift` and `sift-daemon` (package `sift-grep` on crates.io). Background indexing requires `sift-daemon` on PATH beside `sift`.

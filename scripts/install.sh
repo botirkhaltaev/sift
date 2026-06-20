@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Install the `sift` binary from GitHub Releases.
+# Install the `sift` and `sift-daemon` binaries from GitHub Releases.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/install.sh | sh
@@ -40,19 +40,51 @@ resolve_version() {
 	printf '%s\n' "$SIFT_DEFAULT_VERSION"
 }
 
-detect_asset() {
+detect_assets() {
 	_os=$(uname -s)
 	_arch=$(uname -m)
 	case "${_os}:${_arch}" in
-	Linux:x86_64) printf '%s\n' "sift-x86_64-unknown-linux-gnu" ;;
-	Linux:aarch64) printf '%s\n' "sift-aarch64-unknown-linux-gnu" ;;
-	Darwin:arm64) printf '%s\n' "sift-aarch64-apple-darwin" ;;
-	Darwin:x86_64) printf '%s\n' "sift-x86_64-apple-darwin" ;;
-	MINGW*|MSYS*|CYGWIN*) printf '%s\n' "sift-x86_64-pc-windows-msvc.exe" ;;
+	Linux:x86_64)
+		printf '%s\n' "sift-x86_64-unknown-linux-gnu"
+		printf '%s\n' "sift-daemon-x86_64-unknown-linux-gnu"
+		;;
+	Linux:aarch64)
+		printf '%s\n' "sift-aarch64-unknown-linux-gnu"
+		printf '%s\n' "sift-daemon-aarch64-unknown-linux-gnu"
+		;;
+	Darwin:arm64)
+		printf '%s\n' "sift-aarch64-apple-darwin"
+		printf '%s\n' "sift-daemon-aarch64-apple-darwin"
+		;;
+	Darwin:x86_64)
+		printf '%s\n' "sift-x86_64-apple-darwin"
+		printf '%s\n' "sift-daemon-x86_64-apple-darwin"
+		;;
+	MINGW*|MSYS*|CYGWIN*)
+		printf '%s\n' "sift-x86_64-pc-windows-msvc.exe"
+		printf '%s\n' "sift-daemon-x86_64-pc-windows-msvc.exe"
+		;;
 	*)
 		echo "install: unsupported OS/arch: ${_os} ${_arch}" >&2
 		echo "install: try: cargo install --locked --git https://github.com/${SIFT_REPO}.git sift-grep" >&2
 		exit 1
+		;;
+	esac
+}
+
+install_name() {
+	case "$1" in
+	*.exe)
+		case "$1" in
+		sift-daemon-*) printf '%s\n' "sift-daemon.exe" ;;
+		*) printf '%s\n' "sift.exe" ;;
+		esac
+		;;
+	sift-daemon-*)
+		printf '%s\n' "sift-daemon"
+		;;
+	*)
+		printf '%s\n' "sift"
 		;;
 	esac
 }
@@ -67,45 +99,48 @@ fallback_cargo() {
 	exit 0
 }
 
-VERSION=$(resolve_version)
-ASSET=$(detect_asset)
-TAG="v${VERSION}"
-URL="https://github.com/${SIFT_REPO}/releases/download/${TAG}/${ASSET}"
-
-case "$ASSET" in
-*.exe) _bin_name="sift.exe" ;;
-*) _bin_name="sift" ;;
-esac
-if [ -x "${BIN_DIR}/${_bin_name}" ]; then
-	_old_ver=$("${BIN_DIR}/${_bin_name}" --version 2>/dev/null || true)
-	echo "install: upgrading ${_bin_name} (${_old_ver:-unknown}) → ${TAG}" >&2
-fi
-
-TMP="${TMPDIR:-/tmp}"
-DEST="${TMP}/sift-install-$$"
-cleanup() {
-	rm -f "$DEST"
+install_release_assets() {
+	_sift_tmp="${TMPDIR:-/tmp}/sift-install-${SIFT_ASSET}-$$"
+	_daemon_tmp="${TMPDIR:-/tmp}/sift-install-${DAEMON_ASSET}-$$"
+	_sift_url="https://github.com/${SIFT_REPO}/releases/download/${TAG}/${SIFT_ASSET}"
+	_daemon_url="https://github.com/${SIFT_REPO}/releases/download/${TAG}/${DAEMON_ASSET}"
+	if ! curl -fsSL -o "$_sift_tmp" "$_sift_url"; then
+		rm -f "$_sift_tmp" "$_daemon_tmp"
+		return 1
+	fi
+	if ! curl -fsSL -o "$_daemon_tmp" "$_daemon_url"; then
+		rm -f "$_sift_tmp" "$_daemon_tmp"
+		return 1
+	fi
+	mv "$_sift_tmp" "${BIN_DIR}/${SIFT_BIN}"
+	mv "$_daemon_tmp" "${BIN_DIR}/${DAEMON_BIN}"
+	case "$SIFT_ASSET" in
+	*.exe) ;;
+	*) chmod +x "${BIN_DIR}/${SIFT_BIN}" "${BIN_DIR}/${DAEMON_BIN}" ;;
+	esac
+	return 0
 }
-trap cleanup EXIT
 
-if ! curl -fsSL -o "$DEST" "$URL"; then
-	fallback_cargo
+VERSION=$(resolve_version)
+TAG="v${VERSION}"
+ASSETS=$(detect_assets)
+SIFT_ASSET=$(printf '%s' "$ASSETS" | sed -n '1p')
+DAEMON_ASSET=$(printf '%s' "$ASSETS" | sed -n '2p')
+SIFT_BIN=$(install_name "$SIFT_ASSET")
+DAEMON_BIN=$(install_name "$DAEMON_ASSET")
+
+if [ -x "${BIN_DIR}/${SIFT_BIN}" ]; then
+	_old_ver=$("${BIN_DIR}/${SIFT_BIN}" --version 2>/dev/null || true)
+	echo "install: upgrading ${SIFT_BIN} (${_old_ver:-unknown}) → ${TAG}" >&2
 fi
 
 mkdir -p "$BIN_DIR"
-case "$ASSET" in
-*.exe)
-	OUT="$BIN_DIR/sift.exe"
-	mv "$DEST" "$OUT"
-	;;
-*)
-	OUT="$BIN_DIR/sift"
-	mv "$DEST" "$OUT"
-	chmod +x "$OUT"
-	;;
-esac
-trap - EXIT
-rm -f "$DEST" 2>/dev/null || true
 
-echo "Installed sift to ${OUT}"
+if ! install_release_assets; then
+	fallback_cargo
+fi
+
+echo "Installed sift and sift-daemon to ${BIN_DIR}"
+echo "  ${BIN_DIR}/${SIFT_BIN}"
+echo "  ${BIN_DIR}/${DAEMON_BIN}"
 echo "Ensure ${BIN_DIR} is on your PATH (e.g. export PATH=\"${BIN_DIR}:\$PATH\")"

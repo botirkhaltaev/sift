@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use clap::Parser;
-use sift_grep::index::daemon::Daemon;
+use sift_grep::index::daemon::{Daemon, ServeConfig};
 
 #[derive(Parser)]
 #[command(version, about = "Background index refresher for sift")]
@@ -31,12 +31,15 @@ fn main() {
     } else {
         Duration::from_secs(args.idle_timeout_secs)
     };
-    let daemon = Daemon {
-        sift_dir: args.sift_dir,
-        init_root: args.init_root,
-    };
+    let daemon = Daemon::bootstrap(args.sift_dir, args.init_root);
     let shutdown = AtomicBool::new(false);
-    if let Err(e) = daemon.serve(args.ready_file, idle_timeout, &shutdown) {
+    if let Err(e) = daemon.serve(
+        ServeConfig {
+            ready: args.ready_file,
+            idle_timeout,
+        },
+        &shutdown,
+    ) {
         eprintln!("sift-daemon: {e}");
         std::process::exit(1);
     }

@@ -15,6 +15,30 @@ fn exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_sift"))
 }
 
+/// Path to the `sift-daemon` binary for integration tests and subprocess spawns.
+pub fn daemon_bin() -> PathBuf {
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_sift-daemon") {
+        return PathBuf::from(path);
+    }
+    let sift = exe();
+    let deps_path = sift.with_file_name("sift-daemon");
+    if deps_path.exists() {
+        return deps_path;
+    }
+    #[cfg(windows)]
+    {
+        let deps_exe = sift.with_file_name("sift-daemon.exe");
+        if deps_exe.exists() {
+            return deps_exe;
+        }
+    }
+    sift.parent()
+        .and_then(Path::parent)
+        .map(|p| p.join("sift-daemon"))
+        .filter(|p| p.exists())
+        .unwrap_or(deps_path)
+}
+
 /// A temporary directory with helpers to write files, build indexes, and run
 /// `sift` in index or walk mode.
 ///
@@ -126,6 +150,7 @@ impl TestProject {
         let mut cmd = Command::new(exe());
         cmd.current_dir(&self.root);
         cmd.env_remove("SIFT_NO_DAEMON");
+        cmd.env("CARGO_BIN_EXE_sift-daemon", daemon_bin());
         cmd
     }
 
