@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/botirk38/sift/releases/tag/v0.5.0) — 2026-06-20
+
+### Breaking
+
+- Replace `Daemon::send` with `Daemon::index`; remove public `DaemonOp` export
+- `Daemon::serve` takes `ServeConfig` instead of loose arguments
+
+### Features
+
+- Ship `sift-daemon` in GitHub release assets and `install.sh`
+- Collapse daemon into `index/daemon/mod.rs` with inline `Daemon::serve` event loop
+
+### Refactor
+
+- Tighten daemon API: `Daemon::bootstrap`, `Daemon::executable`, domain methods on grouped serve types (#100)
+
 ## [0.4.0](https://github.com/botirk38/sift/releases/tag/v0.4.0) — 2026-06-18
 
 ### Breaking
