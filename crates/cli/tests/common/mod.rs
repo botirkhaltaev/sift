@@ -21,16 +21,24 @@ pub fn daemon_bin() -> PathBuf {
         return PathBuf::from(path);
     }
     let sift = exe();
-    let deps_path = sift.with_file_name("sift-daemon");
-    if deps_path.exists() {
-        return deps_path;
-    }
     #[cfg(windows)]
     {
         let deps_exe = sift.with_file_name("sift-daemon.exe");
         if deps_exe.exists() {
             return deps_exe;
         }
+        if let Some(debug_bin) = sift
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("sift-daemon.exe"))
+            .filter(|p| p.exists())
+        {
+            return debug_bin;
+        }
+    }
+    let deps_path = sift.with_file_name("sift-daemon");
+    if deps_path.exists() {
+        return deps_path;
     }
     sift.parent()
         .and_then(Path::parent)

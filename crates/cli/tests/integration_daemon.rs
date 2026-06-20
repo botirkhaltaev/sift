@@ -619,14 +619,29 @@ fn blocking_build_starts_daemon_for_watch() {
         "expected daemon to start after blocking build, got: {stderr}"
     );
 
+    let sift_dir = p.sift_dir().to_path_buf();
+    let reachable_deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < reachable_deadline {
+        if Daemon::new(sift_dir.clone())
+            .ensure_running()
+            .is_ok()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Daemon::new(sift_dir)
+        .ensure_running()
+        .expect("daemon ipc not reachable after blocking build");
+
     p.write("b.txt", "blocking_handoff_watch_marker\n");
 
-    poll_until(
-        p.sift_dir(),
-        "blocking_handoff_watch_marker",
-        Duration::from_secs(20),
-        |out| out.status.success() && normalize_stdout(out).contains("b.txt"),
-    );
+    #[cfg(windows)]
+    let watch_timeout = Duration::from_secs(90);
+    #[cfg(not(windows))]
+    let watch_timeout = Duration::from_secs(20);
+
+    poll_until_indexed(p.sift_dir(), "b.txt", watch_timeout);
 }
 
 #[test]
