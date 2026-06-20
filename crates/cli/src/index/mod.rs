@@ -16,7 +16,7 @@ use crate::grep::paths::CorpusScope;
 
 pub mod daemon;
 
-pub use daemon::{Daemon, DaemonError, DaemonOp};
+pub use daemon::{Daemon, DaemonError, ServeConfig};
 
 /// Which index subcommand was requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,7 +210,7 @@ impl IndexJob {
             return ExitCode::from(2);
         }
 
-        if let Err(e) = daemon.send(&DaemonOp::Index(Vec::new())) {
+        if let Err(e) = daemon.index(vec![]) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }

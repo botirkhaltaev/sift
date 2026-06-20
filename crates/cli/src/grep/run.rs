@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use sift_core::{CandidateFilter, CorpusKind, Indexes, SearchMode, SearchQuery};
 
-use crate::index::daemon::{Daemon, DaemonOp};
+use crate::index::daemon::Daemon;
 
 use super::argv::Argv;
 use super::filter::{FilterConfig, SearchFilterCtx};
@@ -250,7 +250,7 @@ impl Grep {
         if let Some(daemon) = daemon {
             let paths = session.indexes.unindexed_hits(grep_run.hits);
             if !paths.is_empty()
-                && let Err(e) = daemon.send(&DaemonOp::Index(paths))
+                && let Err(e) = daemon.index(paths)
             {
                 eprintln!("sift: warning: index request failed: {e}");
             }

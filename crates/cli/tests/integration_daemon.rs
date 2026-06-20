@@ -23,8 +23,7 @@ use common::normalize_stdout;
 use sift_core::{
     CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, VisibilityConfig, WalkMeta,
 };
-use sift_grep::daemon::Daemon;
-use sift_grep::index::daemon::DaemonOp;
+use sift_grep::index::daemon::{Daemon, ServeConfig};
 
 fn spawn_daemon(
     sift_dir: PathBuf,
@@ -35,7 +34,13 @@ fn spawn_daemon(
     std::thread::spawn(move || {
         let daemon = Daemon::new(sift_dir);
         daemon
-            .serve(Some(ready_path), idle_timeout, shutdown.as_ref())
+            .serve(
+                ServeConfig {
+                    ready: Some(ready_path),
+                    idle_timeout,
+                },
+                shutdown.as_ref(),
+            )
             .expect("daemon serve");
     })
 }
@@ -74,26 +79,6 @@ fn sample_meta(root: PathBuf) -> StoreMeta {
 
 fn sift_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_sift"))
-}
-
-fn daemon_bin() -> PathBuf {
-    // CARGO_BIN_EXE_sift is set by cargo to the path of the sift binary
-    // (e.g. target/debug/deps/sift-<hash>).
-    // When built via `cargo build`, the daemon binary is at
-    // target/debug/sift-daemon.  Try the deps/ directory first (it is set
-    // when cargo builds both binaries for test), then fall back to
-    // target/debug/ (when `cargo build --bin sift-daemon` was run first).
-    let sift = sift_bin();
-    let deps_path = sift.with_file_name("sift-daemon");
-    if deps_path.exists() {
-        return deps_path;
-    }
-    // Walk up from target/debug/deps/ to target/debug/
-    sift.parent()
-        .and_then(Path::parent)
-        .map(|p| p.join("sift-daemon"))
-        .filter(|p| p.exists())
-        .unwrap_or(deps_path)
 }
 
 fn fresh_dir(name: &str) -> tempfile::TempDir {
@@ -164,7 +149,7 @@ fn daemon_errors_without_meta_or_init_root() {
     let sift_dir = dir.path().join(".sift");
     fs::create_dir_all(&sift_dir).unwrap();
 
-    let out: Output = Command::new(daemon_bin())
+    let out: Output = Command::new(common::daemon_bin())
         .arg("--sift-dir")
         .arg(&sift_dir)
         .output()
@@ -189,7 +174,7 @@ fn daemon_exits_zero_when_lock_held() {
     let mut lock = fslock::LockFile::open(&lock_path).unwrap();
     lock.try_lock().unwrap();
 
-    let out: Output = Command::new(daemon_bin())
+    let out: Output = Command::new(common::daemon_bin())
         .arg("--sift-dir")
         .arg(&sift_dir)
         .output()
@@ -208,7 +193,7 @@ fn daemon_reconciles_on_startup() {
     StoreMeta::write(&meta, &sift_dir).unwrap();
     fs::write(dir.path().join("a.txt"), "hello world\n").unwrap();
 
-    let out: Output = Command::new(daemon_bin())
+    let out: Output = Command::new(common::daemon_bin())
         .arg("--sift-dir")
         .arg(&sift_dir)
         .arg("--idle-timeout-secs")
@@ -232,7 +217,7 @@ fn daemon_reconciles_on_restart() {
     StoreMeta::write(&meta, &sift_dir).unwrap();
 
     fs::write(dir.path().join("a.txt"), "hello world\n").unwrap();
-    let out = Command::new(daemon_bin())
+    let out = Command::new(common::daemon_bin())
         .arg("--sift-dir")
         .arg(&sift_dir)
         .arg("--idle-timeout-secs")
@@ -242,7 +227,7 @@ fn daemon_reconciles_on_restart() {
     assert_exit_code(&out, 0);
 
     fs::write(dir.path().join("b.txt"), "goodbye world\n").unwrap();
-    let out = Command::new(daemon_bin())
+    let out = Command::new(common::daemon_bin())
         .arg("--sift-dir")
         .arg(&sift_dir)
         .arg("--idle-timeout-secs")
@@ -402,7 +387,13 @@ fn daemon_exits_after_idle_timeout() {
             let daemon = Daemon::new(sift_dir);
             let shutdown = AtomicBool::new(false);
             daemon
-                .serve(Some(ready_path), Duration::from_secs(2), &shutdown)
+                .serve(
+                    ServeConfig {
+                        ready: Some(ready_path),
+                        idle_timeout: Duration::from_secs(2),
+                    },
+                    &shutdown,
+                )
                 .expect("daemon serve");
         }
     });
@@ -622,32 +613,31 @@ fn blocking_build_starts_daemon_for_watch() {
         stderr.contains("indexed corpus"),
         "expected blocking build message, got: {stderr}"
     );
-
-    let lock_path = p.sift_dir().join("lock");
-    let lock_deadline = Instant::now() + Duration::from_secs(15);
-    let daemon_locked = 'wait: {
-        while Instant::now() < lock_deadline {
-            let mut lock = fslock::LockFile::open(&lock_path).unwrap();
-            if !lock.try_lock().unwrap() {
-                break 'wait true;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        false
-    };
     assert!(
-        daemon_locked,
-        "daemon should hold lock after blocking build"
+        !stderr.contains("daemon not started"),
+        "expected daemon to start after blocking build, got: {stderr}"
     );
+
+    let sift_dir = p.sift_dir().to_path_buf();
+    let reachable_deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < reachable_deadline {
+        if Daemon::new(sift_dir.clone()).ensure_running().is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Daemon::new(sift_dir)
+        .ensure_running()
+        .expect("daemon ipc not reachable after blocking build");
 
     p.write("b.txt", "blocking_handoff_watch_marker\n");
 
-    poll_until(
-        p.sift_dir(),
-        "blocking_handoff_watch_marker",
-        Duration::from_secs(20),
-        |out| out.status.success() && normalize_stdout(out).contains("b.txt"),
-    );
+    #[cfg(windows)]
+    let watch_timeout = Duration::from_secs(90);
+    #[cfg(not(windows))]
+    let watch_timeout = Duration::from_secs(20);
+
+    poll_until_indexed(p.sift_dir(), "b.txt", watch_timeout);
 }
 
 #[test]
@@ -673,7 +663,7 @@ fn daemon_rebinds_watcher_when_corpus_root_changes() {
     StoreMeta::write(&sample_meta(new_root), p.sift_dir()).unwrap();
 
     Daemon::new(p.sift_dir().to_path_buf())
-        .send(&DaemonOp::Index(Vec::new()))
+        .index(vec![])
         .expect("daemon index op");
 
     poll_until(

@@ -10,7 +10,7 @@ Indexed grep for codebases. Build an index once, then search with a grep-like CL
 curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/install.sh | sh
 ```
 
-Installs to `$HOME/.local/bin/sift`. Override with `PREFIX=/usr/local`.
+Installs `sift` and `sift-daemon` to `$HOME/.local/bin`. Override with `PREFIX=/usr/local`.
 
 ### Updating
 
@@ -18,12 +18,13 @@ Installs to `$HOME/.local/bin/sift`. Override with `PREFIX=/usr/local`.
 sift update
 ```
 
-Or re-run the install script (same as a fresh install over the existing binary).
+Or re-run the install script (same as a fresh install over the existing binaries).
 
 ### From Source
 
 ```bash
 cargo build --release -p sift-grep
+# produces target/release/sift and target/release/sift-daemon
 ./target/release/sift --sift-dir .sift index build /path/to/corpus
 ./target/release/sift --sift-dir .sift "pattern"
 ```

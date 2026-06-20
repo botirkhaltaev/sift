@@ -15,6 +15,11 @@ fn exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_sift"))
 }
 
+/// Path to the `sift-daemon` binary for integration tests and subprocess spawns.
+pub fn daemon_bin() -> PathBuf {
+    sift_grep::index::daemon::Daemon::executable().expect("sift-daemon binary not found")
+}
+
 /// A temporary directory with helpers to write files, build indexes, and run
 /// `sift` in index or walk mode.
 ///
@@ -126,6 +131,7 @@ impl TestProject {
         let mut cmd = Command::new(exe());
         cmd.current_dir(&self.root);
         cmd.env_remove("SIFT_NO_DAEMON");
+        cmd.env("CARGO_BIN_EXE_sift-daemon", daemon_bin());
         cmd
     }
 
