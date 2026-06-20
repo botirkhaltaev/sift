@@ -95,8 +95,8 @@ fallback_cargo() {
 		exit 1
 	fi
 	echo "install: falling back to: cargo install --locked --git https://github.com/${SIFT_REPO}.git sift-grep" >&2
-	cargo install --locked --git "https://github.com/${SIFT_REPO}.git" sift-grep
-	exit 0
+	cargo install --locked --git "https://github.com/${SIFT_REPO}.git" sift-grep || exit 1
+	INSTALLED_DAEMON=1
 }
 
 install_release_assets() {
@@ -109,8 +109,15 @@ install_release_assets() {
 		return 1
 	fi
 	if ! curl -fsSL -o "$_daemon_tmp" "$_daemon_url"; then
-		rm -f "$_sift_tmp" "$_daemon_tmp"
-		return 1
+		rm -f "$_daemon_tmp"
+		mv "$_sift_tmp" "${BIN_DIR}/${SIFT_BIN}"
+		case "$SIFT_ASSET" in
+		*.exe) ;;
+		*) chmod +x "${BIN_DIR}/${SIFT_BIN}" ;;
+		esac
+		echo "install: ${TAG} has no ${DAEMON_ASSET} release asset; installed ${SIFT_BIN} only" >&2
+		INSTALLED_DAEMON=0
+		return 0
 	fi
 	mv "$_sift_tmp" "${BIN_DIR}/${SIFT_BIN}"
 	mv "$_daemon_tmp" "${BIN_DIR}/${DAEMON_BIN}"
@@ -118,6 +125,7 @@ install_release_assets() {
 	*.exe) ;;
 	*) chmod +x "${BIN_DIR}/${SIFT_BIN}" "${BIN_DIR}/${DAEMON_BIN}" ;;
 	esac
+	INSTALLED_DAEMON=1
 	return 0
 }
 
@@ -136,11 +144,18 @@ fi
 
 mkdir -p "$BIN_DIR"
 
+INSTALLED_DAEMON=0
+
 if ! install_release_assets; then
 	fallback_cargo
 fi
 
-echo "Installed sift and sift-daemon to ${BIN_DIR}"
-echo "  ${BIN_DIR}/${SIFT_BIN}"
-echo "  ${BIN_DIR}/${DAEMON_BIN}"
+if [ "$INSTALLED_DAEMON" = "1" ]; then
+	echo "Installed sift and sift-daemon to ${BIN_DIR}"
+	echo "  ${BIN_DIR}/${SIFT_BIN}"
+	echo "  ${BIN_DIR}/${DAEMON_BIN}"
+else
+	echo "Installed sift to ${BIN_DIR}"
+	echo "  ${BIN_DIR}/${SIFT_BIN}"
+fi
 echo "Ensure ${BIN_DIR} is on your PATH (e.g. export PATH=\"${BIN_DIR}:\$PATH\")"
