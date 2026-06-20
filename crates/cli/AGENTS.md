@@ -29,7 +29,7 @@ Two-layer flag model:
 
 ## Structure
 
-- **`src/lib.rs`**: `main_entry`; re-exports `grep::*` and `index::daemon` for tests/benches.
+- **`src/lib.rs`**: `main_entry`; re-exports `grep::*` for tests/benches.
 - **`src/cli.rs`**: `Cli` parser, config builders, `Cli::dispatch`.
 - **`src/update.rs`**: `sift update` (install script via curl).
 - **`src/index/`**: `IndexJob` / `IndexRequest` (build & update), `index/daemon/mod.rs` (IPC, spawn, serve loop).

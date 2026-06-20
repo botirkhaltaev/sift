@@ -63,7 +63,7 @@ pub struct ServeConfig {
 
 /// IPC operation sent to the index daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DaemonOp {
+pub(crate) enum DaemonOp {
     /// Rel-paths to index. Empty vec = full corpus.
     Index(Vec<PathBuf>),
 }
@@ -76,11 +76,6 @@ impl DaemonOp {
     #[must_use]
     pub const fn index(paths: Vec<PathBuf>) -> Self {
         Self::Index(paths)
-    }
-
-    #[must_use]
-    pub const fn full_corpus() -> Self {
-        Self::Index(Vec::new())
     }
 
     pub(crate) fn into_index_paths(self) -> Vec<PathBuf> {
@@ -283,12 +278,14 @@ impl Daemon {
                         && matches!(input, PhaseInput::DeadlineReached)
                         && PendingIndex::lock(&pending)?.is_pending()
                     {
-                        refresh.flush_pending(&mut phase);
+                        refresh.begin(RefreshScope::PendingOnly, &mut phase);
                     } else {
                         let action = phase.advance(input, debounce, idle_timeout);
                         match action {
                             LoopAction::None => {}
-                            LoopAction::StartRefresh => refresh.start(&mut phase),
+                            LoopAction::StartRefresh => {
+                                refresh.begin(RefreshScope::CorpusAndPending, &mut phase);
+                            }
                             LoopAction::Exit => return Ok(()),
                         }
                     }
@@ -490,7 +487,12 @@ impl Daemon {
         }
     }
 
-    fn executable() -> Result<PathBuf, DaemonError> {
+    /// Resolve the `sift-daemon` binary for spawn and integration tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if the current executable path cannot be read.
+    pub fn executable() -> Result<PathBuf, DaemonError> {
         if let Some(path) = std::env::var_os("CARGO_BIN_EXE_sift-daemon") {
             return Ok(PathBuf::from(path));
         }
@@ -835,23 +837,13 @@ impl IndexRefresh<'_> {
                 follow_up: RefreshFollowUp::Queued,
             };
         } else {
-            self.spawn(RefreshScope::CorpusAndPending);
-            *phase = Phase::Refreshing {
-                follow_up: RefreshFollowUp::None,
-            };
+            self.begin(RefreshScope::CorpusAndPending, phase);
         }
         Ok(())
     }
 
-    fn flush_pending(&self, phase: &mut Phase) {
-        self.spawn(RefreshScope::PendingOnly);
-        *phase = Phase::Refreshing {
-            follow_up: RefreshFollowUp::None,
-        };
-    }
-
-    fn start(&self, phase: &mut Phase) {
-        self.spawn(RefreshScope::CorpusAndPending);
+    fn begin(&self, scope: RefreshScope, phase: &mut Phase) {
+        self.spawn(scope);
         *phase = Phase::Refreshing {
             follow_up: RefreshFollowUp::None,
         };
@@ -908,9 +900,9 @@ mod tests {
     #[test]
     fn round_trip_index_full() {
         let mut buf = Vec::new();
-        DaemonOp::full_corpus().encode(&mut buf).unwrap();
+        DaemonOp::index(vec![]).encode(&mut buf).unwrap();
         let op = DaemonOp::decode(buf.as_slice()).unwrap();
-        assert_eq!(op, DaemonOp::full_corpus());
+        assert_eq!(op, DaemonOp::Index(vec![]));
     }
 
     #[cfg(unix)]

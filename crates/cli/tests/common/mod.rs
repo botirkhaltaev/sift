@@ -17,34 +17,7 @@ fn exe() -> PathBuf {
 
 /// Path to the `sift-daemon` binary for integration tests and subprocess spawns.
 pub fn daemon_bin() -> PathBuf {
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_sift-daemon") {
-        return PathBuf::from(path);
-    }
-    let sift = exe();
-    #[cfg(windows)]
-    {
-        let deps_exe = sift.with_file_name("sift-daemon.exe");
-        if deps_exe.exists() {
-            return deps_exe;
-        }
-        if let Some(debug_bin) = sift
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("sift-daemon.exe"))
-            .filter(|p| p.exists())
-        {
-            return debug_bin;
-        }
-    }
-    let deps_path = sift.with_file_name("sift-daemon");
-    if deps_path.exists() {
-        return deps_path;
-    }
-    sift.parent()
-        .and_then(Path::parent)
-        .map(|p| p.join("sift-daemon"))
-        .filter(|p| p.exists())
-        .unwrap_or(deps_path)
+    sift_grep::index::daemon::Daemon::executable().expect("sift-daemon binary not found")
 }
 
 /// A temporary directory with helpers to write files, build indexes, and run

@@ -23,8 +23,7 @@ use common::normalize_stdout;
 use sift_core::{
     CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, VisibilityConfig, WalkMeta,
 };
-use sift_grep::daemon::Daemon;
-use sift_grep::index::daemon::ServeConfig;
+use sift_grep::index::daemon::{Daemon, ServeConfig};
 
 fn spawn_daemon(
     sift_dir: PathBuf,
