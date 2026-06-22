@@ -128,6 +128,9 @@ impl<'a> JsonScan<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if scanning or writing output fails.
     pub fn run(
         &self,
         candidates: &[Candidate],

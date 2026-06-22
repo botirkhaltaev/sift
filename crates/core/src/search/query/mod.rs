@@ -66,7 +66,7 @@ impl SearchQuery {
     }
 
     #[must_use]
-    pub fn opts(&self) -> &SearchOptions {
+    pub const fn opts(&self) -> &SearchOptions {
         &self.opts
     }
 

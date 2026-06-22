@@ -182,35 +182,7 @@ impl Cli {
             },
             Some(Commands::Index { command }) => {
                 let daemon = self.paths.daemon();
-                let (path, indexes, operation, execution) = match command {
-                    IndexCommands::Build {
-                        path,
-                        indexes,
-                        lazy,
-                        wait,
-                    } => {
-                        let execution = if wait {
-                            IndexExecution::Blocking
-                        } else if lazy {
-                            IndexExecution::Background
-                        } else {
-                            IndexExecution::Blocking
-                        };
-                        (path, indexes, IndexOperation::Build, execution)
-                    }
-                    IndexCommands::Update {
-                        path,
-                        indexes,
-                        wait,
-                    } => {
-                        let execution = if wait {
-                            IndexExecution::Blocking
-                        } else {
-                            IndexExecution::Background
-                        };
-                        (path, indexes, IndexOperation::Update, execution)
-                    }
-                };
+                let (path, indexes, operation, execution) = command.into_request_parts();
                 let req = IndexRequest {
                     operation,
                     execution,
@@ -355,6 +327,47 @@ pub enum IndexCommands {
         #[arg(long)]
         wait: bool,
     },
+}
+
+impl IndexCommands {
+    fn into_request_parts(
+        self,
+    ) -> (
+        PathBuf,
+        Option<Vec<sift_core::IndexKind>>,
+        IndexOperation,
+        IndexExecution,
+    ) {
+        match self {
+            Self::Build {
+                path,
+                indexes,
+                lazy,
+                wait,
+            } => {
+                let execution = if wait {
+                    IndexExecution::Blocking
+                } else if lazy {
+                    IndexExecution::Background
+                } else {
+                    IndexExecution::Blocking
+                };
+                (path, indexes, IndexOperation::Build, execution)
+            }
+            Self::Update {
+                path,
+                indexes,
+                wait,
+            } => {
+                let execution = if wait {
+                    IndexExecution::Blocking
+                } else {
+                    IndexExecution::Background
+                };
+                (path, indexes, IndexOperation::Update, execution)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

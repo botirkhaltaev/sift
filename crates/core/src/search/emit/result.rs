@@ -14,6 +14,7 @@ pub struct ChunkOutput {
 }
 
 impl ChunkOutput {
+    #[must_use]
     pub const fn empty() -> Self {
         Self {
             bytes: Vec::new(),
@@ -22,6 +23,9 @@ impl ChunkOutput {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if writing to stdout fails.
     pub fn flush_all(
         outputs: impl IntoIterator<Item = Self>,
         bytes_printed: Option<&AtomicU64>,
