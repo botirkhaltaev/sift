@@ -165,118 +165,128 @@ impl Cli {
         }
     }
 
-    fn index_request(&self) -> IndexRequest {
-        let Commands::Index { command } = self.command.as_ref().expect("index subcommand") else {
-            unreachable!("index_request called without index subcommand");
-        };
-        let filter = self.filter_config();
-        let (path, indexes, operation, execution) = match command {
-            IndexCommands::Build {
-                path,
-                indexes,
-                lazy,
-                wait,
-            } => {
-                let execution = if *wait {
-                    IndexExecution::Blocking
-                } else if *lazy {
-                    IndexExecution::Background
-                } else {
-                    IndexExecution::Blocking
-                };
-                (
-                    path.clone(),
-                    indexes.clone(),
-                    IndexOperation::Build,
-                    execution,
-                )
-            }
-            IndexCommands::Update {
-                path,
-                indexes,
-                wait,
-            } => {
-                let execution = if *wait {
-                    IndexExecution::Blocking
-                } else {
-                    IndexExecution::Background
-                };
-                (
-                    path.clone(),
-                    indexes.clone(),
-                    IndexOperation::Update,
-                    execution,
-                )
-            }
-        };
-        IndexRequest {
-            operation,
-            execution,
-            path,
-            indexes,
-            sift_dir: self.paths.sift_dir.clone(),
-            follow_links: self.paths.follow,
-            one_file_system: self.walker_decl.one_file_system,
-            max_depth: filter.decl.max_depth,
-            max_filesize: filter.decl.max_filesize,
-        }
-    }
-
-    fn dispatch_route(&self) -> DispatchRoute {
-        if self.filter_decl.type_list {
-            return DispatchRoute::TypeList;
-        }
-        match &self.command {
-            Some(Commands::Update) => DispatchRoute::Update,
-            Some(Commands::Index { .. }) => DispatchRoute::Index(self.index_request()),
-            None => DispatchRoute::Grep,
-        }
-    }
-
     #[must_use]
-    pub fn dispatch(&self, argv: &Argv<'_>) -> ExitCode {
-        match self.dispatch_route() {
-            DispatchRoute::TypeList => {
-                TypeCatalog::from_decl(&self.filter_decl).print_list();
-                ExitCode::SUCCESS
-            }
-            DispatchRoute::Update => Self::exit_update(),
-            DispatchRoute::Index(req) => self.exit_index(req, argv),
-            DispatchRoute::Grep => self.exit_grep(argv),
+    pub fn dispatch(self, argv: &Argv<'_>) -> ExitCode {
+        if self.filter_decl.type_list {
+            TypeCatalog::from_decl(&self.filter_decl).print_list();
+            return ExitCode::SUCCESS;
         }
-    }
 
-    fn exit_update() -> ExitCode {
-        match update::run_binary_update() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("sift: {e}");
-                ExitCode::from(2)
+        match self.command {
+            Some(Commands::Update) => match update::run_binary_update() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("sift: {e}");
+                    ExitCode::from(2)
+                }
+            },
+            Some(Commands::Index { command }) => {
+                let daemon = self.paths.daemon();
+                let (path, indexes, operation, execution) = match command {
+                    IndexCommands::Build {
+                        path,
+                        indexes,
+                        lazy,
+                        wait,
+                    } => {
+                        let execution = if wait {
+                            IndexExecution::Blocking
+                        } else if lazy {
+                            IndexExecution::Background
+                        } else {
+                            IndexExecution::Blocking
+                        };
+                        (path, indexes, IndexOperation::Build, execution)
+                    }
+                    IndexCommands::Update {
+                        path,
+                        indexes,
+                        wait,
+                    } => {
+                        let execution = if wait {
+                            IndexExecution::Blocking
+                        } else {
+                            IndexExecution::Background
+                        };
+                        (path, indexes, IndexOperation::Update, execution)
+                    }
+                };
+                let req = IndexRequest {
+                    operation,
+                    execution,
+                    path,
+                    indexes,
+                    sift_dir: self.paths.sift_dir,
+                    follow_links: self.paths.follow,
+                    one_file_system: self.walker_decl.one_file_system,
+                    max_depth: self.filter_decl.max_depth,
+                    max_filesize: self.filter_decl.max_filesize,
+                };
+                match IndexJob::resolve(req) {
+                    Ok(index) => index.run(daemon.as_ref(), argv),
+                    Err(e) => {
+                        eprintln!("sift: {e}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+            None => {
+                let daemon = self.paths.daemon();
+                let search_paths = self.search_scope.paths;
+                let replace_trim = self.replace_decl.trim;
+                let max_count = self.paths.max_count;
+                let line_number = self.line_number_decl.line_number;
+                let follow_links = self.paths.follow;
+                let one_file_system = self.walker_decl.one_file_system;
+                let threads = self.threading.threads;
+                let path_separator = self.threading.path_separator;
+                let mode = if self.filter_decl.files {
+                    GrepMode::ListFiles
+                } else {
+                    GrepMode::Search
+                };
+
+                let grep = Grep::new(GrepConfig {
+                    pattern: PatternConfig {
+                        patterns: self.patterns,
+                        search_flags: self.search_flags,
+                        regex1: self.regex1,
+                        regex2: self.regex2,
+                        multiline: self.multiline_decl,
+                        engine: self.engine_decl,
+                        binary: self.binary_decl,
+                        replace: self.replace_decl,
+                        max_count,
+                    },
+                    filter: FilterConfig {
+                        decl: self.filter_decl,
+                        glob_patterns: self.glob_flags.glob,
+                        follow_links,
+                        one_file_system,
+                    },
+                    output: OutputConfig {
+                        column: self.column_decl,
+                        columns: self.columns_decl,
+                        extra: self.extra_output,
+                        replace_trim,
+                        path_separator,
+                        line_number,
+                        separators: self.separator_decl,
+                        search_paths: search_paths.clone(),
+                    },
+                    sift_dir: self.paths.sift_dir,
+                    search_paths,
+                    threads,
+                    mode,
+                });
+
+                let suppress_errors = SearchFilterCtx::resolve(argv)
+                    .ignore
+                    .msg_flags
+                    .contains(MessageFlags::NO_MESSAGES);
+                Self::exit_from_grep(grep.run(argv, daemon.as_ref()), suppress_errors)
             }
         }
-    }
-
-    fn exit_index(&self, req: IndexRequest, argv: &Argv<'_>) -> ExitCode {
-        let daemon = self.paths.daemon();
-        let index = match IndexJob::resolve(req) {
-            Ok(index) => index,
-            Err(e) => {
-                eprintln!("sift: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        index.run(daemon.as_ref(), argv)
-    }
-
-    fn exit_grep(&self, argv: &Argv<'_>) -> ExitCode {
-        let daemon = self.paths.daemon();
-        let grep = Grep::new(self.grep_config());
-
-        let suppress_errors = SearchFilterCtx::resolve(argv)
-            .ignore
-            .msg_flags
-            .contains(MessageFlags::NO_MESSAGES);
-        Self::exit_from_grep(grep.run(argv, daemon.as_ref()), suppress_errors)
     }
 
     fn exit_from_grep(
@@ -299,13 +309,6 @@ impl Cli {
             }
         }
     }
-}
-
-enum DispatchRoute {
-    TypeList,
-    Update,
-    Index(IndexRequest),
-    Grep,
 }
 
 #[derive(Subcommand)]
