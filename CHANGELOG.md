@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1](https://github.com/botirk38/sift/releases/tag/v0.5.1) — 2026-06-22
+
+### Features
+
+- `sift index build` now delegates to the daemon (async) by default, matching `sift index update` behavior; use `--wait` to opt into synchronous builds
+- Remove `--lazy` flag (async is now the default)
+
+### Fixes
+
+- `install.sh` success output for legacy releases and cargo fallback
+
+### Docs
+
+- Communicate composable index vision across README, AGENTS.md, and rustdoc
+
 ## [0.5.0](https://github.com/botirk38/sift/releases/tag/v0.5.0) — 2026-06-20
 
 ### Breaking

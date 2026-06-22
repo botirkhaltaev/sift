@@ -1,7 +1,9 @@
 //! Grep pipeline orchestration.
 //!
-//! Bridges the logical query, index planner, and candidate filter.
-//! This is the primary API the CLI calls.
+//! Bridges the query planner, index registry, candidate filter, and search
+//! engine into a single `GrepRequest::run()` call. This is the primary API
+//! the CLI calls. The pipeline is index-agnostic: it works with whatever
+//! index types the `Indexes` registry has opened.
 
 use std::path::PathBuf;
 

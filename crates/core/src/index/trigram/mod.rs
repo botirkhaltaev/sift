@@ -22,6 +22,16 @@ pub enum TrigramIndexError {
     Io(#[from] std::io::Error),
 }
 
+/// Opened trigram index with memory-mapped posting lists.
+///
+/// A trigram index is an inverted index mapping every 3-byte sequence found
+/// in the corpus to the set of files that contain it. At query time, required
+/// literals are extracted from the regex pattern, decomposed into trigrams,
+/// and intersected against the posting lists to produce a narrow candidate set.
+///
+/// This is the first shipped index type in Sift's composable index architecture.
+/// It sits alongside future index types (AST, dependency graph, vector) as a
+/// peer in the `Index` enum.
 #[derive(Debug)]
 pub struct TrigramIndex {
     root: PathBuf,

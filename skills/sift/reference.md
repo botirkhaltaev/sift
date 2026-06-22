@@ -5,9 +5,8 @@
 | Command | Purpose |
 |---------|---------|
 | `sift update` | Upgrade the installed **binary** (latest GitHub release) |
-| `sift index build [PATH]` | Create an index (blocking; fails if one already exists) |
-| `sift index build --lazy [PATH]` | Queue a full async build via the watch daemon |
-| `sift index build --wait [PATH]` | Explicit blocking build (default without `--lazy`) |
+| `sift index build [PATH]` | Create an index (async via daemon by default; fails if one already exists) |
+| `sift index build --wait [PATH]` | Blocking build (waits until complete) |
 | `sift index update [PATH]` | Incrementally refresh an existing index (async by default) |
 | `sift index update --wait [PATH]` | Blocking incremental refresh |
 | `sift PATTERN [PATH...]` | Search (indexed or walk mode) |
@@ -37,14 +36,13 @@ Patterns: positional, or `-e PATTERN`, or `-f FILE`. Multiple patterns are OR’
 
 ```bash
 sift --sift-dir .sift index build .
-sift --sift-dir .sift index build --lazy .
+sift --sift-dir .sift index build --wait .
 sift --sift-dir .sift index update .
 sift --sift-dir .sift index update --wait .
 sift --sift-dir .sift index build --indexes trigram .
 ```
 
-- `index build` is blocking unless `--lazy` (async via daemon IPC).
-- `index update` is async unless `--wait`.
+- `index build` and `index update` are both async via daemon by default; use `--wait` for blocking.
 - Search queues background indexing for unindexed hit paths (when the daemon is enabled).
 
 - `PATH` defaults to `.`; can be a single file (indexes parent directory).
@@ -65,7 +63,7 @@ Environment: `SIFT_REPO`, `SIFT_VERSION`, `PREFIX`, `BIN_DIR` (same as install.s
 
 ## Daemon
 
-After `index build --lazy`, `index update`, or search, sift may spawn `sift-daemon` to reconcile index work over IPC and refresh on filesystem changes. Disable for automation:
+After `index build`, `index update`, or search, sift may spawn `sift-daemon` to reconcile index work over IPC and refresh on filesystem changes. Disable for automation:
 
 ```bash
 export SIFT_NO_DAEMON=1

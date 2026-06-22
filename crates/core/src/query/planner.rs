@@ -14,7 +14,12 @@ pub enum CandidateRequirement {
     PotentialMatches,
 }
 
-/// Plans candidate selection by combining indexes and a lazy base provider.
+/// Plans candidate selection by consulting the index registry and falling back
+/// to a filesystem walk when no index can narrow the query.
+///
+/// The planner is the single coordination point between the search pipeline
+/// and the index layer. It is index-agnostic: it calls `Indexes::candidates()`
+/// without knowing which index types are present.
 pub struct QueryPlanner<'a> {
     spec: QuerySpec<'a>,
 }

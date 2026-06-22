@@ -1,4 +1,24 @@
-//! Fast indexed regex search over codebases — core engine.
+//! Composable indexed code search engine.
+//!
+//! `sift-core` builds on-disk indexes over codebases and uses them to narrow
+//! candidate files before running the full regex engine. The index layer is
+//! designed for multiple coexisting index types: each type independently
+//! narrows candidates, and the [`Indexes`] registry intersects their results.
+//!
+//! Today the shipped index type is a trigram index ([`TrigramIndex`]), which
+//! records overlapping 3-byte sequences and achieves up to 60x speedup over
+//! ripgrep on indexed queries. Additional index types (AST indexes, dependency
+//! graphs, vector indexes) can be added by extending the [`IndexKind`] and
+//! [`Index`] enums.
+//!
+//! # Architecture
+//!
+//! ```text
+//! IndexStore::build(kinds) -> snapshot with index artifacts
+//! Indexes::open(sift_dir)  -> registry of opened indexes
+//! QueryPlanner::candidates -> intersect index candidate sets
+//! SearchQuery::run          -> regex scan over narrowed candidates
+//! ```
 //!
 //! **Walking:** [`WalkBuilder`] from the [`ignore`] crate.
 

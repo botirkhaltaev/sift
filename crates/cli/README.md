@@ -1,15 +1,17 @@
 # sift-grep
 
-Grep-like CLI for indexed codebase search. Thin wrapper over `sift-core`: parses flags with clap, maps them to `SearchOptions`, and prints matches.
+Grep-like CLI for indexed codebase search. Thin wrapper over `sift-core`: parses flags with clap, maps them to core types, and prints matches.
+
+Sift currently ships a trigram index for literal search acceleration, but the CLI and core are designed for multiple composable index types. The `--indexes` flag on `sift index build` / `sift index update` selects which `IndexKind` variants to build; the search path is index-agnostic.
 
 ## Usage
 
 ```bash
-# Create an index (blocking)
+# Create an index (async via daemon by default)
 sift --sift-dir .sift index build /path/to/corpus
 
-# Create an index asynchronously (watch daemon required)
-sift --sift-dir .sift index build --lazy /path/to/corpus
+# Create an index synchronously (blocks until complete)
+sift --sift-dir .sift index build --wait /path/to/corpus
 
 # Refresh an existing index (async by default)
 sift --sift-dir .sift index update .
@@ -36,9 +38,12 @@ sift --json "pattern"      # JSON output
 
 | File | Description |
 |------|-------------|
-| [`src/main.rs`](src/main.rs) | thin binary entrypoint |
-| [`src/lib.rs`](src/lib.rs) | `main_entry`, `update`, `index` subcommands, search dispatch |
-| [`src/cli.rs`](src/cli.rs) | `Cli` (clap Parser), `Commands` / `IndexCommands` |
+| [`src/main.rs`](src/main.rs) | Thin binary entrypoint |
+| [`src/lib.rs`](src/lib.rs) | `main_entry`, re-exports for tests/benches |
+| [`src/cli.rs`](src/cli.rs) | `Cli` (clap Parser), config builders, `Cli::dispatch` |
+| [`src/update.rs`](src/update.rs) | `sift update` (install script via curl) |
+| [`src/index/`](src/index/) | `IndexJob` / `IndexRequest` (build & update), daemon IPC |
+| [`src/grep/`](src/grep/) | Search domain: argv, run, pattern, filter, output, paths, ignore |
 | [`tests/`](tests/) | Domain-focused integration tests spawning the real `sift` binary |
 
 ## Integration Tests

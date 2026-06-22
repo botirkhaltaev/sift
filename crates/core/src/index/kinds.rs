@@ -23,9 +23,17 @@ pub struct QueryPlanOutput {
 }
 
 /// Tag identifying an index kind for lifecycle dispatch (build, open, update).
+///
+/// Each variant corresponds to one type of on-disk index. The enum drives
+/// `build`, `open`, and `update` via match arms, so adding a new index type
+/// means adding a variant here and implementing those arms.
+///
+/// Today: `Trigram`. Future variants (AST, dependency graph, vector, etc.)
+/// will be added as the composable index architecture expands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IndexKind {
+    /// Trigram index: inverted index of overlapping 3-byte sequences.
     Trigram,
 }
 
@@ -140,8 +148,13 @@ impl std::str::FromStr for IndexKind {
     }
 }
 
-/// An opened index instance, used for search-time dispatch.
+/// An opened index instance, used for query-time candidate narrowing.
+///
+/// Each variant wraps a concrete index implementation. The `Indexes` registry
+/// opens all available indexes and calls `candidates()` on each, intersecting
+/// results to produce tighter narrowing than any single index alone.
 pub enum Index {
+    /// Opened trigram index with memory-mapped posting lists.
     Trigram(trigram::TrigramIndex),
 }
 

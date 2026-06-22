@@ -305,11 +305,7 @@ pub enum IndexCommands {
         #[arg(short, long, value_delimiter = ',')]
         indexes: Option<Vec<sift_core::IndexKind>>,
 
-        /// Write index metadata only; the daemon builds asynchronously.
-        #[arg(long)]
-        lazy: bool,
-
-        /// Block until the index build completes.
+        /// Block until the index build completes (default: async via daemon).
         #[arg(long)]
         wait: bool,
     },
@@ -342,15 +338,12 @@ impl IndexCommands {
             Self::Build {
                 path,
                 indexes,
-                lazy,
                 wait,
             } => {
                 let execution = if wait {
                     IndexExecution::Blocking
-                } else if lazy {
-                    IndexExecution::Background
                 } else {
-                    IndexExecution::Blocking
+                    IndexExecution::Background
                 };
                 (path, indexes, IndexOperation::Build, execution)
             }
@@ -501,23 +494,23 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_index_build_lazy_flag() {
-        let cli = Cli::try_parse_from(["sift", "index", "build", "--lazy"]).unwrap();
+    fn cli_parses_index_build_defaults_to_background() {
+        let cli = Cli::try_parse_from(["sift", "index", "build"]).unwrap();
         match cli.command {
             Some(Commands::Index {
-                command: IndexCommands::Build { lazy, .. },
-            }) => assert!(lazy),
+                command: IndexCommands::Build { wait, .. },
+            }) => assert!(!wait),
             _ => panic!("expected index build subcommand"),
         }
     }
 
     #[test]
-    fn cli_parses_index_build_without_lazy_flag() {
-        let cli = Cli::try_parse_from(["sift", "index", "build"]).unwrap();
+    fn cli_parses_index_build_wait_flag() {
+        let cli = Cli::try_parse_from(["sift", "index", "build", "--wait"]).unwrap();
         match cli.command {
             Some(Commands::Index {
-                command: IndexCommands::Build { lazy, .. },
-            }) => assert!(!lazy),
+                command: IndexCommands::Build { wait, .. },
+            }) => assert!(wait),
             _ => panic!("expected index build subcommand"),
         }
     }
