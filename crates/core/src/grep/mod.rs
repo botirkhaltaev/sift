@@ -43,7 +43,7 @@ impl GrepRequest<'_> {
     ///
     /// Returns an error if candidate resolution, regex compilation, or search execution fails.
     pub fn run(&self, query: &SearchQuery) -> crate::Result<GrepRun> {
-        if query.opts.max_results == Some(0) {
+        if query.opts().max_results == Some(0) {
             return Err(crate::Error::Search(SearchError::InvalidMaxCount));
         }
 
@@ -76,7 +76,7 @@ impl GrepRequest<'_> {
         }
 
         let (outcome, hits) = query.search(&SearchExecution {
-            candidates,
+            candidates: &candidates,
             output,
             separators: self.separators,
             collect: self.collect.with_hits(true),

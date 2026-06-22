@@ -20,7 +20,7 @@ use crate::grep::pattern::PatternConfig;
 use crate::grep::pattern::{
     BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope,
 };
-use crate::grep::run::{Grep, GrepConfig, GrepOutcome};
+use crate::grep::run::{Grep, GrepConfig, GrepMode, GrepOutcome};
 use crate::index::{IndexExecution, IndexJob, IndexOperation, IndexRequest};
 use crate::update;
 
@@ -157,7 +157,11 @@ impl Cli {
             sift_dir: self.paths.sift_dir.clone(),
             search_paths,
             threads: self.threading.threads,
-            files_mode: self.filter_decl.files,
+            mode: if self.filter_decl.files {
+                GrepMode::ListFiles
+            } else {
+                GrepMode::Search
+            },
         }
     }
 

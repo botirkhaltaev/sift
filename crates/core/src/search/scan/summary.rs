@@ -196,7 +196,7 @@ impl<'a> SummaryWorker<'a> {
         Self {
             searcher: scan
                 .search
-                .build_searcher(false, scan.search.opts.max_results, false),
+                .build_searcher(false, scan.search.opts().max_results, false),
             matcher: scan.matcher,
             output: scan.output,
             summary_counter: scan.counters.primary(),

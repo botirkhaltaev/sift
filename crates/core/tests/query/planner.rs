@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use sift_core::{
     Candidate, CandidateFilter, CandidateFilterConfig, CandidateRequirement, CorpusKind,
-    CorpusMeta, FilterMeta, GlobConfig, IndexConfig, IndexKind, IndexStore, IndexWalkOptions,
+    CorpusMeta, FilterMeta, GlobConfig, IndexConfig, IndexKind, IndexStore, IndexWalkConfig,
     Indexes, QueryFlags, QueryPlanner, QuerySpec, StoreMeta, VisibilityConfig, WalkMeta,
 };
 use tempfile::TempDir;
@@ -40,7 +40,7 @@ fn build_indexes(root: &Path, sift_dir: &Path) -> Indexes {
                     include_paths: &[],
                     exclude_paths: &[],
                 },
-                walk: IndexWalkOptions::new(false),
+                walk: IndexWalkConfig::new(false),
                 visibility: VisibilityConfig::default(),
             },
             &[],

@@ -19,7 +19,7 @@ pub struct WalkOptions {
 
 #[derive(Clone)]
 pub struct SearchExecution<'a> {
-    pub candidates: Vec<Candidate>,
+    pub candidates: &'a [Candidate],
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,

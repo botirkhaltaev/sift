@@ -326,7 +326,7 @@ impl Drop for WriteLockGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::config::WalkOptions;
+    use crate::index::config::IndexWalkConfig;
     use crate::index::meta::{CorpusMeta, FilterMeta, StoreMeta, WalkMeta};
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexKind};
     use crate::search::filter::VisibilityConfig;
@@ -368,7 +368,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         }
     }

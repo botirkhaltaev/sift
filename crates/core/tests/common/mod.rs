@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IgnoreConfig, IndexConfig, IndexKind,
-    IndexStore, IndexWalkOptions, Indexes, StoreMeta, TrigramIndex, VisibilityConfig, WalkMeta,
+    IndexStore, IndexWalkConfig, Indexes, StoreMeta, TrigramIndex, VisibilityConfig, WalkMeta,
 };
 
 pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexKind>) -> StoreMeta {
@@ -69,7 +69,7 @@ pub fn standard_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -
             include_paths: &[],
             exclude_paths,
         },
-        walk: IndexWalkOptions::new(false),
+        walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     }
 }
@@ -83,7 +83,7 @@ pub fn no_ignore_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) 
             include_paths: &[],
             exclude_paths,
         },
-        walk: IndexWalkOptions::new(false),
+        walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig {
             ignore: IgnoreConfig::disabled(),
             ..VisibilityConfig::default()
@@ -124,7 +124,7 @@ pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> TrigramIndex {
             include_paths: &include_paths,
             exclude_paths: &[],
         },
-        walk: IndexWalkOptions::new(false),
+        walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
     TrigramIndex::build(&config, trigram_dir, &[]).expect("build trigram index")

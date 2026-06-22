@@ -37,7 +37,7 @@ impl<'a> JsonWorker<'a> {
         Self {
             searcher: scan
                 .search
-                .build_searcher(true, scan.search.opts.max_results, true),
+                .build_searcher(true, scan.search.opts().max_results, true),
             matcher: scan.matcher,
             output: scan.output,
         }

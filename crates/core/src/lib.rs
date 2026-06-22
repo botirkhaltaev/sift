@@ -23,7 +23,7 @@ pub use search::{
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::config::WalkOptions as IndexWalkOptions;
+pub use index::config::IndexWalkConfig;
 pub use index::meta::StoreMeta;
 pub use index::store::IndexStore;
 pub use index::trigram::{TrigramIndex, TrigramIndexError};
@@ -86,7 +86,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: IndexWalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         TrigramIndex::build(&config, &trigram_dir, &[]).expect("build index")

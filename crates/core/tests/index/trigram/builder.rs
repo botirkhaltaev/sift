@@ -1,7 +1,7 @@
 use std::fs;
 
 use sift_core::{
-    CorpusKind, CorpusSpec, FileId, IndexConfig, IndexWalkOptions, TrigramIndex, VisibilityConfig,
+    CorpusKind, CorpusSpec, FileId, IndexConfig, IndexWalkConfig, TrigramIndex, VisibilityConfig,
 };
 use tempfile::TempDir;
 
@@ -23,7 +23,7 @@ fn persisted_index_reopens_with_same_files() {
             include_paths: &[],
             exclude_paths: &[],
         },
-        walk: IndexWalkOptions::new(false),
+        walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
     TrigramIndex::build(&config, &trigram_dir, &[]).expect("build");

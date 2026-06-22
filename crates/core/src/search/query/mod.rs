@@ -38,9 +38,9 @@ pub struct Match {
 
 #[derive(Debug)]
 pub struct SearchQuery {
-    pub patterns: Vec<String>,
-    pub opts: SearchOptions,
-    pub matcher: OnceLock<RegexMatcher>,
+    patterns: Vec<String>,
+    opts: SearchOptions,
+    matcher: OnceLock<RegexMatcher>,
 }
 
 impl SearchQuery {
@@ -63,6 +63,11 @@ impl SearchQuery {
     #[must_use]
     pub fn patterns(&self) -> &[String] {
         &self.patterns
+    }
+
+    #[must_use]
+    pub fn opts(&self) -> &SearchOptions {
+        &self.opts
     }
 
     pub(crate) fn build_query_spec(&self) -> QuerySpec<'_> {
@@ -97,7 +102,7 @@ impl SearchQuery {
         }
 
         let output = execution.output;
-        let candidates = &execution.candidates;
+        let candidates = execution.candidates;
 
         if candidates.is_empty() {
             return Ok((
@@ -413,6 +418,6 @@ mod tests {
         };
         let search = SearchQuery::new(&patterns, opts).expect("create search");
         assert_eq!(search.patterns(), &patterns);
-        assert!(search.opts.case_insensitive());
+        assert!(search.opts().case_insensitive());
     }
 }

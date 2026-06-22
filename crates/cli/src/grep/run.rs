@@ -10,6 +10,12 @@ use super::output::{FilenameContext, OutputArgv, OutputConfig, SearchOutputCtx};
 use super::paths::CorpusScope;
 use super::pattern::{PatternArgv, PatternConfig, ResolvedPatterns};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrepMode {
+    Search,
+    ListFiles,
+}
+
 /// Resolved configuration for a grep invocation.
 #[derive(Clone)]
 pub struct GrepConfig {
@@ -19,7 +25,7 @@ pub struct GrepConfig {
     pub sift_dir: PathBuf,
     pub search_paths: Vec<PathBuf>,
     pub threads: Option<usize>,
-    pub files_mode: bool,
+    pub mode: GrepMode,
 }
 
 /// Grep-mode search and file listing.
@@ -61,12 +67,13 @@ impl Grep {
     ///
     /// Returns an error if I/O operations fail, paths are invalid, or filter config building fails.
     pub fn run(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<GrepOutcome> {
-        if self.config.files_mode {
-            self.run_files(argv)
-                .map(|found| GrepOutcome::Files { found })
-        } else {
-            self.run_search(argv, daemon)
-                .map(|matched| GrepOutcome::Search { matched })
+        match self.config.mode {
+            GrepMode::ListFiles => self
+                .run_files(argv)
+                .map(|found| GrepOutcome::Files { found }),
+            GrepMode::Search => self
+                .run_search(argv, daemon)
+                .map(|matched| GrepOutcome::Search { matched }),
         }
     }
 
