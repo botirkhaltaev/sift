@@ -36,7 +36,7 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SearchLineStyle {
     pub filename_mode: FilenameMode,
     pub flags: LineStyleFlags,
@@ -66,24 +66,14 @@ impl SearchLineStyle {
     }
 }
 
-impl Default for SearchLineStyle {
-    fn default() -> Self {
-        Self {
-            filename_mode: FilenameMode::Auto,
-            flags: LineStyleFlags::empty(),
-            path_display: PathDisplay::default(),
-            columns: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecordTerminator {
+    #[default]
     Newline,
     Nul,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SearchRecordStyle {
     pub terminator: RecordTerminator,
     pub color: ColorChoice,
@@ -106,16 +96,6 @@ impl RecordTerminator {
         match self {
             Self::Nul => out.push(0),
             Self::Newline => out.push(b'\n'),
-        }
-    }
-}
-
-impl Default for SearchRecordStyle {
-    fn default() -> Self {
-        Self {
-            terminator: RecordTerminator::Newline,
-            color: ColorChoice::Auto,
-            path_separator: None,
         }
     }
 }

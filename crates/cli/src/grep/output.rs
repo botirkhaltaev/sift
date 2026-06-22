@@ -1,5 +1,5 @@
 use clap::{ArgAction, Args};
-use sift_core::{
+use sift_core::search::{
     ColorChoice, FilenameMode, LineStyleFlags, OutputEmission, PassthruMode, SearchLineStyle,
     SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
     ZeroCountMode,
@@ -544,20 +544,20 @@ impl SearchOutputCtx {
                 filename_mode: Self::filename_mode(self.lines.with_filename, filename_ctx),
                 flags: line_flags,
                 path_display,
-                columns: self.max_columns.map(|max| sift_core::ColumnLimit {
+                columns: self.max_columns.map(|max| sift_core::search::ColumnLimit {
                     max,
                     overflow: if self.columns.max_columns_preview {
-                        sift_core::ColumnOverflow::Preview
+                        sift_core::search::ColumnOverflow::Preview
                     } else {
-                        sift_core::ColumnOverflow::Omit
+                        sift_core::search::ColumnOverflow::Omit
                     },
                 }),
             },
             SearchRecordStyle {
                 terminator: if self.format.null_data {
-                    sift_core::RecordTerminator::Nul
+                    sift_core::search::RecordTerminator::Nul
                 } else {
-                    sift_core::RecordTerminator::Newline
+                    sift_core::search::RecordTerminator::Newline
                 },
                 color: self.format.color,
                 path_separator: self.path_separator,

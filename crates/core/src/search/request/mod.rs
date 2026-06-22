@@ -2,13 +2,14 @@ use crate::Candidate;
 use crate::search::output::SearchOutput;
 use crate::search::output::style::SearchSeparators;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkTraversal {
+    #[default]
     DoNotFollow,
     Follow,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WalkOptions {
     pub links: LinkTraversal,
     pub max_depth: Option<usize>,
@@ -16,20 +17,9 @@ pub struct WalkOptions {
     pub one_file_system: bool,
 }
 
-impl Default for WalkOptions {
-    fn default() -> Self {
-        Self {
-            links: LinkTraversal::DoNotFollow,
-            max_depth: None,
-            max_filesize: None,
-            one_file_system: false,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct SearchExecution<'a> {
-    pub candidates: Vec<Candidate>,
+    pub candidates: &'a [Candidate],
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,

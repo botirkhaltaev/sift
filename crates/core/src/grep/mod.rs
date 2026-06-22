@@ -8,16 +8,13 @@
 use std::path::PathBuf;
 
 use crate::Candidate;
-use crate::CandidateFilter;
-use crate::SearchOutput;
-use crate::SearchQuery;
-use crate::SearchSeparators;
-use crate::SearchStats;
 use crate::index::Indexes;
 use crate::query::QueryPlanner;
-use crate::search::SearchError;
-use crate::search::SearchOutcome;
 use crate::search::request::{SearchCollection, SearchExecution};
+use crate::search::{
+    CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
+    SearchStats,
+};
 use rayon::prelude::*;
 
 /// Result of the grep pipeline.
@@ -45,7 +42,7 @@ impl GrepRequest<'_> {
     ///
     /// Returns an error if candidate resolution, regex compilation, or search execution fails.
     pub fn run(&self, query: &SearchQuery) -> crate::Result<GrepRun> {
-        if query.opts.max_results == Some(0) {
+        if query.opts().max_results == Some(0) {
             return Err(crate::Error::Search(SearchError::InvalidMaxCount));
         }
 
@@ -78,7 +75,7 @@ impl GrepRequest<'_> {
         }
 
         let (outcome, hits) = query.search(&SearchExecution {
-            candidates,
+            candidates: &candidates,
             output,
             separators: self.separators,
             collect: self.collect.with_hits(true),

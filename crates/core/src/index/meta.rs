@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::search::filter::{CandidateFilter, VisibilityConfig};
 
-use super::config::{CorpusKind, CorpusSpec, IndexConfig, WalkOptions};
+use super::config::{CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig};
 use super::{IndexError, IndexKind};
 
 const META_FILE: &str = "meta.json";
@@ -117,7 +117,7 @@ impl StoreMeta {
                 include_paths: &self.corpus.include_paths,
                 exclude_paths: &self.corpus.exclude_paths,
             },
-            walk: WalkOptions {
+            walk: IndexWalkConfig {
                 follow_links: self.walk.follow_links,
                 one_file_system: self.walk.one_file_system,
                 max_depth: self.walk.max_depth,

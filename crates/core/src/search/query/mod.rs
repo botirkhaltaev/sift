@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::Instant;
 #[cfg(test)]
 use std::{io, path::Path};
@@ -7,7 +6,6 @@ use std::{io, path::Path};
 #[cfg(test)]
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
-use grep_searcher::Searcher;
 use std::sync::OnceLock;
 
 #[cfg(test)]
@@ -31,8 +29,6 @@ use crate::search::request::SearchExecution;
 
 pub mod matcher;
 
-type SearcherCacheEntry = ((bool, Option<usize>, usize, usize), Searcher);
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     pub file: std::path::PathBuf,
@@ -42,10 +38,9 @@ pub struct Match {
 
 #[derive(Debug)]
 pub struct SearchQuery {
-    pub patterns: Vec<String>,
-    pub opts: SearchOptions,
-    pub matcher: OnceLock<RegexMatcher>,
-    pub searcher_cache: Mutex<Option<SearcherCacheEntry>>,
+    patterns: Vec<String>,
+    opts: SearchOptions,
+    matcher: OnceLock<RegexMatcher>,
 }
 
 impl SearchQuery {
@@ -62,13 +57,17 @@ impl SearchQuery {
             patterns: patterns.to_vec(),
             opts,
             matcher: OnceLock::new(),
-            searcher_cache: Mutex::new(None),
         })
     }
 
     #[must_use]
     pub fn patterns(&self) -> &[String] {
         &self.patterns
+    }
+
+    #[must_use]
+    pub const fn opts(&self) -> &SearchOptions {
+        &self.opts
     }
 
     pub(crate) fn build_query_spec(&self) -> QuerySpec<'_> {
@@ -103,7 +102,7 @@ impl SearchQuery {
         }
 
         let output = execution.output;
-        let candidates = &execution.candidates;
+        let candidates = execution.candidates;
 
         if candidates.is_empty() {
             return Ok((
@@ -419,6 +418,6 @@ mod tests {
         };
         let search = SearchQuery::new(&patterns, opts).expect("create search");
         assert_eq!(search.patterns(), &patterns);
-        assert!(search.opts.case_insensitive());
+        assert!(search.opts().case_insensitive());
     }
 }

@@ -3,9 +3,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sift_core::{
-    CorpusMeta, FilterMeta, IndexKind, IndexStore, StoreMeta, VisibilityConfig, WalkMeta,
-};
+use sift_core::search::VisibilityConfig;
+use sift_core::{CorpusMeta, FilterMeta, IndexKind, IndexStore, StoreMeta, WalkMeta};
 
 use crate::grep::Argv;
 use std::str::FromStr;
@@ -244,7 +243,7 @@ impl IndexJob {
             FilterMeta {
                 visibility: VisibilityConfig {
                     hidden: ignore_res.hidden_mode(),
-                    ignore: sift_core::IgnoreConfig {
+                    ignore: sift_core::search::IgnoreConfig {
                         sources: ignore_res.sources,
                         require_git: ignore_res.require_git,
                         custom_files: Vec::new(),

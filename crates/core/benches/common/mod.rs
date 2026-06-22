@@ -12,9 +12,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use sift_core::{
-    CorpusKind, CorpusSpec, IndexConfig, IndexWalkOptions, TrigramIndex, VisibilityConfig,
-};
+use sift_core::search::VisibilityConfig;
+use sift_core::{CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, TrigramIndex};
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
 
@@ -95,7 +94,7 @@ pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
             include_paths: &include_paths,
             exclude_paths: &[],
         },
-        walk: IndexWalkOptions::new(false),
+        walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
     TrigramIndex::build(&config, idx_dir, &[]).unwrap();

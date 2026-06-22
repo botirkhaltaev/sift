@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::POSTINGS_MAGIC;
 
+use super::read_u32_le;
 use crate::index::mmap::mmap_open;
 
 #[derive(Debug)]
@@ -78,7 +79,7 @@ impl Postings {
                 "unexpected postings magic",
             ));
         }
-        let plen = u32::from_le_bytes(bytes[magic_len..magic_len + 4].try_into().unwrap()) as usize;
+        let plen = read_u32_le(bytes, magic_len) as usize;
         if bytes.len() < magic_len + 4 + plen {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
-use sift_core::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig};
+use sift_core::search::{
+    CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig,
+};
 
 use super::argv::Argv;
 use super::ignore::{IgnoreResolution, MessageFlags};
@@ -489,7 +491,7 @@ mod tests {
     #[test]
     fn search_filter_ctx_hidden_mode_include() {
         use crate::grep::ignore::IgnoreResolution;
-        use sift_core::IgnoreSources;
+        use sift_core::search::IgnoreSources;
         let ctx = SearchFilterCtx {
             ignore: IgnoreResolution {
                 hidden: true,
@@ -500,14 +502,14 @@ mod tests {
         };
         assert!(matches!(
             ctx.ignore.hidden_mode(),
-            sift_core::HiddenMode::Include
+            sift_core::search::HiddenMode::Include
         ));
     }
 
     #[test]
     fn search_filter_ctx_hidden_mode_respect() {
         use crate::grep::ignore::IgnoreResolution;
-        use sift_core::IgnoreSources;
+        use sift_core::search::IgnoreSources;
         let ctx = SearchFilterCtx {
             ignore: IgnoreResolution {
                 sources: IgnoreSources::empty(),
@@ -517,7 +519,7 @@ mod tests {
         };
         assert!(matches!(
             ctx.ignore.hidden_mode(),
-            sift_core::HiddenMode::Respect
+            sift_core::search::HiddenMode::Respect
         ));
     }
 

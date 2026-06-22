@@ -27,23 +27,15 @@ pub mod grep;
 pub use grep::GrepRun;
 mod index;
 pub mod query;
-mod search;
+pub mod search;
 
 pub use candidate::Candidate;
 
-pub use search::{
-    BinaryMode, CandidateFilter, CandidateFilterConfig, CaseMode, ColorChoice, ColumnLimit,
-    ColumnOverflow, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
-    PathDisplay, PatternCompiler, RecordTerminator, SearchCollection, SearchError, SearchLineStyle,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat,
-    SearchQuery, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig,
-    WalkOptions, ZeroCountMode,
-};
+pub use search::{SearchError, SearchOutcome, SearchQuery};
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::config::WalkOptions as IndexWalkOptions;
+pub use index::config::IndexWalkConfig;
 pub use index::meta::StoreMeta;
 pub use index::store::IndexStore;
 pub use index::trigram::{TrigramIndex, TrigramIndexError};
@@ -92,6 +84,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::{CaseMode, SearchOptions, VisibilityConfig};
     use std::fs;
     use tempfile::TempDir;
 
@@ -106,7 +99,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: IndexWalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         TrigramIndex::build(&config, &trigram_dir, &[]).expect("build index")

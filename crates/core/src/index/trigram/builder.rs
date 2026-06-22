@@ -434,10 +434,10 @@ impl IndexTables {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::config::WalkOptions;
+    use crate::index::config::IndexWalkConfig;
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig};
     use crate::search::filter::IgnoreConfig;
-    use crate::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
+    use crate::search::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -454,7 +454,7 @@ mod tests {
                     include_paths: &[],
                     exclude_paths: &[],
                 },
-                walk: WalkOptions::new(false),
+                walk: IndexWalkConfig::new(false),
                 visibility: VisibilityConfig {
                     ignore: IgnoreConfig::disabled(),
                     ..Default::default()
@@ -577,7 +577,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[PathBuf::from("excluded")],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
@@ -621,7 +621,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
@@ -643,7 +643,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
@@ -667,7 +667,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         let indexed = CorpusWalker::new(&config).collect().expect("walk corpus");
@@ -698,7 +698,7 @@ mod tests {
                 include_paths: &[PathBuf::from("keep.txt")],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig {
                 ignore: IgnoreConfig::disabled(),
                 ..Default::default()
@@ -725,7 +725,7 @@ mod tests {
                 include_paths: &[only_txt],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         let tables = IndexTables::build(&config, &[]).expect("build tables");
@@ -765,7 +765,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         let tables = IndexTables::build(&config, &[]).expect("build tables");
@@ -797,7 +797,7 @@ mod tests {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: WalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         let tables = IndexTables::build(&config, &[]).expect("build tables");

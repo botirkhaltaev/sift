@@ -1,7 +1,8 @@
+use sift_core::SearchQuery;
 use sift_core::grep::GrepRequest;
-use sift_core::{
+use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, SearchCollection, SearchOptions, SearchOutput,
-    SearchQuery, SearchSeparators,
+    SearchSeparators,
 };
 use tempfile::TempDir;
 

@@ -8,9 +8,10 @@ use std::fs;
 use std::hint::black_box;
 use std::path::Path;
 
+use sift_core::search::VisibilityConfig;
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexKind, IndexStore,
-    IndexWalkOptions, Indexes, QueryFlags, QuerySpec, StoreMeta, VisibilityConfig, WalkMeta,
+    IndexWalkConfig, Indexes, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
 };
 
 mod common;
@@ -101,7 +102,7 @@ fn standard_build_config<'a>(
             include_paths: &[],
             exclude_paths,
         },
-        walk: IndexWalkOptions::new(false),
+        walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     }
 }
@@ -299,7 +300,7 @@ fn bench_indexes_open(c: &mut Criterion) {
                             include_paths: &[],
                             exclude_paths: &[],
                         },
-                        walk: IndexWalkOptions::new(false),
+                        walk: IndexWalkConfig::new(false),
                         visibility: VisibilityConfig::default(),
                     },
                     &[],

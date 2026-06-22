@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use sift_core::{Indexes, PathDisplay, StoreMeta};
+use sift_core::search::PathDisplay;
+use sift_core::{Indexes, StoreMeta};
 
 #[derive(Args)]
 pub struct PathArgs {

@@ -42,6 +42,7 @@ pub struct TextStatsCounters {
 }
 
 impl TextStatsCounters {
+    #[must_use]
     pub const fn new(collect_stats: bool) -> Self {
         Self {
             primary: AtomicUsize::new(0),

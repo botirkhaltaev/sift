@@ -24,6 +24,7 @@ pub struct FileSummary {
 }
 
 impl FileSummary {
+    #[must_use]
     pub fn tally(&self, mode: SearchMode) -> usize {
         match mode {
             SearchMode::Count | SearchMode::CountMatches => self.count,
@@ -33,6 +34,7 @@ impl FileSummary {
         }
     }
 
+    #[must_use]
     pub const fn is_success(&self, mode: SearchMode) -> bool {
         match mode {
             SearchMode::Count | SearchMode::CountMatches => self.count > 0,
@@ -43,6 +45,7 @@ impl FileSummary {
         }
     }
 
+    #[must_use]
     pub const fn had_positive_hit(&self, mode: SearchMode) -> bool {
         match mode {
             SearchMode::Count | SearchMode::CountMatches => self.count > 0,
@@ -62,6 +65,7 @@ pub struct SummarySink {
 }
 
 impl SummarySink {
+    #[must_use]
     pub const fn new(mode: SearchMode, matcher: Option<RegexMatcher>) -> Self {
         Self {
             mode,
@@ -71,6 +75,7 @@ impl SummarySink {
         }
     }
 
+    #[must_use]
     pub fn finish(self) -> FileSummary {
         FileSummary {
             matched: self.matched,
@@ -196,7 +201,7 @@ impl<'a> SummaryWorker<'a> {
         Self {
             searcher: scan
                 .search
-                .build_searcher(false, scan.search.opts.max_results, false),
+                .build_searcher(false, scan.search.opts().max_results, false),
             matcher: scan.matcher,
             output: scan.output,
             summary_counter: scan.counters.primary(),
@@ -273,6 +278,9 @@ impl<'a> SummaryScan<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if scanning or writing output fails.
     pub fn run(
         &self,
         candidates: &[Candidate],

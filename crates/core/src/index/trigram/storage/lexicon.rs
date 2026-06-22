@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::LEXICON_MAGIC;
 
+use super::{read_u32_le, read_u64_le};
 use crate::index::mmap::mmap_open;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +91,7 @@ impl Lexicon {
                 "unexpected lexicon magic",
             ));
         }
-        let n = u32::from_le_bytes(bytes[magic_len..magic_len + 4].try_into().unwrap()) as usize;
+        let n = read_u32_le(bytes, magic_len) as usize;
         let expected_bytes = n * Self::ENTRY_SIZE;
         if bytes.len() < magic_len + 4 + expected_bytes {
             return Err(std::io::Error::new(
@@ -101,8 +102,8 @@ impl Lexicon {
         let entries = &bytes[magic_len + 4..];
         let mut prev: Option<([u8; 3], u64)> = None;
         for chunk in entries.chunks_exact(Self::ENTRY_SIZE) {
-            let tri: [u8; 3] = chunk[..3].try_into().unwrap();
-            let posting_off = u64::from_le_bytes(chunk[3..11].try_into().unwrap());
+            let tri: [u8; 3] = chunk[..3].try_into().expect("3-byte trigram");
+            let posting_off = read_u64_le(chunk, 3);
             if let Some((prev_tri, prev_off)) = prev {
                 if tri <= prev_tri {
                     return Err(std::io::Error::new(
@@ -154,16 +155,16 @@ impl Lexicon {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let offset = data_start + mid * Self::ENTRY_SIZE;
-            let entry_tri: [u8; 3] = bytes[offset..offset + 3].try_into().unwrap();
+            let entry_tri: [u8; 3] = bytes[offset..offset + 3]
+                .try_into()
+                .expect("3-byte trigram");
 
             match entry_tri.cmp(&tri) {
                 std::cmp::Ordering::Less => lo = mid + 1,
                 std::cmp::Ordering::Greater => hi = mid,
                 std::cmp::Ordering::Equal => {
-                    let off =
-                        u64::from_le_bytes(bytes[offset + 3..offset + 11].try_into().unwrap());
-                    let len =
-                        u32::from_le_bytes(bytes[offset + 11..offset + 15].try_into().unwrap());
+                    let off = read_u64_le(bytes, offset + 3);
+                    let len = read_u32_le(bytes, offset + 11);
                     return Some(LexiconEntry {
                         trigram: entry_tri,
                         offset: off,
@@ -188,8 +189,7 @@ impl Lexicon {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let off = data_start + mid * Self::ENTRY_SIZE + 3;
-            let entry_off =
-                u64::from_le_bytes(bytes[off..off + 8].try_into().expect("entry offset"));
+            let entry_off = read_u64_le(bytes, off);
             if entry_off <= offset {
                 lo = mid + 1;
             } else {
@@ -198,10 +198,7 @@ impl Lexicon {
         }
         if lo < self.count {
             let off = data_start + lo * Self::ENTRY_SIZE + 3;
-            usize::try_from(u64::from_le_bytes(
-                bytes[off..off + 8].try_into().expect("entry offset"),
-            ))
-            .unwrap_or(payload_len)
+            usize::try_from(read_u64_le(bytes, off)).unwrap_or(payload_len)
         } else {
             payload_len
         }
@@ -243,9 +240,11 @@ impl Iterator for LexiconIter<'_> {
         let bytes = self.lexicon.bytes();
         let magic_len = LEXICON_MAGIC.len();
         let offset = magic_len + 4 + self.pos * Lexicon::ENTRY_SIZE;
-        let tri: [u8; 3] = bytes[offset..offset + 3].try_into().unwrap();
-        let off = u64::from_le_bytes(bytes[offset + 3..offset + 11].try_into().unwrap());
-        let len = u32::from_le_bytes(bytes[offset + 11..offset + 15].try_into().unwrap());
+        let tri: [u8; 3] = bytes[offset..offset + 3]
+            .try_into()
+            .expect("3-byte trigram");
+        let off = read_u64_le(bytes, offset + 3);
+        let len = read_u32_le(bytes, offset + 11);
         self.pos += 1;
         Some(LexiconEntry {
             trigram: tri,

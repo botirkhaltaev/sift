@@ -54,8 +54,9 @@ impl Candidate {
             PathDisplay::Relative => self.rel_path().display().to_string(),
         };
         if let Some(sep) = path_separator {
-            let sep_char = sep as char;
-            raw.replace(std::path::MAIN_SEPARATOR, &sep_char.to_string())
+            let mut buf = [0u8; 4];
+            let sep_str = (sep as char).encode_utf8(&mut buf);
+            raw.replace(std::path::MAIN_SEPARATOR, sep_str)
         } else {
             raw
         }
@@ -72,6 +73,14 @@ impl Candidate {
     pub fn within_filesize(&self, max_filesize: Option<u64>) -> bool {
         max_filesize.is_none_or(|limit| {
             std::fs::metadata(&self.abs_path).map_or(true, |m| m.len() <= limit)
+        })
+    }
+
+    /// Sum on-disk byte sizes for all candidates (used for search stats).
+    #[must_use]
+    pub fn total_file_bytes(candidates: &[Self]) -> u64 {
+        candidates.iter().fold(0u64, |acc, c| {
+            acc + std::fs::metadata(c.abs_path()).map_or(0, |m| m.len())
         })
     }
 

@@ -365,7 +365,7 @@ impl<'a> StandardWorker<'a> {
         Self {
             searcher: scan.search.build_searcher(
                 scan.output.lines.line_number(),
-                scan.search.opts.max_results,
+                scan.search.opts().max_results,
                 true,
             ),
             matcher: scan.matcher,
@@ -374,10 +374,10 @@ impl<'a> StandardWorker<'a> {
             bytes: Vec::new(),
             match_counter: scan.counters.primary(),
             files_with_matches: scan.counters.files_with_matches(),
-            replace: scan.search.opts.replace.clone(),
+            replace: scan.search.opts().replace.clone(),
             sink_config: SinkConfig {
-                before_context: scan.search.opts.before_context,
-                after_context: scan.search.opts.after_context,
+                before_context: scan.search.opts().before_context,
+                after_context: scan.search.opts().after_context,
             },
             records: scan.output.records,
             lines_flags: scan.output.lines.flags,
@@ -494,6 +494,9 @@ impl<'a> StandardScan<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if scanning or writing output fails.
     pub fn run(
         &self,
         candidates: &[Candidate],
