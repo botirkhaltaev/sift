@@ -7,11 +7,11 @@ Sift currently ships a trigram index for literal search acceleration, but the CL
 ## Usage
 
 ```bash
-# Create an index (blocking)
+# Create an index (async via daemon by default)
 sift --sift-dir .sift index build /path/to/corpus
 
-# Create an index asynchronously (watch daemon required)
-sift --sift-dir .sift index build --lazy /path/to/corpus
+# Create an index synchronously (blocks until complete)
+sift --sift-dir .sift index build --wait /path/to/corpus
 
 # Refresh an existing index (async by default)
 sift --sift-dir .sift index update .

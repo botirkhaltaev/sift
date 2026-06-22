@@ -127,7 +127,7 @@ sift/
 
 ## Differences from ripgrep
 
-- Requires a **prior index** (`sift index build`, or `sift index build --lazy` with the watch daemon) before searching; refresh with `sift index update` (async by default) or `sift index update --wait`.
+- Requires a **prior index** (`sift index build`) before searching; both `build` and `update` are async via the daemon by default — use `--wait` for synchronous behavior.
 - Search automatically queues background indexing for unindexed files touched during a walk (disable the daemon with `SIFT_NO_DAEMON=1` to skip).
 - Search paths must sit **under** the indexed corpus root.
 - Uses `--no-filename` instead of `-h` (which is help).
@@ -160,7 +160,7 @@ This release is a stable baseline for indexed search, not a full ripgrep drop-in
 **Shipped**
 
 - **Trigram index** -- candidate narrowing with full-scan fallback when the planner cannot extract literals.
-- **Index lifecycle** -- `sift index build`, `sift index build --lazy`, async `sift index update`, and the watch daemon for background reconciliation.
+- **Index lifecycle** -- `sift index build` and `sift index update` (both async via daemon by default, `--wait` for blocking), and the watch daemon for background reconciliation.
 - **Composable index architecture** -- `IndexKind` dispatch, `Indexes` registry with multi-index intersection, snapshot-based atomic persistence. Ready for additional index types.
 - **Documented rg flags** -- behavior tracked in [`docs/rg-compat-matrix.md`](docs/rg-compat-matrix.md) with golden CLI tests for implemented rows.
 
