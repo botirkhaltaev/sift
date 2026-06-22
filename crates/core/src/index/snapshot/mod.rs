@@ -31,7 +31,6 @@ struct CurrentSnapshot {
     lease: SnapshotLease,
 }
 
-
 impl Snapshot {
     #[must_use]
     pub(crate) const fn empty(root: PathBuf) -> Self {

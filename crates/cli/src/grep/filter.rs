@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
-use sift_core::search::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig};
+use sift_core::search::{
+    CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig,
+};
 
 use super::argv::Argv;
 use super::ignore::{IgnoreResolution, MessageFlags};

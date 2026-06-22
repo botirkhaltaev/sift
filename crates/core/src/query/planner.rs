@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use crate::Candidate;
 use crate::StoreMeta;
-use crate::search::CandidateFilter;
 use crate::index::Indexes;
 use crate::query::QuerySpec;
+use crate::search::CandidateFilter;
 
 /// Whether search needs all candidate paths or only potential matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

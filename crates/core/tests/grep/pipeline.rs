@@ -1,9 +1,9 @@
+use sift_core::SearchQuery;
 use sift_core::grep::GrepRequest;
 use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, SearchCollection, SearchOptions, SearchOutput,
     SearchSeparators,
 };
-use sift_core::SearchQuery;
 use tempfile::TempDir;
 
 use super::common::{build_store, make_parity_corpus, open_indexes};

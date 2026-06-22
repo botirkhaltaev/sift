@@ -6,8 +6,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::search::{CaseMode, PatternCompiler, SearchOptions};
 use sift_core::SearchQuery;
+use sift_core::search::{CaseMode, PatternCompiler, SearchOptions};
 
 fn sift_criterion() -> Criterion {
     Criterion::default()

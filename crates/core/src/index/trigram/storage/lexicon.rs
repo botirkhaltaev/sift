@@ -155,7 +155,9 @@ impl Lexicon {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let offset = data_start + mid * Self::ENTRY_SIZE;
-            let entry_tri: [u8; 3] = bytes[offset..offset + 3].try_into().expect("3-byte trigram");
+            let entry_tri: [u8; 3] = bytes[offset..offset + 3]
+                .try_into()
+                .expect("3-byte trigram");
 
             match entry_tri.cmp(&tri) {
                 std::cmp::Ordering::Less => lo = mid + 1,
@@ -238,7 +240,9 @@ impl Iterator for LexiconIter<'_> {
         let bytes = self.lexicon.bytes();
         let magic_len = LEXICON_MAGIC.len();
         let offset = magic_len + 4 + self.pos * Lexicon::ENTRY_SIZE;
-        let tri: [u8; 3] = bytes[offset..offset + 3].try_into().expect("3-byte trigram");
+        let tri: [u8; 3] = bytes[offset..offset + 3]
+            .try_into()
+            .expect("3-byte trigram");
         let off = read_u64_le(bytes, offset + 3);
         let len = read_u32_le(bytes, offset + 11);
         self.pos += 1;

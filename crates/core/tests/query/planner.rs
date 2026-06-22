@@ -1,9 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sift_core::search::{
-    CandidateFilter, CandidateFilterConfig, GlobConfig, VisibilityConfig,
-};
+use sift_core::search::{CandidateFilter, CandidateFilterConfig, GlobConfig, VisibilityConfig};
 use sift_core::{
     Candidate, CandidateRequirement, CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexKind,
     IndexStore, IndexWalkConfig, Indexes, QueryFlags, QueryPlanner, QuerySpec, StoreMeta, WalkMeta,
