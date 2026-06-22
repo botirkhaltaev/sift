@@ -61,15 +61,11 @@ fn index_build_twice_exits_2() {
 }
 
 #[test]
-fn lazy_build_without_daemon_exits_2() {
-    let p = TestProject::new("errors-lazy-no-daemon");
+fn build_without_daemon_exits_2() {
+    let p = TestProject::new("errors-build-no-daemon");
     p.write("a.txt", "hello\n");
 
-    let out = p
-        .sift()
-        .args(["index", "build", "--lazy"])
-        .output()
-        .unwrap();
+    let out = p.sift().args(["index", "build"]).output().unwrap();
     assert_exit_code(&out, 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
