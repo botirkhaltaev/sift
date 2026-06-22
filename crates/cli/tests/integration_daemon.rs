@@ -20,9 +20,8 @@ use common::assert_success;
 use common::normalize;
 use common::normalize_stderr;
 use common::normalize_stdout;
-use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, VisibilityConfig, WalkMeta,
-};
+use sift_core::search::VisibilityConfig;
+use sift_core::{CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, WalkMeta};
 use sift_grep::index::daemon::{Daemon, ServeConfig};
 
 fn spawn_daemon(

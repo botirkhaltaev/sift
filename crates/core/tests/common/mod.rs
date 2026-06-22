@@ -5,9 +5,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use sift_core::search::{IgnoreConfig, VisibilityConfig};
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IgnoreConfig, IndexConfig, IndexKind,
-    IndexStore, IndexWalkConfig, Indexes, StoreMeta, TrigramIndex, VisibilityConfig, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexKind, IndexStore,
+    IndexWalkConfig, Indexes, StoreMeta, TrigramIndex, WalkMeta,
 };
 
 pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexKind>) -> StoreMeta {

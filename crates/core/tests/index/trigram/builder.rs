@@ -1,8 +1,7 @@
 use std::fs;
 
-use sift_core::{
-    CorpusKind, CorpusSpec, FileId, IndexConfig, IndexWalkConfig, TrigramIndex, VisibilityConfig,
-};
+use sift_core::search::VisibilityConfig;
+use sift_core::{CorpusKind, CorpusSpec, FileId, IndexConfig, IndexWalkConfig, TrigramIndex};
 use tempfile::TempDir;
 
 #[test]

@@ -7,19 +7,11 @@ pub mod grep;
 pub use grep::GrepRun;
 mod index;
 pub mod query;
-mod search;
+pub mod search;
 
 pub use candidate::Candidate;
 
-pub use search::{
-    BinaryMode, CandidateFilter, CandidateFilterConfig, CaseMode, ColorChoice, ColumnLimit,
-    ColumnOverflow, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
-    PathDisplay, PatternCompiler, RecordTerminator, SearchCollection, SearchError, SearchLineStyle,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat,
-    SearchQuery, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig,
-    WalkOptions, ZeroCountMode,
-};
+pub use search::{SearchError, SearchOutcome, SearchQuery};
 
 pub use ignore::{Walk, WalkBuilder};
 
@@ -72,6 +64,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::{CaseMode, SearchOptions, VisibilityConfig};
     use std::fs;
     use tempfile::TempDir;
 

@@ -6,7 +6,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::{CaseMode, PatternCompiler, SearchOptions, SearchQuery};
+use sift_core::search::{CaseMode, PatternCompiler, SearchOptions};
+use sift_core::SearchQuery;
 
 fn sift_criterion() -> Criterion {
     Criterion::default()
@@ -84,7 +85,7 @@ fn bench_compiled_search_new(c: &mut Criterion) {
 
     g.bench_function("case_insensitive", |b| {
         let pats = vec!["hello".to_string()];
-        let opts = sift_core::SearchOptions {
+        let opts = SearchOptions {
             case_mode: CaseMode::Insensitive,
             ..Default::default()
         };

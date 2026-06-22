@@ -362,7 +362,7 @@ impl Daemon {
                         max_filesize: None,
                     },
                     FilterMeta {
-                        visibility: sift_core::VisibilityConfig::default(),
+                        visibility: sift_core::search::VisibilityConfig::default(),
                     },
                     IndexKind::ALL.to_vec(),
                 ))
@@ -881,7 +881,7 @@ impl IndexRefresh<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sift_core::VisibilityConfig;
+    use sift_core::search::VisibilityConfig;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
 

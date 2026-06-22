@@ -437,7 +437,7 @@ mod tests {
     use crate::index::config::IndexWalkConfig;
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig};
     use crate::search::filter::IgnoreConfig;
-    use crate::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
+    use crate::search::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;

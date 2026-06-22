@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use sift_core::{CandidateFilter, CorpusKind, Indexes, SearchMode, SearchQuery};
+use sift_core::search::{CandidateFilter, SearchMode};
+use sift_core::{CorpusKind, Indexes, SearchQuery};
 
 use crate::index::daemon::Daemon;
 
@@ -117,11 +118,11 @@ impl Grep {
         let output_argv = OutputArgv::resolve(argv);
         let session = self.prepare_session(argv)?;
 
-        let walk_opts = sift_core::WalkOptions {
+        let walk_opts = sift_core::search::WalkOptions {
             links: if session.search_filter.follow_links() {
-                sift_core::LinkTraversal::Follow
+                sift_core::search::LinkTraversal::Follow
             } else {
-                sift_core::LinkTraversal::DoNotFollow
+                sift_core::search::LinkTraversal::DoNotFollow
             },
             max_depth: session.search_filter.max_depth(),
             max_filesize: session.search_filter.max_filesize(),
@@ -246,7 +247,7 @@ impl Grep {
             filter: &session.search_filter,
             output,
             separators: &out.separators,
-            collect: sift_core::SearchCollection::hits().with_stats(out.print_stats),
+            collect: sift_core::search::SearchCollection::hits().with_stats(out.print_stats),
             store_meta: session.store_meta.as_ref(),
             walk_unindexed: daemon.is_some(),
         }

@@ -1,10 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use sift_core::search::{
+    CandidateFilter, CandidateFilterConfig, GlobConfig, VisibilityConfig,
+};
 use sift_core::{
-    Candidate, CandidateFilter, CandidateFilterConfig, CandidateRequirement, CorpusKind,
-    CorpusMeta, FilterMeta, GlobConfig, IndexConfig, IndexKind, IndexStore, IndexWalkConfig,
-    Indexes, QueryFlags, QueryPlanner, QuerySpec, StoreMeta, VisibilityConfig, WalkMeta,
+    Candidate, CandidateRequirement, CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexKind,
+    IndexStore, IndexWalkConfig, Indexes, QueryFlags, QueryPlanner, QuerySpec, StoreMeta, WalkMeta,
 };
 use tempfile::TempDir;
 

@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion};
 use std::hint::black_box;
 
-use sift_core::SearchMode;
+use sift_core::search::SearchMode;
 use sift_grep::Argv;
 use sift_grep::output::{OutputArgv, SearchOutputCtx};
 use sift_grep::pattern::PatternArgv;

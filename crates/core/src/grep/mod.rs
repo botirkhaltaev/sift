@@ -6,16 +6,13 @@
 use std::path::PathBuf;
 
 use crate::Candidate;
-use crate::CandidateFilter;
-use crate::SearchOutput;
-use crate::SearchQuery;
-use crate::SearchSeparators;
-use crate::SearchStats;
 use crate::index::Indexes;
 use crate::query::QueryPlanner;
-use crate::search::SearchError;
-use crate::search::SearchOutcome;
 use crate::search::request::{SearchCollection, SearchExecution};
+use crate::search::{
+    CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
+    SearchStats,
+};
 use rayon::prelude::*;
 
 /// Result of the grep pipeline.

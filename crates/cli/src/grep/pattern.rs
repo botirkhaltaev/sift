@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
-use sift_core::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions};
+use sift_core::search::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions};
 
 use super::argv::Argv;
 use super::engine::{EngineDecl, MultilineDecl};

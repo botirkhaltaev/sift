@@ -1,4 +1,4 @@
-use sift_core::{
+use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, HiddenMode, IgnoreConfig, IgnoreSources,
     VisibilityConfig,
 };

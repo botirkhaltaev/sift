@@ -7,11 +7,11 @@ use std::hint::black_box;
 use std::path::Path;
 
 use sift_core::grep::GrepRequest;
-use sift_core::{
-    CandidateFilter, CandidateFilterConfig, ColorChoice, Index, Indexes, OutputEmission,
-    SearchCollection, SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchQuery,
-    SearchRecordStyle, SearchSeparators, TrigramIndex,
+use sift_core::search::{
+    CandidateFilter, CandidateFilterConfig, ColorChoice, OutputEmission, SearchCollection,
+    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle, SearchSeparators,
 };
+use sift_core::{Index, Indexes, SearchQuery, TrigramIndex};
 
 mod common;
 
@@ -117,7 +117,7 @@ fn bench_indexed_search(c: &mut Criterion) {
         let query = make_search(
             &["beta"],
             SearchOptions {
-                case_mode: sift_core::CaseMode::Insensitive,
+                case_mode: sift_core::search::CaseMode::Insensitive,
                 ..Default::default()
             },
         );

@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::Candidate;
-use crate::CandidateFilter;
 use crate::StoreMeta;
+use crate::search::CandidateFilter;
 use crate::index::Indexes;
 use crate::query::QuerySpec;
 
