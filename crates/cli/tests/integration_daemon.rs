@@ -257,7 +257,7 @@ fn daemon_reindexes_on_file_changes() {
     let status = Command::new(sift_bin())
         .arg("--sift-dir")
         .arg(&sift_dir)
-        .args(["index", "build"])
+        .args(["index", "build", "--wait"])
         .arg(&root)
         .env("SIFT_NO_DAEMON", "1")
         .status()
@@ -437,7 +437,7 @@ fn daemon_reconciles_offline_changes() {
     let status = Command::new(sift_bin())
         .arg("--sift-dir")
         .arg(&sift_dir)
-        .args(["index", "build"])
+        .args(["index", "build", "--wait"])
         .arg(&root)
         .env("SIFT_NO_DAEMON", "1")
         .status()
@@ -488,15 +488,15 @@ fn daemon_reconciles_offline_changes() {
 }
 
 #[test]
-fn lazy_build_becomes_searchable_without_wait() {
-    let p = TestProject::new("daemon-lazy-build");
-    p.write("a.txt", "lazy_build_daemon_marker\n");
+fn build_defaults_to_async_and_becomes_searchable() {
+    let p = TestProject::new("daemon-async-build");
+    p.write("a.txt", "async_build_daemon_marker\n");
 
     let out = p
         .sift_with_daemon()
         .arg("--sift-dir")
         .arg(p.sift_dir())
-        .args(["index", "build", "--lazy"])
+        .args(["index", "build"])
         .output()
         .unwrap();
     assert_success(&out);
@@ -509,7 +509,7 @@ fn lazy_build_becomes_searchable_without_wait() {
     poll_until_indexed(p.sift_dir(), "a.txt", Duration::from_secs(15));
     poll_until(
         p.sift_dir(),
-        "lazy_build_daemon_marker",
+        "async_build_daemon_marker",
         Duration::from_secs(5),
         |out| out.status.success() && normalize_stdout(out).contains("a.txt"),
     );
@@ -604,7 +604,7 @@ fn blocking_build_starts_daemon_for_watch() {
         .sift_with_daemon()
         .arg("--sift-dir")
         .arg(p.sift_dir())
-        .args(["index", "build"])
+        .args(["index", "build", "--wait"])
         .output()
         .unwrap();
     assert_success(&out);
