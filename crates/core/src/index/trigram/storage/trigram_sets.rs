@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use super::format::TRIGRAMS_MAGIC;
+use super::{read_u32_le, read_u64_le};
 use crate::index::mmap::mmap_open;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::Trigram;
@@ -281,8 +282,7 @@ impl TrigramSets {
                 "unexpected trigram sets magic",
             ));
         }
-        let count =
-            u32::from_le_bytes(bytes[magic_len..magic_len + 4].try_into().unwrap()) as usize;
+        let count = read_u32_le(bytes, magic_len) as usize;
         let offset_table_start = magic_len + 4;
         let blob_start = offset_table_start + count * 8;
         if bytes.len() < blob_start {
@@ -293,11 +293,7 @@ impl TrigramSets {
         }
         let mut prev_off: Option<u64> = None;
         for i in 0..count {
-            let off = u64::from_le_bytes(
-                bytes[offset_table_start + i * 8..offset_table_start + (i + 1) * 8]
-                    .try_into()
-                    .unwrap(),
-            );
+            let off = read_u64_le(bytes, offset_table_start + i * 8);
             let off_usize = usize::try_from(off).map_err(|_| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -333,10 +329,7 @@ impl TrigramSets {
         let bytes = self.bytes();
         if id + 1 < self.count {
             let off_start = self.offset_table_start + (id + 1) * 8;
-            usize::try_from(u64::from_le_bytes(
-                bytes[off_start..off_start + 8].try_into().unwrap(),
-            ))
-            .unwrap_or(bytes.len())
+            usize::try_from(read_u64_le(bytes, off_start)).unwrap_or(bytes.len())
         } else {
             bytes.len()
         }
@@ -356,10 +349,7 @@ impl TrigramSets {
         }
         let bytes = self.bytes();
         let off_start = self.offset_table_start + id * 8;
-        let off = usize::try_from(u64::from_le_bytes(
-            bytes[off_start..off_start + 8].try_into().unwrap(),
-        ))
-        .map_err(|_| {
+        let off = usize::try_from(read_u64_le(bytes, off_start)).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("trigram set {id} offset exceeds address space"),

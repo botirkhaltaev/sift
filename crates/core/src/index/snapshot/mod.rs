@@ -31,11 +31,6 @@ struct CurrentSnapshot {
     lease: SnapshotLease,
 }
 
-impl Drop for CurrentSnapshot {
-    fn drop(&mut self) {
-        let _ = &mut self.lease;
-    }
-}
 
 impl Snapshot {
     #[must_use]

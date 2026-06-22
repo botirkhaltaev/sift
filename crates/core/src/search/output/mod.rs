@@ -16,7 +16,7 @@ pub enum SearchOutputFormat {
     Json,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SearchOutput {
     pub format: SearchOutputFormat,
     pub mode: SearchMode,
@@ -25,20 +25,6 @@ pub struct SearchOutput {
     pub records: SearchRecordStyle,
     pub passthru: PassthruMode,
     pub include_zero: ZeroCountMode,
-}
-
-impl Default for SearchOutput {
-    fn default() -> Self {
-        Self {
-            format: SearchOutputFormat::Text,
-            mode: SearchMode::Standard,
-            emission: OutputEmission::Normal,
-            lines: SearchLineStyle::default(),
-            records: SearchRecordStyle::default(),
-            passthru: PassthruMode::Disabled,
-            include_zero: ZeroCountMode::Omit,
-        }
-    }
 }
 
 impl SearchOutput {

@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::Instant;
 #[cfg(test)]
 use std::{io, path::Path};
@@ -7,7 +6,6 @@ use std::{io, path::Path};
 #[cfg(test)]
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
-use grep_searcher::Searcher;
 use std::sync::OnceLock;
 
 #[cfg(test)]
@@ -31,8 +29,6 @@ use crate::search::request::SearchExecution;
 
 pub mod matcher;
 
-type SearcherCacheEntry = ((bool, Option<usize>, usize, usize), Searcher);
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     pub file: std::path::PathBuf,
@@ -45,7 +41,6 @@ pub struct SearchQuery {
     pub patterns: Vec<String>,
     pub opts: SearchOptions,
     pub matcher: OnceLock<RegexMatcher>,
-    pub searcher_cache: Mutex<Option<SearcherCacheEntry>>,
 }
 
 impl SearchQuery {
@@ -62,7 +57,6 @@ impl SearchQuery {
             patterns: patterns.to_vec(),
             opts,
             matcher: OnceLock::new(),
-            searcher_cache: Mutex::new(None),
         })
     }
 

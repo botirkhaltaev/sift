@@ -23,25 +23,19 @@ impl PatternCompiler {
 
     #[must_use]
     pub fn fixed_strings(mut self, on: bool) -> Self {
-        if on {
-            self.flags |= SearchMatchFlags::FIXED_STRINGS;
-        }
+        self.flags.set(SearchMatchFlags::FIXED_STRINGS, on);
         self
     }
 
     #[must_use]
     pub fn word_regexp(mut self, on: bool) -> Self {
-        if on {
-            self.flags |= SearchMatchFlags::WORD_REGEXP;
-        }
+        self.flags.set(SearchMatchFlags::WORD_REGEXP, on);
         self
     }
 
     #[must_use]
     pub fn line_regexp(mut self, on: bool) -> Self {
-        if on {
-            self.flags |= SearchMatchFlags::LINE_REGEXP;
-        }
+        self.flags.set(SearchMatchFlags::LINE_REGEXP, on);
         self
     }
 
@@ -73,9 +67,9 @@ impl PatternCompiler {
     ///
     /// Returns `SearchError::RegexBuild` if the combined pattern is invalid.
     pub fn compile(&self, patterns: &[&str]) -> Result<Regex, SearchError> {
-        let branches: Vec<String> = patterns.iter().map(|p| self.shape(p)).collect();
+        let mut branches: Vec<String> = patterns.iter().map(|p| self.shape(p)).collect();
         let combined = if branches.len() == 1 {
-            branches[0].clone()
+            branches.swap_remove(0)
         } else {
             branches
                 .into_iter()

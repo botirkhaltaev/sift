@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::index::mmap::mmap_open;
 use crate::index::snapshot::ArtifactData;
 use crate::index::trigram::storage::format::FILES_MAGIC;
+use crate::index::trigram::storage::{read_i64_le, read_u32_le, read_u64_le};
 
 /// Per-file fingerprint for change detection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,8 +123,7 @@ impl FileTable {
                 "unexpected files table magic",
             ));
         }
-        let count =
-            u32::from_le_bytes(bytes[magic_len..magic_len + 4].try_into().unwrap()) as usize;
+        let count = read_u32_le(bytes, magic_len) as usize;
         let offset_table_start = magic_len + 4;
         let blob_start = offset_table_start + count * 4;
         if bytes.len() < blob_start {
@@ -133,11 +133,7 @@ impl FileTable {
             ));
         }
         for i in 0..count {
-            let off = u32::from_le_bytes(
-                bytes[offset_table_start + i * 4..offset_table_start + (i + 1) * 4]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
+            let off = read_u32_le(bytes, offset_table_start + i * 4) as usize;
             if off < blob_start {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -150,7 +146,7 @@ impl FileTable {
                     format!("offset table[{i}] path_len prefix extends past end"),
                 ));
             }
-            let path_len = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+            let path_len = read_u32_le(bytes, off) as usize;
             let entry_end = off + 4 + path_len + Self::FINGERPRINT_LEN;
             if entry_end > bytes.len() {
                 return Err(std::io::Error::new(
@@ -171,12 +167,8 @@ impl FileTable {
         let mut out = Vec::with_capacity(self.count);
         let bytes = self.bytes();
         for id in 0..self.count {
-            let off = u32::from_le_bytes(
-                bytes[self.offset_table_start + id * 4..self.offset_table_start + (id + 1) * 4]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            let path_len = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+            let off = read_u32_le(bytes, self.offset_table_start + id * 4) as usize;
+            let path_len = read_u32_le(bytes, off) as usize;
             let path_start = off + 4;
             let path_end = path_start + path_len;
             let path_bytes = bytes.get(path_start..path_end).ok_or_else(|| {
@@ -193,8 +185,8 @@ impl FileTable {
             })?;
 
             let fp_start = path_end;
-            let mtime_secs = i64::from_le_bytes(bytes[fp_start..fp_start + 8].try_into().unwrap());
-            let size = u64::from_le_bytes(bytes[fp_start + 8..fp_start + 16].try_into().unwrap());
+            let mtime_secs = read_i64_le(bytes, fp_start);
+            let size = read_u64_le(bytes, fp_start + 8);
 
             out.push(FileFingerprint {
                 path: PathBuf::from(path),
