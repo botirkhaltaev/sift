@@ -9,6 +9,11 @@ use super::snapshot::{
 
 /// Index lifecycle orchestrator backed by a [`SnapshotStore`] for atomic
 /// persistence and coordination.
+///
+/// Manages building, updating, and publishing snapshots that contain one or
+/// more index kinds. The `build` and `update` methods accept `&[IndexKind]`,
+/// so the store handles any combination of index types without index-specific
+/// logic.
 pub struct IndexStore<S: SnapshotStore = DiskSnapshotStore> {
     snapshots: S,
     sift_dir: PathBuf,

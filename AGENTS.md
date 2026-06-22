@@ -4,7 +4,9 @@ Guidelines for AI agents working on the sift codebase.
 
 ## Project Overview
 
-Sift is an indexed regex search engine for codebases, written in Rust. It builds on-disk indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine. The shipped index type is a trigram index, achieving up to 60x speedup over ripgrep on indexed queries. The `IndexKind` enum and `Index` enum provide static dispatch; adding a new index kind means adding a variant to each.
+Sift is an indexed code search engine written in Rust, built around **composable on-disk indexes**. It builds indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine.
+
+The core architecture treats code search like database query execution: multiple index types can coexist, each narrowing candidates independently, with the `Indexes` registry intersecting their results. Today, Sift ships a **trigram index** (achieving up to 60x speedup over ripgrep on indexed queries). The `IndexKind` and `Index` enums provide static dispatch; adding a new index kind means adding a variant to each. Future index types (AST indexes, dependency graphs, vector indexes) will slot into the same architecture.
 
 ## Build & Test
 
@@ -20,11 +22,11 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 
 | Path | Role |
 |------|------|
-| `crates/core/` | `sift-core`: query planning, index-backed candidate narrowing, search engine |
-| `crates/core/src/query/` | Query description, planning, candidate plans |
-| `crates/core/src/index/` | `Index` enum, `IndexKind` enum, `IndexStore`, and `Indexes` registry |
-| `crates/core/src/index/trigram/` | Trigram index: build, storage, and search |
-| `crates/core/src/grep/` | Grep-style matching, scanning, output, filtering |
+| `crates/core/` | `sift-core`: composable index registry, query planning, candidate narrowing, search engine |
+| `crates/core/src/query/` | Index-agnostic query description and candidate planning |
+| `crates/core/src/index/` | `IndexKind` / `Index` enums, `Indexes` registry, `IndexStore`, snapshot persistence |
+| `crates/core/src/index/trigram/` | Trigram index: build, storage, and search (first shipped index type) |
+| `crates/core/src/grep/` | Grep pipeline orchestration: bridges query planner, index registry, and search engine |
 | `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
 | `benchsuite/` | Comparative `rg` vs `sift` benchmarks |

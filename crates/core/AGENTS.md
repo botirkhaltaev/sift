@@ -2,7 +2,9 @@
 
 ## Responsibility
 
-Core search engine: query planning, index-backed candidate narrowing, grep-style execution, and parallel file scanning.
+Core engine for composable indexed code search: index registry, query planning, candidate narrowing, grep-style execution, and parallel file scanning.
+
+The engine is designed around multiple coexisting index types. The `IndexKind` enum drives lifecycle dispatch (build/open/update), the `Index` enum drives query-time dispatch (candidate narrowing), and the `Indexes` registry intersects candidate sets from all available indexes. Today `Trigram` is the only variant; future index kinds (AST, dependency graph, vector) slot in by adding variants to these enums.
 
 ## Public API
 
@@ -12,9 +14,9 @@ Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `Se
 
 | Module | Responsibility |
 |--------|----------------|
-| `query/` | Query description (`QuerySpec`), planning |
-| `index/mod.rs` | `Indexes` registry, `Index` enum (runtime dispatch), `IndexKind` enum (lifecycle dispatch), `IndexBuildConfig`, shared types (`FileId`, `IndexId`), `IndexError` |
-| `index/store.rs` | `IndexStore`: snapshot management, `StoreMeta`, timestamp-based IDs, `gc_snapshots` |
+| `query/` | Index-agnostic query description (`QuerySpec`), candidate planning |
+| `index/mod.rs` | `Indexes` registry, `Index` enum (query dispatch), `IndexKind` enum (lifecycle dispatch), shared types (`FileId`, `IndexId`), `IndexError` |
+| `index/store.rs` | `IndexStore`: snapshot-based persistence, atomic build/update/publish |
 | `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, inherent build/open/update/candidates methods, `TrigramIndexError` |
 | `index/trigram/builder.rs` | `IndexTableBuilder`: corpus walk, fingerprint collection, trigram extraction, table construction |
 | `index/trigram/file_table.rs` | `MappedFilesView`: file ID to relative path mapping with fingerprints |
@@ -88,8 +90,8 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
 ```
 
 ### Key Types
-- `Indexes`: registry of opened indexes; owns initialization via `Indexes::open(sift_dir)`
-- `IndexStore`: snapshot-based persistence for indexes, with non-generic `build`/`update` taking `&[IndexKind]`
+- `Indexes`: registry of opened indexes; opens all kinds in a snapshot and intersects their candidate sets at query time
+- `IndexStore`: snapshot-based persistence for indexes, with `build`/`update` taking `&[IndexKind]`
 - `StoreMeta`: single source of truth for root, corpus_kind, follow_links, and index kinds
 - `FileId`: type-safe file identifier within an index
 - `IndexId`: type-safe index identifier in a multi-index search
@@ -102,6 +104,7 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
 - **Index file order:** lexicographic relative paths (stable file IDs).
 - **Rayon gating:** same effective-worker heuristic for parallel search and parallel index extraction.
 - **Conservative candidates:** `Index::candidates` may over-return but must not under-return.
+- **Index independence:** each index kind narrows candidates independently; the registry combines results. No index kind depends on another.
 
 ## Testing
 

@@ -1,4 +1,5 @@
 bitflags::bitflags! {
+    /// Flags modifying how a query is interpreted by the search engine and index layer.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct QueryFlags: u8 {
         const FIXED_STRINGS    = 1 << 0;
@@ -9,6 +10,11 @@ bitflags::bitflags! {
     }
 }
 
+/// Index-agnostic query description.
+///
+/// Describes what the user is searching for (patterns + flags) without
+/// referencing any specific index type. Each index kind interprets the
+/// spec independently to narrow candidates.
 #[derive(Debug, Clone)]
 pub struct QuerySpec<'a> {
     pub patterns: &'a [String],

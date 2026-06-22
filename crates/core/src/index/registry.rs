@@ -9,6 +9,11 @@ use super::store;
 
 /// Registry of opened indexes read from a snapshot store.
 ///
+/// Opens all index kinds found in the current snapshot and provides
+/// query-time candidate narrowing by intersecting results from each index.
+/// Multiple indexes together produce tighter narrowing than any single
+/// index alone.
+///
 /// Owns a [`Snapshot`] that holds a reader lease, preventing the snapshot
 /// from being garbage-collected while searches are active.
 pub struct Indexes {
