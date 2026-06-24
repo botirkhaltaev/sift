@@ -15,6 +15,8 @@ pub use error::IndexError;
 pub use kinds::{FileId, Index, IndexId, IndexKind, PlanMode, QueryPlanOutput};
 pub use meta::{CorpusMeta, FilterMeta, WalkMeta};
 pub use registry::Indexes;
+pub use snapshot::SnapshotId;
+pub use store::ReconcileOutcome;
 
 #[cfg(test)]
 mod tests {

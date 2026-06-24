@@ -41,10 +41,13 @@ pub use index::store::IndexStore;
 pub use index::trigram::{TrigramIndex, TrigramIndexError};
 pub use index::{
     CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig, IndexError,
-    IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, WalkMeta,
+    IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, ReconcileOutcome, SnapshotId, WalkMeta,
 };
 
-pub use query::{CandidateRequirement, QueryFlags, QueryPlanner, QuerySpec, UnindexedStrategy};
+pub use query::{
+    CandidatePlan, CandidateRequirement, CandidateSource, QueryFlags, QueryPlanner, QuerySpec,
+    SnapshotValidation, UnindexedPolicy,
+};
 
 use thiserror::Error;
 

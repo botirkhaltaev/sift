@@ -1,9 +1,9 @@
-use sift_core::SearchQuery;
 use sift_core::grep::GrepRequest;
 use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, SearchCollection, SearchOptions, SearchOutput,
     SearchSeparators,
 };
+use sift_core::{CandidateSource, SearchQuery, SnapshotValidation, UnindexedPolicy};
 use tempfile::TempDir;
 
 use super::common::{build_store, make_parity_corpus, open_indexes};
@@ -26,8 +26,11 @@ fn grep_finds_match_in_indexed_corpus() {
         output: SearchOutput::default(),
         separators: &SearchSeparators::default(),
         collect: SearchCollection::none(),
-        store_meta: None,
-        unindexed: sift_core::UnindexedStrategy::Skip,
+        candidate_source: CandidateSource {
+            store_meta: None,
+            unindexed: UnindexedPolicy::Skip,
+            snapshot: SnapshotValidation::Unvalidated,
+        },
     }
     .run(&query)
     .expect("grep run");

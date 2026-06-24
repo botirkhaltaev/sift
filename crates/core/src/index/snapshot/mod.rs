@@ -17,6 +17,7 @@ use super::kinds::Index;
 
 /// An immutable opened snapshot and the indexes it contains.
 pub struct Snapshot {
+    id: Option<SnapshotId>,
     root: PathBuf,
     state: SnapshotState,
 }
@@ -35,6 +36,7 @@ impl Snapshot {
     #[must_use]
     pub(crate) const fn empty(root: PathBuf) -> Self {
         Self {
+            id: None,
             root,
             state: SnapshotState::Empty,
         }
@@ -43,6 +45,7 @@ impl Snapshot {
     #[must_use]
     pub(crate) const fn from_indexes(root: PathBuf, indexes: Vec<Index>) -> Self {
         Self {
+            id: None,
             root,
             state: SnapshotState::Current(CurrentSnapshot {
                 indexes,
@@ -52,8 +55,14 @@ impl Snapshot {
     }
 
     #[must_use]
-    pub(crate) const fn current(root: PathBuf, indexes: Vec<Index>, lease: SnapshotLease) -> Self {
+    pub(crate) const fn committed(
+        id: SnapshotId,
+        root: PathBuf,
+        indexes: Vec<Index>,
+        lease: SnapshotLease,
+    ) -> Self {
         Self {
+            id: Some(id),
             root,
             state: SnapshotState::Current(CurrentSnapshot {
                 indexes,
@@ -65,6 +74,11 @@ impl Snapshot {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> Option<&SnapshotId> {
+        self.id.as_ref()
     }
 
     #[must_use]

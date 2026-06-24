@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use super::config::CorpusKind;
 use super::error::IndexError;
 use super::kinds::Index;
-use super::snapshot::Snapshot;
+use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
 
 /// Registry of opened indexes read from a snapshot store.
@@ -75,6 +75,11 @@ impl Indexes {
     #[must_use]
     pub fn root(&self) -> &Path {
         self.snapshot.root()
+    }
+
+    #[must_use]
+    pub const fn snapshot_id(&self) -> Option<&SnapshotId> {
+        self.snapshot.id()
     }
 
     /// Produce narrowed candidates from all indexes that can narrow the query.

@@ -5,10 +5,12 @@ use serde::{Deserialize, Serialize};
 pub struct SnapshotId(String);
 
 impl SnapshotId {
+    #[must_use]
     pub const fn new(id: String) -> Self {
         Self(id)
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

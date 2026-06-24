@@ -8,8 +8,8 @@ use sift_core::search::{
     VisibilityConfig,
 };
 use sift_core::{
-    CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, Indexes, SearchQuery, TrigramIndex,
-    UnindexedStrategy,
+    CandidateSource, CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, Indexes, SearchQuery,
+    SnapshotValidation, TrigramIndex, UnindexedPolicy,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -88,8 +88,11 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
         },
         separators: &SearchSeparators::default(),
         collect: SearchCollection::none(),
-        store_meta: None,
-        unindexed: UnindexedStrategy::Skip,
+        candidate_source: CandidateSource {
+            store_meta: None,
+            unindexed: UnindexedPolicy::Skip,
+            snapshot: SnapshotValidation::Unvalidated,
+        },
     };
     let _ = request.run(&q);
 }

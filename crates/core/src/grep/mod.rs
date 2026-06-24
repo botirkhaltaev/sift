@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use crate::Candidate;
 use crate::index::Indexes;
-use crate::query::{QueryPlanner, UnindexedStrategy};
+use crate::query::{CandidatePlan, CandidateSource, QueryPlanner};
 use crate::search::request::{SearchCollection, SearchExecution};
 use crate::search::{
     CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
@@ -31,8 +31,7 @@ pub struct GrepRequest<'a> {
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,
-    pub store_meta: Option<&'a crate::StoreMeta>,
-    pub unindexed: UnindexedStrategy,
+    pub candidate_source: CandidateSource<'a>,
 }
 
 impl GrepRequest<'_> {
@@ -51,11 +50,12 @@ impl GrepRequest<'_> {
         let requirement = output.candidate_requirement();
 
         let raw = QueryPlanner::new(spec).candidates(
-            self.indexes,
-            requirement,
-            self.filter,
-            self.store_meta,
-            self.unindexed,
+            CandidatePlan {
+                indexes: self.indexes,
+                requirement,
+                filter: self.filter,
+                source: self.candidate_source,
+            },
             || self.filter.collect(),
         )?;
 

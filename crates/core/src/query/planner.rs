@@ -14,14 +14,39 @@ pub enum CandidateRequirement {
     PotentialMatches,
 }
 
-/// Whether the planner should walk for files not present in the index snapshot.
+/// Whether candidate planning may inspect files not present in the index snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum UnindexedStrategy {
+pub enum UnindexedPolicy {
     /// Return only index-narrowed candidates. No filesystem walk.
     #[default]
     Skip,
     /// Walk to discover files not yet indexed and merge them into results.
     Walk,
+}
+
+/// Whether the opened snapshot has been validated as a complete read version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SnapshotValidation {
+    #[default]
+    Unvalidated,
+    Validated,
+}
+
+/// Candidate source policy for a grep run.
+#[derive(Clone, Copy)]
+pub struct CandidateSource<'a> {
+    pub store_meta: Option<&'a StoreMeta>,
+    pub unindexed: UnindexedPolicy,
+    pub snapshot: SnapshotValidation,
+}
+
+/// Inputs for candidate planning.
+#[derive(Clone, Copy)]
+pub struct CandidatePlan<'a> {
+    pub indexes: &'a Indexes,
+    pub requirement: CandidateRequirement,
+    pub filter: &'a CandidateFilter,
+    pub source: CandidateSource<'a>,
 }
 
 /// Plans candidate selection by consulting the index registry and falling back
@@ -42,7 +67,7 @@ impl<'a> QueryPlanner<'a> {
 
     /// Resolve candidates using indexes or the lazy base provider.
     ///
-    /// When `unindexed` is [`UnindexedStrategy::Walk`] and the index narrows
+    /// When `unindexed` is [`UnindexedPolicy::Walk`] and the index narrows
     /// candidates, also walk corpus paths that are not yet present in the
     /// current snapshot.
     ///
@@ -51,34 +76,43 @@ impl<'a> QueryPlanner<'a> {
     /// Delegates to `base` when fallback is triggered; returns `base` errors unchanged.
     pub fn candidates(
         &self,
-        indexes: &Indexes,
-        requirement: CandidateRequirement,
-        filter: &CandidateFilter,
-        store_meta: Option<&StoreMeta>,
-        unindexed: UnindexedStrategy,
+        plan: CandidatePlan<'_>,
         base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
     ) -> crate::Result<Vec<Candidate>> {
-        match requirement {
+        match plan.requirement {
             CandidateRequirement::Complete => {
-                if indexes.is_empty() {
+                if plan.indexes.is_empty() {
                     return base();
                 }
-                if store_meta.is_some_and(|meta| !meta.matches_search_filter(filter)) {
+                if plan
+                    .source
+                    .store_meta
+                    .is_some_and(|meta| !meta.covers_candidate_filter(plan.filter))
+                {
                     return base();
                 }
-                Ok(indexes.complete_candidates())
+                Ok(plan.indexes.complete_candidates())
             }
             CandidateRequirement::PotentialMatches => {
-                if indexes.is_empty() {
+                if plan.indexes.is_empty() {
                     return base();
                 }
-                match indexes.candidates(&self.spec) {
+                match plan.indexes.candidates(&self.spec) {
                     None => base(),
-                    Some(snapshot_hits) if unindexed == UnindexedStrategy::Skip => {
+                    Some(snapshot_hits) if plan.source.unindexed == UnindexedPolicy::Skip => {
+                        Ok(snapshot_hits)
+                    }
+                    Some(snapshot_hits)
+                        if plan.source.snapshot == SnapshotValidation::Validated
+                            && plan
+                                .source
+                                .store_meta
+                                .is_some_and(|meta| meta.covers_candidate_filter(plan.filter)) =>
+                    {
                         Ok(snapshot_hits)
                     }
                     Some(mut snapshot_hits) => {
-                        let indexed_paths = indexes.indexed_rel_paths();
+                        let indexed_paths = plan.indexes.indexed_rel_paths();
                         let walked = base()?;
                         let mut seen: HashSet<PathBuf> = snapshot_hits
                             .iter()
