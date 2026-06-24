@@ -53,7 +53,7 @@ def ensure_sift_index(corpus_dir, suite_dir=None):
         return sift_dir
 
     print(f'# Building sift index for {corpus_dir} -> {sift_dir}', file=sys.stderr)
-    cmd = [SIFT_BINARY, '--sift-dir', sift_dir, 'build', corpus_dir]
+    cmd = [SIFT_BINARY, '--sift-dir', sift_dir, 'index', 'build', '--wait', corpus_dir]
     result = subprocess.run(cmd, cwd=os.path.dirname(corpus_dir) or '.')
     if result.returncode != 0:
         raise RuntimeError(f'sift build failed for {corpus_dir}')
