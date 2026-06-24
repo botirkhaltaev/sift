@@ -1,18 +1,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::{PatternCompiler, SearchMatchFlags, SearchOptions};
+use sift_core::search::{PatternCompiler, SearchMatchFlags, SearchOptions};
 
 /// Static branches combined with random bytes to stress alternation and flag shaping.
-const STATIC_BRANCHES: &[&str] = &[
-    r"a.c",
-    r"foo|bar",
-    r"^line$",
-    r"\bword\b",
-    "(",
-    r"[",
-    "",
-];
+const STATIC_BRANCHES: &[&str] = &[r"a.c", r"foo|bar", r"^line$", r"\bword\b", "(", r"[", ""];
 
 fn compile_with_flags(patterns: &[String], opts: &SearchOptions) {
     let _ = PatternCompiler::new()

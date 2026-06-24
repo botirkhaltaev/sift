@@ -1,11 +1,15 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::grep::{GrepRequest, run as grep_run};
+use sift_core::grep::GrepRequest;
+use sift_core::search::{
+    CandidateFilter, CandidateFilterConfig, OutputEmission, PatternCompiler, SearchCollection,
+    SearchMatchFlags, SearchOptions, SearchOutput, SearchOutputFormat, SearchSeparators,
+    VisibilityConfig,
+};
 use sift_core::{
-    CandidateFilter, CandidateFilterConfig, CorpusKind, CorpusSpec, IndexConfig, Indexes,
-    IndexWalkOptions, PatternCompiler, SearchCollection, SearchOutput, SearchOutputFormat,
-    SearchQuery, SearchSeparators, TrigramIndex, VisibilityConfig,
+    CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, Indexes, SearchQuery, TrigramIndex,
+    UnindexedStrategy,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -13,7 +17,7 @@ use std::sync::OnceLock;
 const MAX_PATTERN_LEN: usize = 512;
 
 struct IndexHolder {
-    temp: tempfile::TempDir,
+    _temp: tempfile::TempDir,
     indexes: Indexes,
 }
 
@@ -36,13 +40,13 @@ fn indexed() -> &'static Indexes {
                 include_paths: &[],
                 exclude_paths: &[],
             },
-            walk: IndexWalkOptions::new(false),
+            walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
         TrigramIndex::build(&config, &trigram_dir, &[]).expect("build_index");
         let indexes = Indexes::open(&sift_dir).expect("open_index");
         IndexHolder {
-            temp: tmp,
+            _temp: tmp,
             indexes,
         }
     });
@@ -56,41 +60,38 @@ fn lossy_pattern(data: &[u8]) -> String {
         .collect()
 }
 
-fn opts_from_bytes(data: &[u8]) -> sift_core::SearchOptions {
+fn opts_from_bytes(data: &[u8]) -> SearchOptions {
     let flags = data
         .first()
-        .map(|b| sift_core::SearchMatchFlags::from_bits_truncate(u16::from(*b)))
+        .map(|b| SearchMatchFlags::from_bits_truncate(u16::from(*b)))
         .unwrap_or_default();
     let max_results = data.get(1).map(|b| (*b as usize).min(10_000));
-    sift_core::SearchOptions {
+    SearchOptions {
         flags,
         max_results,
-        ..sift_core::SearchOptions::default()
+        ..SearchOptions::default()
     }
 }
 
-fn run_search(
-    indexes: &Indexes,
-    patterns: &[String],
-    opts: &sift_core::SearchOptions,
-) {
+fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
     let Ok(q) = SearchQuery::new(patterns, opts.clone()) else {
         return;
     };
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), indexes.root()).unwrap();
-    let _ = grep_run(&q, &GrepRequest {
+    let request = GrepRequest {
         indexes,
         filter: &filter,
         output: SearchOutput {
             format: SearchOutputFormat::Text,
-            emission: sift_core::OutputEmission::Quiet,
+            emission: OutputEmission::Quiet,
             ..SearchOutput::default()
         },
         separators: &SearchSeparators::default(),
         collect: SearchCollection::none(),
         store_meta: None,
-        unindexed: sift_core::UnindexedStrategy::Skip,
-    });
+        unindexed: UnindexedStrategy::Skip,
+    };
+    let _ = request.run(&q);
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -121,7 +122,7 @@ fuzz_target!(|data: &[u8]| {
     }
 });
 
-fn compile_with_flags(patterns: &[&str], opts: &sift_core::SearchOptions) -> Result<(), ()> {
+fn compile_with_flags(patterns: &[&str], opts: &SearchOptions) -> Result<(), ()> {
     PatternCompiler::new()
         .fixed_strings(opts.fixed_strings())
         .word_regexp(opts.word_regexp())

@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/botirk38/sift/releases/tag/v0.6.0) — 2026-06-24
+
+### Breaking
+
+- Make `SearchQuery` fields private and expose search options through `SearchQuery::opts()`
+- Move search-domain types under the public `sift_core::search` module and reduce root re-exports to `SearchError`, `SearchOutcome`, and `SearchQuery`
+- Change `SearchExecution` to borrow candidates instead of taking ownership
+- Replace boolean grep/index modes with `GrepMode`, `UnindexedStrategy`, and `IndexWalkConfig` domain types
+- Change CLI dispatch to consume `Cli` during routing
+
+### Performance
+
+- Cache candidate file size and directory depth from walk/index metadata, reducing repeated filesystem metadata calls
+- Skip total file byte accounting unless stats are requested
+
+### Fixes
+
+- Use `bitflags::set()` in `PatternCompiler` so disabled flags are applied correctly
+- Replace unchecked storage reads with explicit little-endian read helpers
+
+### Docs
+
+- Revamp README installation and usage documentation
+- Add benchmark chart generation and benchmark result images
+- Add implementation and review plans for the architecture cleanup
+
+### Deps
+
+- Bump `memmap2` from 0.9.10 to 0.9.11
+- Bump `actions/checkout` from 6 to 7
+
 ## [0.5.1](https://github.com/botirk38/sift/releases/tag/v0.5.1) — 2026-06-22
 
 ### Features
@@ -310,5 +341,4 @@ All notable changes to this project will be documented in this file.
 - skip redundant canonicalize in indexed search
 - cache parallel scan threshold with OnceLock
 - byte-first scanning with regex::bytes::Regex, remove prefilter
-
 
