@@ -1,6 +1,6 @@
 # Sift
 
-Indexed grep for codebases. Build a trigram index once, then search **2--3x faster** than ripgrep on literal queries.
+Indexed grep for codebases. Build a trigram index once, then search **2 to 3x faster** than ripgrep on literal queries.
 
 ```bash
 sift index build .          # one-time index
@@ -17,15 +17,15 @@ Or from source: `cargo build --release -p sift-grep`
 
 ## How It Works
 
-1. **Build** -- extract overlapping 3-byte trigrams from every file, persist as memory-mapped tables.
-2. **Plan** -- decompose the regex into trigram terms, intersect posting lists to produce a candidate set.
-3. **Search** -- scan only candidate files with the full regex engine.
+1. **Build**: extract overlapping 3-byte trigrams from every file, persist as memory-mapped tables.
+2. **Plan**: decompose the regex into trigram terms, intersect posting lists to produce a candidate set.
+3. **Search**: scan only candidate files with the full regex engine.
 
 Queries with index hits skip most of the corpus. Full-scan fallback (e.g. `\p{Greek}`) matches ripgrep performance.
 
 ## Performance
 
-Linux kernel source tree -- 79K files, 1.3 GB. End-to-end CLI wall-clock (includes startup, index open, daemon).
+Linux kernel source tree, 79K files, 1.3 GB. End-to-end CLI wall-clock (includes startup, index open, daemon).
 
 ![sift speedup over ripgrep](docs/benchmarks/bench_speedup.png)
 
@@ -85,4 +85,4 @@ cargo test --workspace --all-features
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE-2.0), at your option.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE-2.0), at your option.
