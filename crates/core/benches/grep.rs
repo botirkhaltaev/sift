@@ -67,7 +67,7 @@ fn run_grep(
         separators: &SearchSeparators::default(),
         collect,
         store_meta: None,
-        walk_unindexed: false,
+        unindexed: sift_core::UnindexedStrategy::Skip,
     }
     .run(query)
     .unwrap()

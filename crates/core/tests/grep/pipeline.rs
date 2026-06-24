@@ -27,7 +27,7 @@ fn grep_finds_match_in_indexed_corpus() {
         separators: &SearchSeparators::default(),
         collect: SearchCollection::none(),
         store_meta: None,
-        walk_unindexed: false,
+        unindexed: sift_core::UnindexedStrategy::Skip,
     }
     .run(&query)
     .expect("grep run");

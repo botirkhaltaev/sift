@@ -77,6 +77,7 @@ impl<'a> ignore::ParallelVisitorBuilder<'a> for CandidateWalk<'_> {
         Box::new(CandidateCollector {
             filter_root: self.filter_root.clone(),
             max_filesize: self.filter.max_filesize(),
+            cache_metadata: true,
             thread_candidates: Vec::new(),
             walk_error: Arc::clone(&self.walk_error),
             consolidated: Arc::clone(&self.consolidated),
@@ -88,6 +89,7 @@ impl<'a> ignore::ParallelVisitorBuilder<'a> for CandidateWalk<'_> {
 struct CandidateCollector {
     filter_root: PathBuf,
     max_filesize: Option<u64>,
+    cache_metadata: bool,
     thread_candidates: Vec<Candidate>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
     consolidated: Arc<Mutex<Vec<Candidate>>>,
@@ -119,18 +121,31 @@ impl ignore::ParallelVisitor for CandidateCollector {
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             return WalkState::Continue;
         }
+        let metadata = entry.metadata().ok();
         if let Some(limit) = self.max_filesize
-            && entry.metadata().is_ok_and(|m| m.len() > limit)
+            && metadata.as_ref().is_some_and(|m| m.len() > limit)
         {
             return WalkState::Continue;
         }
+        let (cached_size, cached_depth) = if self.cache_metadata {
+            (
+                metadata.map(|m| m.len()),
+                Some(entry.depth().saturating_sub(1)),
+            )
+        } else {
+            (None, None)
+        };
         let abs_path = entry.path().to_path_buf();
         let rel_path = abs_path
             .strip_prefix(&self.filter_root)
             .unwrap_or(&abs_path)
             .to_path_buf();
-        self.thread_candidates
-            .push(Candidate::new(rel_path, abs_path));
+        self.thread_candidates.push(Candidate::with_metadata(
+            rel_path,
+            abs_path,
+            cached_size,
+            cached_depth,
+        ));
         WalkState::Continue
     }
 }

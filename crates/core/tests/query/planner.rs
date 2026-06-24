@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use sift_core::search::{CandidateFilter, CandidateFilterConfig, GlobConfig, VisibilityConfig};
 use sift_core::{
     Candidate, CandidateRequirement, CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexKind,
-    IndexStore, IndexWalkConfig, Indexes, QueryFlags, QueryPlanner, QuerySpec, StoreMeta, WalkMeta,
+    IndexStore, IndexWalkConfig, Indexes, QueryFlags, QueryPlanner, QuerySpec, StoreMeta,
+    UnindexedStrategy, WalkMeta,
 };
 use tempfile::TempDir;
 
@@ -100,7 +101,7 @@ fn potential_matches_narrowable_uses_index() {
             CandidateRequirement::PotentialMatches,
             &filter,
             None,
-            false,
+            UnindexedStrategy::Skip,
             || panic!("base should not be called when index narrows"),
         )
         .expect("candidates");
@@ -127,7 +128,7 @@ fn potential_matches_non_narrowable_falls_back_to_base() {
             CandidateRequirement::PotentialMatches,
             &filter,
             None,
-            false,
+            UnindexedStrategy::Skip,
             || Ok(base),
         )
         .expect("candidates");
@@ -160,7 +161,7 @@ fn potential_matches_includes_unindexed_walk_paths() {
             CandidateRequirement::PotentialMatches,
             &filter,
             None,
-            true,
+            UnindexedStrategy::Walk,
             || Ok(base),
         )
         .expect("candidates");
@@ -187,7 +188,7 @@ fn complete_falls_back_to_base() {
             CandidateRequirement::Complete,
             &filter,
             None,
-            false,
+            UnindexedStrategy::Skip,
             || Ok(base),
         )
         .expect("candidates");
