@@ -1,19 +1,21 @@
 # Agent Skills
 
-Installable agent skills following the [Agent Skills](https://agentskills.io) format. Each skill is a directory with `SKILL.md` (YAML frontmatter + instructions).
+Agent skills for coding agents following the [Agent Skills](https://agentskills.io) format ([SKILL.md spec](https://github.com/anthropics/skills)). Each skill is a directory with `SKILL.md` (YAML frontmatter + instructions) and optional reference files.
 
 ## Install
 
 ```bash
-# From a clone of this repo
-npx skills add ./skills/sift
+# From GitHub (recommended)
+npx skills add botirk38/sift
 
 # Pick specific agents
-npx skills add ./skills/sift -a cursor -a claude-code -y
+npx skills add botirk38/sift -a claude-code -a cursor -y
 
-# From GitHub
-npx skills add https://github.com/botirk38/sift/tree/master/skills/sift
+# From a local clone
+npx skills add ./skills/sift
 ```
+
+Works with Claude Code, Cursor, Codex, Devin, and other agents that support the SKILL.md format.
 
 ## Available Skills
 
@@ -24,5 +26,5 @@ npx skills add https://github.com/botirk38/sift/tree/master/skills/sift
 ## Listing
 
 ```bash
-npx skills add ./skills --list
+npx skills add botirk38/sift --list
 ```

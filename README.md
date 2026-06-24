@@ -9,11 +9,27 @@ sift "PM_RESUME"            # instant results
 
 ## Install
 
+### For Humans
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/install.sh | sh
 ```
 
 Or from source: `cargo build --release -p sift-grep`
+
+Upgrade: `sift update`
+
+### For Coding Agents
+
+Install the [agent skill](https://agentskills.io) so your agent knows how to use sift:
+
+```bash
+npx skills add botirk38/sift
+```
+
+This works with Claude Code, Cursor, Codex, Devin, and other agents that support the [SKILL.md](https://github.com/anthropics/skills) format. The skill teaches the agent when and how to build indexes, run queries, and interpret results.
+
+See [`skills/`](skills/) for details.
 
 ## How It Works
 
