@@ -182,10 +182,12 @@ impl Cli {
             },
             Some(Commands::Index { command }) => {
                 let daemon = self.paths.daemon();
-                let (path, indexes, operation, execution) = command.into_request_parts();
+                let (path, indexes, operation, execution, build_coverage) =
+                    command.into_request_parts();
                 let req = IndexRequest {
                     operation,
                     execution,
+                    build_coverage,
                     path,
                     indexes,
                     sift_dir: self.paths.sift_dir,
@@ -308,6 +310,10 @@ pub enum IndexCommands {
         /// Block until the index build completes (default: async via daemon).
         #[arg(long)]
         wait: bool,
+
+        /// Build a lazy index that may be completed incrementally by searches.
+        #[arg(long)]
+        lazy: bool,
     },
     /// Incrementally refresh an existing index (fails if no index exists).
     Update {
@@ -333,19 +339,26 @@ impl IndexCommands {
         Option<Vec<sift_core::IndexKind>>,
         IndexOperation,
         IndexExecution,
+        sift_core::IndexCoverage,
     ) {
         match self {
             Self::Build {
                 path,
                 indexes,
                 wait,
+                lazy,
             } => {
                 let execution = if wait {
                     IndexExecution::Blocking
                 } else {
                     IndexExecution::Background
                 };
-                (path, indexes, IndexOperation::Build, execution)
+                let coverage = if lazy {
+                    sift_core::IndexCoverage::Lazy
+                } else {
+                    sift_core::IndexCoverage::Complete
+                };
+                (path, indexes, IndexOperation::Build, execution, coverage)
             }
             Self::Update {
                 path,
@@ -357,7 +370,13 @@ impl IndexCommands {
                 } else {
                     IndexExecution::Background
                 };
-                (path, indexes, IndexOperation::Update, execution)
+                (
+                    path,
+                    indexes,
+                    IndexOperation::Update,
+                    execution,
+                    sift_core::IndexCoverage::Complete,
+                )
             }
         }
     }
@@ -513,5 +532,22 @@ mod tests {
             }) => assert!(wait),
             _ => panic!("expected index build subcommand"),
         }
+    }
+
+    #[test]
+    fn cli_parses_index_build_lazy_flag() {
+        let cli = Cli::try_parse_from(["sift", "index", "build", "--lazy"]).unwrap();
+        match cli.command {
+            Some(Commands::Index {
+                command: IndexCommands::Build { lazy, .. },
+            }) => assert!(lazy),
+            _ => panic!("expected index build subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_rejects_index_update_lazy_flag() {
+        let result = Cli::try_parse_from(["sift", "index", "update", "--lazy"]);
+        assert!(result.is_err());
     }
 }

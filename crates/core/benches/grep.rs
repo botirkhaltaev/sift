@@ -11,9 +11,7 @@ use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, ColorChoice, OutputEmission, SearchCollection,
     SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle, SearchSeparators,
 };
-use sift_core::{
-    CandidateSource, Index, Indexes, SearchQuery, SnapshotValidation, TrigramIndex, UnindexedPolicy,
-};
+use sift_core::{CandidateSource, Index, Indexes, SearchQuery, SnapshotValidation, TrigramIndex};
 
 mod common;
 
@@ -70,7 +68,6 @@ fn run_grep(
         collect,
         candidate_source: CandidateSource {
             store_meta: None,
-            unindexed: UnindexedPolicy::Skip,
             snapshot: SnapshotValidation::Unvalidated,
         },
     }

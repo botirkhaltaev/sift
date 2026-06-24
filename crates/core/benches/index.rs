@@ -118,6 +118,7 @@ fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
             include_paths: Vec::new(),
             exclude_paths: Vec::new(),
         },
+        sift_core::IndexCoverage::Complete,
         WalkMeta {
             follow_links: false,
             one_file_system: false,
@@ -277,6 +278,7 @@ fn bench_indexes_open(c: &mut Criterion) {
                     include_paths: Vec::new(),
                     exclude_paths: Vec::new(),
                 },
+                sift_core::IndexCoverage::Complete,
                 WalkMeta {
                     follow_links: false,
                     one_file_system: false,

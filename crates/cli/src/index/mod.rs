@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sift_core::search::VisibilityConfig;
-use sift_core::{CorpusMeta, FilterMeta, IndexKind, IndexStore, StoreMeta, WalkMeta};
+use sift_core::{
+    CorpusMeta, FilterMeta, IndexCoverage, IndexKind, IndexStore, StoreMeta, WalkMeta,
+};
 
 use crate::grep::Argv;
 use std::str::FromStr;
@@ -35,6 +37,7 @@ pub enum IndexExecution {
 pub struct IndexRequest {
     pub operation: IndexOperation,
     pub execution: IndexExecution,
+    pub build_coverage: IndexCoverage,
     pub path: PathBuf,
     pub indexes: Option<Vec<IndexKind>>,
     pub sift_dir: PathBuf,
@@ -48,6 +51,7 @@ pub struct IndexRequest {
 pub struct IndexJob {
     pub operation: IndexOperation,
     pub execution: IndexExecution,
+    pub build_coverage: IndexCoverage,
     pub root: PathBuf,
     pub include_paths: Vec<PathBuf>,
     pub corpus_kind: sift_core::CorpusKind,
@@ -85,6 +89,7 @@ impl IndexJob {
         Ok(Self {
             operation: req.operation,
             execution: req.execution,
+            build_coverage: req.build_coverage,
             root,
             include_paths,
             corpus_kind,
@@ -106,7 +111,8 @@ impl IndexJob {
         }
 
         let ignore_res = IgnoreResolution::resolve(argv);
-        let meta = self.store_meta(ignore_res);
+        let existing_meta = StoreMeta::read(&self.sift_dir).ok();
+        let meta = self.store_meta(ignore_res, existing_meta.as_ref());
 
         let mut store = match IndexStore::open_or_create(&self.sift_dir, &meta) {
             Ok(s) => s,
@@ -115,11 +121,6 @@ impl IndexJob {
                 return ExitCode::from(2);
             }
         };
-
-        if let Err(e) = store.refresh_meta(&meta) {
-            eprintln!("sift: {e}");
-            return ExitCode::from(2);
-        }
 
         let has_snapshot = store.current_id().is_some();
         match self.operation {
@@ -138,6 +139,11 @@ impl IndexJob {
                 return ExitCode::from(2);
             }
             IndexOperation::Build | IndexOperation::Update => {}
+        }
+
+        if let Err(e) = store.refresh_meta(&meta) {
+            eprintln!("sift: {e}");
+            return ExitCode::from(2);
         }
 
         if let Err(e) = store.reconcile(&meta, &[]) {
@@ -165,7 +171,8 @@ impl IndexJob {
 
     fn run_background(&self, daemon: Option<&Daemon>, argv: &Argv<'_>) -> ExitCode {
         let ignore_res = IgnoreResolution::resolve(argv);
-        let meta = self.store_meta(ignore_res);
+        let existing_meta = StoreMeta::read(&self.sift_dir).ok();
+        let meta = self.store_meta(ignore_res, existing_meta.as_ref());
 
         let store = match IndexStore::open_or_create(&self.sift_dir, &meta) {
             Ok(s) => s,
@@ -226,7 +233,17 @@ impl IndexJob {
         ExitCode::SUCCESS
     }
 
-    fn store_meta(&self, ignore_res: IgnoreResolution) -> StoreMeta {
+    fn store_meta(
+        &self,
+        ignore_res: IgnoreResolution,
+        existing_meta: Option<&StoreMeta>,
+    ) -> StoreMeta {
+        let coverage = match self.operation {
+            IndexOperation::Build => self.build_coverage,
+            IndexOperation::Update => {
+                existing_meta.map_or(self.build_coverage, |meta| meta.coverage)
+            }
+        };
         StoreMeta::new(
             CorpusMeta {
                 root: self.root.clone(),
@@ -234,6 +251,7 @@ impl IndexJob {
                 include_paths: self.include_paths.clone(),
                 exclude_paths: self.exclude_paths.clone(),
             },
+            coverage,
             WalkMeta {
                 follow_links: self.follow_links,
                 one_file_system: self.one_file_system,

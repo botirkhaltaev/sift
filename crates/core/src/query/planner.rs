@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::Candidate;
-use crate::StoreMeta;
 use crate::index::Indexes;
 use crate::query::QuerySpec;
 use crate::search::CandidateFilter;
+use crate::{IndexCoverage, StoreMeta};
 
 /// Whether search needs all candidate paths or only potential matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,29 +14,19 @@ pub enum CandidateRequirement {
     PotentialMatches,
 }
 
-/// Whether candidate planning may inspect files not present in the index snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum UnindexedPolicy {
-    /// Return only index-narrowed candidates. No filesystem walk.
-    #[default]
-    Skip,
-    /// Walk to discover files not yet indexed and merge them into results.
-    Walk,
-}
-
 /// Whether the opened snapshot has been validated as a complete read version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SnapshotValidation {
     #[default]
     Unvalidated,
     Validated,
+    Stale,
 }
 
 /// Candidate source policy for a grep run.
 #[derive(Clone, Copy)]
 pub struct CandidateSource<'a> {
     pub store_meta: Option<&'a StoreMeta>,
-    pub unindexed: UnindexedPolicy,
     pub snapshot: SnapshotValidation,
 }
 
@@ -67,9 +57,9 @@ impl<'a> QueryPlanner<'a> {
 
     /// Resolve candidates using indexes or the lazy base provider.
     ///
-    /// When `unindexed` is [`UnindexedPolicy::Walk`] and the index narrows
-    /// candidates, also walk corpus paths that are not yet present in the
-    /// current snapshot.
+    /// Lazy stores may merge filesystem walk results for paths not present in
+    /// the current snapshot. Complete stores use snapshot candidates unless an
+    /// explicit stale validation result requires a conservative walk fallback.
     ///
     /// # Errors
     ///
@@ -99,37 +89,56 @@ impl<'a> QueryPlanner<'a> {
                 }
                 match plan.indexes.candidates(&self.spec) {
                     None => base(),
-                    Some(snapshot_hits) if plan.source.unindexed == UnindexedPolicy::Skip => {
-                        Ok(snapshot_hits)
-                    }
-                    Some(snapshot_hits)
-                        if plan.source.snapshot == SnapshotValidation::Validated
-                            && plan
-                                .source
-                                .store_meta
-                                .is_some_and(|meta| meta.covers_candidate_filter(plan.filter)) =>
-                    {
-                        Ok(snapshot_hits)
-                    }
-                    Some(mut snapshot_hits) => {
-                        let indexed_paths = plan.indexes.indexed_rel_paths();
-                        let walked = base()?;
-                        let mut seen: HashSet<PathBuf> = snapshot_hits
-                            .iter()
-                            .map(|c| c.rel_path().to_path_buf())
-                            .collect();
-                        for candidate in walked {
-                            if indexed_paths.contains(candidate.rel_path()) {
-                                continue;
-                            }
-                            if seen.insert(candidate.rel_path().to_path_buf()) {
-                                snapshot_hits.push(candidate);
-                            }
-                        }
-                        Ok(snapshot_hits)
-                    }
+                    Some(snapshot_hits) => Self::resolve_index_hits(plan, snapshot_hits, base),
                 }
             }
         }
+    }
+
+    fn resolve_index_hits(
+        plan: CandidatePlan<'_>,
+        snapshot_hits: Vec<Candidate>,
+        base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
+    ) -> crate::Result<Vec<Candidate>> {
+        let Some(meta) = plan.source.store_meta else {
+            return Ok(snapshot_hits);
+        };
+
+        if !meta.covers_candidate_filter(plan.filter) {
+            return base();
+        }
+
+        match meta.coverage {
+            IndexCoverage::Complete => {
+                if plan.source.snapshot == SnapshotValidation::Stale {
+                    base()
+                } else {
+                    Ok(snapshot_hits)
+                }
+            }
+            IndexCoverage::Lazy => Self::merge_unindexed(plan, snapshot_hits, base),
+        }
+    }
+
+    fn merge_unindexed(
+        plan: CandidatePlan<'_>,
+        mut snapshot_hits: Vec<Candidate>,
+        base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
+    ) -> crate::Result<Vec<Candidate>> {
+        let indexed_paths = plan.indexes.indexed_rel_paths();
+        let walked = base()?;
+        let mut seen: HashSet<PathBuf> = snapshot_hits
+            .iter()
+            .map(|c| c.rel_path().to_path_buf())
+            .collect();
+        for candidate in walked {
+            if indexed_paths.contains(candidate.rel_path()) {
+                continue;
+            }
+            if seen.insert(candidate.rel_path().to_path_buf()) {
+                snapshot_hits.push(candidate);
+            }
+        }
+        Ok(snapshot_hits)
     }
 }

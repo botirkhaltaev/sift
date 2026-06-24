@@ -15,9 +15,21 @@ const STORE_VERSION: u32 = 1;
 pub struct StoreMeta {
     pub version: u32,
     pub corpus: CorpusMeta,
+    #[serde(default)]
+    pub coverage: IndexCoverage,
     pub walk: WalkMeta,
     pub filters: FilterMeta,
     pub indexes: Vec<IndexKind>,
+}
+
+/// Whether the store is expected to cover the whole configured corpus.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum IndexCoverage {
+    /// The committed snapshots are complete read versions for the configured corpus.
+    #[default]
+    Complete,
+    /// Snapshots may be partial; candidate planning must discover unindexed paths.
+    Lazy,
 }
 
 /// Which corpus this store indexes.
@@ -54,6 +66,7 @@ impl StoreMeta {
     #[must_use]
     pub const fn new(
         corpus: CorpusMeta,
+        coverage: IndexCoverage,
         walk: WalkMeta,
         filters: FilterMeta,
         indexes: Vec<IndexKind>,
@@ -61,6 +74,7 @@ impl StoreMeta {
         Self {
             version: STORE_VERSION,
             corpus,
+            coverage,
             walk,
             filters,
             indexes,
@@ -172,6 +186,7 @@ mod tests {
                 include_paths: vec![PathBuf::from("only.rs")],
                 exclude_paths: vec![PathBuf::from(".sift")],
             },
+            IndexCoverage::Lazy,
             WalkMeta {
                 follow_links: true,
                 one_file_system: true,
@@ -193,6 +208,7 @@ mod tests {
         assert_eq!(loaded.corpus.root, meta.corpus.root);
         assert_eq!(loaded.corpus.kind, meta.corpus.kind);
         assert_eq!(loaded.corpus.include_paths, meta.corpus.include_paths);
+        assert_eq!(loaded.coverage, meta.coverage);
         assert_eq!(loaded.walk, meta.walk);
         assert_eq!(loaded.filters, meta.filters);
         assert_eq!(loaded.indexes, meta.indexes);
