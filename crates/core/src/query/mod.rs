@@ -1,5 +1,8 @@
 mod planner;
 mod spec;
 
-pub use planner::{CandidateRequirement, QueryPlanner, UnindexedStrategy};
+pub use planner::{
+    CandidatePlan, CandidateRequirement, CandidateSource, QueryPlanner, SnapshotValidation,
+    UnindexedPolicy,
+};
 pub use spec::{QueryFlags, QuerySpec};

@@ -127,14 +127,31 @@ impl StoreMeta {
         }
     }
 
-    /// Whether the search-time filter matches the walk and visibility stored in meta.
+    /// Whether this index metadata covers the search-time candidate universe.
     #[must_use]
-    pub fn matches_search_filter(&self, filter: &CandidateFilter) -> bool {
+    pub fn covers_candidate_filter(&self, filter: &CandidateFilter) -> bool {
         self.walk.follow_links == filter.follow_links()
             && self.walk.one_file_system == filter.one_file_system()
             && self.walk.max_depth == filter.max_depth()
             && self.walk.max_filesize == filter.max_filesize()
             && self.filters.visibility == *filter.visibility()
+            && self.covers_search_scopes(filter)
+    }
+
+    fn covers_search_scopes(&self, filter: &CandidateFilter) -> bool {
+        if self.corpus.include_paths.is_empty() {
+            return true;
+        }
+
+        filter.scopes().iter().all(|scope| {
+            !scope.as_os_str().is_empty()
+                && scope != Path::new(".")
+                && self
+                    .corpus
+                    .include_paths
+                    .iter()
+                    .any(|include| scope.starts_with(include))
+        })
     }
 }
 

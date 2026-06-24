@@ -20,6 +20,13 @@ pub struct IndexStore<S: SnapshotStore = DiskSnapshotStore> {
     meta: Option<StoreMeta>,
 }
 
+/// Result of reconciling store metadata and corpus state into a committed snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcileOutcome {
+    pub snapshot_id: SnapshotId,
+    pub changed: bool,
+}
+
 impl IndexStore<DiskSnapshotStore> {
     #[must_use]
     pub const fn meta(&self) -> Option<&StoreMeta> {
@@ -150,7 +157,12 @@ impl IndexStore<DiskSnapshotStore> {
                 )?);
             }
 
-            return Ok(super::snapshot::Snapshot::current(root, indexes, lease));
+            return Ok(super::snapshot::Snapshot::committed(
+                manifest.id,
+                root,
+                indexes,
+                lease,
+            ));
         }
 
         Err(crate::Error::Io(std::io::Error::new(
@@ -293,21 +305,48 @@ impl<S: SnapshotStore> IndexStore<S> {
     /// # Errors
     ///
     /// Propagates build/update failures from the underlying index kinds.
-    pub fn reconcile(&mut self, meta: &StoreMeta, paths: &[PathBuf]) -> crate::Result<()> {
+    pub fn reconcile(
+        &mut self,
+        meta: &StoreMeta,
+        paths: &[PathBuf],
+    ) -> crate::Result<ReconcileOutcome> {
         let config = meta.index_config();
         let kinds = &meta.indexes;
-        if paths.is_empty() {
+        let (snapshot_id, changed) = if paths.is_empty() {
             if self.current_id().is_none() {
-                self.build(kinds, &config, &[])?;
+                (SnapshotId::new(self.build(kinds, &config, &[])?), true)
             } else {
-                self.update(kinds, &config, &[])?;
+                match self.update(kinds, &config, &[])? {
+                    Some(id) => (SnapshotId::new(id), true),
+                    None => (self.current_snapshot_id()?, false),
+                }
             }
         } else if self.current_id().is_none() {
-            self.build(kinds, &config, paths)?;
+            (SnapshotId::new(self.build(kinds, &config, paths)?), true)
         } else {
-            self.update(kinds, &config, paths)?;
-        }
-        Ok(())
+            match self.update(kinds, &config, paths)? {
+                Some(id) => (SnapshotId::new(id), true),
+                None => (self.current_snapshot_id()?, false),
+            }
+        };
+        Ok(ReconcileOutcome {
+            snapshot_id,
+            changed,
+        })
+    }
+
+    fn current_snapshot_id(&self) -> crate::Result<SnapshotId> {
+        self.current_id()
+            .map(|id| SnapshotId::new(id.to_string()))
+            .ok_or_else(|| {
+                crate::Error::Index(IndexError::Io {
+                    path: self.sift_dir.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no current snapshot after reconcile",
+                    ),
+                })
+            })
     }
 }
 fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {

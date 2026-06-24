@@ -74,6 +74,17 @@ overfit one caller, one test, one branch, or one implementation detail. Name
 types and functions after the domain concept they model, not the incidental
 mechanism they use.
 
+When adding request/config structs, name them after the domain decision they
+represent, not the mechanical data they carry. Avoid vague bundles such as
+`Context`, `State`, `Read`, or `Options` unless those are the actual domain
+terms. Prefer names like `CandidateSource`, `SnapshotValidation`, and
+`IndexCoverage` that tell callers how to reason about the API.
+
+Do not expose low-level planner knobs through higher-level APIs as loose fields.
+Group related inputs behind a domain type owned by the layer making the
+decision, and make each field describe a stable concept rather than a temporary
+implementation detail.
+
 When behavior has distinct cases, model those cases directly with domain types.
 Use enums for real alternatives, structs for coherent grouped data, and options
 structs for configurable behavior. Avoid boolean flags when a named domain type

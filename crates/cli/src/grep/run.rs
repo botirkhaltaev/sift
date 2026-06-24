@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use sift_core::search::{CandidateFilter, SearchMode};
-use sift_core::{CorpusKind, Indexes, SearchQuery, UnindexedStrategy};
+use sift_core::{
+    CandidateSource, CorpusKind, Indexes, SearchQuery, SnapshotValidation, UnindexedPolicy,
+};
 
 use crate::index::daemon::Daemon;
 
@@ -241,6 +243,20 @@ impl Grep {
             }
         };
         let output = out.to_core_output(&self.config.output, filename_ctx);
+        let snapshot_read = daemon
+            .and_then(|daemon| {
+                session
+                    .indexes
+                    .snapshot_id()
+                    .and_then(|id| daemon.validate_snapshot(id).ok())
+            })
+            .map_or(SnapshotValidation::Unvalidated, |valid| {
+                if valid {
+                    SnapshotValidation::Validated
+                } else {
+                    SnapshotValidation::Unvalidated
+                }
+            });
 
         let grep_run = sift_core::grep::GrepRequest {
             indexes: &session.indexes,
@@ -248,11 +264,14 @@ impl Grep {
             output,
             separators: &out.separators,
             collect: sift_core::search::SearchCollection::hits().with_stats(out.print_stats),
-            store_meta: session.store_meta.as_ref(),
-            unindexed: if daemon.is_some() {
-                UnindexedStrategy::Walk
-            } else {
-                UnindexedStrategy::Skip
+            candidate_source: CandidateSource {
+                store_meta: session.store_meta.as_ref(),
+                unindexed: if daemon.is_some() {
+                    UnindexedPolicy::Walk
+                } else {
+                    UnindexedPolicy::Skip
+                },
+                snapshot: snapshot_read,
             },
         }
         .run(&query)?;

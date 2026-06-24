@@ -22,7 +22,7 @@ use common::normalize_stderr;
 use common::normalize_stdout;
 use sift_core::search::VisibilityConfig;
 use sift_core::{CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, WalkMeta};
-use sift_grep::index::daemon::{Daemon, ServeConfig};
+use sift_grep::index::daemon::{Daemon, DaemonOrchestrator, ServeConfig};
 
 fn spawn_daemon(
     sift_dir: PathBuf,
@@ -31,7 +31,7 @@ fn spawn_daemon(
     shutdown: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let daemon = Daemon::new(sift_dir);
+        let daemon = DaemonOrchestrator::new(sift_dir, None);
         daemon
             .serve(
                 ServeConfig {
@@ -383,7 +383,7 @@ fn daemon_exits_after_idle_timeout() {
         let sift_dir = sift_dir.clone();
         let ready_path = ready_path.clone();
         move || {
-            let daemon = Daemon::new(sift_dir);
+            let daemon = DaemonOrchestrator::new(sift_dir, None);
             let shutdown = AtomicBool::new(false);
             daemon
                 .serve(
@@ -595,6 +595,59 @@ fn search_walk_hit_queues_partial_index() {
 }
 
 #[test]
+fn daemon_validates_only_current_committed_snapshot() {
+    let p = TestProject::new("daemon-validate-snapshot");
+    p.write("a.txt", "validate_snapshot_initial\n");
+    p.build_index();
+
+    let ready_path = p.sift_dir().join("daemon-ready.validate");
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let handle = spawn_daemon(
+        p.sift_dir().to_path_buf(),
+        ready_path.clone(),
+        LONG_IDLE,
+        Arc::clone(&shutdown),
+    );
+    wait_for_ready(&ready_path);
+
+    let daemon = Daemon::new(p.sift_dir().to_path_buf());
+    let first = Indexes::open(p.sift_dir()).expect("open indexes");
+    let first_id = first.snapshot_id().expect("snapshot id").clone();
+    assert!(
+        daemon
+            .validate_snapshot(&first_id)
+            .expect("validate snapshot"),
+        "current snapshot should validate"
+    );
+
+    p.write("b.txt", "validate_snapshot_next\n");
+    daemon.index(vec![]).expect("queue full reconcile");
+    poll_until_indexed(p.sift_dir(), "b.txt", Duration::from_secs(15));
+
+    let second = Indexes::open(p.sift_dir()).expect("open indexes");
+    let second_id = second.snapshot_id().expect("snapshot id").clone();
+    assert_ne!(
+        first_id, second_id,
+        "reconcile should commit a new snapshot"
+    );
+    assert!(
+        !daemon
+            .validate_snapshot(&first_id)
+            .expect("validate snapshot"),
+        "old snapshot should not validate after a newer commit"
+    );
+    assert!(
+        daemon
+            .validate_snapshot(&second_id)
+            .expect("validate snapshot"),
+        "new snapshot should validate"
+    );
+
+    shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+}
+
+#[test]
 fn blocking_build_starts_daemon_for_watch() {
     let p = TestProject::new("daemon-blocking-handoff");
     p.write("a.txt", "blocking_handoff_initial\n");
@@ -620,13 +673,16 @@ fn blocking_build_starts_daemon_for_watch() {
     let sift_dir = p.sift_dir().to_path_buf();
     let reachable_deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < reachable_deadline {
-        if Daemon::new(sift_dir.clone()).ensure_running().is_ok() {
+        if DaemonOrchestrator::new(sift_dir.clone(), None)
+            .start()
+            .is_ok()
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Daemon::new(sift_dir)
-        .ensure_running()
+    DaemonOrchestrator::new(sift_dir, None)
+        .start()
         .expect("daemon ipc not reachable after blocking build");
 
     p.write("b.txt", "blocking_handoff_watch_marker\n");
