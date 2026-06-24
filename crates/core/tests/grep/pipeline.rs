@@ -3,7 +3,7 @@ use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, SearchCollection, SearchOptions, SearchOutput,
     SearchSeparators,
 };
-use sift_core::{CandidateSource, SearchQuery, SnapshotValidation, UnindexedPolicy};
+use sift_core::{CandidateSource, SearchQuery, SnapshotValidation};
 use tempfile::TempDir;
 
 use super::common::{build_store, make_parity_corpus, open_indexes};
@@ -28,7 +28,6 @@ fn grep_finds_match_in_indexed_corpus() {
         collect: SearchCollection::none(),
         candidate_source: CandidateSource {
             store_meta: None,
-            unindexed: UnindexedPolicy::Skip,
             snapshot: SnapshotValidation::Unvalidated,
         },
     }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use sift_core::search::{CandidateFilter, SearchMode};
 use sift_core::{
-    CandidateSource, CorpusKind, Indexes, SearchQuery, SnapshotValidation, UnindexedPolicy,
+    CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
 };
 
 use crate::index::daemon::Daemon;
@@ -243,20 +243,21 @@ impl Grep {
             }
         };
         let output = out.to_core_output(&self.config.output, filename_ctx);
-        let snapshot_read = daemon
+        let snapshot = daemon
             .and_then(|daemon| {
                 session
                     .indexes
                     .snapshot_id()
-                    .and_then(|id| daemon.validate_snapshot(id).ok())
+                    .map(|id| daemon.validate_snapshot(id))
             })
-            .map_or(SnapshotValidation::Unvalidated, |valid| {
-                if valid {
-                    SnapshotValidation::Validated
-                } else {
-                    SnapshotValidation::Unvalidated
-                }
-            });
+            .map_or(
+                SnapshotValidation::Unvalidated,
+                |validation| match validation {
+                    Ok(true) => SnapshotValidation::Validated,
+                    Ok(false) => SnapshotValidation::Stale,
+                    Err(_) => SnapshotValidation::Unvalidated,
+                },
+            );
 
         let grep_run = sift_core::grep::GrepRequest {
             indexes: &session.indexes,
@@ -266,19 +267,19 @@ impl Grep {
             collect: sift_core::search::SearchCollection::hits().with_stats(out.print_stats),
             candidate_source: CandidateSource {
                 store_meta: session.store_meta.as_ref(),
-                unindexed: if daemon.is_some() {
-                    UnindexedPolicy::Walk
-                } else {
-                    UnindexedPolicy::Skip
-                },
-                snapshot: snapshot_read,
+                snapshot,
             },
         }
         .run(&query)?;
         if let Some(s) = &grep_run.outcome.stats {
             SearchOutputCtx::write_stats(s);
         }
-        if let Some(daemon) = daemon {
+        if let Some(daemon) = daemon
+            && session
+                .store_meta
+                .as_ref()
+                .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
+        {
             let paths = session.indexes.unindexed_hits(grep_run.hits);
             if !paths.is_empty()
                 && let Err(e) = daemon.index(paths)

@@ -21,7 +21,9 @@ use common::normalize;
 use common::normalize_stderr;
 use common::normalize_stdout;
 use sift_core::search::VisibilityConfig;
-use sift_core::{CorpusKind, CorpusMeta, FilterMeta, IndexKind, Indexes, StoreMeta, WalkMeta};
+use sift_core::{
+    CorpusKind, CorpusMeta, FilterMeta, IndexCoverage, IndexKind, Indexes, StoreMeta, WalkMeta,
+};
 use sift_grep::index::daemon::{Daemon, DaemonOrchestrator, ServeConfig};
 
 fn spawn_daemon(
@@ -63,6 +65,7 @@ fn sample_meta(root: PathBuf) -> StoreMeta {
             include_paths: Vec::new(),
             exclude_paths: Vec::new(),
         },
+        IndexCoverage::Complete,
         WalkMeta {
             follow_links: false,
             one_file_system: false,
@@ -558,10 +561,81 @@ fn index_update_async_reconciles_offline_edit() {
 }
 
 #[test]
+fn index_build_lazy_persists_lazy_coverage() {
+    let p = TestProject::new("index-build-lazy-coverage");
+    p.write("a.txt", "lazy_coverage_marker\n");
+
+    let status = p
+        .sift()
+        .arg("--sift-dir")
+        .arg(p.sift_dir())
+        .args(["index", "build", "--wait", "--lazy"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "lazy index build failed with {status}");
+
+    let meta = StoreMeta::read(p.sift_dir()).expect("read meta");
+    assert_eq!(meta.coverage, IndexCoverage::Lazy);
+}
+
+#[test]
+fn index_update_preserves_lazy_coverage() {
+    let p = TestProject::new("index-update-lazy-coverage");
+    p.write("a.txt", "lazy_update_original\n");
+    let status = p
+        .sift()
+        .arg("--sift-dir")
+        .arg(p.sift_dir())
+        .args(["index", "build", "--wait", "--lazy"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "lazy index build failed with {status}");
+
+    p.write("b.txt", "lazy_update_next\n");
+    let status = p
+        .sift()
+        .arg("--sift-dir")
+        .arg(p.sift_dir())
+        .args(["index", "update", "--wait"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "index update failed with {status}");
+
+    let meta = StoreMeta::read(p.sift_dir()).expect("read meta");
+    assert_eq!(meta.coverage, IndexCoverage::Lazy);
+}
+
+#[test]
+fn failed_rebuild_does_not_change_coverage() {
+    let p = TestProject::new("failed-rebuild-coverage");
+    p.write("a.txt", "complete_coverage_marker\n");
+    p.build_index();
+
+    let status = p
+        .sift()
+        .arg("--sift-dir")
+        .arg(p.sift_dir())
+        .args(["index", "build", "--wait", "--lazy"])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "rebuild unexpectedly succeeded");
+
+    let meta = StoreMeta::read(p.sift_dir()).expect("read meta");
+    assert_eq!(meta.coverage, IndexCoverage::Complete);
+}
+
+#[test]
 fn search_walk_hit_queues_partial_index() {
     let p = TestProject::new("daemon-walk-hit-partial");
     p.write("a.txt", "indexed_only_a\n");
-    p.build_index();
+    let status = p
+        .sift()
+        .arg("--sift-dir")
+        .arg(p.sift_dir())
+        .args(["index", "build", "--wait", "--lazy"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "lazy index build failed with {status}");
     p.write("b.txt", "walk_hit_partial_marker\n");
 
     assert!(

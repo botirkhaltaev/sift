@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use sift_core::search::{IgnoreConfig, VisibilityConfig};
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexKind, IndexStore,
-    IndexWalkConfig, Indexes, StoreMeta, TrigramIndex, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexCoverage, IndexKind,
+    IndexStore, IndexWalkConfig, Indexes, StoreMeta, TrigramIndex, WalkMeta,
 };
 
 pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexKind>) -> StoreMeta {
@@ -19,6 +19,7 @@ pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexKind>) -> StoreMeta {
             include_paths: Vec::new(),
             exclude_paths: Vec::new(),
         },
+        IndexCoverage::Complete,
         WalkMeta {
             follow_links: false,
             one_file_system: false,

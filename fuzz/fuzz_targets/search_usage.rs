@@ -9,7 +9,7 @@ use sift_core::search::{
 };
 use sift_core::{
     CandidateSource, CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, Indexes, SearchQuery,
-    SnapshotValidation, TrigramIndex, UnindexedPolicy,
+    SnapshotValidation, TrigramIndex,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -90,7 +90,6 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
         collect: SearchCollection::none(),
         candidate_source: CandidateSource {
             store_meta: None,
-            unindexed: UnindexedPolicy::Skip,
             snapshot: SnapshotValidation::Unvalidated,
         },
     };

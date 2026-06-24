@@ -15,8 +15,8 @@ use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, S
 use notify::RecursiveMode;
 use notify::Watcher;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, IndexKind, IndexStore, ReconcileOutcome, SnapshotId,
-    StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, FilterMeta, IndexCoverage, IndexKind, IndexStore, ReconcileOutcome,
+    SnapshotId, StoreMeta, WalkMeta,
 };
 use thiserror::Error;
 
@@ -467,6 +467,7 @@ impl DaemonOrchestrator {
                         include_paths: Vec::new(),
                         exclude_paths: CorpusScope::excluded_paths(&root, sift_dir),
                     },
+                    IndexCoverage::Complete,
                     WalkMeta {
                         follow_links: false,
                         one_file_system: false,
@@ -1284,6 +1285,7 @@ mod tests {
                 include_paths: Vec::new(),
                 exclude_paths: Vec::new(),
             },
+            IndexCoverage::Complete,
             WalkMeta {
                 follow_links: false,
                 one_file_system: false,
@@ -1313,6 +1315,7 @@ mod tests {
                 include_paths: Vec::new(),
                 exclude_paths: Vec::new(),
             },
+            IndexCoverage::Complete,
             WalkMeta {
                 follow_links: false,
                 one_file_system: false,
@@ -1351,6 +1354,7 @@ mod tests {
                     include_paths: Vec::new(),
                     exclude_paths: Vec::new(),
                 },
+                IndexCoverage::Complete,
                 WalkMeta {
                     follow_links: false,
                     one_file_system: false,
@@ -1377,6 +1381,7 @@ mod tests {
                     include_paths: Vec::new(),
                     exclude_paths: Vec::new(),
                 },
+                IndexCoverage::Complete,
                 WalkMeta {
                     follow_links: false,
                     one_file_system: false,
@@ -1408,6 +1413,7 @@ mod tests {
                 include_paths: Vec::new(),
                 exclude_paths: Vec::new(),
             },
+            IndexCoverage::Complete,
             WalkMeta {
                 follow_links: false,
                 one_file_system: false,
@@ -1479,6 +1485,7 @@ mod tests {
                 include_paths: Vec::new(),
                 exclude_paths: Vec::new(),
             },
+            IndexCoverage::Complete,
             WalkMeta {
                 follow_links: false,
                 one_file_system: false,

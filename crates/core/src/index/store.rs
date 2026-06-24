@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     use crate::index::config::IndexWalkConfig;
     use crate::index::meta::{CorpusMeta, FilterMeta, StoreMeta, WalkMeta};
-    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexKind};
+    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexCoverage, IndexKind};
     use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
@@ -390,6 +390,7 @@ mod tests {
                 include_paths: Vec::new(),
                 exclude_paths: Vec::new(),
             },
+            IndexCoverage::Complete,
             WalkMeta {
                 follow_links: false,
                 one_file_system: false,

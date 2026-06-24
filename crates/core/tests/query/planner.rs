@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use sift_core::search::{CandidateFilter, CandidateFilterConfig, GlobConfig, VisibilityConfig};
 use sift_core::{
     Candidate, CandidatePlan, CandidateRequirement, CandidateSource, CorpusKind, CorpusMeta,
-    FilterMeta, IndexConfig, IndexKind, IndexStore, IndexWalkConfig, Indexes, QueryFlags,
-    QueryPlanner, QuerySpec, SnapshotValidation, StoreMeta, UnindexedPolicy, WalkMeta,
+    FilterMeta, IndexConfig, IndexCoverage, IndexKind, IndexStore, IndexWalkConfig, Indexes,
+    QueryFlags, QueryPlanner, QuerySpec, SnapshotValidation, StoreMeta, WalkMeta,
 };
 use tempfile::TempDir;
 
@@ -18,6 +18,7 @@ fn build_indexes(root: &Path, sift_dir: &Path) -> Indexes {
             include_paths: Vec::new(),
             exclude_paths: Vec::new(),
         },
+        IndexCoverage::Complete,
         WalkMeta {
             follow_links: false,
             one_file_system: false,
@@ -78,6 +79,7 @@ fn default_meta(root: &Path) -> StoreMeta {
             include_paths: Vec::new(),
             exclude_paths: Vec::new(),
         },
+        IndexCoverage::Complete,
         WalkMeta {
             follow_links: false,
             one_file_system: false,
@@ -124,7 +126,6 @@ fn potential_matches_narrowable_uses_index() {
                 filter: &filter,
                 source: CandidateSource {
                     store_meta: None,
-                    unindexed: UnindexedPolicy::Skip,
                     snapshot: SnapshotValidation::Unvalidated,
                 },
             },
@@ -156,7 +157,6 @@ fn potential_matches_non_narrowable_falls_back_to_base() {
                 filter: &filter,
                 source: CandidateSource {
                     store_meta: None,
-                    unindexed: UnindexedPolicy::Skip,
                     snapshot: SnapshotValidation::Unvalidated,
                 },
             },
@@ -172,7 +172,7 @@ fn potential_matches_non_narrowable_falls_back_to_base() {
 }
 
 #[test]
-fn potential_matches_includes_unindexed_walk_paths() {
+fn lazy_potential_matches_includes_unindexed_walk_paths() {
     let tmp = TempDir::new().expect("tempdir");
     let corpus = tmp.path().join("corpus");
     make_parity_corpus(&corpus);
@@ -186,6 +186,10 @@ fn potential_matches_includes_unindexed_walk_paths() {
     };
     let filter = default_filter(&corpus);
     let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt", "new.txt"]);
+    let meta = StoreMeta {
+        coverage: IndexCoverage::Lazy,
+        ..default_meta(&corpus)
+    };
     let result = QueryPlanner::new(spec)
         .candidates(
             CandidatePlan {
@@ -193,8 +197,7 @@ fn potential_matches_includes_unindexed_walk_paths() {
                 requirement: CandidateRequirement::PotentialMatches,
                 filter: &filter,
                 source: CandidateSource {
-                    store_meta: None,
-                    unindexed: UnindexedPolicy::Walk,
+                    store_meta: Some(&meta),
                     snapshot: SnapshotValidation::Unvalidated,
                 },
             },
@@ -227,7 +230,6 @@ fn potential_matches_validated_snapshot_skips_unindexed_walk() {
                 filter: &filter,
                 source: CandidateSource {
                     store_meta: Some(&meta),
-                    unindexed: UnindexedPolicy::Walk,
                     snapshot: SnapshotValidation::Validated,
                 },
             },
@@ -256,7 +258,7 @@ fn potential_matches_validated_snapshot_walks_when_filter_not_covered() {
     };
     let filter = CandidateFilter::new(&filter_config, &corpus).expect("filter");
     let meta = default_meta(&corpus);
-    let base = candidates_from_paths(&corpus, &["new.txt"]);
+    let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt", "new.txt"]);
     let result = QueryPlanner::new(spec)
         .candidates(
             CandidatePlan {
@@ -265,17 +267,62 @@ fn potential_matches_validated_snapshot_walks_when_filter_not_covered() {
                 filter: &filter,
                 source: CandidateSource {
                     store_meta: Some(&meta),
-                    unindexed: UnindexedPolicy::Walk,
                     snapshot: SnapshotValidation::Validated,
                 },
             },
             || Ok(base),
         )
         .expect("candidates");
-    let paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+    let mut paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+    paths.sort();
     assert_eq!(
         paths,
-        vec![PathBuf::from("a/x.txt"), PathBuf::from("new.txt")]
+        vec![
+            PathBuf::from("a/x.txt"),
+            PathBuf::from("b/y.txt"),
+            PathBuf::from("new.txt")
+        ]
+    );
+}
+
+#[test]
+fn potential_matches_stale_complete_snapshot_falls_back_to_base() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    make_parity_corpus(&corpus);
+    let sift_dir = tmp.path().join(".sift");
+    let indexes = build_indexes(&corpus, &sift_dir);
+
+    let spec = QuerySpec {
+        patterns: &["beta".to_string()],
+        flags: QueryFlags::empty(),
+    };
+    let filter = default_filter(&corpus);
+    let meta = default_meta(&corpus);
+    let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt", "new.txt"]);
+    let result = QueryPlanner::new(spec)
+        .candidates(
+            CandidatePlan {
+                indexes: &indexes,
+                requirement: CandidateRequirement::PotentialMatches,
+                filter: &filter,
+                source: CandidateSource {
+                    store_meta: Some(&meta),
+                    snapshot: SnapshotValidation::Stale,
+                },
+            },
+            || Ok(base),
+        )
+        .expect("candidates");
+    let mut paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("a/x.txt"),
+            PathBuf::from("b/y.txt"),
+            PathBuf::from("new.txt")
+        ]
     );
 }
 
@@ -294,7 +341,7 @@ fn potential_matches_validated_snapshot_walks_when_partial_index_does_not_cover_
     let filter = default_filter(&corpus);
     let mut meta = default_meta(&corpus);
     meta.corpus.include_paths = vec![PathBuf::from("a/x.txt")];
-    let base = candidates_from_paths(&corpus, &["new.txt"]);
+    let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt", "new.txt"]);
     let result = QueryPlanner::new(spec)
         .candidates(
             CandidatePlan {
@@ -303,17 +350,21 @@ fn potential_matches_validated_snapshot_walks_when_partial_index_does_not_cover_
                 filter: &filter,
                 source: CandidateSource {
                     store_meta: Some(&meta),
-                    unindexed: UnindexedPolicy::Walk,
                     snapshot: SnapshotValidation::Validated,
                 },
             },
             || Ok(base),
         )
         .expect("candidates");
-    let paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+    let mut paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+    paths.sort();
     assert_eq!(
         paths,
-        vec![PathBuf::from("a/x.txt"), PathBuf::from("new.txt")]
+        vec![
+            PathBuf::from("a/x.txt"),
+            PathBuf::from("b/y.txt"),
+            PathBuf::from("new.txt")
+        ]
     );
 }
 
@@ -338,7 +389,6 @@ fn complete_falls_back_to_base() {
                 filter: &filter,
                 source: CandidateSource {
                     store_meta: None,
-                    unindexed: UnindexedPolicy::Skip,
                     snapshot: SnapshotValidation::Unvalidated,
                 },
             },
