@@ -190,11 +190,12 @@ impl SearchQuery {
             }
         };
 
-        let stats = counters.finish(
-            candidates.len(),
-            crate::Candidate::total_file_bytes(candidates),
-            search_start.elapsed(),
-        );
+        let bytes_searched = if collect.stats {
+            crate::Candidate::total_file_bytes(candidates)
+        } else {
+            0
+        };
+        let stats = counters.finish(candidates.len(), bytes_searched, search_start.elapsed());
 
         Ok((did_match, stats, hits))
     }

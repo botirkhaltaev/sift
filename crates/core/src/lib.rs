@@ -44,7 +44,7 @@ pub use index::{
     IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, WalkMeta,
 };
 
-pub use query::{CandidateRequirement, QueryFlags, QueryPlanner, QuerySpec};
+pub use query::{CandidateRequirement, QueryFlags, QueryPlanner, QuerySpec, UnindexedStrategy};
 
 use thiserror::Error;
 

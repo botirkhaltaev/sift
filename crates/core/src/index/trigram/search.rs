@@ -24,9 +24,11 @@ impl TrigramIndex {
                 .filter_map(|id| {
                     let fid = FileId::new(usize::try_from(id).ok()?);
                     let fp = self.fingerprints.get(fid.get())?;
-                    Some(crate::Candidate::new(
+                    Some(crate::Candidate::with_metadata(
                         fp.path.clone(),
                         self.root.join(&fp.path),
+                        Some(fp.size),
+                        None,
                     ))
                 })
                 .collect(),
@@ -50,7 +52,14 @@ impl TrigramIndex {
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
         self.fingerprints
             .iter()
-            .map(|fp| crate::Candidate::new(fp.path.clone(), self.root.join(&fp.path)))
+            .map(|fp| {
+                crate::Candidate::with_metadata(
+                    fp.path.clone(),
+                    self.root.join(&fp.path),
+                    Some(fp.size),
+                    None,
+                )
+            })
             .collect()
     }
 

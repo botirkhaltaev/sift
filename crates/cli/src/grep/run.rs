@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use sift_core::search::{CandidateFilter, SearchMode};
-use sift_core::{CorpusKind, Indexes, SearchQuery};
+use sift_core::{CorpusKind, Indexes, SearchQuery, UnindexedStrategy};
 
 use crate::index::daemon::Daemon;
 
@@ -249,7 +249,11 @@ impl Grep {
             separators: &out.separators,
             collect: sift_core::search::SearchCollection::hits().with_stats(out.print_stats),
             store_meta: session.store_meta.as_ref(),
-            walk_unindexed: daemon.is_some(),
+            unindexed: if daemon.is_some() {
+                UnindexedStrategy::Walk
+            } else {
+                UnindexedStrategy::Skip
+            },
         }
         .run(&query)?;
         if let Some(s) = &grep_run.outcome.stats {

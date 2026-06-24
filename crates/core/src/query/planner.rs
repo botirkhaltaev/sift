@@ -14,6 +14,16 @@ pub enum CandidateRequirement {
     PotentialMatches,
 }
 
+/// Whether the planner should walk for files not present in the index snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnindexedStrategy {
+    /// Return only index-narrowed candidates. No filesystem walk.
+    #[default]
+    Skip,
+    /// Walk to discover files not yet indexed and merge them into results.
+    Walk,
+}
+
 /// Plans candidate selection by consulting the index registry and falling back
 /// to a filesystem walk when no index can narrow the query.
 ///
@@ -32,8 +42,9 @@ impl<'a> QueryPlanner<'a> {
 
     /// Resolve candidates using indexes or the lazy base provider.
     ///
-    /// When `walk_unindexed` is true and the index narrows candidates, also walk
-    /// corpus paths that are not yet present in the current snapshot.
+    /// When `unindexed` is [`UnindexedStrategy::Walk`] and the index narrows
+    /// candidates, also walk corpus paths that are not yet present in the
+    /// current snapshot.
     ///
     /// # Errors
     ///
@@ -44,7 +55,7 @@ impl<'a> QueryPlanner<'a> {
         requirement: CandidateRequirement,
         filter: &CandidateFilter,
         store_meta: Option<&StoreMeta>,
-        walk_unindexed: bool,
+        unindexed: UnindexedStrategy,
         base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
     ) -> crate::Result<Vec<Candidate>> {
         match requirement {
@@ -63,7 +74,9 @@ impl<'a> QueryPlanner<'a> {
                 }
                 match indexes.candidates(&self.spec) {
                     None => base(),
-                    Some(snapshot_hits) if !walk_unindexed => Ok(snapshot_hits),
+                    Some(snapshot_hits) if unindexed == UnindexedStrategy::Skip => {
+                        Ok(snapshot_hits)
+                    }
                     Some(mut snapshot_hits) => {
                         let indexed_paths = indexes.indexed_rel_paths();
                         let walked = base()?;

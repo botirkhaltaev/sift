@@ -89,7 +89,7 @@ fn run_search(
         separators: &SearchSeparators::default(),
         collect: SearchCollection::none(),
         store_meta: None,
-        walk_unindexed: false,
+        unindexed: sift_core::UnindexedStrategy::Skip,
     });
 }
 
