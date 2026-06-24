@@ -1,162 +1,79 @@
 # Sift
 
-Indexed grep for codebases. Build an index once, then search with a grep-like CLI or the `sift-core` library -- up to 2.8x faster than ripgrep end-to-end on indexed queries.
+Indexed grep for codebases. Build a trigram index once, then search **2--3x faster** than ripgrep on literal queries.
 
-## Why Sift
+```bash
+sift index build .          # one-time index
+sift "PM_RESUME"            # instant results
+```
 
-Tools like `grep` and `ripgrep` scan every file on every query. For large codebases this means most search time is spent reading files that cannot possibly match. Sift takes a different approach: build on-disk indexes ahead of time, then use them to skip irrelevant files entirely.
-
-Today, Sift ships a **trigram index** -- an inverted index of overlapping 3-byte sequences that filters candidate files before the regex engine runs. This alone eliminates the majority of file reads for literal and near-literal patterns.
-
-But trigram indexing is just the first index type. The core architecture is designed around **composable on-disk indexes for codebases** -- the same idea that makes databases fast for diverse query workloads.
-
-## Quick Start
-
-### Install (GitHub Release)
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/botirk38/sift/master/scripts/install.sh | sh
 ```
 
-Installs `sift` and `sift-daemon` to `$HOME/.local/bin`. Override with `PREFIX=/usr/local`.
-
-### Updating
-
-```bash
-sift update
-```
-
-Or re-run the install script (same as a fresh install over the existing binaries).
-
-### From Source
-
-```bash
-cargo build --release -p sift-grep
-# produces target/release/sift and target/release/sift-daemon
-./target/release/sift --sift-dir .sift index build /path/to/corpus
-./target/release/sift --sift-dir .sift "pattern"
-```
-
-Patterns use Rust `regex` syntax by default. Use `-F` for fixed strings, `--` to disambiguate from subcommands (e.g. `sift -- index build`).
+Or from source: `cargo build --release -p sift-grep`
 
 ## How It Works
 
-### Today: Trigram Index
+1. **Build** -- extract overlapping 3-byte trigrams from every file, persist as memory-mapped tables.
+2. **Plan** -- decompose the regex into trigram terms, intersect posting lists to produce a candidate set.
+3. **Search** -- scan only candidate files with the full regex engine.
 
-Sift uses on-disk indexes to skip files that cannot match your query:
-
-1. **Build** -- walk the corpus respecting `.gitignore` rules, extract overlapping 3-byte sequences (trigrams) from every file, and persist them as memory-mapped tables.
-2. **Plan** -- extract required literals from the regex pattern, decompose them into trigram terms, and intersect posting lists to produce a narrow candidate set.
-3. **Search** -- scan only candidate files with the full regex engine, optionally parallelized via Rayon when the candidate count justifies it.
-
-Queries with index hits skip most of the corpus entirely. Full-scan fallback (e.g. `\p{Greek}`) still matches ripgrep performance.
-
-### Architecture: Composable Indexes
-
-Under the hood, Sift is not built around trigrams specifically. The core abstractions -- `IndexKind`, `Index`, and the `Indexes` registry -- are designed so that multiple index types can coexist and cooperate:
-
-```
-                        +-----------+
-          pattern  ---> |  Planner  | ---> candidate set
-                        +-----------+
-                              |
-              +---------------+---------------+
-              |               |               |
-        [Trigram Index] [Index Kind B]  [Index Kind C]
-              |               |               |
-              v               v               v
-         candidates      candidates      candidates
-              \               |               /
-               \              |              /
-                +---  intersect / union  ---+
-                              |
-                        final candidates ---> regex scan
-```
-
-The `Indexes` registry opens all available index kinds under a `.sift` directory and intersects their candidate sets at query time. Multiple indexes together produce tighter narrowing than any single index alone. Each index kind decides independently how to filter candidates for a given query; the registry combines their results.
-
-Today, `IndexKind` has one variant: `Trigram`. Adding a new index kind means adding a variant to the `IndexKind` and `Index` enums and implementing the build/open/update lifecycle. The query planner, search engine, snapshot store, and CLI work unchanged.
-
-## Vision
-
-The long-term goal is to treat code search the way databases treat query execution:
-
-- **Multiple index types** -- trigram indexes for literal search, AST indexes for symbols and language-aware queries, dependency/reference graph indexes, vector indexes for semantic search, and other specialized indexes depending on workload.
-- **Query planning** -- given a search pattern, determine which indexes can contribute and how to combine their candidate sets most efficiently.
-- **Index composition** -- intersect or union candidate sets from different index types to achieve narrowing that no single index could provide alone.
-
-The architectural scaffolding for this already exists: pluggable `IndexKind` dispatch, the `Indexes` registry with multi-index candidate intersection, snapshot-based atomic persistence, and an index-agnostic query planner. What remains is building the additional index types and evolving the planner to leverage them.
-
-**None of this changes what Sift is today.** If you want a faster grep, `sift index build` and `sift "pattern"` work now. The composable index architecture is the foundation that future index types will build on.
+Queries with index hits skip most of the corpus. Full-scan fallback (e.g. `\p{Greek}`) matches ripgrep performance.
 
 ## Performance
 
-Benchmarked against ripgrep on the **Linux kernel** source tree (79K files, 1.3 GB). Full end-to-end CLI measurements including process startup, index open, and daemon coordination.
-
-### Speedup
+Linux kernel source tree -- 79K files, 1.3 GB. End-to-end CLI wall-clock (includes startup, index open, daemon).
 
 ![sift speedup over ripgrep](docs/benchmarks/bench_speedup.png)
 
-Indexed queries (literals, words, alternations) benefit from trigram narrowing -- sift reads only the candidate files instead of scanning the full corpus. Non-indexed patterns (pure Unicode classes, no-literal regexes) fall back to a full scan where both tools perform comparably.
-
-### Absolute Times
-
 ![sift vs ripgrep times](docs/benchmarks/bench_times.png)
 
-| Search Class | `rg` | `sift` | Speedup | Mechanism |
-|---|---:|---:|---:|---|
-| Literal | 1.17s | 0.42s | **2.8x** | Index narrows 79K files to ~255 candidates |
-| Word match | 1.15s | 0.41s | **2.8x** | Literal shaping + index narrowing |
-| Regex with literal suffix | 1.17s | 0.44s | **2.7x** | Extracts required literals, then narrows |
-| Alternation | 0.88s | 0.48s | **1.8x** | Multi-arm candidate narrowing |
-| Alternation (case-insensitive) | 1.41s | 0.90s | **1.6x** | Case-folded alternation narrowing |
-| Unicode `\p{Greek}` | 3.17s | 2.40s | **1.3x** | Full scan, near parity |
-| No-literal regex | 2.31s | 2.42s | 1.0x | Full scan fallback, comparable |
-| Unicode word `\wAh` | 0.81s | 1.18s | 0.7x | Full scan, rg regex engine faster |
+| Query type | `rg` | `sift` | Speedup |
+|---|---:|---:|---:|
+| Literal | 1.17s | 0.42s | **2.8x** |
+| Word match | 1.15s | 0.41s | **2.8x** |
+| Regex with literal | 1.17s | 0.44s | **2.7x** |
+| Alternation | 0.88s | 0.48s | **1.8x** |
+| Unicode (full scan) | 2.05s | 2.40s | 0.9x |
+| No-literal (full scan) | 2.31s | 2.42s | 1.0x |
 
-Correctness parity: **11/11** benchmarks produce identical line counts.
+**11/11** benchmarks produce identical line counts. See [`benchsuite/`](benchsuite/).
 
-> **Note:** The internal search engine is much faster than wall-clock numbers suggest (18 ms for a literal query via `--stats`). Wall-clock time is dominated by process startup, index mmap, and daemon coordination. The [`crates/core/benches/`](crates/core/benches/) Criterion suite measures the search engine in isolation.
+> The search engine itself runs in ~18 ms for indexed literals (`--stats`). Wall-clock is dominated by process startup and daemon coordination.
 
-See [`benchsuite/`](benchsuite/) for the comparative suite and chart generation.
+## Architecture
+
+Sift is built around **composable on-disk indexes**. The `Indexes` registry opens all index kinds under a `.sift` directory and intersects their candidate sets at query time.
+
+```
+  pattern --> Planner --> [Trigram] [Future Index B] [Future Index C]
+                              \           |            /
+                               intersect / union
+                                      |
+                              candidate set --> regex scan
+```
+
+Today there is one index kind (`Trigram`). Adding a new kind means adding a variant to `IndexKind` / `Index` and implementing the build/open/update lifecycle. The planner, search engine, and CLI work unchanged.
 
 ## Project Layout
 
-```
-sift/
-├── crates/
-│   ├── core/           # sift-core: index registry, query planner, search engine
-│   └── cli/            # sift-cli: grep-like CLI over sift-core
-├── fuzz/               # cargo-fuzz targets (standalone, nightly)
-├── benchsuite/         # rg vs sift comparative benchmarks
-├── scripts/            # bench.sh, fuzz.sh, install.sh
-├── skills/             # Agent skill for searching with sift (npx skills)
-└── docs/               # Performance snapshots and compatibility matrix
-```
-
-## Crates
-
-| Crate | Package | Description |
-|-------|---------|-------------|
-| [`crates/core`](crates/core/) | `sift-core` | Index registry, query planner, candidate narrowing, and parallel search engine |
-| [`crates/cli`](crates/cli/) | `sift-cli` | `sift` binary with ripgrep-compatible flags |
-| [`fuzz/`](fuzz/) | n/a | LibFuzzer targets for `sift-core` (excluded from workspace) |
+| Path | Role |
+|------|------|
+| `crates/core/` | Index registry, query planner, search engine |
+| `crates/cli/` | `sift` binary (ripgrep-compatible flags) |
+| `benchsuite/` | Comparative rg vs sift benchmarks + chart generation |
+| `fuzz/` | Cargo-fuzz targets |
 
 ## Differences from ripgrep
 
-- Requires a **prior index** (`sift index build`) before searching; both `build` and `update` are async via the daemon by default — use `--wait` for synchronous behavior.
-- Search automatically queues background indexing for unindexed files touched during a walk (disable the daemon with `SIFT_NO_DAEMON=1` to skip).
-- Search paths must sit **under** the indexed corpus root.
-- Uses `--no-filename` instead of `-h` (which is help).
+- Requires `sift index build` before searching (async via daemon by default, `--wait` for blocking).
+- Search paths must sit under the indexed corpus root.
+- `SIFT_NO_DAEMON=1` disables background indexing.
 
-See [`docs/rg-compat-matrix.md`](docs/rg-compat-matrix.md) for the full flag compatibility matrix.
-
-## Requirements
-
-| Component | Version |
-|-----------|---------|
-| Rust | 2024 edition (stable) |
-| OS | Linux, macOS, Windows (CI-tested) |
+See [`docs/rg-compat-matrix.md`](docs/rg-compat-matrix.md) for the full flag matrix.
 
 ## Development
 
@@ -165,28 +82,6 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
-
-CI runs fmt, clippy (`-D warnings`), and tests on Linux, macOS, and Windows. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-
-Contributing and security reporting: [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
-
-## Current Scope
-
-This release is a stable baseline for indexed search, not a full ripgrep drop-in.
-
-**Shipped**
-
-- **Trigram index** -- candidate narrowing with full-scan fallback when the planner cannot extract literals.
-- **Index lifecycle** -- `sift index build` and `sift index update` (both async via daemon by default, `--wait` for blocking), and the watch daemon for background reconciliation.
-- **Composable index architecture** -- `IndexKind` dispatch, `Indexes` registry with multi-index intersection, snapshot-based atomic persistence. Ready for additional index types.
-- **Documented rg flags** -- behavior tracked in [`docs/rg-compat-matrix.md`](docs/rg-compat-matrix.md) with golden CLI tests for implemented rows.
-
-**Not yet shipped**
-
-- Additional index types (AST, dependency graph, vector, etc.).
-- Cross-index query planning beyond candidate intersection.
-- Full ripgrep parity (ignore overrides, multiline/encoding, `--vimgrep`, `--debug`, and other matrix rows marked Missing or Partial).
-- PCRE2 / `-P` and other engine-specific ripgrep features.
 
 ## License
 
