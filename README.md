@@ -1,6 +1,6 @@
 # Sift
 
-Indexed grep for codebases. Build an index once, then search with a grep-like CLI or the `sift-core` library -- up to 60x faster than ripgrep on indexed queries.
+Indexed grep for codebases. Build an index once, then search with a grep-like CLI or the `sift-core` library -- up to 2.8x faster than ripgrep end-to-end on indexed queries.
 
 ## Why Sift
 
@@ -91,17 +91,34 @@ The architectural scaffolding for this already exists: pluggable `IndexKind` dis
 
 ## Performance
 
-Benchsuite snapshot against the Linux kernel corpus:
+Benchmarked against ripgrep on the **Linux kernel** source tree (79K files, 1.3 GB). Full end-to-end CLI measurements including process startup, index open, and daemon coordination.
 
-| Search Class | Speedup vs `rg` | Mechanism |
-|---|---:|---|
-| Indexed literals | ~60x | Index narrowing eliminates most files |
-| Indexed word matches | ~60x | Whole-word literal shaping stays cheap |
-| Indexed alternation | ~31x | Multi-arm candidate narrowing |
-| Full-scan Unicode | ~1.0x | Near parity, regex engine scans |
-| Full-scan no-literal | ~1.1x | Comparable full-scan performance |
+### Speedup
 
-Correctness parity: **11/11** benchmarks. See [`crates/core/benches/README.md`](crates/core/benches/README.md) for the full benchmark and profiling workflow, and [`benchsuite/`](benchsuite/) for the comparative suite.
+![sift speedup over ripgrep](docs/benchmarks/bench_speedup.png)
+
+Indexed queries (literals, words, alternations) benefit from trigram narrowing -- sift reads only the candidate files instead of scanning the full corpus. Non-indexed patterns (pure Unicode classes, no-literal regexes) fall back to a full scan where both tools perform comparably.
+
+### Absolute Times
+
+![sift vs ripgrep times](docs/benchmarks/bench_times.png)
+
+| Search Class | `rg` | `sift` | Speedup | Mechanism |
+|---|---:|---:|---:|---|
+| Literal | 1.17s | 0.42s | **2.8x** | Index narrows 79K files to ~255 candidates |
+| Word match | 1.15s | 0.41s | **2.8x** | Literal shaping + index narrowing |
+| Regex with literal suffix | 1.17s | 0.44s | **2.7x** | Extracts required literals, then narrows |
+| Alternation | 0.88s | 0.48s | **1.8x** | Multi-arm candidate narrowing |
+| Alternation (case-insensitive) | 1.41s | 0.90s | **1.6x** | Case-folded alternation narrowing |
+| Unicode `\p{Greek}` | 3.17s | 2.40s | **1.3x** | Full scan, near parity |
+| No-literal regex | 2.31s | 2.42s | 1.0x | Full scan fallback, comparable |
+| Unicode word `\wAh` | 0.81s | 1.18s | 0.7x | Full scan, rg regex engine faster |
+
+Correctness parity: **11/11** benchmarks produce identical line counts.
+
+> **Note:** The internal search engine is much faster than wall-clock numbers suggest (18 ms for a literal query via `--stats`). Wall-clock time is dominated by process startup, index mmap, and daemon coordination. The [`crates/core/benches/`](crates/core/benches/) Criterion suite measures the search engine in isolation.
+
+See [`benchsuite/`](benchsuite/) for the comparative suite and chart generation.
 
 ## Project Layout
 

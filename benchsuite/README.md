@@ -7,6 +7,7 @@ Comparative benchmarks: `sift` vs `ripgrep` on real-world code-search workloads.
 - `rg` (ripgrep) in `PATH`
 - `sift` binary at `../target/release/sift` (or `--sift-binary`)
 - `git`, `curl`, `gunzip` for corpus downloads
+- `matplotlib` (optional, for chart generation)
 
 ## Usage
 
@@ -27,9 +28,22 @@ python3 benchsuite/benchsuite --dir /tmp/benchsuite --warmup-iter 3 --bench-iter
 python3 benchsuite/benchsuite --dir /tmp/benchsuite --raw /tmp/results.csv
 ```
 
+## Generating Charts
+
+After running benchmarks with `--raw`, generate comparison charts:
+
+```bash
+pip install matplotlib
+python3 benchsuite/generate_charts.py /tmp/results.csv --outdir docs/benchmarks/
+```
+
+This produces:
+- `bench_times.png` -- grouped bar chart of absolute times per benchmark
+- `bench_speedup.png` -- horizontal bar chart of sift speedup over ripgrep
+
 ## Indexing
 
-`sift` requires a per-corpus index. The benchsuite builds each index once on first use and caches it for subsequent runs.
+`sift` requires a per-corpus index. The benchsuite builds each index once on first use (`sift index build --wait`) and caches it for subsequent runs.
 
 ## Custom Binary
 
