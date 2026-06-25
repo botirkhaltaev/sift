@@ -5,7 +5,7 @@ use sift_core::search::{CandidateFilter, CandidateFilterConfig, GlobConfig, Visi
 use sift_core::{
     Candidate, CandidatePlan, CandidateRequirement, CandidateSource, CorpusKind, CorpusMeta,
     FilterMeta, IndexConfig, IndexCoverage, IndexKind, IndexStore, IndexWalkConfig, Indexes,
-    QueryFlags, QueryPlanner, QuerySpec, SnapshotValidation, StoreMeta, WalkMeta,
+    NGramKind, QueryFlags, QueryPlanner, QuerySpec, SnapshotValidation, StoreMeta, WalkMeta,
 };
 use tempfile::TempDir;
 
@@ -28,12 +28,12 @@ fn build_indexes(root: &Path, sift_dir: &Path) -> Indexes {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::Trigram],
+        vec![IndexKind::NGram(NGramKind::Trigram)],
     );
     let mut store = IndexStore::open_or_create(sift_dir, &meta).expect("open store");
     store
         .build(
-            &[IndexKind::Trigram],
+            &[IndexKind::NGram(NGramKind::Trigram)],
             &IndexConfig {
                 corpus: sift_core::CorpusSpec {
                     root,
@@ -89,7 +89,7 @@ fn default_meta(root: &Path) -> StoreMeta {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::Trigram],
+        vec![IndexKind::NGram(NGramKind::Trigram)],
     )
 }
 

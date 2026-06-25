@@ -8,8 +8,8 @@ use sift_core::search::{
     VisibilityConfig,
 };
 use sift_core::{
-    CandidateSource, CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, Indexes, SearchQuery,
-    SnapshotValidation, TrigramIndex,
+    CandidateSource, CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, Indexes, NGramIndex,
+    SearchQuery, SnapshotValidation, TrigramSpec,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -43,7 +43,7 @@ fn indexed() -> &'static Indexes {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        TrigramIndex::build(&config, &trigram_dir, &[]).expect("build_index");
+        NGramIndex::build(TrigramSpec, &config, &trigram_dir, &[]).expect("build_index");
         let indexes = Indexes::open(&sift_dir).expect("open_index");
         IndexHolder {
             _temp: tmp,

@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sift_core::search::VisibilityConfig;
-use sift_core::{CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, TrigramIndex};
+use sift_core::{CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, NGramIndex, TrigramSpec};
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
 
@@ -77,8 +77,8 @@ pub fn materialize_large_corpus(
 
 // ─── Index helpers ───────────────────────────────────────────────────────────
 
-/// Trigram tables written directly under `idx_dir` (for open/candidate benches).
-pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
+/// Trigram-specialized N-gram tables written directly under `idx_dir`.
+pub fn build_index(corpus: &Path, idx_dir: &Path) -> NGramIndex<TrigramSpec> {
     let (root, kind, include_paths) = if corpus.is_file() {
         let parent = corpus.parent().unwrap_or(corpus);
         let filename = corpus.file_name().map(PathBuf::from).unwrap_or_default();
@@ -97,15 +97,15 @@ pub fn build_index(corpus: &Path, idx_dir: &Path) -> TrigramIndex {
         walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
-    TrigramIndex::build(&config, idx_dir, &[]).unwrap();
-    TrigramIndex::open(idx_dir, root, kind).unwrap()
+    NGramIndex::build(TrigramSpec, &config, idx_dir, &[]).unwrap();
+    NGramIndex::open(TrigramSpec, idx_dir, root, kind).unwrap()
 }
 
-pub fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> TrigramIndex {
-    TrigramIndex::open(idx_dir, root, kind).unwrap()
+pub fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> NGramIndex<TrigramSpec> {
+    NGramIndex::open(TrigramSpec, idx_dir, root, kind).unwrap()
 }
 
-pub fn open_large_index() -> (tempfile::TempDir, TrigramIndex) {
+pub fn open_large_index() -> (tempfile::TempDir, NGramIndex<TrigramSpec>) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     materialize_large_corpus(&corpus, 8_000, 100, 256);

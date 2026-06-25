@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     use crate::index::config::IndexWalkConfig;
     use crate::index::meta::{CorpusMeta, FilterMeta, StoreMeta, WalkMeta};
-    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexCoverage, IndexKind};
+    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexCoverage, IndexKind, NGramKind};
     use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
@@ -400,7 +400,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::Trigram],
+            vec![IndexKind::NGram(NGramKind::Trigram)],
         )
     }
 
@@ -433,7 +433,11 @@ mod tests {
         let mut store = open_test_store(&corpus, &sift_dir);
 
         store
-            .build(&[IndexKind::Trigram], &test_config(&corpus), &[])
+            .build(
+                &[IndexKind::NGram(NGramKind::Trigram)],
+                &test_config(&corpus),
+                &[],
+            )
             .expect("build");
 
         assert!(StoreMeta::path(&sift_dir).exists());
@@ -446,7 +450,7 @@ mod tests {
         assert!(snapshot_dir.join("trigram").join("files.bin").exists());
         assert!(snapshot_dir.join("trigram").join("lexicon.bin").exists());
         assert!(snapshot_dir.join("trigram").join("postings.bin").exists());
-        assert!(snapshot_dir.join("trigram").join("trigrams.bin").exists());
+        assert!(snapshot_dir.join("trigram").join("grams.bin").exists());
 
         assert!(!id.is_empty());
     }
@@ -462,7 +466,11 @@ mod tests {
         let mut store = open_test_store(&corpus, &sift_dir);
 
         store
-            .build(&[IndexKind::Trigram], &test_config(&corpus), &[])
+            .build(
+                &[IndexKind::NGram(NGramKind::Trigram)],
+                &test_config(&corpus),
+                &[],
+            )
             .expect("build");
 
         drop(store);
@@ -505,13 +513,13 @@ mod tests {
 
         let mut store = open_test_store(&corpus, &sift_dir);
         store
-            .build(&[IndexKind::Trigram], &config, &[])
+            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("build");
 
         let id_after_build = store.current_id().expect("has id").to_string();
 
         let changed = store
-            .update(&[IndexKind::Trigram], &config, &[])
+            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("update");
         assert_eq!(changed, None, "expected no rebuild when corpus unchanged");
         assert_eq!(store.current_id().unwrap(), id_after_build);
@@ -529,7 +537,7 @@ mod tests {
 
         let mut store = open_test_store(&corpus, &sift_dir);
         store
-            .build(&[IndexKind::Trigram], &config, &[])
+            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("build");
 
         let id_after_build = store.current_id().expect("has id").to_string();
@@ -537,7 +545,7 @@ mod tests {
         fs::write(corpus.join("g.txt"), "new file\n").expect("write new file");
 
         let changed = store
-            .update(&[IndexKind::Trigram], &config, &[])
+            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("update");
         assert!(changed.is_some(), "expected rebuild when file added");
         assert_ne!(store.current_id().unwrap(), id_after_build);
@@ -556,7 +564,7 @@ mod tests {
         let mut store = open_test_store(&corpus, &sift_dir);
 
         let err = store
-            .update(&[IndexKind::Trigram], &config, &[])
+            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect_err("update without snapshot");
         assert!(matches!(err, crate::Error::Index(_)));
     }
@@ -574,7 +582,7 @@ mod tests {
         let mut store = open_test_store(&corpus, &sift_dir);
 
         store
-            .build(&[IndexKind::Trigram], &config, &[])
+            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("build");
 
         // Verify lock was released after build by acquiring it externally.
@@ -600,13 +608,13 @@ mod tests {
         // Store A builds.
         let mut store_a = open_test_store(&corpus, &sift_dir);
         store_a
-            .build(&[IndexKind::Trigram], &config, &[])
+            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("build");
 
         // Store A publishes a new snapshot.
         fs::write(corpus.join("g.txt"), "new\n").expect("write");
         store_a
-            .update(&[IndexKind::Trigram], &config, &[])
+            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("update");
 
         // Store B opens — it should see the same current (reads fresh from disk
@@ -622,7 +630,7 @@ mod tests {
         // its snapshot state.  Since the corpus is unchanged, no new snapshot
         // is published and current_id stays the same.
         let changed = store_b
-            .update(&[IndexKind::Trigram], &config, &[])
+            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
             .expect("update");
         assert_eq!(changed, None, "corpus unchanged after store_a update");
         assert_eq!(

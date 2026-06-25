@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use sift_core::search::{IgnoreConfig, VisibilityConfig};
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexCoverage, IndexKind,
-    IndexStore, IndexWalkConfig, Indexes, StoreMeta, TrigramIndex, WalkMeta,
+    IndexStore, IndexWalkConfig, Indexes, NGramIndex, NGramKind, StoreMeta, TrigramSpec, WalkMeta,
 };
 
 pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexKind>) -> StoreMeta {
@@ -97,11 +97,11 @@ pub fn build_store(corpus: &Path, sift_dir: &Path) -> IndexStore {
     let root = corpus
         .canonicalize()
         .unwrap_or_else(|_| corpus.to_path_buf());
-    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let meta = sample_store_meta(root, vec![IndexKind::NGram(NGramKind::Trigram)]);
     let mut store = IndexStore::open_or_create(sift_dir, &meta).expect("open store");
     let config = standard_build_config(corpus, &[]);
     store
-        .build(&[IndexKind::Trigram], &config, &[])
+        .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
         .expect("build index");
     store
 }
@@ -110,7 +110,7 @@ pub fn open_indexes(sift_dir: &Path) -> Indexes {
     Indexes::open(sift_dir).expect("open indexes")
 }
 
-pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> TrigramIndex {
+pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> NGramIndex<TrigramSpec> {
     let (root, kind, include_paths) = if corpus.is_file() {
         let parent = corpus.parent().unwrap_or(corpus);
         let filename = corpus.file_name().map(PathBuf::from).unwrap_or_default();
@@ -129,7 +129,7 @@ pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> TrigramIndex {
         walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
-    TrigramIndex::build(&config, trigram_dir, &[]).expect("build trigram index")
+    NGramIndex::build(TrigramSpec, &config, trigram_dir, &[]).expect("build trigram index")
 }
 
 pub fn dir_size(path: &Path) -> u64 {

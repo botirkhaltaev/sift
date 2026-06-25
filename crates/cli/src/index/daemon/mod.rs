@@ -1156,6 +1156,7 @@ impl IndexRefresh<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sift_core::NGramKind;
     use sift_core::search::VisibilityConfig;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
@@ -1295,7 +1296,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::Trigram],
+            vec![IndexKind::NGram(NGramKind::Trigram)],
         );
         StoreMeta::write(&meta, &sift_dir).unwrap();
 
@@ -1325,7 +1326,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::Trigram],
+            vec![IndexKind::NGram(NGramKind::Trigram)],
         );
         StoreMeta::write(&meta, &sift_dir).unwrap();
 
@@ -1364,7 +1365,7 @@ mod tests {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexKind::Trigram],
+                vec![IndexKind::NGram(NGramKind::Trigram)],
             ),
             &sift_dir,
         )
@@ -1391,7 +1392,7 @@ mod tests {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexKind::Trigram],
+                vec![IndexKind::NGram(NGramKind::Trigram)],
             ),
             &sift_dir,
         )
@@ -1423,7 +1424,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::Trigram],
+            vec![IndexKind::NGram(NGramKind::Trigram)],
         );
         std::fs::create_dir_all(&sift_dir).unwrap();
         StoreMeta::write(&meta, &sift_dir).unwrap();
@@ -1495,7 +1496,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::Trigram],
+            vec![IndexKind::NGram(NGramKind::Trigram)],
         );
         std::fs::create_dir_all(&sift_dir).unwrap();
         StoreMeta::write(&meta, &sift_dir).unwrap();

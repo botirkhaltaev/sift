@@ -11,7 +11,9 @@ use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, ColorChoice, OutputEmission, SearchCollection,
     SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle, SearchSeparators,
 };
-use sift_core::{CandidateSource, Index, Indexes, SearchQuery, SnapshotValidation, TrigramIndex};
+use sift_core::{
+    CandidateSource, Index, Indexes, NGramIndex, SearchQuery, SnapshotValidation, TrigramSpec,
+};
 
 mod common;
 
@@ -25,9 +27,9 @@ fn sift_criterion() -> Criterion {
         .configure_from_args()
 }
 
-fn wrap_index(index: TrigramIndex) -> Indexes {
+fn wrap_index(index: NGramIndex<TrigramSpec>) -> Indexes {
     let root = index.root().to_path_buf();
-    Indexes::from_single(Index::Trigram(index), root)
+    Indexes::from_single(Index::NGram(index), root)
 }
 
 // ─── Grep-specific helpers ───────────────────────────────────────────────────

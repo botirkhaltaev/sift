@@ -5,8 +5,8 @@
 //! designed for multiple coexisting index types: each type independently
 //! narrows candidates, and the [`Indexes`] registry intersects their results.
 //!
-//! Today the shipped index type is a trigram index ([`TrigramIndex`]), which
-//! records overlapping 3-byte sequences and achieves up to 60x speedup over
+//! Today the shipped index type is an N-gram index with a trigram specialization
+//! ([`NGramIndex`]<[`TrigramSpec`]>), which records overlapping 3-byte sequences and achieves up to 60x speedup over
 //! ripgrep on indexed queries. Additional index types (AST indexes, dependency
 //! graphs, vector indexes) can be added by extending the [`IndexKind`] and
 //! [`Index`] enums.
@@ -37,12 +37,14 @@ pub use ignore::{Walk, WalkBuilder};
 
 pub use index::config::IndexWalkConfig;
 pub use index::meta::StoreMeta;
+pub use index::ngram::{
+    GramKey, GramWidth, NGramIndex, NGramIndexError, PackedGram, Trigram, TrigramSpec,
+};
 pub use index::store::IndexStore;
-pub use index::trigram::{TrigramIndex, TrigramIndexError};
 pub use index::{
     CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig, IndexCoverage,
-    IndexError, IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, ReconcileOutcome,
-    SnapshotId, WalkMeta,
+    IndexError, IndexId, IndexKind, Indexes, NGramKind, PlanMode, QueryPlanOutput,
+    ReconcileOutcome, SnapshotId, WalkMeta,
 };
 
 pub use query::{
@@ -56,7 +58,7 @@ pub const SIFT_DIR: &str = ".sift";
 pub const FILES_BIN: &str = "files.bin";
 pub const LEXICON_BIN: &str = "lexicon.bin";
 pub const POSTINGS_BIN: &str = "postings.bin";
-pub const TRIGRAMS_BIN: &str = "trigrams.bin";
+pub const GRAMS_BIN: &str = "grams.bin";
 
 /// Top-level umbrella error for all core operations.
 #[derive(Debug, Error)]
@@ -77,9 +79,9 @@ pub enum Error {
     Regex(#[from] Box<regex_automata::meta::BuildError>),
 }
 
-impl From<crate::index::trigram::TrigramIndexError> for Error {
-    fn from(e: crate::index::trigram::TrigramIndexError) -> Self {
-        Self::Index(IndexError::Trigram(e))
+impl From<crate::index::ngram::NGramIndexError> for Error {
+    fn from(e: crate::index::ngram::NGramIndexError) -> Self {
+        Self::Index(IndexError::NGram(e))
     }
 }
 
@@ -92,7 +94,10 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn build_trigram_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> TrigramIndex {
+    fn build_trigram_in_tmp(
+        tmp: &TempDir,
+        corpus_path: &std::path::Path,
+    ) -> NGramIndex<TrigramSpec> {
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
         let config = IndexConfig {
@@ -106,11 +111,11 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        TrigramIndex::build(&config, &trigram_dir, &[]).expect("build index")
+        NGramIndex::build(TrigramSpec, &config, &trigram_dir, &[]).expect("build index")
     }
 
     fn build_index_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> Index {
-        Index::Trigram(build_trigram_in_tmp(tmp, corpus_path))
+        Index::NGram(build_trigram_in_tmp(tmp, corpus_path))
     }
 
     #[test]
@@ -126,7 +131,7 @@ mod tests {
             tri.file_path(FileId::new(0)).is_some(),
             "should have indexed files"
         );
-        let index = Index::Trigram(tri);
+        let index = Index::NGram(tri);
 
         let pat = vec![r"let\s+x".to_string()];
         let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
@@ -176,7 +181,7 @@ mod tests {
                 "file {i} should be indexed"
             );
         }
-        let index = Index::Trigram(tri);
+        let index = Index::NGram(tri);
 
         let pat = vec!["needle".to_string()];
         let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");

@@ -1,18 +1,18 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::config::{CorpusKind, IndexConfig};
-use super::trigram;
+use super::ngram;
 use super::{IndexDestination, IndexSource};
 
 /// How an index query plan resolves candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PlanMode {
-    /// The query was narrowed using trigram candidates from the index.
+    /// The query was narrowed using N-gram candidates from the index.
     #[default]
     IndexedCandidates,
-    /// No trigrams were usable — all indexed files must be scanned.
+    /// No grams were usable — all indexed files must be scanned.
     FullScan,
 }
 
@@ -28,22 +28,29 @@ pub struct QueryPlanOutput {
 /// `build`, `open`, and `update` via match arms, so adding a new index type
 /// means adding a variant here and implementing those arms.
 ///
-/// Today: `Trigram`. Future variants (AST, dependency graph, vector, etc.)
+/// Today: `NGram(Trigram)`. Future variants (AST, dependency graph, vector, etc.)
 /// will be added as the composable index architecture expands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IndexKind {
+    /// N-gram inverted index.
+    NGram(NGramKind),
+}
+
+/// Width-specific N-gram implementation selected for an N-gram index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum IndexKind {
-    /// Trigram index: inverted index of overlapping 3-byte sequences.
+pub enum NGramKind {
+    /// Optimized 3-byte N-gram specialization.
     Trigram,
 }
 
 impl IndexKind {
-    pub const ALL: &[Self] = &[Self::Trigram];
+    pub const ALL: &[Self] = &[Self::NGram(NGramKind::Trigram)];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Trigram => "trigram",
+            Self::NGram(kind) => kind.as_str(),
         }
     }
 
@@ -51,11 +58,11 @@ impl IndexKind {
     #[must_use]
     pub(crate) const fn artifact_names(self) -> &'static [&'static str] {
         match self {
-            Self::Trigram => &[
+            Self::NGram(NGramKind::Trigram) => &[
                 crate::FILES_BIN,
                 crate::LEXICON_BIN,
                 crate::POSTINGS_BIN,
-                crate::TRIGRAMS_BIN,
+                crate::GRAMS_BIN,
             ],
         }
     }
@@ -68,10 +75,9 @@ impl IndexKind {
         paths: &[PathBuf],
     ) -> crate::Result<()> {
         match self {
-            Self::Trigram => {
-                let tables = trigram::builder::IndexTables::build(config, paths)?;
-                let root = config.corpus.root.canonicalize()?;
-                trigram::TrigramIndex::persist_tables(&tables, &root, config.corpus.kind, dest)?;
+            Self::NGram(NGramKind::Trigram) => {
+                let spec = ngram::TrigramSpec;
+                ngram::NGramIndex::build_into(spec, config, dest, paths)?;
                 Ok(())
             }
         }
@@ -85,7 +91,8 @@ impl IndexKind {
         corpus_kind: CorpusKind,
     ) -> crate::Result<Index> {
         match self {
-            Self::Trigram => Ok(Index::Trigram(trigram::TrigramIndex::open_tables(
+            Self::NGram(NGramKind::Trigram) => Ok(Index::NGram(ngram::NGramIndex::open_tables(
+                ngram::TrigramSpec,
                 source,
                 root,
                 corpus_kind,
@@ -121,9 +128,13 @@ impl IndexKind {
             .canonicalize()
             .unwrap_or_else(|_| config.corpus.root.to_path_buf());
         match self {
-            Self::Trigram => {
-                let existing =
-                    trigram::TrigramIndex::open_tables(current, &root, config.corpus.kind)?;
+            Self::NGram(NGramKind::Trigram) => {
+                let existing = ngram::NGramIndex::open_tables(
+                    ngram::TrigramSpec,
+                    current,
+                    &root,
+                    config.corpus.kind,
+                )?;
                 let output = existing.rebuild(config, dest, paths)?;
                 Ok(output.is_some())
             }
@@ -137,13 +148,41 @@ impl std::fmt::Display for IndexKind {
     }
 }
 
+impl Serialize for IndexKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for IndexKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl std::str::FromStr for IndexKind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "trigram" => Ok(Self::Trigram),
+            "trigram" => Ok(Self::NGram(NGramKind::Trigram)),
             other => Err(format!("unknown index kind: {other}")),
+        }
+    }
+}
+
+impl NGramKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trigram => "trigram",
         }
     }
 }
@@ -154,36 +193,36 @@ impl std::str::FromStr for IndexKind {
 /// opens all available indexes and calls `candidates()` on each, intersecting
 /// results to produce tighter narrowing than any single index alone.
 pub enum Index {
-    /// Opened trigram index with memory-mapped posting lists.
-    Trigram(trigram::TrigramIndex),
+    /// Opened trigram-specialized N-gram index with memory-mapped posting lists.
+    NGram(ngram::NGramIndex<ngram::TrigramSpec>),
 }
 
 impl Index {
     #[must_use]
     pub fn root(&self) -> &Path {
         match self {
-            Self::Trigram(idx) => idx.root(),
+            Self::NGram(idx) => idx.root(),
         }
     }
 
     #[must_use]
     pub const fn corpus_kind(&self) -> CorpusKind {
         match self {
-            Self::Trigram(idx) => idx.corpus_kind(),
+            Self::NGram(idx) => idx.corpus_kind(),
         }
     }
 
     #[must_use]
     pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
         match self {
-            Self::Trigram(idx) => idx.candidates(query),
+            Self::NGram(idx) => idx.candidates(query),
         }
     }
 
     #[must_use]
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
         match self {
-            Self::Trigram(idx) => idx.all_files(),
+            Self::NGram(idx) => idx.all_files(),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::trigram::TrigramIndexError;
+use super::ngram::NGramIndexError;
 
 /// Errors specific to the index registry layer.
 #[derive(Debug, thiserror::Error)]
@@ -9,7 +9,7 @@ pub enum IndexError {
     InvalidLayout { path: PathBuf },
 
     #[error(transparent)]
-    Trigram(#[from] TrigramIndexError),
+    NGram(#[from] NGramIndexError),
 
     #[error("IO error inspecting index path {path}: {source}")]
     Io {

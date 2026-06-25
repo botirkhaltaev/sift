@@ -199,7 +199,7 @@ mod tests {
                     ..VisibilityConfig::default()
                 },
             },
-            vec![IndexKind::Trigram],
+            vec![IndexKind::NGram(crate::index::NGramKind::Trigram)],
         );
         meta.write(tmp.path()).expect("write meta");
 

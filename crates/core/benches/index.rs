@@ -1,6 +1,6 @@
 //! Index build, open, candidate, and persistence benchmarks.
 //!
-//! Exercises public `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, and `Index` APIs.
+//! Exercises public N-gram index, `Indexes`, and `Index` APIs.
 //! Storage effects are measured indirectly through build/open/save/reopen paths.
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -11,7 +11,7 @@ use std::path::Path;
 use sift_core::search::VisibilityConfig;
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexKind, IndexStore,
-    IndexWalkConfig, Indexes, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
+    IndexWalkConfig, Indexes, NGramKind, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
 };
 
 mod common;
@@ -128,11 +128,13 @@ fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::Trigram],
+        vec![IndexKind::NGram(NGramKind::Trigram)],
     );
     let mut store = IndexStore::open_or_create(sift_dir, &meta).unwrap();
     let config = standard_build_config(corpus, &[]);
-    store.build(&[IndexKind::Trigram], &config, &[]).unwrap();
+    store
+        .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+        .unwrap();
 }
 
 // ─── Build benchmarks ────────────────────────────────────────────────────────
@@ -288,12 +290,12 @@ fn bench_indexes_open(c: &mut Criterion) {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexKind::Trigram],
+                vec![IndexKind::NGram(NGramKind::Trigram)],
             );
             let mut store = IndexStore::open_or_create(&sift, &meta).expect("open store");
             store
                 .build(
-                    &[IndexKind::Trigram],
+                    &[IndexKind::NGram(NGramKind::Trigram)],
                     &IndexConfig {
                         corpus: CorpusSpec {
                             root: &corpus,
@@ -344,7 +346,7 @@ fn bench_index_save_reopen(c: &mut Criterion) {
     g.finish();
 }
 
-// ─── TrigramIndex inherent method benches ────────────────────────────────────
+// ─── Trigram-specialized N-gram method benches ───────────────────────────────
 
 fn bench_trigram_index_methods(c: &mut Criterion) {
     let fixture = common::open_large_index();

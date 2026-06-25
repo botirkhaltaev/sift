@@ -12,7 +12,7 @@ The index layer is designed for multiple coexisting index types:
 - `Index` enum: query-time dispatch (candidates, all_files). One variant per index type.
 - `Indexes` registry: opens all index kinds from a snapshot and intersects their candidate sets.
 
-Today both enums have one variant: `Trigram`. Future index kinds (AST, dependency graph, vector, etc.) are added as sibling variants and sibling modules to `trigram/`.
+Today the shipped index is `IndexKind::NGram(NGramKind::Trigram)` / `Index::NGram`, backed by `ngram/`. Future index families (AST, dependency graph, vector, etc.) are added as sibling variants and sibling modules.
 
 ## Key Types
 
@@ -25,26 +25,28 @@ Today both enums have one variant: `Trigram`. Future index kinds (AST, dependenc
 - `FileId`: type-safe file identifier within an index.
 - `IndexId`: type-safe index identifier in a multi-index search.
 - `Candidate`: single file candidate with `rel_path`, `abs_path`, filtering methods.
+- `NGramIndex<S>`: generic N-gram implementation parameterized by an `NGramSpec`; `TrigramSpec` is the shipped optimized specialization.
 
 ## Conventions
 
-- Each index kind lives in its own submodule (sibling of `trigram/`).
+- Each index family lives in its own submodule (for example, `ngram/`).
 - `grep/` only talks to `Index` enum, never to concrete index internals.
 - `Index::candidates` may over-return but must not under-return (conservative).
 - Each index kind narrows independently; the registry combines results.
+- Keep index-family internals behind a domain spec when a generic implementation has optimized specializations; do not leak specialization mechanics into callers.
 
 ## Adding a New Index Kind
 
 1. Add a variant to `IndexKind` and `Index` in `kinds.rs`.
 2. Implement `build`, `open`, `update` in the `IndexKind` match arms.
 3. Implement `root`, `corpus_kind`, `candidates`, `all_files` in the `Index` match arms.
-4. Create a sibling module to `trigram/` with the implementation.
+4. Create a sibling module to `ngram/` with the implementation.
 
 No changes needed to `Indexes`, `IndexStore`, `QueryPlanner`, `search/`, or `grep/`.
 
 ## Do NOT
 
-- Add trigram-specific logic outside `trigram/`.
+- Add N-gram specialization logic outside `ngram/`.
 - Make index implementations depend on `grep/` or `query/` internals.
 - Change enum signatures without updating all match arms.
 - Have one index kind depend on another.

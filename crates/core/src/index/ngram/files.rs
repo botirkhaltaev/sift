@@ -11,9 +11,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::index::mmap::mmap_open;
+use crate::index::ngram::storage::format::FILES_MAGIC;
+use crate::index::ngram::storage::{read_i64_le, read_u32_le, read_u64_le};
 use crate::index::snapshot::ArtifactData;
-use crate::index::trigram::storage::format::FILES_MAGIC;
-use crate::index::trigram::storage::{read_i64_le, read_u32_le, read_u64_le};
 
 /// Per-file fingerprint for change detection.
 #[derive(Debug, Clone, PartialEq, Eq)]

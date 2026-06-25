@@ -1,7 +1,7 @@
 //! Corpus walk, file stat, and posting assembly helpers.
 //!
-//! These are private helpers used by [`TrigramIndex::build`] and
-//! [`TrigramIndex::update`] — there is no separate builder type.
+//! These are private helpers used by [`NGramIndex::build`] and
+//! [`NGramIndex::update`] — there is no separate builder type.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -10,19 +10,20 @@ use ignore::{
     DirEntry, Error as IgnoreError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState,
 };
 
-use super::Trigram;
-use super::file_table::FileFingerprint;
+use super::NGramSpec;
+use super::files::FileFingerprint;
+use super::gram::{GramKey, Trigram};
+use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
-use super::storage::trigram_sets::TrigramSet;
 
 use crate::index::{CorpusKind, IndexConfig};
 use crate::search::filter::{HiddenMode, IgnoreSources};
 
 /// Collected index data ready for persistence.
-pub struct IndexTables {
+pub struct IndexTables<G: GramKey> {
     pub fingerprints: Vec<FileFingerprint>,
-    pub file_trigrams: Vec<TrigramSet>,
-    pub lexicon: Vec<LexiconEntry>,
+    pub file_grams: Vec<GramSet<G>>,
+    pub lexicon: Vec<LexiconEntry<G>>,
     pub postings: Vec<u8>,
 }
 
@@ -240,19 +241,90 @@ impl<'a> FingerprintCollector<'a> {
 // Posting assembly
 // ---------------------------------------------------------------------------
 
-/// Assembles trigram → file ID posting lists from per-file trigram sets.
-pub struct PostingAssembler<'a> {
-    file_trigrams: &'a [TrigramSet],
+/// Assembles gram -> file ID posting lists from per-file gram sets.
+pub struct PostingTables<G: GramKey> {
+    pub lexicon: Vec<LexiconEntry<G>>,
+    pub postings: Vec<u8>,
 }
 
-impl<'a> PostingAssembler<'a> {
-    pub const fn new(file_trigrams: &'a [TrigramSet]) -> Self {
-        Self { file_trigrams }
+impl<G: GramKey> PostingTables<G> {
+    pub fn assemble(file_grams: &[GramSet<G>]) -> crate::Result<Self> {
+        let total: usize = file_grams.iter().map(|s| s.as_slice().len()).sum();
+        if file_grams.len() > u32::MAX as usize {
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "too many indexed files",
+            )));
+        }
+
+        let mut pairs = Vec::with_capacity(total);
+        for (fid, set) in file_grams.iter().enumerate() {
+            let fid32 = u32::try_from(fid).expect("file count checked above");
+            for gram in set.as_slice() {
+                pairs.push((gram.ordinal(), fid32));
+            }
+        }
+        pairs.sort_unstable();
+        Self::encode_pairs(&pairs)
     }
 
-    pub fn assemble(&self) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
-        let total: usize = self.file_trigrams.iter().map(|s| s.as_slice().len()).sum();
-        if self.file_trigrams.len() > u32::MAX as usize {
+    fn encode_pairs(pairs: &[(u64, u32)]) -> crate::Result<Self> {
+        let mut posting_bytes = Vec::with_capacity(pairs.len() * 3);
+        let mut lexicon = Vec::new();
+        let mut i = 0;
+        while i < pairs.len() {
+            let gram_key = pairs[i].0;
+            let start = i;
+            while i < pairs.len() && pairs[i].0 == gram_key {
+                i += 1;
+            }
+            let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "postings offset overflow",
+                ))
+            })?;
+            let len = u32::try_from(i - start).map_err(|_| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "posting list too long",
+                ))
+            })?;
+            let mut prev = 0u64;
+            for (j, &(_, fid)) in pairs[start..i].iter().enumerate() {
+                let fid = u64::from(fid);
+                let raw = if j == 0 {
+                    fid
+                } else {
+                    fid.checked_sub(prev).ok_or_else(|| {
+                        crate::Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "non-monotonic posting list",
+                        ))
+                    })?
+                };
+                let mut buf = unsigned_varint::encode::u64_buffer();
+                let encoded = unsigned_varint::encode::u64(raw, &mut buf);
+                posting_bytes.extend_from_slice(encoded);
+                prev = fid;
+            }
+            lexicon.push(LexiconEntry {
+                gram: G::from_ordinal(gram_key)?,
+                offset,
+                len,
+            });
+        }
+        Ok(Self {
+            lexicon,
+            postings: posting_bytes,
+        })
+    }
+}
+
+impl PostingTables<Trigram> {
+    pub fn assemble_trigrams(file_grams: &[GramSet<Trigram>]) -> crate::Result<Self> {
+        let total: usize = file_grams.iter().map(|s| s.as_slice().len()).sum();
+        if file_grams.len() > u32::MAX as usize {
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "too many indexed files",
@@ -261,7 +333,7 @@ impl<'a> PostingAssembler<'a> {
 
         // Collect (trigram_key, file_id) pairs packed into u64.
         let mut pairs = Vec::with_capacity(total);
-        for (fid, set) in self.file_trigrams.iter().enumerate() {
+        for (fid, set) in file_grams.iter().enumerate() {
             let fid32 = u32::try_from(fid).expect("file count checked above");
             for tri in set.as_slice() {
                 pairs.push((u64::from(tri.as_u24()) << 32) | u64::from(fid32));
@@ -326,9 +398,9 @@ impl<'a> PostingAssembler<'a> {
         std::mem::swap(pairs, &mut scratch);
     }
 
-    fn encode_sorted(pairs: &[u64]) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
+    fn encode_sorted(pairs: &[u64]) -> crate::Result<Self> {
         let mut posting_bytes = Vec::with_capacity(pairs.len() * 3);
-        let mut lex_entries = Vec::new();
+        let mut lexicon = Vec::new();
         let mut i = 0;
         while i < pairs.len() {
             let tri_key = (pairs[i] >> 32) as u32;
@@ -366,13 +438,16 @@ impl<'a> PostingAssembler<'a> {
                 posting_bytes.extend_from_slice(encoded);
                 prev = fid;
             }
-            lex_entries.push(LexiconEntry {
-                trigram: Trigram::from_u24(tri_key).to_bytes(),
+            lexicon.push(LexiconEntry {
+                gram: Trigram::from_u24(tri_key),
                 offset,
                 len,
             });
         }
-        Ok((lex_entries, posting_bytes))
+        Ok(Self {
+            lexicon,
+            postings: posting_bytes,
+        })
     }
 }
 
@@ -380,8 +455,12 @@ impl<'a> PostingAssembler<'a> {
 ///
 /// When `paths` is empty, discovers files via [`CorpusWalker`]. Otherwise indexes
 /// exactly the given corpus-relative paths.
-impl IndexTables {
-    pub fn build(config: &IndexConfig<'_>, paths: &[PathBuf]) -> crate::Result<Self> {
+impl<G: GramKey> IndexTables<G> {
+    pub fn build<S: NGramSpec<Gram = G>>(
+        spec: S,
+        config: &IndexConfig<'_>,
+        paths: &[PathBuf],
+    ) -> crate::Result<Self> {
         use rayon::prelude::*;
 
         let (paths, root) = match config.corpus.kind {
@@ -407,22 +486,22 @@ impl IndexTables {
 
         let fingerprints = FingerprintCollector::new(root, &paths).collect()?;
 
-        let file_trigrams: Vec<TrigramSet> = fingerprints
+        let file_grams: Vec<GramSet<G>> = fingerprints
             .par_iter()
             .map(|fp| {
                 let abs = root.join(&fp.path);
-                TrigramSet::from_file(&abs)
+                std::fs::read(&abs).map(|bytes| spec.collect_grams(&bytes))
             })
             .collect::<std::io::Result<_>>()
             .map_err(crate::Error::Io)?;
 
-        let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
+        let tables = spec.assemble_postings(&file_grams)?;
 
         Ok(Self {
             fingerprints,
-            file_trigrams,
-            lexicon,
-            postings,
+            file_grams,
+            lexicon: tables.lexicon,
+            postings: tables.postings,
         })
     }
 }
@@ -435,6 +514,8 @@ impl IndexTables {
 mod tests {
     use super::*;
     use crate::index::config::IndexWalkConfig;
+    use crate::index::ngram::storage::postings::Postings;
+    use crate::index::ngram::{Trigram, TrigramSpec};
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig};
     use crate::search::filter::IgnoreConfig;
     use crate::search::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
@@ -462,16 +543,20 @@ mod tests {
             }
         }
 
-        fn build(root: &Path) -> IndexTables {
+        fn build(root: &Path) -> IndexTables<Trigram> {
             let config = Self::no_ignore_config(root);
-            IndexTables::build(&config, &[]).expect("build tables")
+            IndexTables::build(TrigramSpec, &config, &[]).expect("build tables")
         }
     }
 
     struct PostingCounts;
 
     impl PostingCounts {
-        fn file_occurrences(postings: &[u8], lexicon: &[LexiconEntry], file_id: u32) -> usize {
+        fn file_occurrences(
+            postings: &[u8],
+            lexicon: &[LexiconEntry<Trigram>],
+            file_id: u32,
+        ) -> usize {
             lexicon
                 .iter()
                 .map(|entry| {
@@ -483,7 +568,7 @@ mod tests {
                             usize::try_from(e.offset).unwrap_or(usize::MAX)
                         });
                     let slice = &postings[start..end];
-                    crate::index::trigram::storage::postings::Postings::decode_sorted(slice)
+                    Postings::decode_sorted(slice)
                         .unwrap_or_default()
                         .into_iter()
                         .filter(|&id| id == file_id)
@@ -583,7 +668,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(TrigramSpec, &config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -704,7 +789,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(TrigramSpec, &config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -728,7 +813,7 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(TrigramSpec, &config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(
             tables.fingerprints[0].path,
@@ -768,7 +853,7 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(TrigramSpec, &config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             !paths.iter().any(|p| p == "skip.ignored"),
@@ -800,7 +885,7 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(TrigramSpec, &config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             paths.iter().any(|p| p == Path::new("src/keep.txt")),
