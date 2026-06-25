@@ -1,9 +1,9 @@
-//! On-disk tables for the trigram index.
+//! On-disk tables for N-gram indexes.
 
 pub mod format;
+pub mod grams;
 pub mod lexicon;
 pub mod postings;
-pub mod trigram_sets;
 
 pub(super) fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(

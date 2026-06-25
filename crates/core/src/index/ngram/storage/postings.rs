@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
+use crate::index::ngram::storage::format::POSTINGS_MAGIC;
 use crate::index::snapshot::ArtifactData;
-use crate::index::trigram::storage::format::POSTINGS_MAGIC;
 
 use super::read_u32_le;
 use crate::index::mmap::mmap_open;

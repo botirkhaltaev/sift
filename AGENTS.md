@@ -6,7 +6,7 @@ Guidelines for AI agents working on the sift codebase.
 
 Sift is an indexed code search engine written in Rust, built around **composable on-disk indexes**. It builds indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine.
 
-The core architecture treats code search like database query execution: multiple index types can coexist, each narrowing candidates independently, with the `Indexes` registry intersecting their results. Today, Sift ships a **trigram index** (achieving up to 60x speedup over ripgrep on indexed queries). The `IndexKind` and `Index` enums provide static dispatch; adding a new index kind means adding a variant to each. Future index types (AST indexes, dependency graphs, vector indexes) will slot into the same architecture.
+The core architecture treats code search like database query execution: multiple index configurations can coexist, each narrowing candidates independently, with the `Indexes` registry intersecting their results. Today, Sift ships a runtime-width N-gram index that defaults to trigram width. `IndexConfig` records configured/persisted index identity, `IndexStore` owns build/open/update transactions, and `Index` is the opened query-time runtime dispatch. Future index types (AST indexes, dependency graphs, vector indexes) slot into the same architecture.
 
 ## Build & Test
 
@@ -24,8 +24,8 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 |------|------|
 | `crates/core/` | `sift-core`: composable index registry, query planning, candidate narrowing, search engine |
 | `crates/core/src/query/` | Index-agnostic query description and candidate planning |
-| `crates/core/src/index/` | `IndexKind` / `Index` enums, `Indexes` registry, `IndexStore`, snapshot persistence |
-| `crates/core/src/index/trigram/` | Trigram index: build, storage, and search (first shipped index type) |
+| `crates/core/src/index/` | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
+| `crates/core/src/index/ngram/` | N-gram index: generic implementation plus trigram specialization (first shipped index type) |
 | `crates/core/src/grep/` | Grep pipeline orchestration: bridges query planner, index registry, and search engine |
 | `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
@@ -36,7 +36,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 
 ## Key Conventions
 
-- **No `unsafe`** except in `index/trigram/storage/mmap.rs` (documented safety invariant).
+- **No `unsafe`** except in `index/mmap.rs` (documented safety invariant).
 - **Strict clippy:** workspace uses `pedantic + nursery + cargo` warnings; CI uses `-D warnings`.
 - Fix lints at the root cause. `#[allow]` is **never** permitted.
 - Small, focused changes; follow existing patterns in the crate you touch.
@@ -55,7 +55,7 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`IndexStore::open_or_create` → `IndexStore::build(kinds, config)` → `Indexes::open` → `SearchQuery::new` → `SearchQuery::run(SearchExecution)`. The `--indexes` flag on `sift index build` / `sift index update` selects which `IndexKind` variants to use (defaults to all). See `crates/core/README.md`.
+`IndexStore::open_or_create` → `IndexStore::build(configs, build_config)` → `Indexes::open` → `SearchQuery::new` → `SearchQuery::run(SearchExecution)`. The `--indexes` flag on `sift index build` / `sift index update` selects which `IndexConfig` values to use (defaults to all). See `crates/core/README.md`.
 
 ## Architecture & Design
 
@@ -140,7 +140,7 @@ how they differ from an alternate path.
 
 ## IndexSource / IndexDestination
 
-TrigramIndex lifecycle functions (`build`, `open`, `update`) and IndexKind
+N-gram lifecycle functions (`build`, `open`, `update`) and `IndexConfig`
 lifecycle functions (`build`, `open`, `update`) use `IndexSource` and
 `IndexDestination` domain types instead of parallel variants:
 
@@ -151,8 +151,8 @@ lifecycle functions (`build`, `open`, `update`) use `IndexSource` and
 
 Each function dispatches internally on the enum variant. See
 `crates/core/src/index/mod.rs` for the type definitions,
-`crates/core/src/index/trigram/lifecycle.rs` for the TrigramIndex lifecycle,
-and `crates/core/src/index/kinds.rs` for IndexKind dispatch.
+`crates/core/src/index/ngram/mod.rs` for the NGramIndex lifecycle,
+and `crates/core/src/index/kinds.rs` for configured/runtime index dispatch.
 
 ## Module Organization
 

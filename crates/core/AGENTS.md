@@ -4,30 +4,31 @@
 
 Core engine for composable indexed code search: index registry, query planning, candidate narrowing, grep-style execution, and parallel file scanning.
 
-The engine is designed around multiple coexisting index types. The `IndexKind` enum drives lifecycle dispatch (build/open/update), the `Index` enum drives query-time dispatch (candidate narrowing), and the `Indexes` registry intersects candidate sets from all available indexes. Today `Trigram` is the only variant; future index kinds (AST, dependency graph, vector) slot in by adding variants to these enums.
+The engine is designed around multiple coexisting configured indexes. `IndexConfig` records configured/persisted identity, `IndexStore` owns build/open/update snapshot transactions, the `Index` enum drives query-time candidate narrowing, and the `Indexes` registry intersects candidate sets from all available indexes. Today the default configured index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
 
 ## Public API
 
-Re-exported from `lib.rs`: `TrigramIndex`, `TrigramIndexBuilder`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `IndexKind`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
+Re-exported from `lib.rs`: `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `IndexConfig`, `IndexBuildConfig`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
 
 ## Source Map
 
 | Module | Responsibility |
 |--------|----------------|
 | `query/` | Index-agnostic query description (`QuerySpec`), candidate planning |
-| `index/mod.rs` | `Indexes` registry, `Index` enum (query dispatch), `IndexKind` enum (lifecycle dispatch), shared types (`FileId`, `IndexId`), `IndexError` |
+| `walk/` | Shared filesystem discovery (`FileWalk`) for search candidate collection and index builds |
+| `index/mod.rs` | `Indexes` registry, `IndexConfig` configured identity, `Index` enum (query dispatch), shared types (`FileId`, `IndexId`), `IndexError` |
 | `index/store.rs` | `IndexStore`: snapshot-based persistence, atomic build/update/publish |
-| `index/trigram/mod.rs` | `TrigramIndex` struct, posting list intersection, inherent build/open/update/candidates methods, `TrigramIndexError` |
-| `index/trigram/builder.rs` | `IndexTableBuilder`: corpus walk, fingerprint collection, trigram extraction, table construction |
-| `index/trigram/file_table.rs` | `MappedFilesView`: file ID to relative path mapping with fingerprints |
-| `index/trigram/storage/` | Binary persistence format for lexicon, postings, and file tables |
+| `index/ngram/mod.rs` | Runtime-width N-gram `Config` and `Index`, posting list intersection, lifecycle, candidate narrowing, `NGramIndexError` |
+| `index/ngram/build.rs` | `IndexTables`: fingerprint collection, N-gram extraction, table construction |
+| `index/ngram/files.rs` | File ID to relative path mapping with fingerprints |
+| `index/ngram/storage/` | Binary persistence format for gram sets, lexicon, postings, and file tables |
 | `grep/mod.rs` | Pipeline orchestration: `GrepRequest`, `run()` |
 | `search/` | Regex execution (scan workers, output, pattern, filter) |
 | `search/options/` | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
 | `search/query/` | `SearchQuery`, `Match` |
 | `search/pattern/` | `PatternCompiler`: composable regex builder |
 | `search/request/` | `SearchExecution`, `WalkOptions`, `LinkTraversal` |
-| `search/candidates/` | Walk-based candidate collection |
+| `search/candidates/` | Search candidate collection through `walk::FileWalk` |
 | `search/scan/` | Text / summary / JSON scanning workers |
 | `search/emit/` | Output formatting, result chunks, stats helpers |
 | `search/filter/` | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |
@@ -55,7 +56,7 @@ Public grep APIs (`SearchQuery::new`, `SearchQuery::run`, `discover_files`, `Ind
 ### Index Enum (runtime dispatch)
 ```rust
 pub enum Index {
-    Trigram(TrigramIndex),
+    NGram(NGramIndex),
 }
 impl Index {
     pub fn root(&self) -> &Path;
@@ -65,15 +66,15 @@ impl Index {
 }
 ```
 
-### IndexKind Enum (lifecycle dispatch)
+### IndexConfig Enum (configured identity)
 ```rust
-pub enum IndexKind { Trigram }
-impl IndexKind {
+pub enum IndexConfig { NGram(NGramConfig) }
+impl IndexConfig {
     pub const ALL: &[Self];
-    pub fn as_str(self) -> &'static str;
-    pub(crate) fn build_to_dir(self, config, output_dir) -> Result<()>;
-    pub(crate) fn open_from_dir(self, index_dir, root, corpus_kind) -> Result<Index>;
-    pub(crate) fn try_update(self, snapshot_dir, config, output_dir) -> Result<bool>;
+    pub fn name(self) -> String;
+    pub(crate) fn build(self, build, dest, paths) -> Result<()>;
+    pub(crate) fn open(self, source, root, corpus_kind) -> Result<Index>;
+    pub(crate) fn update(self, source, build, dest, paths) -> Result<bool>;
 }
 ```
 
@@ -91,8 +92,9 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
 
 ### Key Types
 - `Indexes`: registry of opened indexes; opens all kinds in a snapshot and intersects their candidate sets at query time
-- `IndexStore`: snapshot-based persistence for indexes, with `build`/`update` taking `&[IndexKind]`
-- `StoreMeta`: single source of truth for root, corpus_kind, follow_links, and index kinds
+- `IndexStore`: snapshot-based persistence for indexes, with `build`/`update` taking `&[IndexConfig]`
+- `NGramIndex`: runtime-width N-gram index implementation opened from persisted storage
+- `StoreMeta`: single source of truth for root, corpus_kind, follow_links, and index configurations
 - `FileId`: type-safe file identifier within an index
 - `IndexId`: type-safe index identifier in a multi-index search
 - `Candidate`: single file with rel_path, abs_path, filtering predicates
@@ -104,7 +106,7 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
 - **Index file order:** lexicographic relative paths (stable file IDs).
 - **Rayon gating:** same effective-worker heuristic for parallel search and parallel index extraction.
 - **Conservative candidates:** `Index::candidates` may over-return but must not under-return.
-- **Index independence:** each index kind narrows candidates independently; the registry combines results. No index kind depends on another.
+- **Index independence:** each configured index narrows candidates independently; the registry combines results. No index depends on another.
 
 ## Testing
 
@@ -121,7 +123,7 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 | File | Coverage |
 |------|----------|
 | `query.rs` | `QueryPlanner`, `PatternCompiler`, `SearchQuery::new` |
-| `index.rs` | `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, `Index` enum, candidates, explain, save/reopen |
+| `index.rs` | Runtime-width `NGramIndex`, `Indexes`, `Index` enum, candidates, explain, save/reopen |
 | `grep.rs` | `SearchQuery::run`, `CandidateFilter`, output modes |
 
 ### Conventions
@@ -145,8 +147,8 @@ See [`benches/README.md`](benches/README.md) for the full benchmark and profilin
 ## Do NOT
 
 - Break the public API without updating the CLI crate.
-- Add `unsafe` outside `index/trigram/storage/mmap.rs`.
+- Add `unsafe` outside `index/mmap.rs`.
 - Use `#[allow(clippy::...)]` without a documented reason.
-- Have `grep/` import from `index::trigram`. Use `Index` enum only.
+- Have `grep/` import from concrete index modules such as `index::ngram`. Use `Index` enum only.
 - Add variants to `crate::Error`. Define them in the owning module's error type.
 - Expose internal APIs for benchmarking purposes.

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::{IndexKind, IndexStore, Indexes, QueryFlags, QuerySpec};
+use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes, QueryFlags, QuerySpec};
 use tempfile::TempDir;
 
 use super::common::{
@@ -43,11 +43,11 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
     let sift_dir = tmp.path().join(".sift");
     let tmp_path = tmp.path().to_path_buf();
     let root = tmp_path.canonicalize().unwrap_or(tmp_path);
-    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let meta = sample_store_meta(root, vec![IndexConfig::ngram(GramWidth::TRIGRAM)]);
     let mut store = IndexStore::open_or_create(&sift_dir, &meta).expect("open");
     let config = no_ignore_build_config(tmp.path(), &[]);
     store
-        .build(&[IndexKind::Trigram], &config, &[])
+        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
         .expect("build");
 
     let spec = QuerySpec {
@@ -99,11 +99,11 @@ fn build_respects_hidden_files_by_default() {
     let sift_dir = TempDir::new().expect("sift tempdir");
     let corpus_path = corpus.path().to_path_buf();
     let root = corpus_path.canonicalize().unwrap_or(corpus_path);
-    let meta = sample_store_meta(root, vec![IndexKind::Trigram]);
+    let meta = sample_store_meta(root, vec![IndexConfig::ngram(GramWidth::TRIGRAM)]);
     let mut store = IndexStore::open_or_create(sift_dir.path(), &meta).expect("open");
     store
         .build(
-            &[IndexKind::Trigram],
+            &[IndexConfig::ngram(GramWidth::TRIGRAM)],
             &super::common::standard_build_config(corpus.path(), &[]),
             &[],
         )

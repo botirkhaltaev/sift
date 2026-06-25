@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::search::filter::{CandidateFilter, VisibilityConfig};
 
-use super::config::{CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig};
-use super::{IndexError, IndexKind};
+use super::config::{CorpusKind, CorpusSpec, IndexBuildConfig, IndexWalkConfig};
+use super::{IndexConfig, IndexError};
 
 const META_FILE: &str = "meta.json";
 const STORE_VERSION: u32 = 1;
@@ -19,7 +19,7 @@ pub struct StoreMeta {
     pub coverage: IndexCoverage,
     pub walk: WalkMeta,
     pub filters: FilterMeta,
-    pub indexes: Vec<IndexKind>,
+    pub indexes: Vec<IndexConfig>,
 }
 
 /// Whether the store is expected to cover the whole configured corpus.
@@ -69,7 +69,7 @@ impl StoreMeta {
         coverage: IndexCoverage,
         walk: WalkMeta,
         filters: FilterMeta,
-        indexes: Vec<IndexKind>,
+        indexes: Vec<IndexConfig>,
     ) -> Self {
         Self {
             version: STORE_VERSION,
@@ -122,8 +122,8 @@ impl StoreMeta {
 
     /// Map persisted metadata to a runtime index build configuration.
     #[must_use]
-    pub fn index_config(&self) -> IndexConfig<'_> {
-        IndexConfig {
+    pub fn index_config(&self) -> IndexBuildConfig<'_> {
+        IndexBuildConfig {
             corpus: CorpusSpec {
                 root: &self.corpus.root,
                 kind: self.corpus.kind,
@@ -199,7 +199,7 @@ mod tests {
                     ..VisibilityConfig::default()
                 },
             },
-            vec![IndexKind::Trigram],
+            vec![IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
         );
         meta.write(tmp.path()).expect("write meta");
 

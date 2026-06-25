@@ -1,6 +1,6 @@
 //! Index build, open, candidate, and persistence benchmarks.
 //!
-//! Exercises public `TrigramIndexBuilder`, `TrigramIndex`, `Indexes`, and `Index` APIs.
+//! Exercises public N-gram index, `Indexes`, and `Index` APIs.
 //! Storage effects are measured indirectly through build/open/save/reopen paths.
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -10,8 +10,8 @@ use std::path::Path;
 
 use sift_core::search::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexKind, IndexStore,
-    IndexWalkConfig, Indexes, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
+    IndexStore, IndexWalkConfig, Indexes, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
 };
 
 mod common;
@@ -93,8 +93,8 @@ fn materialize_monorepo_corpus(
 fn standard_build_config<'a>(
     root: &'a Path,
     exclude_paths: &'a [std::path::PathBuf],
-) -> IndexConfig<'a> {
-    IndexConfig {
+) -> IndexBuildConfig<'a> {
+    IndexBuildConfig {
         corpus: CorpusSpec {
             root,
             kind: CorpusKind::Directory,
@@ -128,11 +128,13 @@ fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::Trigram],
+        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
     );
     let mut store = IndexStore::open_or_create(sift_dir, &meta).unwrap();
     let config = standard_build_config(corpus, &[]);
-    store.build(&[IndexKind::Trigram], &config, &[]).unwrap();
+    store
+        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
+        .unwrap();
 }
 
 // ─── Build benchmarks ────────────────────────────────────────────────────────
@@ -288,13 +290,13 @@ fn bench_indexes_open(c: &mut Criterion) {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexKind::Trigram],
+                vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
             );
             let mut store = IndexStore::open_or_create(&sift, &meta).expect("open store");
             store
                 .build(
-                    &[IndexKind::Trigram],
-                    &IndexConfig {
+                    &[IndexConfig::ngram(GramWidth::TRIGRAM)],
+                    &IndexBuildConfig {
                         corpus: CorpusSpec {
                             root: &corpus,
                             kind: CorpusKind::Directory,
@@ -344,7 +346,7 @@ fn bench_index_save_reopen(c: &mut Criterion) {
     g.finish();
 }
 
-// ─── TrigramIndex inherent method benches ────────────────────────────────────
+// ─── Trigram-specialized N-gram method benches ───────────────────────────────
 
 fn bench_trigram_index_methods(c: &mut Criterion) {
     let fixture = common::open_large_index();

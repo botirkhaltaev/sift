@@ -62,17 +62,17 @@ Linux kernel source tree, 79K files, 1.3 GB. End-to-end CLI wall-clock (includes
 
 ## Architecture
 
-Sift is built around **composable on-disk indexes**. The `Indexes` registry opens all index kinds under a `.sift` directory and intersects their candidate sets at query time.
+Sift is built around **composable on-disk indexes**. The `Indexes` registry opens all configured indexes under a `.sift` directory and intersects their candidate sets at query time.
 
 ```
-  pattern --> Planner --> [Trigram] [Future Index B] [Future Index C]
+  pattern --> Planner --> [ngram-3] [Future Index B] [Future Index C]
                               \           |            /
                                intersect / union
                                       |
                               candidate set --> regex scan
 ```
 
-Today there is one index kind (`Trigram`). Adding a new kind means adding a variant to `IndexKind` / `Index` and implementing the build/open/update lifecycle. The planner, search engine, and CLI work unchanged.
+Today the default configured index is `ngram-3`, a runtime-width N-gram index. Adding a new index family means adding configured identity plus opened runtime dispatch while leaving the planner, search engine, and CLI flow unchanged.
 
 ## Project Layout
 

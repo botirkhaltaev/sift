@@ -57,6 +57,11 @@ impl CandidateFilter {
     }
 
     #[must_use]
+    pub fn exclude_paths(&self) -> &[PathBuf] {
+        &self.exclude_paths
+    }
+
+    #[must_use]
     pub(crate) const fn needs_rel_str_for_matching(&self) -> bool {
         self.gitignore.is_some() || self.glob.is_some() || self.type_glob.is_some()
     }

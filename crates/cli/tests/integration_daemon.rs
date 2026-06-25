@@ -22,7 +22,8 @@ use common::normalize_stderr;
 use common::normalize_stdout;
 use sift_core::search::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, IndexCoverage, IndexKind, Indexes, StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
+    WalkMeta,
 };
 use sift_grep::index::daemon::{Daemon, DaemonOrchestrator, ServeConfig};
 
@@ -75,7 +76,7 @@ fn sample_meta(root: PathBuf) -> StoreMeta {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::Trigram],
+        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
     )
 }
 

@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use sift_core::search::{CandidateFilter, CandidateFilterConfig, GlobConfig, VisibilityConfig};
 use sift_core::{
     Candidate, CandidatePlan, CandidateRequirement, CandidateSource, CorpusKind, CorpusMeta,
-    FilterMeta, IndexConfig, IndexCoverage, IndexKind, IndexStore, IndexWalkConfig, Indexes,
-    QueryFlags, QueryPlanner, QuerySpec, SnapshotValidation, StoreMeta, WalkMeta,
+    FilterMeta, GramWidth, IndexBuildConfig, IndexConfig, IndexCoverage, IndexStore,
+    IndexWalkConfig, Indexes, QueryFlags, QueryPlanner, QuerySpec, SnapshotValidation, StoreMeta,
+    WalkMeta,
 };
 use tempfile::TempDir;
 
@@ -28,13 +29,13 @@ fn build_indexes(root: &Path, sift_dir: &Path) -> Indexes {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::Trigram],
+        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
     );
     let mut store = IndexStore::open_or_create(sift_dir, &meta).expect("open store");
     store
         .build(
-            &[IndexKind::Trigram],
-            &IndexConfig {
+            &[IndexConfig::ngram(GramWidth::TRIGRAM)],
+            &IndexBuildConfig {
                 corpus: sift_core::CorpusSpec {
                     root,
                     kind: CorpusKind::Directory,
@@ -89,7 +90,7 @@ fn default_meta(root: &Path) -> StoreMeta {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::Trigram],
+        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
     )
 }
 

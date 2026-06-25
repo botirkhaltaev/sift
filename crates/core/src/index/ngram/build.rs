@@ -1,201 +1,24 @@
 //! Corpus walk, file stat, and posting assembly helpers.
 //!
-//! These are private helpers used by [`TrigramIndex::build`] and
-//! [`TrigramIndex::update`] — there is no separate builder type.
+//! These are private helpers used by [`Index::build`] and [`Index::update`].
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
-use ignore::{
-    DirEntry, Error as IgnoreError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState,
-};
-
-use super::Trigram;
-use super::file_table::FileFingerprint;
+use super::files::FileFingerprint;
+use super::gram::{Gram, GramWidth};
+use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
-use super::storage::trigram_sets::TrigramSet;
 
-use crate::index::{CorpusKind, IndexConfig};
-use crate::search::filter::{HiddenMode, IgnoreSources};
+use crate::index::{CorpusKind, IndexBuildConfig};
+use crate::search::request::LinkTraversal;
+use crate::walk::FileWalk;
 
 /// Collected index data ready for persistence.
 pub struct IndexTables {
     pub fingerprints: Vec<FileFingerprint>,
-    pub file_trigrams: Vec<TrigramSet>,
+    pub file_grams: Vec<GramSet>,
     pub lexicon: Vec<LexiconEntry>,
     pub postings: Vec<u8>,
-}
-
-// ---------------------------------------------------------------------------
-// Corpus walk
-// ---------------------------------------------------------------------------
-
-/// Per-thread collector for [`WalkParallel::visit`].
-struct CorpusPathCollector<'a> {
-    root: PathBuf,
-    exclude_paths: &'a [PathBuf],
-    include_paths: &'a [PathBuf],
-    max_filesize: Option<u64>,
-    thread_paths: Vec<PathBuf>,
-    walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
-}
-
-impl Drop for CorpusPathCollector<'_> {
-    fn drop(&mut self) {
-        if self.thread_paths.is_empty() {
-            return;
-        }
-        let mut guard = self
-            .consolidated_paths
-            .lock()
-            .expect("consolidate corpus paths lock");
-        guard.append(&mut self.thread_paths);
-    }
-}
-
-impl ParallelVisitor for CorpusPathCollector<'_> {
-    fn visit(&mut self, entry: Result<DirEntry, IgnoreError>) -> WalkState {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                let mut guard = self.walk_error.lock().expect("walk error lock");
-                if guard.is_none() {
-                    *guard = Some(crate::Error::Ignore(err));
-                }
-                drop(guard);
-                return WalkState::Quit;
-            }
-        };
-        let path = entry.path();
-        let rel = path.strip_prefix(&self.root).unwrap_or(path);
-
-        // Skip excluded directories before descent.
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-            if self.is_excluded(rel) {
-                return WalkState::Skip;
-            }
-            return WalkState::Continue;
-        }
-
-        if entry.file_type().is_some_and(|ft| ft.is_file()) && !self.is_excluded(rel) {
-            if let Some(limit) = self.max_filesize
-                && entry.metadata().is_ok_and(|m| m.len() > limit)
-            {
-                return WalkState::Continue;
-            }
-            self.thread_paths.push(rel.to_path_buf());
-        }
-        WalkState::Continue
-    }
-}
-
-impl CorpusPathCollector<'_> {
-    /// True when the path matches an explicit exclude rule or falls outside
-    /// the explicit include set.
-    ///
-    /// For directories this accepts the path if *any* included path lies
-    /// under it, so that directory pruning does not skip an ancestor of a
-    /// wanted file.
-    fn is_excluded(&self, rel: &Path) -> bool {
-        if self
-            .exclude_paths
-            .iter()
-            .any(|excluded| rel.starts_with(excluded))
-        {
-            return true;
-        }
-        if !self.include_paths.is_empty()
-            && !self.include_paths.iter().any(|included| {
-                rel == *included || included.starts_with(rel) || rel.starts_with(included)
-            })
-        {
-            return true;
-        }
-        false
-    }
-}
-
-struct CorpusPathCollectorBuilder<'a> {
-    root: PathBuf,
-    exclude_paths: &'a [PathBuf],
-    include_paths: &'a [PathBuf],
-    max_filesize: Option<u64>,
-    walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
-}
-
-impl<'a> ParallelVisitorBuilder<'a> for CorpusPathCollectorBuilder<'a> {
-    fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
-        Box::new(CorpusPathCollector {
-            root: self.root.clone(),
-            exclude_paths: self.exclude_paths,
-            include_paths: self.include_paths,
-            max_filesize: self.max_filesize,
-            thread_paths: Vec::new(),
-            walk_error: Arc::clone(&self.walk_error),
-            consolidated_paths: Arc::clone(&self.consolidated_paths),
-        })
-    }
-}
-
-/// Walks the corpus directory and collects sorted relative file paths.
-pub struct CorpusWalker<'a> {
-    config: &'a IndexConfig<'a>,
-}
-
-impl<'a> CorpusWalker<'a> {
-    pub const fn new(config: &'a IndexConfig<'a>) -> Self {
-        Self { config }
-    }
-
-    fn walk_builder(&self) -> WalkBuilder {
-        let sources = self.config.visibility.ignore.sources;
-        let mut wb = WalkBuilder::new(self.config.corpus.root);
-        wb.follow_links(self.config.corpus.follow_links)
-            .same_file_system(self.config.walk.one_file_system)
-            .hidden(matches!(self.config.visibility.hidden, HiddenMode::Respect))
-            .parents(sources.contains(IgnoreSources::PARENT))
-            .ignore(sources.contains(IgnoreSources::DOT))
-            .git_ignore(sources.contains(IgnoreSources::VCS))
-            .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
-            .git_global(sources.contains(IgnoreSources::GLOBAL))
-            .require_git(self.config.visibility.ignore.require_git);
-        if let Some(d) = self.config.walk.max_depth {
-            wb.max_depth(Some(d + 1));
-        }
-        wb
-    }
-
-    pub fn collect(&self) -> crate::Result<Vec<PathBuf>> {
-        let walk_error = Arc::new(Mutex::new(None));
-        let consolidated_paths = Arc::new(Mutex::new(Vec::new()));
-
-        let mut builder = CorpusPathCollectorBuilder {
-            root: self.config.corpus.root.to_path_buf(),
-            exclude_paths: self.config.corpus.exclude_paths,
-            include_paths: self.config.corpus.include_paths,
-            max_filesize: self.config.walk.max_filesize,
-            walk_error: Arc::clone(&walk_error),
-            consolidated_paths: Arc::clone(&consolidated_paths),
-        };
-
-        self.walk_builder().build_parallel().visit(&mut builder);
-
-        {
-            let mut err_slot = walk_error.lock().expect("walk error lock");
-            if let Some(err) = err_slot.take() {
-                return Err(err);
-            }
-        }
-
-        let merged_paths = {
-            let mut guard = consolidated_paths.lock().expect("paths lock");
-            guard.sort_unstable();
-            std::mem::take(&mut *guard)
-        };
-        Ok(merged_paths)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -240,100 +63,41 @@ impl<'a> FingerprintCollector<'a> {
 // Posting assembly
 // ---------------------------------------------------------------------------
 
-/// Assembles trigram → file ID posting lists from per-file trigram sets.
-pub struct PostingAssembler<'a> {
-    file_trigrams: &'a [TrigramSet],
+/// Assembles gram -> file ID posting lists from per-file gram sets.
+pub struct PostingTables {
+    pub lexicon: Vec<LexiconEntry>,
+    pub postings: Vec<u8>,
 }
 
-impl<'a> PostingAssembler<'a> {
-    pub const fn new(file_trigrams: &'a [TrigramSet]) -> Self {
-        Self { file_trigrams }
-    }
-
-    pub fn assemble(&self) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
-        let total: usize = self.file_trigrams.iter().map(|s| s.as_slice().len()).sum();
-        if self.file_trigrams.len() > u32::MAX as usize {
+impl PostingTables {
+    pub fn assemble(width: GramWidth, file_grams: &[GramSet]) -> crate::Result<Self> {
+        let total: usize = file_grams.iter().map(|s| s.as_slice().len()).sum();
+        if file_grams.len() > u32::MAX as usize {
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "too many indexed files",
             )));
         }
 
-        // Collect (trigram_key, file_id) pairs packed into u64.
         let mut pairs = Vec::with_capacity(total);
-        for (fid, set) in self.file_trigrams.iter().enumerate() {
+        for (fid, set) in file_grams.iter().enumerate() {
             let fid32 = u32::try_from(fid).expect("file count checked above");
-            for tri in set.as_slice() {
-                pairs.push((u64::from(tri.as_u24()) << 32) | u64::from(fid32));
+            for gram in set.as_slice() {
+                pairs.push((gram.ordinal(), fid32));
             }
         }
-
-        // 2-pass stable radix sort on the trigram key (bits 32-55).
-        // File IDs (bits 0-31) are already ordered because we iterate files
-        // in ascending order, and a stable sort preserves that order within
-        // each trigram group.  This halves the passes compared to sorting
-        // the full 56-bit packed value.
-        Self::radix_sort_trigram(&mut pairs);
-
-        Self::encode_sorted(&pairs)
+        pairs.sort_unstable();
+        Self::encode_pairs(width, &pairs)
     }
 
-    fn radix_sort_trigram(pairs: &mut Vec<u64>) {
-        let len = pairs.len();
-        if len < 2 {
-            return;
-        }
-
-        let mut scratch = vec![0u64; len];
-        let mut count = vec![0usize; 65_536];
-
-        // Pass 1: sort by bits 32-47 (low 16 of trigram key).
-        for &p in pairs.iter() {
-            count[((p >> 32) & 0xFFFF) as usize] += 1;
-        }
-        let mut total = 0usize;
-        for c in &mut count {
-            let tmp = *c + total;
-            *c = total;
-            total = tmp;
-        }
-        for &p in pairs.iter() {
-            let bucket = ((p >> 32) & 0xFFFF) as usize;
-            scratch[count[bucket]] = p;
-            count[bucket] += 1;
-        }
-        std::mem::swap(pairs, &mut scratch);
-        count.fill(0);
-
-        // Pass 2: sort by bits 48-55 (high 8 of 24-bit trigram key).
-        // Only 256 values are possible; we still use the 65536 array
-        // to avoid a separate code path, but only the first 256 entries
-        // are touched.
-        for &p in pairs.iter() {
-            count[((p >> 48) & 0xFF) as usize] += 1;
-        }
-        total = 0;
-        for c in &mut count {
-            let tmp = *c + total;
-            *c = total;
-            total = tmp;
-        }
-        for &p in pairs.iter() {
-            let bucket = ((p >> 48) & 0xFF) as usize;
-            scratch[count[bucket]] = p;
-            count[bucket] += 1;
-        }
-        std::mem::swap(pairs, &mut scratch);
-    }
-
-    fn encode_sorted(pairs: &[u64]) -> crate::Result<(Vec<LexiconEntry>, Vec<u8>)> {
+    fn encode_pairs(width: GramWidth, pairs: &[(u64, u32)]) -> crate::Result<Self> {
         let mut posting_bytes = Vec::with_capacity(pairs.len() * 3);
-        let mut lex_entries = Vec::new();
+        let mut lexicon = Vec::new();
         let mut i = 0;
         while i < pairs.len() {
-            let tri_key = (pairs[i] >> 32) as u32;
+            let gram_key = pairs[i].0;
             let start = i;
-            while i < pairs.len() && (pairs[i] >> 32) as u32 == tri_key {
+            while i < pairs.len() && pairs[i].0 == gram_key {
                 i += 1;
             }
             let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
@@ -349,8 +113,8 @@ impl<'a> PostingAssembler<'a> {
                 ))
             })?;
             let mut prev = 0u64;
-            for (j, &p) in pairs[start..i].iter().enumerate() {
-                let fid = p & 0xFFFF_FFFF;
+            for (j, &(_, fid)) in pairs[start..i].iter().enumerate() {
+                let fid = u64::from(fid);
                 let raw = if j == 0 {
                     fid
                 } else {
@@ -366,22 +130,29 @@ impl<'a> PostingAssembler<'a> {
                 posting_bytes.extend_from_slice(encoded);
                 prev = fid;
             }
-            lex_entries.push(LexiconEntry {
-                trigram: Trigram::from_u24(tri_key).to_bytes(),
+            lexicon.push(LexiconEntry {
+                gram: Gram::from_ordinal(width, gram_key)?,
                 offset,
                 len,
             });
         }
-        Ok((lex_entries, posting_bytes))
+        Ok(Self {
+            lexicon,
+            postings: posting_bytes,
+        })
     }
 }
 
 /// Build in-memory index tables from a corpus configuration.
 ///
-/// When `paths` is empty, discovers files via [`CorpusWalker`]. Otherwise indexes
+/// When `paths` is empty, discovers files via [`FileWalk`]. Otherwise indexes
 /// exactly the given corpus-relative paths.
 impl IndexTables {
-    pub fn build(config: &IndexConfig<'_>, paths: &[PathBuf]) -> crate::Result<Self> {
+    pub fn build(
+        width: GramWidth,
+        config: &IndexBuildConfig<'_>,
+        paths: &[PathBuf],
+    ) -> crate::Result<Self> {
         use rayon::prelude::*;
 
         let (paths, root) = match config.corpus.kind {
@@ -397,7 +168,19 @@ impl IndexTables {
             }
             CorpusKind::Directory => {
                 let paths = if paths.is_empty() {
-                    CorpusWalker::new(config).collect()?
+                    FileWalk::new(config.corpus.root)
+                        .scopes(config.corpus.include_paths)
+                        .excludes(config.corpus.exclude_paths)
+                        .visibility(config.visibility.clone())
+                        .links(if config.corpus.follow_links {
+                            LinkTraversal::Follow
+                        } else {
+                            LinkTraversal::DoNotFollow
+                        })
+                        .one_file_system(config.walk.one_file_system)
+                        .max_depth(config.walk.max_depth)
+                        .max_filesize(config.walk.max_filesize)
+                        .collect_paths()?
                 } else {
                     paths.to_vec()
                 };
@@ -407,22 +190,22 @@ impl IndexTables {
 
         let fingerprints = FingerprintCollector::new(root, &paths).collect()?;
 
-        let file_trigrams: Vec<TrigramSet> = fingerprints
+        let file_grams: Vec<GramSet> = fingerprints
             .par_iter()
             .map(|fp| {
                 let abs = root.join(&fp.path);
-                TrigramSet::from_file(&abs)
+                std::fs::read(&abs).map(|bytes| GramSet::collect(width, &bytes))
             })
             .collect::<std::io::Result<_>>()
             .map_err(crate::Error::Io)?;
 
-        let (lexicon, postings) = PostingAssembler::new(&file_trigrams).assemble()?;
+        let tables = PostingTables::assemble(width, &file_grams)?;
 
         Ok(Self {
             fingerprints,
-            file_trigrams,
-            lexicon,
-            postings,
+            file_grams,
+            lexicon: tables.lexicon,
+            postings: tables.postings,
         })
     }
 }
@@ -435,9 +218,13 @@ impl IndexTables {
 mod tests {
     use super::*;
     use crate::index::config::IndexWalkConfig;
-    use crate::index::{CorpusKind, CorpusSpec, IndexConfig};
+    use crate::index::ngram::gram::GramWidth;
+    use crate::index::ngram::storage::postings::Postings;
+    use crate::index::{CorpusKind, CorpusSpec, IndexBuildConfig};
     use crate::search::filter::IgnoreConfig;
+    use crate::search::request::LinkTraversal;
     use crate::search::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
+    use crate::walk::FileWalk;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -445,8 +232,8 @@ mod tests {
     struct TablesFixture;
 
     impl TablesFixture {
-        fn no_ignore_config(root: &Path) -> IndexConfig<'_> {
-            IndexConfig {
+        fn no_ignore_config(root: &Path) -> IndexBuildConfig<'_> {
+            IndexBuildConfig {
                 corpus: CorpusSpec {
                     root,
                     kind: CorpusKind::Directory,
@@ -464,7 +251,7 @@ mod tests {
 
         fn build(root: &Path) -> IndexTables {
             let config = Self::no_ignore_config(root);
-            IndexTables::build(&config, &[]).expect("build tables")
+            IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables")
         }
     }
 
@@ -483,7 +270,7 @@ mod tests {
                             usize::try_from(e.offset).unwrap_or(usize::MAX)
                         });
                     let slice = &postings[start..end];
-                    crate::index::trigram::storage::postings::Postings::decode_sorted(slice)
+                    Postings::decode_sorted(slice)
                         .unwrap_or_default()
                         .into_iter()
                         .filter(|&id| id == file_id)
@@ -510,7 +297,7 @@ mod tests {
     struct FilterParity;
 
     impl FilterParity {
-        fn filter_config(build: &IndexConfig<'_>) -> CandidateFilterConfig {
+        fn filter_config(build: &IndexBuildConfig<'_>) -> CandidateFilterConfig {
             CandidateFilterConfig {
                 exclude_paths: build.corpus.exclude_paths.to_vec(),
                 visibility: build.visibility.clone(),
@@ -569,7 +356,7 @@ mod tests {
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::write(excluded_dir.join("skip.txt"), "world\n").expect("write skip");
 
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -583,7 +370,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -613,7 +400,7 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         FilterCorpus::write(tmp.path());
 
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -624,7 +411,11 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
+        let paths = FileWalk::new(config.corpus.root)
+            .visibility(config.visibility.clone())
+            .links(LinkTraversal::DoNotFollow)
+            .collect_paths()
+            .expect("walk corpus");
         assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
         assert!(!paths.iter().any(|p| p.starts_with("skip")));
         assert!(!paths.iter().any(|p| p.starts_with("also_skip")));
@@ -635,7 +426,7 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         FilterCorpus::write(tmp.path());
 
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -649,7 +440,11 @@ mod tests {
                 ..Default::default()
             },
         };
-        let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
+        let paths = FileWalk::new(config.corpus.root)
+            .visibility(config.visibility.clone())
+            .links(LinkTraversal::DoNotFollow)
+            .collect_paths()
+            .expect("walk corpus");
         assert!(paths.iter().any(|p| p.starts_with("skip")));
         assert!(paths.iter().any(|p| p.starts_with("also_skip")));
     }
@@ -659,7 +454,7 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         FilterCorpus::write(tmp.path());
 
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -670,7 +465,11 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let indexed = CorpusWalker::new(&config).collect().expect("walk corpus");
+        let indexed = FileWalk::new(config.corpus.root)
+            .visibility(config.visibility.clone())
+            .links(LinkTraversal::DoNotFollow)
+            .collect_paths()
+            .expect("walk corpus");
         let filter = CandidateFilter::new(&FilterParity::filter_config(&config), tmp.path())
             .expect("filter");
 
@@ -690,7 +489,7 @@ mod tests {
         fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
         fs::write(tmp.path().join("skip.txt"), "world\n").expect("write skip");
 
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -704,7 +503,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -717,7 +516,7 @@ mod tests {
         fs::write(tmp.path().join("other.txt"), "haystack\n").expect("write other");
 
         let only_txt = PathBuf::from("only.txt");
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::SingleFile,
@@ -728,7 +527,7 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(
             tables.fingerprints[0].path,
@@ -757,7 +556,7 @@ mod tests {
         fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
         fs::write(tmp.path().join("skip.ignored"), "secret\n").expect("write ignored");
 
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -768,7 +567,7 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             !paths.iter().any(|p| p == "skip.ignored"),
@@ -789,7 +588,7 @@ mod tests {
         fs::write(tmp.path().join("src/keep.txt"), "needle\n").expect("write keep");
         fs::write(tmp.path().join("target/ignored.txt"), "secret\n").expect("write ignored");
 
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -800,7 +599,7 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(&config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             paths.iter().any(|p| p == Path::new("src/keep.txt")),

@@ -4,15 +4,15 @@ Core engine for indexed code search. Build on-disk indexes over a codebase, then
 
 ## Index Architecture
 
-The engine is built around composable indexes. Each index type independently narrows candidates for a query; the `Indexes` registry combines their results via set intersection. Today the shipped index type is a **trigram index**; the `IndexKind` and `Index` enums provide static dispatch for adding future index kinds (AST indexes, dependency graphs, vector indexes, etc.) without changing the query planner or search pipeline.
+The engine is built around composable indexes. Each configured index independently narrows candidates for a query; the `Indexes` registry combines their results via set intersection. Today the shipped index is a runtime-width N-gram index that defaults to trigram width. `IndexConfig` records configured/persisted identity, `IndexStore` owns build/open/update transactions, and `Index` is the opened query-time dispatch.
 
 ```
-IndexKind::Trigram  ──build/open/update──>  Index::Trigram(TrigramIndex)
-IndexKind::???      ──build/open/update──>  Index::???(...)
-                                                 │
-                                          Indexes registry
-                                                 │
-                              intersect candidate sets at query time
+IndexConfig::ngram(GramWidth::TRIGRAM)  ──IndexStore──>  Index::NGram(NGramIndex)
+IndexConfig::???                         ──IndexStore──>  Index::???(...)
+                                                                  │
+                                                           Indexes registry
+                                                                  │
+                                               intersect candidate sets at query time
 ```
 
 ## Modules
@@ -20,8 +20,9 @@ IndexKind::???      ──build/open/update──>  Index::???(...)
 | Module | Description |
 |--------|-------------|
 | [`query/`](src/query/) | Query description (`QuerySpec`), planning -- index-agnostic |
-| [`index/`](src/index/) | `IndexKind` / `Index` enums, `Indexes` registry, `IndexStore`, snapshot persistence |
-| [`index/trigram/`](src/index/trigram/) | Trigram index: build, load, search, and on-disk storage |
+| [`walk/`](src/walk/) | Shared filesystem discovery for search candidates and index builds |
+| [`index/`](src/index/) | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
+| [`index/ngram/`](src/index/ngram/) | Runtime-width N-gram index: build, load, search, and on-disk storage |
 | [`grep/`](src/grep/) | Pipeline orchestration: `GrepRequest`, `run()` |
 | [`search/`](src/search/) | Regex execution, scanning, output formatting, parallelism |
 | [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
@@ -30,13 +31,13 @@ IndexKind::???      ──build/open/update──>  Index::???(...)
 
 ```rust
 use sift_core::{
-    IndexStore, IndexKind, IndexConfig, Indexes,
-    SearchQuery, SearchOptions, GrepRequest, CandidateFilter,
+    CandidateSource, GrepRequest, GramWidth, IndexBuildConfig, IndexConfig, IndexStore, Indexes,
+    SearchCollection, SearchOptions, SearchQuery, SnapshotValidation,
 };
 
-// Build indexes (currently trigram; extensible to multiple kinds)
+// Build indexes (currently trigram-specialized N-gram; extensible to multiple kinds)
 let mut store = IndexStore::open_or_create(&sift_dir, &meta)?;
-store.build(&[IndexKind::Trigram], &config, &[])?;
+store.build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])?;
 
 // Open all indexes in the store
 let indexes = Indexes::open(&sift_dir)?;
@@ -49,8 +50,10 @@ let run = GrepRequest {
     output,
     separators: &separators,
     collect: SearchCollection::none(),
-    store_meta: None,
-    walk_unindexed: false,
+    candidate_source: CandidateSource {
+        store_meta: Some(&meta),
+        snapshot: SnapshotValidation::Unvalidated,
+    },
 }
 .run(&query)?;
 ```

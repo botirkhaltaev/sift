@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use sift_core::search::VisibilityConfig;
 use sift_core::{
-    CorpusMeta, FilterMeta, IndexCoverage, IndexKind, IndexStore, StoreMeta, WalkMeta,
+    CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, StoreMeta, WalkMeta,
 };
 
 use crate::grep::Argv;
@@ -39,7 +39,7 @@ pub struct IndexRequest {
     pub execution: IndexExecution,
     pub build_coverage: IndexCoverage,
     pub path: PathBuf,
-    pub indexes: Option<Vec<IndexKind>>,
+    pub indexes: Option<Vec<IndexConfig>>,
     pub sift_dir: PathBuf,
     pub follow_links: bool,
     pub one_file_system: bool,
@@ -55,7 +55,7 @@ pub struct IndexJob {
     pub root: PathBuf,
     pub include_paths: Vec<PathBuf>,
     pub corpus_kind: sift_core::CorpusKind,
-    pub indexes: Vec<IndexKind>,
+    pub indexes: Vec<IndexConfig>,
     pub follow_links: bool,
     pub one_file_system: bool,
     pub max_depth: Option<usize>,
@@ -79,7 +79,7 @@ impl IndexJob {
         } else {
             (canonical, Vec::new(), sift_core::CorpusKind::Directory)
         };
-        let indexes: Vec<IndexKind> = req.indexes.as_deref().unwrap_or(IndexKind::ALL).to_vec();
+        let indexes: Vec<IndexConfig> = req.indexes.as_deref().unwrap_or(IndexConfig::ALL).to_vec();
         let exclude_paths = CorpusScope::excluded_paths(&root, &req.sift_dir);
         let max_filesize = req
             .max_filesize
