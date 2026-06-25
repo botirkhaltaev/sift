@@ -9,7 +9,7 @@ Benchmarks mirror the `src/` module layout and exercise only public APIs.
 | File | What it measures |
 |------|------------------|
 | `query.rs` | `QueryPlanner` decisions, `PatternCompiler` shaping/compilation, `SearchQuery::new` |
-| `index.rs` | `NGramIndex<TrigramSpec>` build/open, `Indexes::open`, `Index` enum methods, `candidates`, `explain`, save/reopen |
+| `index.rs` | Runtime-width `NGramIndex` build/open, `Indexes::open`, `Index` enum methods, `candidates`, `explain`, save/reopen |
 | `grep.rs` | `SearchQuery::run` (indexed search / walk search), `CandidateFilter` paths, output modes |
 
 Storage is benchmarked indirectly through `index.rs` build/open/save/reopen paths. No direct storage benchmarks.

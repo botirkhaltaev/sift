@@ -4,20 +4,20 @@
 
 Core engine for composable indexed code search: index registry, query planning, candidate narrowing, grep-style execution, and parallel file scanning.
 
-The engine is designed around multiple coexisting index types. The `IndexKind` enum drives lifecycle dispatch (build/open/update), the `Index` enum drives query-time dispatch (candidate narrowing), and the `Indexes` registry intersects candidate sets from all available indexes. Today the shipped variant is `IndexKind::NGram(NGramKind::Trigram)`; future index kinds (AST, dependency graph, vector) slot in by adding variants to these enums.
+The engine is designed around multiple coexisting configured indexes. `IndexConfig` records configured/persisted identity, `IndexStore` owns build/open/update snapshot transactions, the `Index` enum drives query-time candidate narrowing, and the `Indexes` registry intersects candidate sets from all available indexes. Today the default configured index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
 
 ## Public API
 
-Re-exported from `lib.rs`: `NGramIndex`, `NGramSpec`, `TrigramSpec`, `GramWidth`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `IndexKind`, `NGramKind`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
+Re-exported from `lib.rs`: `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `IndexConfig`, `IndexBuildConfig`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
 
 ## Source Map
 
 | Module | Responsibility |
 |--------|----------------|
 | `query/` | Index-agnostic query description (`QuerySpec`), candidate planning |
-| `index/mod.rs` | `Indexes` registry, `Index` enum (query dispatch), `IndexKind` enum (lifecycle dispatch), shared types (`FileId`, `IndexId`), `IndexError` |
+| `index/mod.rs` | `Indexes` registry, `IndexConfig` configured identity, `Index` enum (query dispatch), shared types (`FileId`, `IndexId`), `IndexError` |
 | `index/store.rs` | `IndexStore`: snapshot-based persistence, atomic build/update/publish |
-| `index/ngram/mod.rs` | `NGramIndex<S>` struct, `NGramSpec`, trigram specialization, posting list intersection, lifecycle, candidate narrowing, `NGramIndexError` |
+| `index/ngram/mod.rs` | Runtime-width N-gram `Config` and `Index`, posting list intersection, lifecycle, candidate narrowing, `NGramIndexError` |
 | `index/ngram/build.rs` | `IndexTables`: corpus walk, fingerprint collection, N-gram extraction, table construction |
 | `index/ngram/files.rs` | File ID to relative path mapping with fingerprints |
 | `index/ngram/storage/` | Binary persistence format for gram sets, lexicon, postings, and file tables |
@@ -55,7 +55,7 @@ Public grep APIs (`SearchQuery::new`, `SearchQuery::run`, `discover_files`, `Ind
 ### Index Enum (runtime dispatch)
 ```rust
 pub enum Index {
-    NGram(NGramIndex<TrigramSpec>),
+    NGram(NGramIndex),
 }
 impl Index {
     pub fn root(&self) -> &Path;
@@ -65,16 +65,15 @@ impl Index {
 }
 ```
 
-### IndexKind Enum (lifecycle dispatch)
+### IndexConfig Enum (configured identity)
 ```rust
-pub enum IndexKind { NGram(NGramKind) }
-pub enum NGramKind { Trigram }
-impl IndexKind {
+pub enum IndexConfig { NGram(NGramConfig) }
+impl IndexConfig {
     pub const ALL: &[Self];
-    pub fn as_str(self) -> &'static str;
-    pub(crate) fn build_to_dir(self, config, output_dir) -> Result<()>;
-    pub(crate) fn open_from_dir(self, index_dir, root, corpus_kind) -> Result<Index>;
-    pub(crate) fn try_update(self, snapshot_dir, config, output_dir) -> Result<bool>;
+    pub fn name(self) -> String;
+    pub(crate) fn build(self, build, dest, paths) -> Result<()>;
+    pub(crate) fn open(self, source, root, corpus_kind) -> Result<Index>;
+    pub(crate) fn update(self, source, build, dest, paths) -> Result<bool>;
 }
 ```
 
@@ -92,9 +91,9 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
 
 ### Key Types
 - `Indexes`: registry of opened indexes; opens all kinds in a snapshot and intersects their candidate sets at query time
-- `IndexStore`: snapshot-based persistence for indexes, with `build`/`update` taking `&[IndexKind]`
-- `NGramIndex<S>`: generic N-gram index implementation parameterized by an `NGramSpec`; `TrigramSpec` is the shipped optimized specialization
-- `StoreMeta`: single source of truth for root, corpus_kind, follow_links, and index kinds
+- `IndexStore`: snapshot-based persistence for indexes, with `build`/`update` taking `&[IndexConfig]`
+- `NGramIndex`: runtime-width N-gram index implementation opened from persisted storage
+- `StoreMeta`: single source of truth for root, corpus_kind, follow_links, and index configurations
 - `FileId`: type-safe file identifier within an index
 - `IndexId`: type-safe index identifier in a multi-index search
 - `Candidate`: single file with rel_path, abs_path, filtering predicates
@@ -106,7 +105,7 @@ grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
 - **Index file order:** lexicographic relative paths (stable file IDs).
 - **Rayon gating:** same effective-worker heuristic for parallel search and parallel index extraction.
 - **Conservative candidates:** `Index::candidates` may over-return but must not under-return.
-- **Index independence:** each index kind narrows candidates independently; the registry combines results. No index kind depends on another.
+- **Index independence:** each configured index narrows candidates independently; the registry combines results. No index depends on another.
 
 ## Testing
 
@@ -123,7 +122,7 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 | File | Coverage |
 |------|----------|
 | `query.rs` | `QueryPlanner`, `PatternCompiler`, `SearchQuery::new` |
-| `index.rs` | `NGramIndex<TrigramSpec>`, `Indexes`, `Index` enum, candidates, explain, save/reopen |
+| `index.rs` | Runtime-width `NGramIndex`, `Indexes`, `Index` enum, candidates, explain, save/reopen |
 | `grep.rs` | `SearchQuery::run`, `CandidateFilter`, output modes |
 
 ### Conventions

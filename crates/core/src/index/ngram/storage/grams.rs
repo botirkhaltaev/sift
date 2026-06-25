@@ -1,24 +1,22 @@
 //! Per-file gram sets: file id -> sorted unique N-grams.
 
-use std::cell::RefCell;
-use std::marker::PhantomData;
 use std::path::Path;
 
 use super::format::GRAMS_MAGIC;
 use super::{read_u32_le, read_u64_le};
 use crate::index::mmap::mmap_open;
-use crate::index::ngram::gram::{GramKey, Trigram};
+use crate::index::ngram::gram::{Gram, GramWidth, GramWindows};
 use crate::index::snapshot::ArtifactData;
 
 /// A single sorted unique gram set for one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GramSet<G: GramKey> {
-    grams: Vec<G>,
+pub struct GramSet {
+    grams: Vec<Gram>,
 }
 
-impl<G: GramKey> GramSet<G> {
-    pub fn new(grams: Vec<G>) -> std::io::Result<Self> {
-        let mut prev: Option<G> = None;
+impl GramSet {
+    pub fn new(grams: Vec<Gram>) -> std::io::Result<Self> {
+        let mut prev: Option<Gram> = None;
         for gram in &grams {
             if let Some(prev) = prev
                 && *gram <= prev
@@ -33,20 +31,19 @@ impl<G: GramKey> GramSet<G> {
         Ok(Self { grams })
     }
 
-    pub(crate) fn collect(bytes: &[u8]) -> Self {
-        let width = G::WIDTH.get();
-        if bytes.len() < width {
+    #[must_use]
+    pub fn collect(width: GramWidth, bytes: &[u8]) -> Self {
+        if bytes.len() < width.get() {
             return Self { grams: Vec::new() };
         }
-        let mut grams: Vec<G> = (0..=bytes.len() - width)
-            .map(|offset| G::from_window(&bytes[offset..offset + width]))
-            .collect();
+        let mut grams: Vec<Gram> = GramWindows::new(bytes, width).collect();
         grams.sort_unstable();
         grams.dedup();
         Self { grams }
     }
 
-    pub fn as_slice(&self) -> &[G] {
+    #[must_use]
+    pub fn as_slice(&self) -> &[Gram] {
         &self.grams
     }
 
@@ -69,7 +66,7 @@ impl<G: GramKey> GramSet<G> {
         Ok(())
     }
 
-    pub fn decode(bytes: &[u8]) -> std::io::Result<Self> {
+    pub fn decode(width: GramWidth, bytes: &[u8]) -> std::io::Result<Self> {
         let mut out = Vec::new();
         let mut pos = 0usize;
         let mut prev = 0u64;
@@ -92,75 +89,24 @@ impl<G: GramKey> GramSet<G> {
                     )
                 })?
             };
-            out.push(G::from_ordinal(value)?);
+            out.push(Gram::from_ordinal(width, value)?);
             prev = value;
         }
         Self::new(out)
     }
 }
 
-impl GramSet<Trigram> {
-    /// Optimized trigram extraction using a thread-local 24-bit bitset.
-    pub(crate) fn collect_trigrams(bytes: &[u8]) -> Self {
-        if bytes.len() < 3 {
-            return Self { grams: Vec::new() };
-        }
-
-        thread_local! {
-            static SEEN: RefCell<Vec<u64>> = RefCell::new(vec![0u64; 1 << 18]);
-        }
-
-        SEEN.with(|cell| {
-            let mut seen = cell.borrow_mut();
-            let mut grams = Vec::new();
-            let mut key =
-                (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
-            {
-                let idx = key as usize;
-                seen[idx >> 6] |= 1u64 << (idx & 63);
-                grams.push(Trigram::from_u24(key));
-            }
-            for &b in &bytes[3..] {
-                key = ((key & 0x0000_FFFF) << 8) | u32::from(b);
-                let idx = key as usize;
-                let word = &mut seen[idx >> 6];
-                let bit = 1u64 << (idx & 63);
-                if *word & bit == 0 {
-                    *word |= bit;
-                    grams.push(Trigram::from_u24(key));
-                }
-            }
-            for gram in &grams {
-                let idx = gram.as_u24() as usize;
-                seen[idx >> 6] &= !(1u64 << (idx & 63));
-            }
-            grams.sort_unstable();
-            Self { grams }
-        })
-    }
-}
-
 /// Memory-mapped view of per-file gram sets.
 #[derive(Debug)]
-pub struct GramSets<G: GramKey> {
+pub struct GramSets {
+    width: GramWidth,
     data: ArtifactData,
     count: usize,
     offset_table_start: usize,
-    gram_type: PhantomData<fn() -> G>,
 }
 
-impl<G: GramKey> GramSets<G> {
-    #[must_use]
-    pub fn empty() -> Self {
-        Self {
-            data: ArtifactData::Memory(Vec::new().into()),
-            count: 0,
-            offset_table_start: 0,
-            gram_type: PhantomData,
-        }
-    }
-
-    pub fn encode(sets: &[GramSet<G>]) -> std::io::Result<Vec<u8>> {
+impl GramSets {
+    pub fn encode(width: GramWidth, sets: &[GramSet]) -> std::io::Result<Vec<u8>> {
         let count = sets.len();
         let offset_table_start = GRAMS_MAGIC.len() + 12;
         let blob_start = offset_table_start + count * 8;
@@ -184,7 +130,7 @@ impl<G: GramKey> GramSets<G> {
 
         let mut file_bytes = Vec::with_capacity(blob_start + blob.len());
         file_bytes.extend_from_slice(&GRAMS_MAGIC);
-        file_bytes.extend_from_slice(&G::WIDTH.as_u32().to_le_bytes());
+        file_bytes.extend_from_slice(&width.as_u32().to_le_bytes());
         let count = u32::try_from(count).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -200,29 +146,29 @@ impl<G: GramKey> GramSets<G> {
         Ok(file_bytes)
     }
 
-    pub fn create(path: &Path, sets: &[GramSet<G>]) -> std::io::Result<Self> {
-        let data = Self::encode(sets)?;
+    pub fn create(path: &Path, width: GramWidth, sets: &[GramSet]) -> std::io::Result<Self> {
+        let data = Self::encode(width, sets)?;
         std::fs::write(path, &data)?;
-        Self::open(path)
+        Self::open(path, width)
     }
 
-    pub fn open(path: &Path) -> std::io::Result<Self> {
+    pub fn open(path: &Path, width: GramWidth) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
-        Self::from_artifact(ArtifactData::Mmap(mmap))
+        Self::from_artifact(ArtifactData::Mmap(mmap), width)
     }
 
-    pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
+    pub fn from_artifact(data: ArtifactData, width: GramWidth) -> std::io::Result<Self> {
         let bytes = data.as_ref();
-        let (count, offset_table_start) = Self::validate(bytes)?;
+        let (count, offset_table_start) = Self::validate(bytes, width)?;
         Ok(Self {
+            width,
             data,
             count,
             offset_table_start,
-            gram_type: PhantomData,
         })
     }
 
-    fn validate(bytes: &[u8]) -> std::io::Result<(usize, usize)> {
+    fn validate(bytes: &[u8], width: GramWidth) -> std::io::Result<(usize, usize)> {
         let magic_len = GRAMS_MAGIC.len();
         if bytes.len() < magic_len + 12 {
             return Err(std::io::Error::new(
@@ -237,12 +183,12 @@ impl<G: GramKey> GramSets<G> {
             ));
         }
         let stored_width = read_u32_le(bytes, magic_len);
-        if stored_width != G::WIDTH.as_u32() {
+        if stored_width != width.as_u32() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "gram set width {stored_width} does not match expected {}",
-                    G::WIDTH.get()
+                    width.get()
                 ),
             ));
         }
@@ -258,22 +204,12 @@ impl<G: GramKey> GramSets<G> {
         let mut prev_off: Option<u64> = None;
         for i in 0..count {
             let off = read_u64_le(bytes, offset_table_start + i * 8);
-            let off_usize = usize::try_from(off).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("gram set offset[{i}] exceeds address space"),
-                )
-            })?;
-            if off_usize > bytes.len() {
+            if off < u64::try_from(blob_start).unwrap_or(u64::MAX)
+                || usize::try_from(off).map_or(true, |o| o > bytes.len())
+            {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("offset table[{i}] points past end"),
-                ));
-            }
-            if off_usize < blob_start {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("offset table[{i}] points before blob start"),
+                    "gram set offset out of bounds",
                 ));
             }
             if let Some(prev) = prev_off
@@ -281,7 +217,7 @@ impl<G: GramKey> GramSets<G> {
             {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("offset table[{i}] not monotonic (prev={prev}, cur={off})"),
+                    "gram set offsets are not monotonic",
                 ));
             }
             prev_off = Some(off);
@@ -289,42 +225,33 @@ impl<G: GramKey> GramSets<G> {
         Ok((count, offset_table_start))
     }
 
-    fn blob_end(&self, id: usize) -> usize {
-        let bytes = self.bytes();
-        if id + 1 < self.count {
-            let off_start = self.offset_table_start + (id + 1) * 8;
-            usize::try_from(read_u64_le(bytes, off_start)).unwrap_or(bytes.len())
-        } else {
-            bytes.len()
-        }
-    }
-
-    fn bytes(&self) -> &[u8] {
-        self.data.as_ref()
-    }
-
-    pub fn get(&self, id: usize) -> std::io::Result<GramSet<G>> {
-        if id >= self.count {
+    pub fn get(&self, file_id: usize) -> std::io::Result<GramSet> {
+        if file_id >= self.count {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("gram set index {id} out of range (count={})", self.count),
+                "file id out of bounds for gram sets",
             ));
         }
-        let bytes = self.bytes();
-        let off_start = self.offset_table_start + id * 8;
-        let off = usize::try_from(read_u64_le(bytes, off_start)).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("gram set {id} offset exceeds address space"),
-            )
-        })?;
-        let end = self.blob_end(id);
+        let bytes = self.data.as_ref();
+        let off = usize::try_from(read_u64_le(bytes, self.offset_table_start + file_id * 8))
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "offset too large")
+            })?;
+        let end = if file_id + 1 < self.count {
+            usize::try_from(read_u64_le(
+                bytes,
+                self.offset_table_start + (file_id + 1) * 8,
+            ))
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "offset too large"))?
+        } else {
+            bytes.len()
+        };
         if off > end || end > bytes.len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("gram set {id} data extends past end"),
+                "gram set range out of bounds",
             ));
         }
-        GramSet::decode(&bytes[off..end])
+        GramSet::decode(self.width, &bytes[off..end])
     }
 }

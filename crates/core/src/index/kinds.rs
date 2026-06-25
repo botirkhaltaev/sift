@@ -2,17 +2,17 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::config::{CorpusKind, IndexConfig};
+use super::config::{CorpusKind, IndexBuildConfig};
 use super::ngram;
 use super::{IndexDestination, IndexSource};
 
 /// How an index query plan resolves candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PlanMode {
-    /// The query was narrowed using N-gram candidates from the index.
+    /// The query was narrowed using indexed candidates.
     #[default]
     IndexedCandidates,
-    /// No grams were usable — all indexed files must be scanned.
+    /// No index terms were usable, so all indexed files must be scanned.
     FullScan,
 }
 
@@ -22,68 +22,49 @@ pub struct QueryPlanOutput {
     pub mode: PlanMode,
 }
 
-/// Tag identifying an index kind for lifecycle dispatch (build, open, update).
-///
-/// Each variant corresponds to one type of on-disk index. The enum drives
-/// `build`, `open`, and `update` via match arms, so adding a new index type
-/// means adding a variant here and implementing those arms.
-///
-/// Today: `NGram(Trigram)`. Future variants (AST, dependency graph, vector, etc.)
-/// will be added as the composable index architecture expands.
+/// Configured index identity persisted in metadata and snapshot manifests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IndexKind {
-    /// N-gram inverted index.
-    NGram(NGramKind),
+pub enum IndexConfig {
+    /// Runtime-width N-gram index configuration.
+    NGram(ngram::Config),
 }
 
-/// Width-specific N-gram implementation selected for an N-gram index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum NGramKind {
-    /// Optimized 3-byte N-gram specialization.
-    Trigram,
-}
-
-impl IndexKind {
-    pub const ALL: &[Self] = &[Self::NGram(NGramKind::Trigram)];
+impl IndexConfig {
+    pub const ALL: &[Self] = &[Self::NGram(ngram::Config::DEFAULT)];
 
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    pub const fn ngram(width: ngram::GramWidth) -> Self {
+        Self::NGram(ngram::Config::new(width))
+    }
+
+    #[must_use]
+    pub fn name(self) -> String {
         match self {
-            Self::NGram(kind) => kind.as_str(),
+            Self::NGram(config) => config.name(),
         }
     }
 
-    /// Return the artifact file names that this index kind produces.
     #[must_use]
     pub(crate) const fn artifact_names(self) -> &'static [&'static str] {
         match self {
-            Self::NGram(NGramKind::Trigram) => &[
-                crate::FILES_BIN,
-                crate::LEXICON_BIN,
-                crate::POSTINGS_BIN,
-                crate::GRAMS_BIN,
-            ],
+            Self::NGram(config) => config.artifact_names(),
         }
     }
 
-    /// Build this index kind into the given destination.
     pub(crate) fn build(
         self,
-        config: &IndexConfig<'_>,
+        build: &IndexBuildConfig<'_>,
         dest: IndexDestination,
         paths: &[PathBuf],
     ) -> crate::Result<()> {
         match self {
-            Self::NGram(NGramKind::Trigram) => {
-                let spec = ngram::TrigramSpec;
-                ngram::NGramIndex::build_into(spec, config, dest, paths)?;
+            Self::NGram(config) => {
+                config.build_into(build, dest, paths)?;
                 Ok(())
             }
         }
     }
 
-    /// Open this index kind from the given source.
     pub(crate) fn open(
         self,
         source: IndexSource,
@@ -91,73 +72,61 @@ impl IndexKind {
         corpus_kind: CorpusKind,
     ) -> crate::Result<Index> {
         match self {
-            Self::NGram(NGramKind::Trigram) => Ok(Index::NGram(ngram::NGramIndex::open_tables(
-                ngram::TrigramSpec,
-                source,
-                root,
-                corpus_kind,
-            )?)),
+            Self::NGram(config) => Ok(Index::NGram(config.open_from(source, root, corpus_kind)?)),
         }
     }
 
-    /// Update this index kind from the current snapshot, writing to `dest`.
-    ///
-    /// Returns `true` if a new index was written. If the index kind is not
-    /// present in the current snapshot, it is built from scratch.
     pub(crate) fn update(
         self,
         current: IndexSource,
-        config: &IndexConfig<'_>,
+        build: &IndexBuildConfig<'_>,
         dest: IndexDestination,
         paths: &[PathBuf],
     ) -> crate::Result<bool> {
         let is_present = match &current {
             IndexSource::Directory(dir) => dir.exists(),
-            IndexSource::Snapshot { reader, namespace } => {
-                reader.manifest().indexes.iter().any(|n| n == *namespace)
-            }
+            IndexSource::Snapshot { reader, namespace } => reader
+                .manifest()
+                .indexes
+                .iter()
+                .any(|name| name == *namespace),
         };
         if !is_present {
-            self.build(config, dest, paths)?;
+            self.build(build, dest, paths)?;
             return Ok(true);
         }
 
-        let root = config
+        let root = build
             .corpus
             .root
             .canonicalize()
-            .unwrap_or_else(|_| config.corpus.root.to_path_buf());
+            .unwrap_or_else(|_| build.corpus.root.to_path_buf());
         match self {
-            Self::NGram(NGramKind::Trigram) => {
-                let existing = ngram::NGramIndex::open_tables(
-                    ngram::TrigramSpec,
-                    current,
-                    &root,
-                    config.corpus.kind,
-                )?;
-                let output = existing.rebuild(config, dest, paths)?;
+            Self::NGram(config) => {
+                let existing = config.open_from(current, &root, build.corpus.kind)?;
+                let output = existing.rebuild(build, dest, paths)?;
                 Ok(output.is_some())
             }
         }
     }
 }
 
-impl std::fmt::Display for IndexKind {
+impl std::fmt::Display for IndexConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(&(*self).name())
     }
 }
 
-impl Serialize for IndexKind {
+impl Serialize for IndexConfig {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.as_str())
+        serializer.serialize_str(&(*self).name())
     }
 }
 
-impl<'de> Deserialize<'de> for IndexKind {
+impl<'de> Deserialize<'de> for IndexConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -167,62 +136,50 @@ impl<'de> Deserialize<'de> for IndexKind {
     }
 }
 
-impl std::str::FromStr for IndexKind {
+impl std::str::FromStr for IndexConfig {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "trigram" => Ok(Self::NGram(NGramKind::Trigram)),
-            other => Err(format!("unknown index kind: {other}")),
+            "trigram" => Ok(Self::ngram(ngram::GramWidth::TRIGRAM)),
+            other => ngram::Config::parse_name(other).map(Self::NGram),
         }
     }
 }
 
-impl NGramKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Trigram => "trigram",
-        }
-    }
-}
-
-/// An opened index instance, used for query-time candidate narrowing.
-///
-/// Each variant wraps a concrete index implementation. The `Indexes` registry
-/// opens all available indexes and calls `candidates()` on each, intersecting
-/// results to produce tighter narrowing than any single index alone.
+/// Opened runtime index used for query-time candidate narrowing.
+#[derive(Debug)]
 pub enum Index {
-    /// Opened trigram-specialized N-gram index with memory-mapped posting lists.
-    NGram(ngram::NGramIndex<ngram::TrigramSpec>),
+    /// Runtime-width N-gram index.
+    NGram(ngram::Index),
 }
 
 impl Index {
     #[must_use]
     pub fn root(&self) -> &Path {
         match self {
-            Self::NGram(idx) => idx.root(),
+            Self::NGram(index) => index.root(),
         }
     }
 
     #[must_use]
     pub const fn corpus_kind(&self) -> CorpusKind {
         match self {
-            Self::NGram(idx) => idx.corpus_kind(),
+            Self::NGram(index) => index.corpus_kind(),
         }
     }
 
     #[must_use]
     pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
         match self {
-            Self::NGram(idx) => idx.candidates(query),
+            Self::NGram(index) => index.candidates(query),
         }
     }
 
     #[must_use]
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
         match self {
-            Self::NGram(idx) => idx.all_files(),
+            Self::NGram(index) => index.all_files(),
         }
     }
 }

@@ -10,8 +10,8 @@ use std::path::Path;
 
 use sift_core::search::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, IndexConfig, IndexKind, IndexStore,
-    IndexWalkConfig, Indexes, NGramKind, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
+    IndexStore, IndexWalkConfig, Indexes, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
 };
 
 mod common;
@@ -93,8 +93,8 @@ fn materialize_monorepo_corpus(
 fn standard_build_config<'a>(
     root: &'a Path,
     exclude_paths: &'a [std::path::PathBuf],
-) -> IndexConfig<'a> {
-    IndexConfig {
+) -> IndexBuildConfig<'a> {
+    IndexBuildConfig {
         corpus: CorpusSpec {
             root,
             kind: CorpusKind::Directory,
@@ -128,12 +128,12 @@ fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexKind::NGram(NGramKind::Trigram)],
+        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
     );
     let mut store = IndexStore::open_or_create(sift_dir, &meta).unwrap();
     let config = standard_build_config(corpus, &[]);
     store
-        .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
         .unwrap();
 }
 
@@ -290,13 +290,13 @@ fn bench_indexes_open(c: &mut Criterion) {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexKind::NGram(NGramKind::Trigram)],
+                vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
             );
             let mut store = IndexStore::open_or_create(&sift, &meta).expect("open store");
             store
                 .build(
-                    &[IndexKind::NGram(NGramKind::Trigram)],
-                    &IndexConfig {
+                    &[IndexConfig::ngram(GramWidth::TRIGRAM)],
+                    &IndexBuildConfig {
                         corpus: CorpusSpec {
                             root: &corpus,
                             kind: CorpusKind::Directory,

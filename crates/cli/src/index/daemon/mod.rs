@@ -15,7 +15,7 @@ use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, S
 use notify::RecursiveMode;
 use notify::Watcher;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, IndexCoverage, IndexKind, IndexStore, ReconcileOutcome,
+    CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, ReconcileOutcome,
     SnapshotId, StoreMeta, WalkMeta,
 };
 use thiserror::Error;
@@ -477,7 +477,7 @@ impl DaemonOrchestrator {
                     FilterMeta {
                         visibility: sift_core::search::VisibilityConfig::default(),
                     },
-                    IndexKind::ALL.to_vec(),
+                    IndexConfig::ALL.to_vec(),
                 ))
             }
             (Err(e), None) => Err(e),
@@ -867,7 +867,7 @@ impl StorePaths<'_> {
         let mut meta = StoreMeta::read(sift_dir)
             .map_err(|e| DaemonError::message(format!("no store metadata: {e}")))?;
         if meta.indexes.is_empty() {
-            meta.indexes = IndexKind::ALL.to_vec();
+            meta.indexes = IndexConfig::ALL.to_vec();
         }
         Ok(meta)
     }
@@ -1156,7 +1156,7 @@ impl IndexRefresh<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sift_core::NGramKind;
+    use sift_core::GramWidth;
     use sift_core::search::VisibilityConfig;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
@@ -1296,7 +1296,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::NGram(NGramKind::Trigram)],
+            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
         );
         StoreMeta::write(&meta, &sift_dir).unwrap();
 
@@ -1326,7 +1326,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::NGram(NGramKind::Trigram)],
+            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
         );
         StoreMeta::write(&meta, &sift_dir).unwrap();
 
@@ -1365,7 +1365,7 @@ mod tests {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexKind::NGram(NGramKind::Trigram)],
+                vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
             ),
             &sift_dir,
         )
@@ -1392,7 +1392,7 @@ mod tests {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexKind::NGram(NGramKind::Trigram)],
+                vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
             ),
             &sift_dir,
         )
@@ -1424,7 +1424,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::NGram(NGramKind::Trigram)],
+            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
         );
         std::fs::create_dir_all(&sift_dir).unwrap();
         StoreMeta::write(&meta, &sift_dir).unwrap();
@@ -1496,7 +1496,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::NGram(NGramKind::Trigram)],
+            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
         );
         std::fs::create_dir_all(&sift_dir).unwrap();
         StoreMeta::write(&meta, &sift_dir).unwrap();

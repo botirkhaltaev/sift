@@ -219,7 +219,7 @@ fn partial_index_missing_component_errors() {
     let snapshot = current.trim();
     let postings = p
         .root()
-        .join(format!(".sift/snapshots/{snapshot}/trigram/postings.bin"));
+        .join(format!(".sift/snapshots/{snapshot}/ngram-3/postings.bin"));
     fs::remove_file(&postings).unwrap();
 
     let out = p.index_output(["unique_marker_partial_index"]);

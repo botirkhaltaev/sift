@@ -12,7 +12,7 @@ Sift is a well-structured Rust project. Clippy pedantic+nursery+cargo passes cle
 
 - **Error hierarchy** is textbook: per-module error types (`CompileError`, `FilterError`, `OutputError`, `ExecutionError`) aggregated via `From` impls into `SearchError`, then into `crate::Error`. Clean, composable, no stringly-typed errors.
 - **`IndexSource`/`IndexDestination` enums** cleanly replace what would otherwise be parallel `*_to_dir`/`*_into` function variants. Functions dispatch internally on the variant.
-- **`IndexKind` lifecycle dispatch** (`build`, `open`, `update`) is extensible — adding a new index kind means adding enum variants with match arms.
+- **`IndexConfig` lifecycle routing** (`build`, `open`, `update`) is extensible — adding a new index configuration means adding enum variants with match arms.
 - **`Snapshot` + `SnapshotLease`** RAII pattern prevents GC of snapshots during active reads.
 - **`Candidate`** with `OnceLock<String>` for lazy `rel_str` is a good zero-cost-until-needed pattern.
 - **`PatternCompiler`** is a clean builder with `#[must_use]` on every step.
@@ -54,7 +54,7 @@ pub use candidate::Candidate;
 pub use grep::GrepRun;
 pub use index::{
     CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig,
-    IndexError, IndexId, IndexKind, Indexes, PlanMode, QueryPlanOutput, WalkMeta,
+    IndexError, IndexId, IndexConfig, Indexes, PlanMode, QueryPlanOutput, WalkMeta,
 };
 pub use index::config::WalkOptions as IndexWalkOptions;
 pub use index::meta::StoreMeta;

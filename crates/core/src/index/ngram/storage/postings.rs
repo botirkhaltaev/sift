@@ -15,14 +15,6 @@ pub struct Postings {
 }
 
 impl Postings {
-    #[must_use]
-    pub fn empty() -> Self {
-        Self {
-            data: ArtifactData::Memory(Vec::new().into()),
-            payload_len: 0,
-        }
-    }
-
     fn bytes(&self) -> &[u8] {
         self.data.as_ref()
     }

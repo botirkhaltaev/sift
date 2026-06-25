@@ -5,16 +5,16 @@
 //! designed for multiple coexisting index types: each type independently
 //! narrows candidates, and the [`Indexes`] registry intersects their results.
 //!
-//! Today the shipped index type is an N-gram index with a trigram specialization
-//! ([`NGramIndex`]<[`TrigramSpec`]>), which records overlapping 3-byte sequences and achieves up to 60x speedup over
+//! Today the shipped index type is a runtime-width N-gram index, defaulting to
+//! 3-byte grams, which records overlapping byte sequences and achieves up to 60x speedup over
 //! ripgrep on indexed queries. Additional index types (AST indexes, dependency
-//! graphs, vector indexes) can be added by extending the [`IndexKind`] and
+//! graphs, vector indexes) can be added by extending the [`IndexConfig`] and
 //! [`Index`] enums.
 //!
 //! # Architecture
 //!
 //! ```text
-//! IndexStore::build(kinds) -> snapshot with index artifacts
+//! IndexStore::build(configs) -> snapshot with index artifacts
 //! Indexes::open(sift_dir)  -> registry of opened indexes
 //! QueryPlanner::candidates -> intersect index candidate sets
 //! SearchQuery::run          -> regex scan over narrowed candidates
@@ -35,16 +35,16 @@ pub use search::{SearchError, SearchOutcome, SearchQuery};
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::config::IndexWalkConfig;
+pub use index::config::{IndexBuildConfig, IndexWalkConfig};
 pub use index::meta::StoreMeta;
 pub use index::ngram::{
-    GramKey, GramWidth, NGramIndex, NGramIndexError, PackedGram, Trigram, TrigramSpec,
+    Config as NGramConfig, Gram, GramWidth, GramWindows, Index as NGramIndex, NGramIndexError,
 };
 pub use index::store::IndexStore;
 pub use index::{
     CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig, IndexCoverage,
-    IndexError, IndexId, IndexKind, Indexes, NGramKind, PlanMode, QueryPlanOutput,
-    ReconcileOutcome, SnapshotId, WalkMeta,
+    IndexError, IndexId, Indexes, PlanMode, QueryPlanOutput, ReconcileOutcome, SnapshotId,
+    WalkMeta,
 };
 
 pub use query::{
@@ -94,13 +94,10 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn build_trigram_in_tmp(
-        tmp: &TempDir,
-        corpus_path: &std::path::Path,
-    ) -> NGramIndex<TrigramSpec> {
+    fn build_trigram_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> index::ngram::Index {
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: corpus_path,
                 kind: CorpusKind::Directory,
@@ -111,7 +108,9 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        NGramIndex::build(TrigramSpec, &config, &trigram_dir, &[]).expect("build index")
+        index::ngram::Config::new(GramWidth::TRIGRAM)
+            .build(&config, &trigram_dir, &[])
+            .expect("build index")
     }
 
     fn build_index_in_tmp(tmp: &TempDir, corpus_path: &std::path::Path) -> Index {

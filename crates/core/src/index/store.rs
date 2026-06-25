@@ -11,9 +11,9 @@ use super::snapshot::{
 /// persistence and coordination.
 ///
 /// Manages building, updating, and publishing snapshots that contain one or
-/// more index kinds. The `build` and `update` methods accept `&[IndexKind]`,
-/// so the store handles any combination of index types without index-specific
-/// logic.
+/// more configured indexes. The `build` and `update` methods accept
+/// `&[IndexConfig]`, so the store handles any combination of index types
+/// without index-specific logic.
 pub struct IndexStore<S: SnapshotStore = DiskSnapshotStore> {
     snapshots: S,
     sift_dir: PathBuf,
@@ -146,11 +146,11 @@ impl IndexStore<DiskSnapshotStore> {
 
             let mut indexes = Vec::new();
             for name in &manifest.indexes {
-                let kind: super::IndexKind = name
-                    .parse()
-                    .map_err(|_| crate::Error::Index(IndexError::UnknownIndexKind(name.clone())))?;
+                let config: super::IndexConfig = name.parse().map_err(|_| {
+                    crate::Error::Index(IndexError::UnknownIndexConfig(name.clone()))
+                })?;
                 let index_dir = snap_dir.join(name);
-                indexes.push(kind.open(
+                indexes.push(config.open(
                     super::IndexSource::Directory(&index_dir),
                     &root,
                     corpus_kind,
@@ -186,7 +186,7 @@ impl<S: SnapshotStore> IndexStore<S> {
     // Write path
     // ------------------------------------------------------------------
 
-    /// Build a new snapshot using the given index kinds.
+    /// Build a new snapshot using the given configured indexes.
     ///
     /// Acquires the writer session, builds each index kind as artifacts, and
     /// publishes the snapshot.
@@ -199,19 +199,20 @@ impl<S: SnapshotStore> IndexStore<S> {
     /// build fails, or publishing fails.
     pub fn build(
         &mut self,
-        kinds: &[super::IndexKind],
-        config: &super::IndexConfig<'_>,
+        configs: &[super::IndexConfig],
+        build: &super::IndexBuildConfig<'_>,
         paths: &[PathBuf],
     ) -> crate::Result<String> {
         let mut writer = self.snapshots.writer()?;
         let mut txn = writer.begin()?;
 
-        for kind in kinds {
-            kind.build(
-                config,
+        for config in configs {
+            let namespace = config.name();
+            config.build(
+                build,
                 super::IndexDestination::Snapshot {
                     writer: &mut txn,
-                    namespace: kind.as_str(),
+                    namespace: &namespace,
                 },
                 paths,
             )?;
@@ -219,7 +220,7 @@ impl<S: SnapshotStore> IndexStore<S> {
 
         let manifest = SnapshotManifest {
             id: txn.id().clone(),
-            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+            indexes: configs.iter().map(|config| config.name()).collect(),
         };
         let id = writer.publish(txn, manifest)?;
         Ok(id.to_string())
@@ -240,8 +241,8 @@ impl<S: SnapshotStore> IndexStore<S> {
     /// snapshot cannot be opened, the update check fails, or publishing fails.
     pub fn update(
         &mut self,
-        kinds: &[super::IndexKind],
-        config: &super::IndexConfig<'_>,
+        configs: &[super::IndexConfig],
+        build: &super::IndexBuildConfig<'_>,
         paths: &[PathBuf],
     ) -> crate::Result<Option<String>> {
         let mut writer = self.snapshots.writer()?;
@@ -258,18 +259,19 @@ impl<S: SnapshotStore> IndexStore<S> {
 
         let mut txn = writer.begin()?;
 
-        let changed: Vec<bool> = kinds
+        let changed: Vec<bool> = configs
             .iter()
-            .map(|kind| {
-                kind.update(
+            .map(|config| {
+                let namespace = config.name();
+                config.update(
                     super::IndexSource::Snapshot {
                         reader: &current as &dyn super::snapshot::SnapshotRead,
-                        namespace: kind.as_str(),
+                        namespace: &namespace,
                     },
-                    config,
+                    build,
                     super::IndexDestination::Snapshot {
                         writer: &mut txn,
-                        namespace: kind.as_str(),
+                        namespace: &namespace,
                     },
                     paths,
                 )
@@ -280,19 +282,20 @@ impl<S: SnapshotStore> IndexStore<S> {
             return Ok(None);
         }
 
-        for (kind, did_change) in kinds.iter().zip(&changed) {
+        for (config, did_change) in configs.iter().zip(&changed) {
             if !did_change {
-                for artifact_name in kind.artifact_names() {
-                    let data = current.artifact(kind.as_str(), artifact_name)?;
+                let namespace = config.name();
+                for artifact_name in config.artifact_names() {
+                    let data = current.artifact(&namespace, artifact_name)?;
                     let bytes = data.as_ref().to_vec();
-                    txn.put_artifact(kind.as_str(), artifact_name, bytes)?;
+                    txn.put_artifact(&namespace, artifact_name, bytes)?;
                 }
             }
         }
 
         let manifest = SnapshotManifest {
             id: txn.id().clone(),
-            indexes: kinds.iter().map(|k| k.as_str().to_string()).collect(),
+            indexes: configs.iter().map(|config| config.name()).collect(),
         };
         let id = writer.publish(txn, manifest)?;
         Ok(Some(id.to_string()))
@@ -310,21 +313,21 @@ impl<S: SnapshotStore> IndexStore<S> {
         meta: &StoreMeta,
         paths: &[PathBuf],
     ) -> crate::Result<ReconcileOutcome> {
-        let config = meta.index_config();
-        let kinds = &meta.indexes;
+        let build = meta.index_config();
+        let configs = &meta.indexes;
         let (snapshot_id, changed) = if paths.is_empty() {
             if self.current_id().is_none() {
-                (SnapshotId::new(self.build(kinds, &config, &[])?), true)
+                (SnapshotId::new(self.build(configs, &build, &[])?), true)
             } else {
-                match self.update(kinds, &config, &[])? {
+                match self.update(configs, &build, &[])? {
                     Some(id) => (SnapshotId::new(id), true),
                     None => (self.current_snapshot_id()?, false),
                 }
             }
         } else if self.current_id().is_none() {
-            (SnapshotId::new(self.build(kinds, &config, paths)?), true)
+            (SnapshotId::new(self.build(configs, &build, paths)?), true)
         } else {
-            match self.update(kinds, &config, paths)? {
+            match self.update(configs, &build, paths)? {
                 Some(id) => (SnapshotId::new(id), true),
                 None => (self.current_snapshot_id()?, false),
             }
@@ -370,9 +373,9 @@ impl Drop for WriteLockGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::config::IndexWalkConfig;
+    use crate::index::config::{IndexBuildConfig, IndexWalkConfig};
     use crate::index::meta::{CorpusMeta, FilterMeta, StoreMeta, WalkMeta};
-    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexCoverage, IndexKind, NGramKind};
+    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexCoverage};
     use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
@@ -400,12 +403,12 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexKind::NGram(NGramKind::Trigram)],
+            vec![IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
         )
     }
 
-    fn test_config(corpus: &Path) -> IndexConfig<'_> {
-        IndexConfig {
+    fn test_config(corpus: &Path) -> IndexBuildConfig<'_> {
+        IndexBuildConfig {
             corpus: CorpusSpec {
                 root: corpus,
                 kind: CorpusKind::Directory,
@@ -434,7 +437,7 @@ mod tests {
 
         store
             .build(
-                &[IndexKind::NGram(NGramKind::Trigram)],
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
                 &test_config(&corpus),
                 &[],
             )
@@ -446,11 +449,12 @@ mod tests {
         let snapshot_dir = store.snapshot_dir(id);
         assert!(snapshot_dir.exists());
         assert!(snapshot_dir.join(MANIFEST_FILE).exists());
-        assert!(snapshot_dir.join("trigram").exists());
-        assert!(snapshot_dir.join("trigram").join("files.bin").exists());
-        assert!(snapshot_dir.join("trigram").join("lexicon.bin").exists());
-        assert!(snapshot_dir.join("trigram").join("postings.bin").exists());
-        assert!(snapshot_dir.join("trigram").join("grams.bin").exists());
+        let index_dir = snapshot_dir.join("ngram-3");
+        assert!(index_dir.exists());
+        assert!(index_dir.join("files.bin").exists());
+        assert!(index_dir.join("lexicon.bin").exists());
+        assert!(index_dir.join("postings.bin").exists());
+        assert!(index_dir.join("grams.bin").exists());
 
         assert!(!id.is_empty());
     }
@@ -467,7 +471,7 @@ mod tests {
 
         store
             .build(
-                &[IndexKind::NGram(NGramKind::Trigram)],
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
                 &test_config(&corpus),
                 &[],
             )
@@ -513,13 +517,21 @@ mod tests {
 
         let mut store = open_test_store(&corpus, &sift_dir);
         store
-            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .build(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("build");
 
         let id_after_build = store.current_id().expect("has id").to_string();
 
         let changed = store
-            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .update(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("update");
         assert_eq!(changed, None, "expected no rebuild when corpus unchanged");
         assert_eq!(store.current_id().unwrap(), id_after_build);
@@ -537,7 +549,11 @@ mod tests {
 
         let mut store = open_test_store(&corpus, &sift_dir);
         store
-            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .build(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("build");
 
         let id_after_build = store.current_id().expect("has id").to_string();
@@ -545,7 +561,11 @@ mod tests {
         fs::write(corpus.join("g.txt"), "new file\n").expect("write new file");
 
         let changed = store
-            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .update(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("update");
         assert!(changed.is_some(), "expected rebuild when file added");
         assert_ne!(store.current_id().unwrap(), id_after_build);
@@ -564,7 +584,11 @@ mod tests {
         let mut store = open_test_store(&corpus, &sift_dir);
 
         let err = store
-            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .update(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect_err("update without snapshot");
         assert!(matches!(err, crate::Error::Index(_)));
     }
@@ -582,7 +606,11 @@ mod tests {
         let mut store = open_test_store(&corpus, &sift_dir);
 
         store
-            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .build(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("build");
 
         // Verify lock was released after build by acquiring it externally.
@@ -608,13 +636,21 @@ mod tests {
         // Store A builds.
         let mut store_a = open_test_store(&corpus, &sift_dir);
         store_a
-            .build(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .build(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("build");
 
         // Store A publishes a new snapshot.
         fs::write(corpus.join("g.txt"), "new\n").expect("write");
         store_a
-            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .update(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("update");
 
         // Store B opens — it should see the same current (reads fresh from disk
@@ -630,7 +666,11 @@ mod tests {
         // its snapshot state.  Since the corpus is unchanged, no new snapshot
         // is published and current_id stays the same.
         let changed = store_b
-            .update(&[IndexKind::NGram(NGramKind::Trigram)], &config, &[])
+            .update(
+                &[IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+                &config,
+                &[],
+            )
             .expect("update");
         assert_eq!(changed, None, "corpus unchanged after store_a update");
         assert_eq!(

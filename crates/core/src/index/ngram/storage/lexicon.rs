@@ -1,52 +1,51 @@
 //! Sorted N-gram key -> postings slice descriptor.
 
-use std::marker::PhantomData;
 use std::path::Path;
 
 use crate::index::mmap::mmap_open;
-use crate::index::ngram::gram::GramKey;
+use crate::index::ngram::gram::{Gram, GramWidth};
 use crate::index::ngram::storage::format::LEXICON_MAGIC;
 use crate::index::snapshot::ArtifactData;
 
 use super::{read_u32_le, read_u64_le};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LexiconEntry<G: GramKey> {
-    pub gram: G,
+pub struct LexiconEntry {
+    pub gram: Gram,
     pub offset: u64,
     pub len: u32,
 }
 
 /// Memory-mapped lexicon.
 #[derive(Debug)]
-pub struct Lexicon<G: GramKey> {
+pub struct Lexicon {
+    width: GramWidth,
     data: ArtifactData,
     count: usize,
-    gram_type: PhantomData<fn() -> G>,
 }
 
-impl<G: GramKey> Lexicon<G> {
+impl Lexicon {
     const HEADER_SIZE: usize = 12;
 
     #[must_use]
-    pub fn empty() -> Self {
+    pub fn empty(width: GramWidth) -> Self {
         Self {
+            width,
             data: ArtifactData::Memory(Vec::new().into()),
             count: 0,
-            gram_type: PhantomData,
         }
     }
 
-    const fn entry_size() -> usize {
-        G::WIDTH.get() + 12
+    const fn entry_size(width: GramWidth) -> usize {
+        width.get() + 12
     }
 
-    pub fn encode(entries: &[LexiconEntry<G>]) -> std::io::Result<Vec<u8>> {
+    pub fn encode(width: GramWidth, entries: &[LexiconEntry]) -> std::io::Result<Vec<u8>> {
         let mut data = Vec::with_capacity(
-            LEXICON_MAGIC.len() + Self::HEADER_SIZE + entries.len() * Self::entry_size(),
+            LEXICON_MAGIC.len() + Self::HEADER_SIZE + entries.len() * Self::entry_size(width),
         );
         data.extend_from_slice(&LEXICON_MAGIC);
-        data.extend_from_slice(&G::WIDTH.as_u32().to_le_bytes());
+        data.extend_from_slice(&width.as_u32().to_le_bytes());
         let count = u32::try_from(entries.len()).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -56,7 +55,7 @@ impl<G: GramKey> Lexicon<G> {
         data.extend_from_slice(&count.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
         for e in entries {
-            e.gram.write_bytes(&mut data);
+            e.gram.write_bytes(width, &mut data);
             data.extend_from_slice(&e.offset.to_le_bytes());
             data.extend_from_slice(&e.len.to_le_bytes());
         }
@@ -67,28 +66,28 @@ impl<G: GramKey> Lexicon<G> {
         self.data.as_ref()
     }
 
-    pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
+    pub fn from_artifact(data: ArtifactData, width: GramWidth) -> std::io::Result<Self> {
         let bytes = data.as_ref();
-        let count = Self::validate(bytes)?;
-        Ok(Self {
-            data,
-            count,
-            gram_type: PhantomData,
-        })
+        let count = Self::validate(bytes, width)?;
+        Ok(Self { width, data, count })
     }
 
-    pub fn create(path: &Path, entries: &[LexiconEntry<G>]) -> std::io::Result<Self> {
-        let data = Self::encode(entries)?;
+    pub fn create(
+        path: &Path,
+        width: GramWidth,
+        entries: &[LexiconEntry],
+    ) -> std::io::Result<Self> {
+        let data = Self::encode(width, entries)?;
         std::fs::write(path, &data)?;
-        Self::open(path)
+        Self::open(path, width)
     }
 
-    pub fn open(path: &Path) -> std::io::Result<Self> {
+    pub fn open(path: &Path, width: GramWidth) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
-        Self::from_artifact(ArtifactData::Mmap(mmap))
+        Self::from_artifact(ArtifactData::Mmap(mmap), width)
     }
 
-    fn validate(bytes: &[u8]) -> std::io::Result<usize> {
+    fn validate(bytes: &[u8], width: GramWidth) -> std::io::Result<usize> {
         let magic_len = LEXICON_MAGIC.len();
         if bytes.len() < magic_len + Self::HEADER_SIZE {
             return Err(std::io::Error::new(
@@ -103,17 +102,17 @@ impl<G: GramKey> Lexicon<G> {
             ));
         }
         let stored_width = read_u32_le(bytes, magic_len);
-        if stored_width != G::WIDTH.as_u32() {
+        if stored_width != width.as_u32() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "lexicon gram width {stored_width} does not match expected {}",
-                    G::WIDTH.get()
+                    width.get()
                 ),
             ));
         }
         let n = read_u32_le(bytes, magic_len + 4) as usize;
-        let expected_bytes = n * Self::entry_size();
+        let expected_bytes = n * Self::entry_size(width);
         if bytes.len() < magic_len + Self::HEADER_SIZE + expected_bytes {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -121,10 +120,10 @@ impl<G: GramKey> Lexicon<G> {
             ));
         }
         let entries = &bytes[magic_len + Self::HEADER_SIZE..];
-        let mut prev: Option<(G, u64)> = None;
-        for chunk in entries.chunks_exact(Self::entry_size()) {
-            let gram = G::read_bytes(&chunk[..G::WIDTH.get()])?;
-            let posting_off = read_u64_le(chunk, G::WIDTH.get());
+        let mut prev: Option<(Gram, u64)> = None;
+        for chunk in entries.chunks_exact(Self::entry_size(width)) {
+            let gram = Gram::read_bytes(width, &chunk[..width.get()])?;
+            let posting_off = read_u64_le(chunk, width.get());
             if let Some((prev_gram, prev_off)) = prev {
                 if gram <= prev_gram {
                     return Err(std::io::Error::new(
@@ -155,14 +154,14 @@ impl<G: GramKey> Lexicon<G> {
     }
 
     #[must_use]
-    pub fn get(&self, gram: G) -> Option<LexiconEntry<G>> {
+    pub fn get(&self, gram: Gram) -> Option<LexiconEntry> {
         if self.count == 0 {
             return None;
         }
         let bytes = self.bytes();
         let data_start = LEXICON_MAGIC.len() + Self::HEADER_SIZE;
-        let gram_width = G::WIDTH.get();
-        let entry_size = Self::entry_size();
+        let gram_width = self.width.get();
+        let entry_size = Self::entry_size(self.width);
 
         let mut lo = 0;
         let mut hi = self.count;
@@ -170,7 +169,7 @@ impl<G: GramKey> Lexicon<G> {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let offset = data_start + mid * entry_size;
-            let entry_gram = G::read_bytes(&bytes[offset..offset + gram_width])
+            let entry_gram = Gram::read_bytes(self.width, &bytes[offset..offset + gram_width])
                 .expect("gram key validated at open");
 
             match entry_gram.cmp(&gram) {
@@ -197,8 +196,8 @@ impl<G: GramKey> Lexicon<G> {
         }
         let bytes = self.bytes();
         let data_start = LEXICON_MAGIC.len() + Self::HEADER_SIZE;
-        let entry_size = Self::entry_size();
-        let off_delta = G::WIDTH.get();
+        let entry_size = Self::entry_size(self.width);
+        let off_delta = self.width.get();
         let mut lo = 0usize;
         let mut hi = self.count;
         while lo < hi {
@@ -218,52 +217,47 @@ impl<G: GramKey> Lexicon<G> {
             payload_len
         }
     }
-
-    #[must_use]
-    pub const fn iter(&self) -> LexiconIter<'_, G> {
-        LexiconIter {
-            lexicon: self,
-            pos: 0,
-        }
-    }
 }
 
-impl<'a, G: GramKey> IntoIterator for &'a Lexicon<G> {
-    type Item = LexiconEntry<G>;
-    type IntoIter = LexiconIter<'a, G>;
+pub struct LexiconIter<'a> {
+    lexicon: &'a Lexicon,
+    idx: usize,
+}
+
+impl<'a> IntoIterator for &'a Lexicon {
+    type Item = LexiconEntry;
+    type IntoIter = LexiconIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         LexiconIter {
             lexicon: self,
-            pos: 0,
+            idx: 0,
         }
     }
 }
 
-pub struct LexiconIter<'a, G: GramKey> {
-    lexicon: &'a Lexicon<G>,
-    pos: usize,
-}
-
-impl<G: GramKey> Iterator for LexiconIter<'_, G> {
-    type Item = LexiconEntry<G>;
+impl Iterator for LexiconIter<'_> {
+    type Item = LexiconEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.lexicon.count {
+        if self.idx >= self.lexicon.count {
             return None;
         }
         let bytes = self.lexicon.bytes();
-        let offset =
-            LEXICON_MAGIC.len() + Lexicon::<G>::HEADER_SIZE + self.pos * Lexicon::<G>::entry_size();
-        let gram_width = G::WIDTH.get();
-        let gram =
-            G::read_bytes(&bytes[offset..offset + gram_width]).expect("gram key validated at open");
-        let off = read_u64_le(bytes, offset + gram_width);
-        let len = read_u32_le(bytes, offset + gram_width + 8);
-        self.pos += 1;
+        let data_start = LEXICON_MAGIC.len() + Lexicon::HEADER_SIZE;
+        let entry_size = Lexicon::entry_size(self.lexicon.width);
+        let offset = data_start + self.idx * entry_size;
+        self.idx += 1;
+        let gram = Gram::read_bytes(
+            self.lexicon.width,
+            &bytes[offset..offset + self.lexicon.width.get()],
+        )
+        .expect("gram key validated at open");
+        let posting_offset = read_u64_le(bytes, offset + self.lexicon.width.get());
+        let len = read_u32_le(bytes, offset + self.lexicon.width.get() + 8);
         Some(LexiconEntry {
             gram,
-            offset: off,
+            offset: posting_offset,
             len,
         })
     }

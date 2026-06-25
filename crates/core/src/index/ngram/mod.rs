@@ -12,13 +12,13 @@ use regex_syntax::hir::literal::{ExtractKind, Extractor};
 use regex_syntax::hir::{self, Hir};
 
 use crate::index::snapshot::ArtifactData;
-use crate::index::{CorpusKind, FileId, IndexConfig, IndexDestination, IndexSource};
+use crate::index::{CorpusKind, FileId, IndexBuildConfig, IndexDestination, IndexSource};
 use crate::query::QuerySpec;
 
-use self::build::{CorpusWalker, FingerprintCollector, IndexTables};
+use self::build::{CorpusWalker, FingerprintCollector, IndexTables, PostingTables};
 use self::files::FileFingerprint;
 use self::files::FileTable;
-pub use gram::{GramKey, GramWidth, GramWindows, PackedGram, Trigram};
+pub use gram::{Gram, GramWidth, GramWindows};
 use storage::grams::{GramSet, GramSets};
 use storage::lexicon::Lexicon;
 use storage::postings::Postings;
@@ -33,148 +33,73 @@ pub enum NGramIndexError {
     Io(#[from] std::io::Error),
 }
 
-/// Width-specific N-gram behavior.
-pub trait NGramSpec: Copy + Clone + Send + Sync + std::fmt::Debug + 'static {
-    type Gram: GramKey;
-
-    fn width(self) -> GramWidth;
-
-    fn collect_grams(self, bytes: &[u8]) -> storage::grams::GramSet<Self::Gram> {
-        storage::grams::GramSet::collect(bytes)
-    }
-
-    fn assemble_postings(
-        self,
-        file_grams: &[storage::grams::GramSet<Self::Gram>],
-    ) -> crate::Result<build::PostingTables<Self::Gram>> {
-        build::PostingTables::assemble(file_grams)
-    }
+/// Configured runtime-width N-gram index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Config {
+    width: GramWidth,
 }
 
-/// Optimized 3-byte N-gram specialization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TrigramSpec;
-
-impl NGramSpec for TrigramSpec {
-    type Gram = Trigram;
-
-    fn width(self) -> GramWidth {
-        GramWidth::TRIGRAM
-    }
-
-    fn collect_grams(self, bytes: &[u8]) -> storage::grams::GramSet<Self::Gram> {
-        storage::grams::GramSet::collect_trigrams(bytes)
-    }
-
-    fn assemble_postings(
-        self,
-        file_grams: &[storage::grams::GramSet<Self::Gram>],
-    ) -> crate::Result<build::PostingTables<Self::Gram>> {
-        build::PostingTables::assemble_trigrams(file_grams)
-    }
-}
-
-/// Opened N-gram index with memory-mapped posting lists.
+/// Opened runtime-width N-gram index.
 #[derive(Debug)]
-pub struct NGramIndex<S: NGramSpec> {
+pub struct Index {
+    width: GramWidth,
+    storage: Storage,
+}
+
+#[derive(Debug)]
+struct Storage {
     root: PathBuf,
-    spec: S,
     pub(crate) fingerprints: Vec<FileFingerprint>,
-    gram_sets: storage::grams::GramSets<S::Gram>,
-    lexicon: storage::lexicon::Lexicon<S::Gram>,
+    gram_sets: storage::grams::GramSets,
+    lexicon: storage::lexicon::Lexicon,
     postings: storage::postings::Postings,
     corpus_kind: CorpusKind,
 }
 
-impl<S: NGramSpec> NGramIndex<S> {
+impl Config {
     #[must_use]
-    pub fn new(spec: S) -> Self {
-        Self {
-            root: PathBuf::new(),
-            spec,
-            fingerprints: Vec::new(),
-            gram_sets: storage::grams::GramSets::empty(),
-            lexicon: storage::lexicon::Lexicon::empty(),
-            postings: storage::postings::Postings::empty(),
-            corpus_kind: CorpusKind::Directory,
-        }
+    pub const fn new(width: GramWidth) -> Self {
+        Self { width }
+    }
+
+    pub const DEFAULT: Self = Self {
+        width: GramWidth::TRIGRAM,
+    };
+
+    #[must_use]
+    pub const fn width(self) -> GramWidth {
+        self.width
     }
 
     #[must_use]
-    pub const fn spec(&self) -> S {
-        self.spec
+    pub fn name(self) -> String {
+        format!("ngram-{}", self.width.get())
+    }
+
+    /// Parse an N-gram index configuration name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is not `ngram-N` or `ngram:N`, or if `N` is not a valid width.
+    pub fn parse_name(value: &str) -> Result<Self, String> {
+        let width = value
+            .strip_prefix("ngram-")
+            .or_else(|| value.strip_prefix("ngram:"))
+            .ok_or_else(|| format!("unknown index: {value}"))?;
+        let width = width
+            .parse::<u8>()
+            .map_err(|_| format!("invalid ngram width: {width}"))?;
+        Ok(Self::new(GramWidth::new(width)))
     }
 
     #[must_use]
-    pub fn file_path(&self, id: FileId) -> Option<&Path> {
-        self.fingerprints.get(id.get()).map(|fp| fp.path.as_path())
-    }
-
-    #[must_use]
-    pub fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
-        self.fingerprints
-            .get(id.get())
-            .map(|fp| self.root.join(&fp.path))
-    }
-
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    #[must_use]
-    pub const fn corpus_kind(&self) -> CorpusKind {
-        self.corpus_kind
-    }
-
-    /// Produce narrowed candidate files for the query.
-    /// Returns `None` if the query can't be narrowed (full scan required).
-    #[must_use]
-    pub fn candidates(&self, query: &QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
-        let arms = self.extract_literal_arms(query)?;
-        Some(
-            self.candidate_file_ids(&arms)
-                .into_iter()
-                .filter_map(|id| {
-                    let fid = FileId::new(usize::try_from(id).ok()?);
-                    let fp = self.fingerprints.get(fid.get())?;
-                    Some(crate::Candidate::with_metadata(
-                        fp.path.clone(),
-                        self.root.join(&fp.path),
-                        Some(fp.size),
-                        None,
-                    ))
-                })
-                .collect(),
-        )
-    }
-
-    /// Returns an explanation of how a query would be handled.
-    #[must_use]
-    pub fn explain(&self, query: &QuerySpec<'_>) -> crate::index::QueryPlanOutput {
-        let mode = match self.extract_literal_arms(query) {
-            Some(_) => crate::index::PlanMode::IndexedCandidates,
-            None => crate::index::PlanMode::FullScan,
-        };
-        crate::index::QueryPlanOutput {
-            pattern: query.patterns.to_vec().join("|"),
-            mode,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
-        self.fingerprints
-            .iter()
-            .map(|fp| {
-                crate::Candidate::with_metadata(
-                    fp.path.clone(),
-                    self.root.join(&fp.path),
-                    Some(fp.size),
-                    None,
-                )
-            })
-            .collect()
+    pub const fn artifact_names(self) -> &'static [&'static str] {
+        &[
+            crate::FILES_BIN,
+            crate::LEXICON_BIN,
+            crate::POSTINGS_BIN,
+            crate::GRAMS_BIN,
+        ]
     }
 
     /// Build an N-gram index from an explicit path list, or from a full walk when `paths` is empty.
@@ -183,50 +108,50 @@ impl<S: NGramSpec> NGramIndex<S> {
     ///
     /// Returns an error if corpus walking, extraction, or encoding fails.
     pub fn build(
-        spec: S,
-        config: &IndexConfig<'_>,
+        self,
+        config: &IndexBuildConfig<'_>,
         output_dir: &Path,
         paths: &[PathBuf],
-    ) -> crate::Result<Self> {
-        Self::build_into(spec, config, IndexDestination::Directory(output_dir), paths)
+    ) -> crate::Result<Index> {
+        self.build_into(config, IndexDestination::Directory(output_dir), paths)
     }
 
     /// Build an N-gram index into a directory or snapshot destination.
     pub(crate) fn build_into(
-        spec: S,
-        config: &IndexConfig<'_>,
+        self,
+        config: &IndexBuildConfig<'_>,
         dest: IndexDestination,
         paths: &[PathBuf],
-    ) -> crate::Result<Self> {
-        let tables = IndexTables::build(spec, config, paths)?;
+    ) -> crate::Result<Index> {
+        let tables = IndexTables::build(self.width, config, paths)?;
         let root = config.corpus.root.canonicalize()?;
-        Self::persist_tables(spec, &tables, &root, config.corpus.kind, dest)
+        Self::persist_tables(self.width, &tables, &root, config.corpus.kind, dest)
     }
 
     /// Encode and store tables at the given destination, returning a live index.
     pub(crate) fn persist_tables(
-        spec: S,
-        tables: &IndexTables<S::Gram>,
+        width: GramWidth,
+        tables: &IndexTables,
         root: &Path,
         corpus_kind: CorpusKind,
         dest: IndexDestination,
-    ) -> crate::Result<Self> {
+    ) -> crate::Result<Index> {
         match dest {
             IndexDestination::Directory(dir) => {
-                Self::create_in_dir(spec, tables, root, corpus_kind, dir)
+                Self::create_in_dir(width, tables, root, corpus_kind, dir)
             }
             IndexDestination::Snapshot { writer, namespace } => {
                 let ((fr, lr), (pr, gr)) = rayon::join(
                     || {
                         rayon::join(
                             || FileTable::encode(&tables.fingerprints),
-                            || Lexicon::encode(&tables.lexicon),
+                            || Lexicon::encode(width, &tables.lexicon),
                         )
                     },
                     || {
                         rayon::join(
                             || Postings::encode(&tables.postings),
-                            || GramSets::encode(&tables.file_grams),
+                            || GramSets::encode(width, &tables.file_grams),
                         )
                     },
                 );
@@ -238,12 +163,16 @@ impl<S: NGramSpec> NGramIndex<S> {
 
                 let files =
                     FileTable::from_artifact(ArtifactData::Memory(files_bytes.clone().into()))?;
-                let lexicon =
-                    Lexicon::from_artifact(ArtifactData::Memory(lexicon_bytes.clone().into()))?;
+                let lexicon = Lexicon::from_artifact(
+                    ArtifactData::Memory(lexicon_bytes.clone().into()),
+                    width,
+                )?;
                 let postings =
                     Postings::from_artifact(ArtifactData::Memory(postings_bytes.clone().into()))?;
-                let gram_sets =
-                    GramSets::from_artifact(ArtifactData::Memory(gram_sets_bytes.clone().into()))?;
+                let gram_sets = GramSets::from_artifact(
+                    ArtifactData::Memory(gram_sets_bytes.clone().into()),
+                    width,
+                )?;
 
                 writer.put_artifact(namespace, crate::FILES_BIN, files_bytes)?;
                 writer.put_artifact(namespace, crate::LEXICON_BIN, lexicon_bytes)?;
@@ -254,14 +183,16 @@ impl<S: NGramSpec> NGramIndex<S> {
                 Self::validate_file_paths(&fingerprints)?;
                 Self::validate_lexicon_postings(&lexicon, &postings)?;
 
-                Ok(Self {
-                    root: root.to_path_buf(),
-                    spec,
-                    fingerprints,
-                    gram_sets,
-                    lexicon,
-                    postings,
-                    corpus_kind,
+                Ok(Index {
+                    width,
+                    storage: Storage {
+                        root: root.to_path_buf(),
+                        fingerprints,
+                        gram_sets,
+                        lexicon,
+                        postings,
+                        corpus_kind,
+                    },
                 })
             }
         }
@@ -273,94 +204,30 @@ impl<S: NGramSpec> NGramIndex<S> {
     ///
     /// Returns an error if persistence files are missing or malformed.
     pub fn open(
-        spec: S,
+        width: GramWidth,
         index_dir: &Path,
         root: &Path,
         corpus_kind: CorpusKind,
-    ) -> crate::Result<Self> {
-        Self::open_tables(spec, IndexSource::Directory(index_dir), root, corpus_kind)
+    ) -> crate::Result<Index> {
+        Self::open_tables(width, IndexSource::Directory(index_dir), root, corpus_kind)
     }
 
-    /// Update the index from the current corpus, writing artifact files into `output_dir`.
-    ///
-    /// Returns `Ok(Some(index))` if a new index was written, or `Ok(None)` if no files changed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if corpus walking, extraction, or encoding fails.
-    pub fn update(
-        &self,
-        config: &IndexConfig<'_>,
-        output_dir: &Path,
-        paths: &[PathBuf],
-    ) -> crate::Result<Option<Self>> {
-        self.rebuild(config, IndexDestination::Directory(output_dir), paths)
-    }
-
-    /// Rebuild index tables for changed files and persist to `dest`.
-    pub(crate) fn rebuild(
-        &self,
-        config: &IndexConfig<'_>,
-        dest: IndexDestination,
-        paths: &[PathBuf],
-    ) -> crate::Result<Option<Self>> {
-        use rayon::prelude::*;
-        use std::collections::HashMap;
-
-        let fingerprints = if paths.is_empty() {
-            let corpus_paths = CorpusWalker::new(config).collect()?;
-            FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
-        } else {
-            Self::merge_partial_fingerprints(&self.fingerprints, config.corpus.root, paths)?
-        };
-
-        if fingerprints == self.fingerprints {
-            return Ok(None);
-        }
-
-        let prev_id_by_fp: HashMap<(&Path, i64, u64), usize> = self
-            .fingerprints
-            .iter()
-            .enumerate()
-            .map(|(id, fp)| ((fp.path.as_path(), fp.mtime_secs, fp.size), id))
-            .collect();
-
-        let file_grams: Vec<GramSet<S::Gram>> = fingerprints
-            .par_iter()
-            .map(|fp| {
-                if let Some(&prev_id) =
-                    prev_id_by_fp.get(&(fp.path.as_path(), fp.mtime_secs, fp.size))
-                {
-                    return self.gram_sets.get(prev_id).map_err(crate::Error::Io);
-                }
-                let abs = config.corpus.root.join(&fp.path);
-                std::fs::read(&abs)
-                    .map(|bytes| self.spec.collect_grams(&bytes))
-                    .map_err(crate::Error::Io)
-            })
-            .collect::<crate::Result<_>>()?;
-
-        let postings = self.spec.assemble_postings(&file_grams)?;
-
-        let tables = IndexTables {
-            fingerprints,
-            file_grams,
-            lexicon: postings.lexicon,
-            postings: postings.postings,
-        };
-
-        let root = config.corpus.root.canonicalize()?;
-        let index = Self::persist_tables(self.spec, &tables, &root, config.corpus.kind, dest)?;
-        Ok(Some(index))
+    pub(crate) fn open_from(
+        self,
+        source: IndexSource,
+        root: &Path,
+        corpus_kind: CorpusKind,
+    ) -> crate::Result<Index> {
+        Self::open_tables(self.width, source, root, corpus_kind)
     }
 
     /// Open index tables from a storage source (directory or snapshot).
     pub(crate) fn open_tables(
-        spec: S,
+        width: GramWidth,
         source: IndexSource,
         root: &Path,
         corpus_kind: CorpusKind,
-    ) -> crate::Result<Self> {
+    ) -> crate::Result<Index> {
         match source {
             IndexSource::Directory(dir) => {
                 let files_path = dir.join(crate::FILES_BIN);
@@ -378,18 +245,20 @@ impl<S: NGramSpec> NGramIndex<S> {
                 let fingerprints = files.to_fingerprints().map_err(NGramIndexError::Io)?;
                 Self::validate_file_paths(&fingerprints)?;
 
-                let lexicon = Lexicon::open(&lexicon_path).map_err(NGramIndexError::Io)?;
+                let lexicon = Lexicon::open(&lexicon_path, width).map_err(NGramIndexError::Io)?;
                 let postings = Postings::open(&postings_path).map_err(NGramIndexError::Io)?;
-                let gram_sets = GramSets::open(&grams_path).map_err(NGramIndexError::Io)?;
+                let gram_sets = GramSets::open(&grams_path, width).map_err(NGramIndexError::Io)?;
 
-                Ok(Self {
-                    root: root.to_path_buf(),
-                    spec,
-                    fingerprints,
-                    gram_sets,
-                    lexicon,
-                    postings,
-                    corpus_kind,
+                Ok(Index {
+                    width,
+                    storage: Storage {
+                        root: root.to_path_buf(),
+                        fingerprints,
+                        gram_sets,
+                        lexicon,
+                        postings,
+                        corpus_kind,
+                    },
                 })
             }
             IndexSource::Snapshot { reader, namespace } => {
@@ -399,7 +268,8 @@ impl<S: NGramSpec> NGramIndex<S> {
                 Self::validate_file_paths(&fingerprints)?;
 
                 let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
-                let lexicon = Lexicon::from_artifact(lexicon_data).map_err(NGramIndexError::Io)?;
+                let lexicon =
+                    Lexicon::from_artifact(lexicon_data, width).map_err(NGramIndexError::Io)?;
 
                 let postings_data = reader.artifact(namespace, crate::POSTINGS_BIN)?;
                 let postings =
@@ -407,16 +277,18 @@ impl<S: NGramSpec> NGramIndex<S> {
 
                 let gram_sets_data = reader.artifact(namespace, crate::GRAMS_BIN)?;
                 let gram_sets =
-                    GramSets::from_artifact(gram_sets_data).map_err(NGramIndexError::Io)?;
+                    GramSets::from_artifact(gram_sets_data, width).map_err(NGramIndexError::Io)?;
 
-                Ok(Self {
-                    root: root.to_path_buf(),
-                    spec,
-                    fingerprints,
-                    gram_sets,
-                    lexicon,
-                    postings,
-                    corpus_kind,
+                Ok(Index {
+                    width,
+                    storage: Storage {
+                        root: root.to_path_buf(),
+                        fingerprints,
+                        gram_sets,
+                        lexicon,
+                        postings,
+                        corpus_kind,
+                    },
                 })
             }
         }
@@ -424,12 +296,12 @@ impl<S: NGramSpec> NGramIndex<S> {
 
     /// Write tables to `dir` as persistence files and return an mmap-backed index.
     fn create_in_dir(
-        spec: S,
-        tables: &IndexTables<S::Gram>,
+        width: GramWidth,
+        tables: &IndexTables,
         root: &Path,
         corpus_kind: CorpusKind,
         dir: &Path,
-    ) -> crate::Result<Self> {
+    ) -> crate::Result<Index> {
         std::fs::create_dir_all(dir)?;
 
         let files_path = dir.join(crate::FILES_BIN);
@@ -441,13 +313,13 @@ impl<S: NGramSpec> NGramIndex<S> {
             || {
                 rayon::join(
                     || FileTable::create(&files_path, &tables.fingerprints),
-                    || Lexicon::create(&lexicon_path, &tables.lexicon),
+                    || Lexicon::create(&lexicon_path, width, &tables.lexicon),
                 )
             },
             || {
                 rayon::join(
                     || Postings::create(&postings_path, &tables.postings),
-                    || GramSets::create(&grams_path, &tables.file_grams),
+                    || GramSets::create(&grams_path, width, &tables.file_grams),
                 )
             },
         );
@@ -457,20 +329,194 @@ impl<S: NGramSpec> NGramIndex<S> {
         let postings = pr.map_err(crate::Error::Io)?;
         let gram_sets = gr.map_err(crate::Error::Io)?;
 
-        let root = root.to_path_buf();
         let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
         Self::validate_file_paths(&fingerprints)?;
         Self::validate_lexicon_postings(&lexicon, &postings)?;
 
-        Ok(Self {
-            root,
-            spec,
-            fingerprints,
-            gram_sets,
-            lexicon,
-            postings,
-            corpus_kind,
+        Ok(Index {
+            width,
+            storage: Storage {
+                root: root.to_path_buf(),
+                fingerprints,
+                gram_sets,
+                lexicon,
+                postings,
+                corpus_kind,
+            },
         })
+    }
+
+    fn validate_lexicon_postings(
+        lexicon: &Lexicon,
+        postings: &Postings,
+    ) -> Result<(), NGramIndexError> {
+        Index::validate_lexicon_postings(lexicon, postings)
+    }
+
+    fn validate_file_paths(fingerprints: &[FileFingerprint]) -> Result<(), NGramIndexError> {
+        Index::validate_file_paths(fingerprints)
+    }
+}
+
+impl Index {
+    #[must_use]
+    pub const fn width(&self) -> GramWidth {
+        self.width
+    }
+
+    #[must_use]
+    pub fn file_path(&self, id: FileId) -> Option<&Path> {
+        self.storage
+            .fingerprints
+            .get(id.get())
+            .map(|fp| fp.path.as_path())
+    }
+
+    #[must_use]
+    pub fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
+        self.storage
+            .fingerprints
+            .get(id.get())
+            .map(|fp| self.storage.root.join(&fp.path))
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.storage.root
+    }
+
+    #[must_use]
+    pub const fn corpus_kind(&self) -> CorpusKind {
+        self.storage.corpus_kind
+    }
+
+    /// Produce narrowed candidate files for the query.
+    /// Returns `None` if the query can't be narrowed (full scan required).
+    #[must_use]
+    pub fn candidates(&self, query: &QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+        let arms = Config::new(self.width).extract_literal_arms(query)?;
+        Some(
+            self.candidate_file_ids(&arms)
+                .into_iter()
+                .filter_map(|id| {
+                    let fid = FileId::new(usize::try_from(id).ok()?);
+                    let fp = self.storage.fingerprints.get(fid.get())?;
+                    Some(crate::Candidate::with_metadata(
+                        fp.path.clone(),
+                        self.storage.root.join(&fp.path),
+                        Some(fp.size),
+                        None,
+                    ))
+                })
+                .collect(),
+        )
+    }
+
+    /// Returns an explanation of how a query would be handled.
+    #[must_use]
+    pub fn explain(&self, query: &QuerySpec<'_>) -> crate::index::QueryPlanOutput {
+        let mode = match Config::new(self.width).extract_literal_arms(query) {
+            Some(_) => crate::index::PlanMode::IndexedCandidates,
+            None => crate::index::PlanMode::FullScan,
+        };
+        crate::index::QueryPlanOutput {
+            pattern: query.patterns.to_vec().join("|"),
+            mode,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
+        self.storage
+            .fingerprints
+            .iter()
+            .map(|fp| {
+                crate::Candidate::with_metadata(
+                    fp.path.clone(),
+                    self.storage.root.join(&fp.path),
+                    Some(fp.size),
+                    None,
+                )
+            })
+            .collect()
+    }
+
+    /// Update the index from the current corpus, writing artifact files into `output_dir`.
+    ///
+    /// Returns `Ok(Some(index))` if a new index was written, or `Ok(None)` if no files changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if corpus walking, extraction, or encoding fails.
+    pub fn update(
+        &self,
+        config: &IndexBuildConfig<'_>,
+        output_dir: &Path,
+        paths: &[PathBuf],
+    ) -> crate::Result<Option<Self>> {
+        self.rebuild(config, IndexDestination::Directory(output_dir), paths)
+    }
+
+    /// Rebuild index tables for changed files and persist to `dest`.
+    pub(crate) fn rebuild(
+        &self,
+        config: &IndexBuildConfig<'_>,
+        dest: IndexDestination,
+        paths: &[PathBuf],
+    ) -> crate::Result<Option<Self>> {
+        use rayon::prelude::*;
+        use std::collections::HashMap;
+
+        let fingerprints = if paths.is_empty() {
+            let corpus_paths = CorpusWalker::new(config).collect()?;
+            FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
+        } else {
+            Self::merge_partial_fingerprints(&self.storage.fingerprints, config.corpus.root, paths)?
+        };
+
+        if fingerprints == self.storage.fingerprints {
+            return Ok(None);
+        }
+
+        let prev_id_by_fp: HashMap<(&Path, i64, u64), usize> = self
+            .storage
+            .fingerprints
+            .iter()
+            .enumerate()
+            .map(|(id, fp)| ((fp.path.as_path(), fp.mtime_secs, fp.size), id))
+            .collect();
+
+        let file_grams: Vec<GramSet> = fingerprints
+            .par_iter()
+            .map(|fp| {
+                if let Some(&prev_id) =
+                    prev_id_by_fp.get(&(fp.path.as_path(), fp.mtime_secs, fp.size))
+                {
+                    return self
+                        .storage
+                        .gram_sets
+                        .get(prev_id)
+                        .map_err(crate::Error::Io);
+                }
+                let abs = config.corpus.root.join(&fp.path);
+                std::fs::read(&abs)
+                    .map(|bytes| GramSet::collect(self.width, &bytes))
+                    .map_err(crate::Error::Io)
+            })
+            .collect::<crate::Result<_>>()?;
+
+        let postings = PostingTables::assemble(self.width, &file_grams)?;
+
+        let tables = IndexTables {
+            fingerprints,
+            file_grams,
+            lexicon: postings.lexicon,
+            postings: postings.postings,
+        };
+
+        let root = config.corpus.root.canonicalize()?;
+        let index = Config::persist_tables(self.width, &tables, &root, config.corpus.kind, dest)?;
+        Ok(Some(index))
     }
 
     fn candidate_file_ids(&self, arms: &[Vec<u8>]) -> Vec<u32> {
@@ -490,11 +536,11 @@ impl<S: NGramSpec> NGramIndex<S> {
     }
 
     fn posting_ids_for_literal(&self, lit: &[u8]) -> Option<Vec<u32>> {
-        let width = self.spec.width().get();
+        let width = self.width.get();
         if lit.len() < width {
             return None;
         }
-        let grams: Vec<S::Gram> = GramWindows::<S::Gram>::new(lit).collect();
+        let grams: Vec<Gram> = GramWindows::new(lit, self.width).collect();
         if grams.is_empty() {
             return None;
         }
@@ -511,14 +557,19 @@ impl<S: NGramSpec> NGramIndex<S> {
         if ids.is_empty() { None } else { Some(ids) }
     }
 
-    fn posting_bytes_slice(&self, gram: S::Gram) -> &[u8] {
-        let Some(entry) = self.lexicon.get(gram) else {
+    fn posting_bytes_slice(&self, gram: Gram) -> &[u8] {
+        let Some(entry) = self.storage.lexicon.get(gram) else {
             return &[];
         };
         let start = usize::try_from(entry.offset).unwrap_or(usize::MAX);
-        let payload_len = self.postings.payload_len();
-        let end = self.lexicon.posting_byte_end(entry.offset, payload_len);
-        self.postings.slice(start, end.saturating_sub(start))
+        let payload_len = self.storage.postings.payload_len();
+        let end = self
+            .storage
+            .lexicon
+            .posting_byte_end(entry.offset, payload_len);
+        self.storage
+            .postings
+            .slice(start, end.saturating_sub(start))
     }
 
     fn intersect_sorted_slices(slices: &[&[u8]]) -> Vec<u32> {
@@ -573,24 +624,26 @@ impl<S: NGramSpec> NGramIndex<S> {
         }
         out
     }
+}
 
+impl Config {
     /// Extract literal byte arms from a query spec.
     /// Returns `None` if no usable literals for this N-gram width can be extracted.
-    fn extract_literal_arms(&self, spec: &QuerySpec<'_>) -> Option<Vec<Vec<u8>>> {
-        if spec.invert_match() {
+    fn extract_literal_arms(self, query: &QuerySpec<'_>) -> Option<Vec<Vec<u8>>> {
+        if query.invert_match() {
             return None;
         }
-        let width = self.spec.width().get();
+        let width = self.width.get();
         let mut literal_arms: Vec<Vec<u8>> = Vec::new();
-        for p in spec.patterns {
-            let arms = if spec.fixed_strings() {
-                Self::fixed_string_literals(p.as_bytes(), spec.case_insensitive())
+        for p in query.patterns {
+            let arms = if query.fixed_strings() {
+                Self::fixed_string_literals(p.as_bytes(), query.case_insensitive())
             } else {
                 Self::plan_pattern(
                     p.as_str(),
-                    spec.case_insensitive(),
-                    spec.word_regexp(),
-                    spec.line_regexp(),
+                    query.case_insensitive(),
+                    query.word_regexp(),
+                    query.line_regexp(),
                     width,
                 )?
             };
@@ -722,7 +775,9 @@ impl<S: NGramSpec> NGramIndex<S> {
             vec![lit.to_vec()]
         }
     }
+}
 
+impl Index {
     fn merge_partial_fingerprints(
         existing: &[FileFingerprint],
         root: &Path,
@@ -755,7 +810,7 @@ impl<S: NGramSpec> NGramIndex<S> {
     }
 
     fn validate_lexicon_postings(
-        lexicon: &Lexicon<S::Gram>,
+        lexicon: &Lexicon,
         postings: &Postings,
     ) -> Result<(), NGramIndexError> {
         let payload_len = postings.payload_len();
@@ -826,21 +881,8 @@ mod candidate_tests {
 
     use super::*;
 
-    #[derive(Debug, Clone, Copy)]
-    struct BigramSpec;
-
-    impl NGramSpec for BigramSpec {
-        type Gram = PackedGram<2>;
-
-        fn width(self) -> GramWidth {
-            GramWidth::new(2)
-        }
-    }
-
-    type TrigramNGramIndex = NGramIndex<TrigramSpec>;
-
-    fn trigram_index() -> TrigramNGramIndex {
-        NGramIndex::new(TrigramSpec)
+    fn default_config() -> Config {
+        Config::new(GramWidth::TRIGRAM)
     }
 
     fn encode(ids: &[u32]) -> Vec<u8> {
@@ -877,7 +919,7 @@ mod candidate_tests {
             flags |= QueryFlags::LINE_REGEXP;
         }
         let spec = QuerySpec { patterns, flags };
-        trigram_index().extract_literal_arms(&spec).is_some()
+        default_config().extract_literal_arms(&spec).is_some()
     }
 
     fn full_scan(
@@ -897,16 +939,12 @@ mod candidate_tests {
             flags |= QueryFlags::LINE_REGEXP;
         }
         let spec = QuerySpec { patterns, flags };
-        trigram_index().extract_literal_arms(&spec).is_none()
+        default_config().extract_literal_arms(&spec).is_none()
     }
 
     #[test]
     fn merge_sorted_runs_preserves_order_and_uniqueness() {
-        let merged = TrigramNGramIndex::merge_sorted_runs(vec![
-            vec![1, 3, 7],
-            vec![1, 2, 7, 9],
-            vec![4, 7, 8],
-        ]);
+        let merged = Index::merge_sorted_runs(vec![vec![1, 3, 7], vec![1, 2, 7, 9], vec![4, 7, 8]]);
         assert_eq!(merged, vec![1, 2, 3, 4, 7, 8, 9]);
     }
 
@@ -916,38 +954,38 @@ mod candidate_tests {
         let b = encode(&[3, 7]);
         let c = encode(&[0, 3, 4, 7, 8]);
         let slices = vec![a.as_slice(), b.as_slice(), c.as_slice()];
-        let ids = TrigramNGramIndex::intersect_sorted_slices(&slices);
+        let ids = Index::intersect_sorted_slices(&slices);
         assert_eq!(ids, vec![3, 7]);
     }
 
     #[test]
     fn merge_sorted_runs_empty_input_returns_empty() {
-        let merged = TrigramNGramIndex::merge_sorted_runs(vec![]);
+        let merged = Index::merge_sorted_runs(vec![]);
         assert!(merged.is_empty());
     }
 
     #[test]
     fn merge_sorted_runs_single_list_returns_as_is() {
-        let merged = TrigramNGramIndex::merge_sorted_runs(vec![vec![1, 2, 3]]);
+        let merged = Index::merge_sorted_runs(vec![vec![1, 2, 3]]);
         assert_eq!(merged, vec![1, 2, 3]);
     }
 
     #[test]
     fn merge_sorted_runs_with_empty_lists_mixed_in() {
-        let merged = TrigramNGramIndex::merge_sorted_runs(vec![vec![1, 3], vec![], vec![2, 3]]);
+        let merged = Index::merge_sorted_runs(vec![vec![1, 3], vec![], vec![2, 3]]);
         assert_eq!(merged, vec![1, 2, 3]);
     }
 
     #[test]
     fn intersect_sorted_posting_byte_slices_empty_input_returns_empty() {
-        let ids = TrigramNGramIndex::intersect_sorted_slices(&[]);
+        let ids = Index::intersect_sorted_slices(&[]);
         assert!(ids.is_empty());
     }
 
     #[test]
     fn intersect_sorted_slices_single_returns_decoded_ids() {
         let a = encode(&[1, 3, 5]);
-        let ids = TrigramNGramIndex::intersect_sorted_slices(&[a.as_slice()]);
+        let ids = Index::intersect_sorted_slices(&[a.as_slice()]);
         assert_eq!(ids, vec![1, 3, 5]);
     }
 
@@ -955,14 +993,14 @@ mod candidate_tests {
     #[should_panic(expected = "postings validated at open")]
     fn intersect_sorted_slices_invalid_varint_panics() {
         let a = &[0xff];
-        TrigramNGramIndex::intersect_sorted_slices(&[a]);
+        Index::intersect_sorted_slices(&[a]);
     }
 
     #[test]
     fn intersect_sorted_slices_no_overlap_returns_empty() {
         let a = encode(&[1, 2, 3]);
         let b = encode(&[4, 5, 6]);
-        let ids = TrigramNGramIndex::intersect_sorted_slices(&[a.as_slice(), b.as_slice()]);
+        let ids = Index::intersect_sorted_slices(&[a.as_slice(), b.as_slice()]);
         assert!(ids.is_empty());
     }
 
@@ -1028,7 +1066,7 @@ mod candidate_tests {
             flags: QueryFlags::empty(),
         };
         assert!(
-            NGramIndex::new(BigramSpec)
+            Config::new(GramWidth::new(2))
                 .extract_literal_arms(&spec)
                 .is_some()
         );
@@ -1040,7 +1078,7 @@ mod candidate_tests {
             patterns: &["beta.gamma".to_string()],
             flags: QueryFlags::FIXED_STRINGS,
         };
-        assert!(trigram_index().extract_literal_arms(&spec).is_some());
+        assert!(default_config().extract_literal_arms(&spec).is_some());
     }
 
     #[test]
@@ -1085,8 +1123,8 @@ mod candidate_tests {
 
         // Posting count mismatches are caught at build time.
         // The open path skips content-level validation for speed.
-        let result = TrigramNGramIndex::open(
-            TrigramSpec,
+        let result = Config::open(
+            GramWidth::TRIGRAM,
             &dir,
             Path::new("/root"),
             crate::index::CorpusKind::Directory,
@@ -1100,8 +1138,6 @@ mod persistence_tests {
     use std::path::PathBuf;
 
     use super::*;
-
-    type TrigramNGramIndex = NGramIndex<TrigramSpec>;
 
     #[test]
     fn validate_file_paths_accepts_normal_relative_paths() {
@@ -1117,7 +1153,7 @@ mod persistence_tests {
                 size: 0,
             },
         ];
-        let result = TrigramNGramIndex::validate_file_paths(&fps);
+        let result = Index::validate_file_paths(&fps);
         assert!(result.is_ok());
     }
 
@@ -1129,7 +1165,7 @@ mod persistence_tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramNGramIndex::validate_file_paths(&fps);
+        let result = Index::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 
@@ -1140,7 +1176,7 @@ mod persistence_tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramNGramIndex::validate_file_paths(&fps);
+        let result = Index::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 
@@ -1151,7 +1187,7 @@ mod persistence_tests {
             mtime_secs: 0,
             size: 0,
         }];
-        let result = TrigramNGramIndex::validate_file_paths(&fps);
+        let result = Index::validate_file_paths(&fps);
         assert!(result.is_err());
     }
 }

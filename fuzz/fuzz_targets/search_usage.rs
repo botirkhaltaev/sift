@@ -8,8 +8,8 @@ use sift_core::search::{
     VisibilityConfig,
 };
 use sift_core::{
-    CandidateSource, CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig, Indexes, NGramIndex,
-    SearchQuery, SnapshotValidation, TrigramSpec,
+    CandidateSource, CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes,
+    NGramConfig, SearchQuery, SnapshotValidation,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -32,7 +32,7 @@ fn indexed() -> &'static Indexes {
         fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
-        let config = IndexConfig {
+        let config = IndexBuildConfig {
             corpus: CorpusSpec {
                 root: &corpus,
                 kind: CorpusKind::Directory,
@@ -43,7 +43,9 @@ fn indexed() -> &'static Indexes {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        NGramIndex::build(TrigramSpec, &config, &trigram_dir, &[]).expect("build_index");
+        NGramConfig::new(GramWidth::TRIGRAM)
+            .build(&config, &trigram_dir, &[])
+            .expect("build_index");
         let indexes = Indexes::open(&sift_dir).expect("open_index");
         IndexHolder {
             _temp: tmp,

@@ -17,8 +17,8 @@ pub enum IndexError {
         source: std::io::Error,
     },
 
-    #[error("unknown index kind: {0}")]
-    UnknownIndexKind(String),
+    #[error("unknown index configuration: {0}")]
+    UnknownIndexConfig(String),
 
     #[error("invalid snapshot manifest at {path}: {source}")]
     InvalidManifest {
