@@ -3,11 +3,6 @@
 //! These are private helpers used by [`Index::build`] and [`Index::update`].
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-
-use ignore::{
-    DirEntry, Error as IgnoreError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState,
-};
 
 use super::files::FileFingerprint;
 use super::gram::{Gram, GramWidth};
@@ -15,7 +10,8 @@ use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
 
 use crate::index::{CorpusKind, IndexBuildConfig};
-use crate::search::filter::{HiddenMode, IgnoreSources};
+use crate::search::request::LinkTraversal;
+use crate::walk::FileWalk;
 
 /// Collected index data ready for persistence.
 pub struct IndexTables {
@@ -23,178 +19,6 @@ pub struct IndexTables {
     pub file_grams: Vec<GramSet>,
     pub lexicon: Vec<LexiconEntry>,
     pub postings: Vec<u8>,
-}
-
-// ---------------------------------------------------------------------------
-// Corpus walk
-// ---------------------------------------------------------------------------
-
-/// Per-thread collector for [`WalkParallel::visit`].
-struct CorpusPathCollector<'a> {
-    root: PathBuf,
-    exclude_paths: &'a [PathBuf],
-    include_paths: &'a [PathBuf],
-    max_filesize: Option<u64>,
-    thread_paths: Vec<PathBuf>,
-    walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
-}
-
-impl Drop for CorpusPathCollector<'_> {
-    fn drop(&mut self) {
-        if self.thread_paths.is_empty() {
-            return;
-        }
-        let mut guard = self
-            .consolidated_paths
-            .lock()
-            .expect("consolidate corpus paths lock");
-        guard.append(&mut self.thread_paths);
-    }
-}
-
-impl ParallelVisitor for CorpusPathCollector<'_> {
-    fn visit(&mut self, entry: Result<DirEntry, IgnoreError>) -> WalkState {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                let mut guard = self.walk_error.lock().expect("walk error lock");
-                if guard.is_none() {
-                    *guard = Some(crate::Error::Ignore(err));
-                }
-                drop(guard);
-                return WalkState::Quit;
-            }
-        };
-        let path = entry.path();
-        let rel = path.strip_prefix(&self.root).unwrap_or(path);
-
-        // Skip excluded directories before descent.
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-            if self.is_excluded(rel) {
-                return WalkState::Skip;
-            }
-            return WalkState::Continue;
-        }
-
-        if entry.file_type().is_some_and(|ft| ft.is_file()) && !self.is_excluded(rel) {
-            if let Some(limit) = self.max_filesize
-                && entry.metadata().is_ok_and(|m| m.len() > limit)
-            {
-                return WalkState::Continue;
-            }
-            self.thread_paths.push(rel.to_path_buf());
-        }
-        WalkState::Continue
-    }
-}
-
-impl CorpusPathCollector<'_> {
-    /// True when the path matches an explicit exclude rule or falls outside
-    /// the explicit include set.
-    ///
-    /// For directories this accepts the path if *any* included path lies
-    /// under it, so that directory pruning does not skip an ancestor of a
-    /// wanted file.
-    fn is_excluded(&self, rel: &Path) -> bool {
-        if self
-            .exclude_paths
-            .iter()
-            .any(|excluded| rel.starts_with(excluded))
-        {
-            return true;
-        }
-        if !self.include_paths.is_empty()
-            && !self.include_paths.iter().any(|included| {
-                rel == *included || included.starts_with(rel) || rel.starts_with(included)
-            })
-        {
-            return true;
-        }
-        false
-    }
-}
-
-struct CorpusPathCollectorBuilder<'a> {
-    root: PathBuf,
-    exclude_paths: &'a [PathBuf],
-    include_paths: &'a [PathBuf],
-    max_filesize: Option<u64>,
-    walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated_paths: Arc<Mutex<Vec<PathBuf>>>,
-}
-
-impl<'a> ParallelVisitorBuilder<'a> for CorpusPathCollectorBuilder<'a> {
-    fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
-        Box::new(CorpusPathCollector {
-            root: self.root.clone(),
-            exclude_paths: self.exclude_paths,
-            include_paths: self.include_paths,
-            max_filesize: self.max_filesize,
-            thread_paths: Vec::new(),
-            walk_error: Arc::clone(&self.walk_error),
-            consolidated_paths: Arc::clone(&self.consolidated_paths),
-        })
-    }
-}
-
-/// Walks the corpus directory and collects sorted relative file paths.
-pub struct CorpusWalker<'a> {
-    config: &'a IndexBuildConfig<'a>,
-}
-
-impl<'a> CorpusWalker<'a> {
-    pub const fn new(config: &'a IndexBuildConfig<'a>) -> Self {
-        Self { config }
-    }
-
-    fn walk_builder(&self) -> WalkBuilder {
-        let sources = self.config.visibility.ignore.sources;
-        let mut wb = WalkBuilder::new(self.config.corpus.root);
-        wb.follow_links(self.config.corpus.follow_links)
-            .same_file_system(self.config.walk.one_file_system)
-            .hidden(matches!(self.config.visibility.hidden, HiddenMode::Respect))
-            .parents(sources.contains(IgnoreSources::PARENT))
-            .ignore(sources.contains(IgnoreSources::DOT))
-            .git_ignore(sources.contains(IgnoreSources::VCS))
-            .git_exclude(sources.contains(IgnoreSources::EXCLUDE))
-            .git_global(sources.contains(IgnoreSources::GLOBAL))
-            .require_git(self.config.visibility.ignore.require_git);
-        if let Some(d) = self.config.walk.max_depth {
-            wb.max_depth(Some(d + 1));
-        }
-        wb
-    }
-
-    pub fn collect(&self) -> crate::Result<Vec<PathBuf>> {
-        let walk_error = Arc::new(Mutex::new(None));
-        let consolidated_paths = Arc::new(Mutex::new(Vec::new()));
-
-        let mut builder = CorpusPathCollectorBuilder {
-            root: self.config.corpus.root.to_path_buf(),
-            exclude_paths: self.config.corpus.exclude_paths,
-            include_paths: self.config.corpus.include_paths,
-            max_filesize: self.config.walk.max_filesize,
-            walk_error: Arc::clone(&walk_error),
-            consolidated_paths: Arc::clone(&consolidated_paths),
-        };
-
-        self.walk_builder().build_parallel().visit(&mut builder);
-
-        {
-            let mut err_slot = walk_error.lock().expect("walk error lock");
-            if let Some(err) = err_slot.take() {
-                return Err(err);
-            }
-        }
-
-        let merged_paths = {
-            let mut guard = consolidated_paths.lock().expect("paths lock");
-            guard.sort_unstable();
-            std::mem::take(&mut *guard)
-        };
-        Ok(merged_paths)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +145,7 @@ impl PostingTables {
 
 /// Build in-memory index tables from a corpus configuration.
 ///
-/// When `paths` is empty, discovers files via [`CorpusWalker`]. Otherwise indexes
+/// When `paths` is empty, discovers files via [`FileWalk`]. Otherwise indexes
 /// exactly the given corpus-relative paths.
 impl IndexTables {
     pub fn build(
@@ -344,7 +168,19 @@ impl IndexTables {
             }
             CorpusKind::Directory => {
                 let paths = if paths.is_empty() {
-                    CorpusWalker::new(config).collect()?
+                    FileWalk::new(config.corpus.root)
+                        .scopes(config.corpus.include_paths)
+                        .excludes(config.corpus.exclude_paths)
+                        .visibility(config.visibility.clone())
+                        .links(if config.corpus.follow_links {
+                            LinkTraversal::Follow
+                        } else {
+                            LinkTraversal::DoNotFollow
+                        })
+                        .one_file_system(config.walk.one_file_system)
+                        .max_depth(config.walk.max_depth)
+                        .max_filesize(config.walk.max_filesize)
+                        .collect_paths()?
                 } else {
                     paths.to_vec()
                 };
@@ -386,7 +222,9 @@ mod tests {
     use crate::index::ngram::storage::postings::Postings;
     use crate::index::{CorpusKind, CorpusSpec, IndexBuildConfig};
     use crate::search::filter::IgnoreConfig;
+    use crate::search::request::LinkTraversal;
     use crate::search::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
+    use crate::walk::FileWalk;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -573,7 +411,11 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
+        let paths = FileWalk::new(config.corpus.root)
+            .visibility(config.visibility.clone())
+            .links(LinkTraversal::DoNotFollow)
+            .collect_paths()
+            .expect("walk corpus");
         assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
         assert!(!paths.iter().any(|p| p.starts_with("skip")));
         assert!(!paths.iter().any(|p| p.starts_with("also_skip")));
@@ -598,7 +440,11 @@ mod tests {
                 ..Default::default()
             },
         };
-        let paths = CorpusWalker::new(&config).collect().expect("walk corpus");
+        let paths = FileWalk::new(config.corpus.root)
+            .visibility(config.visibility.clone())
+            .links(LinkTraversal::DoNotFollow)
+            .collect_paths()
+            .expect("walk corpus");
         assert!(paths.iter().any(|p| p.starts_with("skip")));
         assert!(paths.iter().any(|p| p.starts_with("also_skip")));
     }
@@ -619,7 +465,11 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let indexed = CorpusWalker::new(&config).collect().expect("walk corpus");
+        let indexed = FileWalk::new(config.corpus.root)
+            .visibility(config.visibility.clone())
+            .links(LinkTraversal::DoNotFollow)
+            .collect_paths()
+            .expect("walk corpus");
         let filter = CandidateFilter::new(&FilterParity::filter_config(&config), tmp.path())
             .expect("filter");
 

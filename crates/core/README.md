@@ -20,8 +20,9 @@ IndexConfig::???                         ──IndexStore──>  Index::???(...
 | Module | Description |
 |--------|-------------|
 | [`query/`](src/query/) | Query description (`QuerySpec`), planning -- index-agnostic |
+| [`walk/`](src/walk/) | Shared filesystem discovery for search candidates and index builds |
 | [`index/`](src/index/) | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
-| [`index/ngram/`](src/index/ngram/) | N-gram index: build, load, search, on-disk storage, and trigram specialization |
+| [`index/ngram/`](src/index/ngram/) | Runtime-width N-gram index: build, load, search, and on-disk storage |
 | [`grep/`](src/grep/) | Pipeline orchestration: `GrepRequest`, `run()` |
 | [`search/`](src/search/) | Regex execution, scanning, output formatting, parallelism |
 | [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |

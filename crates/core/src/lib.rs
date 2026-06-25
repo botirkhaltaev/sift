@@ -28,6 +28,7 @@ pub use grep::GrepRun;
 mod index;
 pub mod query;
 pub mod search;
+pub(crate) mod walk;
 
 pub use candidate::Candidate;
 

@@ -13,6 +13,7 @@ N-gram index implementation: corpus walk, runtime-width gram extraction, index b
 ## Conventions
 
 - File paths are always relative to the corpus root.
+- Filesystem discovery uses `walk::FileWalk`; do not add N-gram-specific walk visitors.
 - Gram extraction is parallelized via Rayon.
 - `IndexTables::build()` returns in-memory tables; `Config` persists them through `IndexDestination` in `mod.rs`.
 - Generic behavior is runtime-width. Do not add specialization layers until a measured hot path justifies them.

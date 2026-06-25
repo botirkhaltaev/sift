@@ -8,9 +8,9 @@ On-disk binary format for N-gram index tables. All access is zero-copy via memor
 |------|-------------|
 | [`mod.rs`](mod.rs) | Module re-exports |
 | [`format.rs`](format.rs) | Magic bytes (`SIFTFIL1`, `SIFTLEX2`, `SIFTPST1`, `SIFTGRM1`) |
-| [`lexicon.rs`](lexicon.rs) | `LexiconEntry<G>`, `Lexicon<G>`: sorted gram to postings slice descriptor |
+| [`lexicon.rs`](lexicon.rs) | `LexiconEntry`, `Lexicon`: sorted gram to postings slice descriptor |
 | [`postings.rs`](postings.rs) | `Postings`: contiguous `u32` LE file-ID payloads |
-| [`grams.rs`](grams.rs) | `GramSet<G>`, `GramSets<G>`: per-file gram sets for incremental updates |
+| [`grams.rs`](grams.rs) | `GramSet`, `GramSets`: per-file gram sets for incremental updates |
 
 ## Format Overview
 

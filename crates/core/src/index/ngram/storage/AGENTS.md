@@ -4,11 +4,11 @@ Binary persistence format for N-gram index tables. Read/write `files.bin`, `lexi
 
 ## Key Types
 
-- `LexiconEntry<G>`: gram + postings offset + length.
-- `Lexicon<G>`: memory-mapped lexicon with binary-search lookup.
+- `LexiconEntry`: gram + postings offset + length.
+- `Lexicon`: memory-mapped lexicon with binary-search lookup.
 - `Postings`: memory-mapped postings blob.
-- `GramSet<G>`: sorted unique grams for one file.
-- `GramSets<G>`: memory-mapped per-file gram sets for incremental updates.
+- `GramSet`: sorted unique grams for one file.
+- `GramSets`: memory-mapped per-file gram sets for incremental updates.
 
 ## Conventions
 

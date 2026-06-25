@@ -14,8 +14,10 @@ use regex_syntax::hir::{self, Hir};
 use crate::index::snapshot::ArtifactData;
 use crate::index::{CorpusKind, FileId, IndexBuildConfig, IndexDestination, IndexSource};
 use crate::query::QuerySpec;
+use crate::search::request::LinkTraversal;
+use crate::walk::FileWalk;
 
-use self::build::{CorpusWalker, FingerprintCollector, IndexTables, PostingTables};
+use self::build::{FingerprintCollector, IndexTables, PostingTables};
 use self::files::FileFingerprint;
 use self::files::FileTable;
 pub use gram::{Gram, GramWidth, GramWindows};
@@ -468,7 +470,19 @@ impl Index {
         use std::collections::HashMap;
 
         let fingerprints = if paths.is_empty() {
-            let corpus_paths = CorpusWalker::new(config).collect()?;
+            let corpus_paths = FileWalk::new(config.corpus.root)
+                .scopes(config.corpus.include_paths)
+                .excludes(config.corpus.exclude_paths)
+                .visibility(config.visibility.clone())
+                .links(if config.corpus.follow_links {
+                    LinkTraversal::Follow
+                } else {
+                    LinkTraversal::DoNotFollow
+                })
+                .one_file_system(config.walk.one_file_system)
+                .max_depth(config.walk.max_depth)
+                .max_filesize(config.walk.max_filesize)
+                .collect_paths()?;
             FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
         } else {
             Self::merge_partial_fingerprints(&self.storage.fingerprints, config.corpus.root, paths)?

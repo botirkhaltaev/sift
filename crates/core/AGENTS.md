@@ -15,10 +15,11 @@ Re-exported from `lib.rs`: `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`, `In
 | Module | Responsibility |
 |--------|----------------|
 | `query/` | Index-agnostic query description (`QuerySpec`), candidate planning |
+| `walk/` | Shared filesystem discovery (`FileWalk`) for search candidate collection and index builds |
 | `index/mod.rs` | `Indexes` registry, `IndexConfig` configured identity, `Index` enum (query dispatch), shared types (`FileId`, `IndexId`), `IndexError` |
 | `index/store.rs` | `IndexStore`: snapshot-based persistence, atomic build/update/publish |
 | `index/ngram/mod.rs` | Runtime-width N-gram `Config` and `Index`, posting list intersection, lifecycle, candidate narrowing, `NGramIndexError` |
-| `index/ngram/build.rs` | `IndexTables`: corpus walk, fingerprint collection, N-gram extraction, table construction |
+| `index/ngram/build.rs` | `IndexTables`: fingerprint collection, N-gram extraction, table construction |
 | `index/ngram/files.rs` | File ID to relative path mapping with fingerprints |
 | `index/ngram/storage/` | Binary persistence format for gram sets, lexicon, postings, and file tables |
 | `grep/mod.rs` | Pipeline orchestration: `GrepRequest`, `run()` |
@@ -27,7 +28,7 @@ Re-exported from `lib.rs`: `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`, `In
 | `search/query/` | `SearchQuery`, `Match` |
 | `search/pattern/` | `PatternCompiler`: composable regex builder |
 | `search/request/` | `SearchExecution`, `WalkOptions`, `LinkTraversal` |
-| `search/candidates/` | Walk-based candidate collection |
+| `search/candidates/` | Search candidate collection through `walk::FileWalk` |
 | `search/scan/` | Text / summary / JSON scanning workers |
 | `search/emit/` | Output formatting, result chunks, stats helpers |
 | `search/filter/` | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |

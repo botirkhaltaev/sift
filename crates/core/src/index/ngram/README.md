@@ -14,7 +14,7 @@ An N-gram index is an inverted index mapping each fixed-width byte sequence foun
 |------|-------------|
 | [`mod.rs`](mod.rs) | `Config`, `Index`, candidate narrowing, build/open/update lifecycle, error type, and module exports |
 | [`gram.rs`](gram.rs) | `GramWidth`, `Gram`, runtime-width gram window iteration |
-| [`build.rs`](build.rs) | `IndexTables`: corpus walk, gram extraction, incremental table construction |
+| [`build.rs`](build.rs) | `IndexTables`: shared `FileWalk` usage, gram extraction, incremental table construction |
 | [`files.rs`](files.rs) | File ID to relative path + fingerprint mapping |
 | [`storage/`](storage/) | Binary persistence format (lexicon, postings, gram sets, file table) |
 
