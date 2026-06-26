@@ -6,7 +6,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::grep::GrepRequest;
+use sift_core::grep::{CandidateFiles, GrepRequest};
 use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, ColorChoice, OutputEmission, SearchCollection,
     SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle, SearchSeparators,
@@ -70,6 +70,8 @@ fn run_grep(
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
+        candidate_files: CandidateFiles::Search,
+        stdin: None,
     }
     .run(query)
     .unwrap()

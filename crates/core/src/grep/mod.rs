@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::Candidate;
 use crate::index::Indexes;
 use crate::query::{CandidatePlan, CandidateSource, QueryPlanner};
-use crate::search::request::{SearchCollection, SearchExecution};
+use crate::search::request::{SearchCollection, SearchExecution, StdinInput};
 use crate::search::{
     CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
     SearchStats,
@@ -24,6 +24,13 @@ pub struct GrepRun {
     pub hits: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CandidateFiles {
+    #[default]
+    Search,
+    Skip,
+}
+
 /// User-facing request to the grep pipeline.
 pub struct GrepRequest<'a> {
     pub indexes: &'a Indexes,
@@ -32,6 +39,8 @@ pub struct GrepRequest<'a> {
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,
     pub candidate_source: CandidateSource<'a>,
+    pub candidate_files: CandidateFiles,
+    pub stdin: Option<StdinInput<'a>>,
 }
 
 impl GrepRequest<'_> {
@@ -49,22 +58,25 @@ impl GrepRequest<'_> {
         let output = self.output;
         let requirement = output.candidate_requirement();
 
-        let raw = QueryPlanner::new(spec).candidates(
-            CandidatePlan {
-                indexes: self.indexes,
-                requirement,
-                filter: self.filter,
-                source: self.candidate_source,
-            },
-            || self.filter.collect(),
-        )?;
+        let raw = match self.candidate_files {
+            CandidateFiles::Search => QueryPlanner::new(spec).candidates(
+                CandidatePlan {
+                    indexes: self.indexes,
+                    requirement,
+                    filter: self.filter,
+                    source: self.candidate_source,
+                },
+                || self.filter.collect(),
+            )?,
+            CandidateFiles::Skip => Vec::new(),
+        };
 
         let candidates: Vec<Candidate> = raw
             .into_par_iter()
             .filter(|c| c.matches(self.filter))
             .collect();
 
-        if candidates.is_empty() {
+        if candidates.is_empty() && self.stdin.is_none() {
             return Ok(GrepRun {
                 outcome: SearchOutcome {
                     matched: false,
@@ -76,6 +88,7 @@ impl GrepRequest<'_> {
 
         let (outcome, hits) = query.search(&SearchExecution {
             candidates: &candidates,
+            stdin: self.stdin,
             output,
             separators: self.separators,
             collect: self.collect.with_hits(true),

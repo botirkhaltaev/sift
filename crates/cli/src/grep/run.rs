@@ -1,6 +1,8 @@
+use std::io::Read;
 use std::path::PathBuf;
 
-use sift_core::search::{CandidateFilter, SearchMode};
+use sift_core::grep::CandidateFiles;
+use sift_core::search::{CandidateFilter, SearchMode, StdinInput};
 use sift_core::{
     CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
 };
@@ -12,6 +14,8 @@ use super::filter::{FilterConfig, SearchFilterCtx};
 use super::output::{FilenameContext, OutputArgv, OutputConfig, SearchOutputCtx};
 use super::paths::CorpusScope;
 use super::pattern::{PatternArgv, PatternConfig, ResolvedPatterns};
+
+const STDIN_DISPLAY_PATH: &str = "<stdin>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrepMode {
@@ -48,6 +52,11 @@ struct GrepSession {
     scope: CorpusScope,
     search_filter: CandidateFilter,
     store_meta: Option<sift_core::StoreMeta>,
+}
+
+struct SearchInputs {
+    paths: Vec<PathBuf>,
+    stdin: Option<Vec<u8>>,
 }
 
 impl GrepOutcome {
@@ -89,7 +98,11 @@ impl Grep {
         }
     }
 
-    fn prepare_session(&self, argv: &Argv<'_>) -> anyhow::Result<GrepSession> {
+    fn prepare_session(
+        &self,
+        argv: &Argv<'_>,
+        search_paths: &[PathBuf],
+    ) -> anyhow::Result<GrepSession> {
         self.configure_threads();
         let filter = SearchFilterCtx::resolve(argv);
         let cwd = std::env::current_dir()?;
@@ -99,7 +112,7 @@ impl Grep {
             &indexes,
             store_meta.as_ref(),
             &cwd,
-            &self.config.search_paths,
+            search_paths,
             &self.config.sift_dir,
         )?;
         let filter_config = self.config.filter.candidate_config(
@@ -118,7 +131,7 @@ impl Grep {
 
     fn run_files(&self, argv: &Argv<'_>) -> anyhow::Result<bool> {
         let output_argv = OutputArgv::resolve(argv);
-        let session = self.prepare_session(argv)?;
+        let session = self.prepare_session(argv, &self.config.search_paths)?;
 
         let walk_opts = sift_core::search::WalkOptions {
             links: if session.search_filter.follow_links() {
@@ -188,6 +201,7 @@ impl Grep {
 
     fn run_search(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<bool> {
         let patterns = ResolvedPatterns::resolve(&self.config.pattern)?;
+        let input = self.resolve_search_inputs(patterns.stdin_consumed)?;
         let pattern_argv = PatternArgv::resolve(argv);
         let output_argv = OutputArgv::resolve(argv);
 
@@ -218,13 +232,14 @@ impl Grep {
             }
         }
 
-        let session = self.prepare_session(argv)?;
+        let session = self.prepare_session(argv, &input.paths)?;
 
         let opts = self
             .config
             .pattern
             .search_options(&pattern_argv, pattern_argv.only_matching);
-        let query = SearchQuery::new(&patterns.0, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let query =
+            SearchQuery::new(&patterns.patterns, opts).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let (out, _) = SearchOutputCtx::resolve(
             &self.config.output,
@@ -234,30 +249,9 @@ impl Grep {
             line_number_override,
         );
 
-        let filename_ctx = if out.lines.is_path_mode {
-            FilenameContext::PathMode
-        } else {
-            match session.indexes.corpus_kind() {
-                Some(CorpusKind::SingleFile) => FilenameContext::SingleFileCorpus,
-                _ => FilenameContext::DirectoryCorpus,
-            }
-        };
+        let filename_ctx = Self::filename_context(&out, &input, &session);
         let output = out.to_core_output(&self.config.output, filename_ctx);
-        let snapshot = daemon
-            .and_then(|daemon| {
-                session
-                    .indexes
-                    .snapshot_id()
-                    .map(|id| daemon.validate_snapshot(id))
-            })
-            .map_or(
-                SnapshotValidation::Unvalidated,
-                |validation| match validation {
-                    Ok(true) => SnapshotValidation::Validated,
-                    Ok(false) => SnapshotValidation::Stale,
-                    Err(_) => SnapshotValidation::Unvalidated,
-                },
-            );
+        let snapshot = Self::snapshot_validation(&session, daemon);
 
         let grep_run = sift_core::grep::GrepRequest {
             indexes: &session.indexes,
@@ -269,6 +263,11 @@ impl Grep {
                 store_meta: session.store_meta.as_ref(),
                 snapshot,
             },
+            candidate_files: Self::candidate_files(&input),
+            stdin: input.stdin.as_deref().map(|bytes| StdinInput {
+                display_path: STDIN_DISPLAY_PATH,
+                bytes,
+            }),
         }
         .run(&query)?;
         if let Some(s) = &grep_run.outcome.stats {
@@ -289,4 +288,86 @@ impl Grep {
         }
         Ok(grep_run.outcome.matched)
     }
+
+    fn filename_context(
+        out: &SearchOutputCtx,
+        input: &SearchInputs,
+        session: &GrepSession,
+    ) -> FilenameContext {
+        if out.lines.is_path_mode {
+            FilenameContext::PathMode
+        } else if input.stdin.is_some() && input.paths.is_empty() {
+            FilenameContext::SingleFileCorpus
+        } else {
+            match session.indexes.corpus_kind() {
+                Some(CorpusKind::SingleFile) => FilenameContext::SingleFileCorpus,
+                _ => FilenameContext::DirectoryCorpus,
+            }
+        }
+    }
+
+    fn snapshot_validation(session: &GrepSession, daemon: Option<&Daemon>) -> SnapshotValidation {
+        daemon
+            .and_then(|daemon| {
+                session
+                    .indexes
+                    .snapshot_id()
+                    .map(|id| daemon.validate_snapshot(id))
+            })
+            .map_or(
+                SnapshotValidation::Unvalidated,
+                |validation| match validation {
+                    Ok(true) => SnapshotValidation::Validated,
+                    Ok(false) => SnapshotValidation::Stale,
+                    Err(_) => SnapshotValidation::Unvalidated,
+                },
+            )
+    }
+
+    const fn candidate_files(input: &SearchInputs) -> CandidateFiles {
+        if input.stdin.is_some() && input.paths.is_empty() {
+            CandidateFiles::Skip
+        } else {
+            CandidateFiles::Search
+        }
+    }
+
+    fn resolve_search_inputs(&self, stdin_consumed: bool) -> anyhow::Result<SearchInputs> {
+        let mut paths = Vec::with_capacity(self.config.search_paths.len());
+        let mut explicit_stdin = false;
+        for path in &self.config.search_paths {
+            if path == std::path::Path::new("-") {
+                explicit_stdin = true;
+            } else {
+                paths.push(path.clone());
+            }
+        }
+
+        let implicit_stdin =
+            !stdin_consumed && paths.is_empty() && !explicit_stdin && stdin_is_pipe();
+        let stdin = if explicit_stdin || implicit_stdin {
+            let mut bytes = Vec::new();
+            std::io::stdin().read_to_end(&mut bytes)?;
+            Some(bytes)
+        } else {
+            None
+        };
+
+        Ok(SearchInputs { paths, stdin })
+    }
+}
+
+#[cfg(unix)]
+fn stdin_is_pipe() -> bool {
+    use std::os::unix::fs::FileTypeExt;
+
+    std::fs::metadata("/dev/stdin").is_ok_and(|meta| {
+        let ft = meta.file_type();
+        ft.is_fifo() || ft.is_socket() || ft.is_file()
+    })
+}
+
+#[cfg(not(unix))]
+const fn stdin_is_pipe() -> bool {
+    false
 }

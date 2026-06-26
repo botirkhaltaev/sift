@@ -15,7 +15,7 @@ use crate::search::output::SearchOutput;
 use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::search::output::style::FilenameMode;
 use crate::search::query::SearchQuery;
-use crate::search::request::SearchCollection;
+use crate::search::request::{SearchCollection, StdinInput};
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -126,6 +126,22 @@ fn summary_search_file(
     sink.finish()
 }
 
+fn summary_search_slice(
+    searcher: &mut Searcher,
+    matcher: &RegexMatcher,
+    mode: SearchMode,
+    bytes: &[u8],
+) -> FileSummary {
+    let sink_matcher = if mode == SearchMode::CountMatches {
+        Some(matcher.clone())
+    } else {
+        None
+    };
+    let mut sink = SummarySink::new(mode, sink_matcher);
+    let _ = searcher.search_slice(matcher, bytes, &mut sink);
+    sink.finish()
+}
+
 fn write_summary_record(
     out: &mut Vec<u8>,
     output: SearchOutput,
@@ -218,13 +234,47 @@ impl<'a> SummaryWorker<'a> {
                 hit: None,
             };
         }
-
         let result = summary_search_file(
             &mut self.searcher,
             self.matcher,
             self.output.mode,
             candidate.abs_path(),
         );
+        self.search_input(
+            &candidate.display_path(
+                self.output.lines.path_display,
+                self.output.records.path_separator,
+            ),
+            result,
+            stop,
+            (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+        )
+    }
+
+    fn search_stdin(&mut self, input: StdinInput<'_>, stop: &AtomicBool) -> FileResult {
+        if stop.load(Ordering::SeqCst) {
+            return FileResult {
+                output: ChunkOutput::empty(),
+                json_stats: None,
+                hit: None,
+            };
+        }
+        let result = summary_search_slice(
+            &mut self.searcher,
+            self.matcher,
+            self.output.mode,
+            input.bytes,
+        );
+        self.search_input(input.display_path, result, stop, None)
+    }
+
+    fn search_input(
+        &self,
+        display: &str,
+        result: FileSummary,
+        stop: &AtomicBool,
+        hit: Option<PathBuf>,
+    ) -> FileResult {
         if let Some(c) = self.summary_counter {
             c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
         }
@@ -235,11 +285,7 @@ impl<'a> SummaryWorker<'a> {
         }
         let matched = result.is_success(self.output.mode);
         let mut bytes = Vec::new();
-        let display = candidate.display_path(
-            self.output.lines.path_display,
-            self.output.records.path_separator,
-        );
-        let _ = write_summary_record(&mut bytes, self.output, &display, result);
+        let _ = write_summary_record(&mut bytes, self.output, display, result);
         if self.output.emission == OutputEmission::Quiet && result.is_success(self.output.mode) {
             stop.store(true, Ordering::SeqCst);
         }
@@ -251,7 +297,7 @@ impl<'a> SummaryWorker<'a> {
                 heading: false,
             },
             json_stats: None,
-            hit: (self.collect_hits && result.matched).then(|| candidate.rel_path().to_path_buf()),
+            hit: result.matched.then_some(hit).flatten(),
         }
     }
 }
@@ -284,10 +330,11 @@ impl<'a> SummaryScan<'a> {
     pub fn run(
         &self,
         candidates: &[Candidate],
+        stdin: Option<StdinInput<'_>>,
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len();
+        let n = candidates.len() + usize::from(stdin.is_some());
         let mut files = Vec::with_capacity(n);
         candidates
             .par_iter()
@@ -298,6 +345,10 @@ impl<'a> SummaryScan<'a> {
                 },
             )
             .collect_into_vec(&mut files);
+        if let Some(input) = stdin {
+            let mut worker = SummaryWorker::new(self, collect);
+            files.push(worker.search_stdin(input, &stop));
+        }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
         let mut any_match = false;

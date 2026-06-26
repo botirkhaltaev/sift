@@ -13,6 +13,7 @@ use crate::search::emit::stats::SearchStats;
 use crate::search::output::SearchOutput;
 use crate::search::output::mode::OutputEmission;
 use crate::search::query::SearchQuery;
+use crate::search::request::StdinInput;
 
 struct NullWriter;
 
@@ -84,6 +85,49 @@ impl<'a> JsonWorker<'a> {
             hit: None,
         }
     }
+
+    fn search_stdin(&mut self, input: StdinInput<'_>, stop: &AtomicBool) -> FileResult {
+        let quiet = self.output.emission == OutputEmission::Quiet;
+        if stop.load(Ordering::SeqCst) {
+            return FileResult {
+                output: ChunkOutput::empty(),
+                json_stats: None,
+                hit: None,
+            };
+        }
+        let path = std::path::Path::new(input.display_path);
+        let (bytes, file_stats) = if quiet {
+            let mut json = JSON::new(NullWriter);
+            let mut sink = json.sink_with_path(self.matcher, path);
+            let _ = self
+                .searcher
+                .search_slice(self.matcher, input.bytes, &mut sink);
+            (Vec::new(), sink.stats().clone())
+        } else {
+            let mut json = JSON::new(Vec::new());
+            let file_stats = {
+                let mut sink = json.sink_with_path(self.matcher, path);
+                let _ = self
+                    .searcher
+                    .search_slice(self.matcher, input.bytes, &mut sink);
+                sink.stats().clone()
+            };
+            (json.into_inner(), file_stats)
+        };
+        let had_match = file_stats.matches() > 0;
+        if quiet && had_match {
+            stop.store(true, Ordering::SeqCst);
+        }
+        FileResult {
+            output: ChunkOutput {
+                bytes,
+                matched: had_match,
+                heading: false,
+            },
+            json_stats: Some(file_stats),
+            hit: None,
+        }
+    }
 }
 
 fn format_json_summary_line(
@@ -134,10 +178,11 @@ impl<'a> JsonScan<'a> {
     pub fn run(
         &self,
         candidates: &[Candidate],
+        stdin: Option<StdinInput<'_>>,
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len();
+        let n = candidates.len() + usize::from(stdin.is_some());
         let mut files = Vec::with_capacity(n);
         candidates
             .par_iter()
@@ -148,6 +193,10 @@ impl<'a> JsonScan<'a> {
                 },
             )
             .collect_into_vec(&mut files);
+        if let Some(input) = stdin {
+            let mut worker = JsonWorker::new(self);
+            files.push(worker.search_stdin(input, &stop));
+        }
 
         let mut merged = JsonStats::new();
         let mut outputs = Vec::with_capacity(files.len());
@@ -166,8 +215,11 @@ impl<'a> JsonScan<'a> {
         if let Some(s) = stats {
             s.fill_from_json(
                 &merged,
-                candidates.len(),
-                crate::Candidate::total_file_bytes(candidates),
+                candidates.len() + usize::from(stdin.is_some()),
+                crate::Candidate::total_file_bytes(candidates)
+                    + stdin.map_or(0, |input| {
+                        u64::try_from(input.bytes.len()).unwrap_or(u64::MAX)
+                    }),
                 self.wall_start.elapsed(),
                 summary_bytes,
             );

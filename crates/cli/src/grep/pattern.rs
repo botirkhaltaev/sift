@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
 use sift_core::search::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions};
@@ -492,7 +493,10 @@ fn parse_usize_token(s: &str) -> Option<usize> {
 
 /// Patterns resolved from `-e`/`-f`/positional clap declarations.
 #[derive(Debug)]
-pub struct ResolvedPatterns(pub Vec<String>);
+pub struct ResolvedPatterns {
+    pub patterns: Vec<String>,
+    pub stdin_consumed: bool,
+}
 
 impl ResolvedPatterns {
     /// # Errors
@@ -500,11 +504,19 @@ impl ResolvedPatterns {
     /// Returns an error if no pattern is provided or if a pattern file cannot be read.
     pub fn resolve(config: &PatternConfig) -> anyhow::Result<Self> {
         let mut patterns = Vec::new();
+        let mut stdin_consumed = false;
         for p in &config.patterns.regexp {
             patterns.push(p.clone());
         }
         if let Some(file) = config.patterns.pattern_file.as_deref() {
-            let content = std::fs::read_to_string(file)?;
+            let content = if file == Path::new("-") {
+                stdin_consumed = true;
+                let mut content = String::new();
+                std::io::stdin().read_to_string(&mut content)?;
+                content
+            } else {
+                std::fs::read_to_string(file)?
+            };
             for line in content.lines() {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -518,7 +530,10 @@ impl ResolvedPatterns {
         if patterns.is_empty() {
             anyhow::bail!("no pattern given");
         }
-        Ok(Self(patterns))
+        Ok(Self {
+            patterns,
+            stdin_consumed,
+        })
     }
 }
 
@@ -766,7 +781,7 @@ mod tests {
         let patterns =
             ResolvedPatterns::resolve(&pattern_config(&["sift", "-e", "foo", "-e", "bar"]))
                 .unwrap()
-                .0;
+                .patterns;
         assert_eq!(patterns, vec!["foo", "bar"]);
     }
 
@@ -774,7 +789,7 @@ mod tests {
     fn resolve_patterns_positional() {
         let patterns = ResolvedPatterns::resolve(&pattern_config(&["sift", "baz"]))
             .unwrap()
-            .0;
+            .patterns;
         assert_eq!(patterns, vec!["baz"]);
     }
 
@@ -782,7 +797,7 @@ mod tests {
     fn resolve_patterns_regexp_and_positional() {
         let patterns = ResolvedPatterns::resolve(&pattern_config(&["sift", "-e", "foo", "bar"]))
             .unwrap()
-            .0;
+            .patterns;
         assert_eq!(patterns, vec!["foo", "bar"]);
     }
 

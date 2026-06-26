@@ -18,7 +18,7 @@ use crate::search::output::style::{
     FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
 use crate::search::query::SearchQuery;
-use crate::search::request::SearchCollection;
+use crate::search::request::{SearchCollection, StdinInput};
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -390,6 +390,34 @@ impl<'a> StandardWorker<'a> {
     }
 
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
+        self.search_input(
+            &candidate.display_path(self.path_display, self.path_separator),
+            |searcher, matcher, sink| searcher.search_path(matcher, candidate.abs_path(), sink),
+            stop,
+            (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+        )
+    }
+
+    fn search_stdin(&mut self, input: StdinInput<'_>, stop: &AtomicBool) -> FileResult {
+        self.search_input(
+            input.display_path,
+            |searcher, matcher, sink| searcher.search_slice(matcher, input.bytes, sink),
+            stop,
+            None,
+        )
+    }
+
+    fn search_input(
+        &mut self,
+        display: &str,
+        search: impl FnOnce(
+            &mut Searcher,
+            &RegexMatcher,
+            &mut StandardSink<'_>,
+        ) -> Result<(), std::io::Error>,
+        stop: &AtomicBool,
+        hit: Option<PathBuf>,
+    ) -> FileResult {
         self.bytes.clear();
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -406,19 +434,16 @@ impl<'a> StandardWorker<'a> {
             if heading {
                 sink_output.lines.filename_mode = FilenameMode::Never;
             }
-            let display = candidate.display_path(self.path_display, self.path_separator);
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
-                display,
+                display.to_string(),
                 &mut self.bytes,
                 self.separators,
                 self.replace.as_deref(),
                 self.sink_config,
             );
-            let _ = self
-                .searcher
-                .search_path(self.matcher, candidate.abs_path(), &mut sink);
+            let _ = search(&mut self.searcher, self.matcher, &mut sink);
             let n = sink.match_count;
             if let Some(c) = self.match_counter {
                 c.fetch_add(n, Ordering::Relaxed);
@@ -446,7 +471,6 @@ impl<'a> StandardWorker<'a> {
                     if self.records.should_color() {
                         out.extend_from_slice(ANSI_PATH);
                     }
-                    let display = candidate.display_path(self.path_display, self.path_separator);
                     let _ = write!(out, "{display}");
                     if self.records.should_color() {
                         out.extend_from_slice(ANSI_RESET);
@@ -464,7 +488,7 @@ impl<'a> StandardWorker<'a> {
                     && self.emission != OutputEmission::Quiet,
             },
             json_stats: None,
-            hit: (matched && self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+            hit: matched.then_some(hit).flatten(),
         }
     }
 }
@@ -500,10 +524,11 @@ impl<'a> StandardScan<'a> {
     pub fn run(
         &self,
         candidates: &[Candidate],
+        stdin: Option<StdinInput<'_>>,
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len();
+        let n = candidates.len() + usize::from(stdin.is_some());
         let mut files = Vec::with_capacity(n);
         candidates
             .par_iter()
@@ -514,6 +539,10 @@ impl<'a> StandardScan<'a> {
                 },
             )
             .collect_into_vec(&mut files);
+        if let Some(input) = stdin {
+            let mut worker = StandardWorker::new(self, collect);
+            files.push(worker.search_stdin(input, &stop));
+        }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
         for file in files {

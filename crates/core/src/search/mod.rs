@@ -95,7 +95,7 @@ pub use output::{SearchOutput, SearchOutputFormat};
 pub use pattern::PatternCompiler;
 pub use query::Match;
 pub use query::SearchQuery;
-pub use request::{LinkTraversal, SearchCollection, WalkOptions};
+pub use request::{LinkTraversal, SearchCollection, StdinInput, WalkOptions};
 
 #[derive(Debug)]
 pub struct SearchOutcome {
