@@ -963,6 +963,8 @@ dependencies = [
  "clap",
  "criterion",
  "fslock",
+ "globset",
+ "grep-cli",
  "ignore",
  "interprocess",
  "notify",

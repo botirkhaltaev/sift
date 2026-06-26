@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::Candidate;
 use crate::index::Indexes;
 use crate::query::{CandidatePlan, CandidateSource, QueryPlanner};
-use crate::search::request::{SearchCollection, SearchExecution};
+use crate::search::request::{CandidateContent, SearchCollection, SearchExecution};
 use crate::search::{
     CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
     SearchStats,
@@ -24,6 +24,13 @@ pub struct GrepRun {
     pub hits: Vec<PathBuf>,
 }
 
+pub trait CandidateContentSource {
+    /// # Errors
+    ///
+    /// Returns an error if transformed content cannot be read for any candidate.
+    fn read(&self, candidates: &[Candidate]) -> crate::Result<Vec<CandidateContent>>;
+}
+
 /// User-facing request to the grep pipeline.
 pub struct GrepRequest<'a> {
     pub indexes: &'a Indexes,
@@ -32,6 +39,7 @@ pub struct GrepRequest<'a> {
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,
     pub candidate_source: CandidateSource<'a>,
+    pub content_source: Option<&'a dyn CandidateContentSource>,
 }
 
 impl GrepRequest<'_> {
@@ -49,20 +57,29 @@ impl GrepRequest<'_> {
         let output = self.output;
         let requirement = output.candidate_requirement();
 
-        let raw = QueryPlanner::new(spec).candidates(
-            CandidatePlan {
-                indexes: self.indexes,
-                requirement,
-                filter: self.filter,
-                source: self.candidate_source,
-            },
-            || self.filter.collect(),
-        )?;
+        let raw = if self.content_source.is_some() {
+            self.filter.collect()?
+        } else {
+            QueryPlanner::new(spec).candidates(
+                CandidatePlan {
+                    indexes: self.indexes,
+                    requirement,
+                    filter: self.filter,
+                    source: self.candidate_source,
+                },
+                || self.filter.collect(),
+            )?
+        };
 
         let candidates: Vec<Candidate> = raw
             .into_par_iter()
             .filter(|c| c.matches(self.filter))
             .collect();
+
+        let transformed = self
+            .content_source
+            .map(|source| source.read(&candidates))
+            .transpose()?;
 
         if candidates.is_empty() {
             return Ok(GrepRun {
@@ -76,6 +93,7 @@ impl GrepRequest<'_> {
 
         let (outcome, hits) = query.search(&SearchExecution {
             candidates: &candidates,
+            transformed: transformed.as_deref(),
             output,
             separators: self.separators,
             collect: self.collect.with_hits(true),

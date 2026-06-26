@@ -103,6 +103,7 @@ impl SearchQuery {
 
         let output = execution.output;
         let candidates = execution.candidates;
+        let transformed = execution.transformed;
 
         if candidates.is_empty() {
             return Ok((
@@ -127,14 +128,19 @@ impl SearchQuery {
                         output,
                         search_start,
                     );
-                    let json_matched = scan.run(candidates, stats.as_mut())?;
+                    let json_matched = scan.run(candidates, transformed, stats.as_mut())?;
                     (json_matched, stats, Vec::new())
                 }
                 _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),
             },
             SearchOutputFormat::Text => {
-                let (did_match, stats, hits) =
-                    self.run_text_output(candidates, matcher, execution, search_start)?;
+                let (did_match, stats, hits) = self.run_text_output(
+                    candidates,
+                    transformed,
+                    matcher,
+                    execution,
+                    search_start,
+                )?;
                 (did_match, stats, hits)
             }
         };
@@ -160,6 +166,7 @@ impl SearchQuery {
     fn run_text_output(
         &self,
         candidates: &[crate::Candidate],
+        transformed: Option<&[crate::search::request::CandidateContent]>,
         matcher: &RegexMatcher,
         execution: &SearchExecution<'_>,
         search_start: Instant,
@@ -177,7 +184,7 @@ impl SearchQuery {
                     execution.separators,
                     &counters,
                 );
-                scan.run(candidates, collect)?
+                scan.run(candidates, transformed, collect)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
@@ -186,16 +193,23 @@ impl SearchQuery {
                 let scan = crate::search::scan::summary::SummaryScan::new(
                     self, matcher, output, &counters,
                 );
-                scan.run(candidates, collect)?
+                scan.run(candidates, transformed, collect)?
             }
         };
 
         let bytes_searched = if collect.stats {
-            crate::Candidate::total_file_bytes(candidates)
+            transformed.map_or_else(
+                || crate::Candidate::total_file_bytes(candidates),
+                |items| items.iter().map(|item| item.bytes.len() as u64).sum(),
+            )
         } else {
             0
         };
-        let stats = counters.finish(candidates.len(), bytes_searched, search_start.elapsed());
+        let input_count = transformed.map_or(
+            candidates.len(),
+            <[crate::search::request::CandidateContent]>::len,
+        );
+        let stats = counters.finish(input_count, bytes_searched, search_start.elapsed());
 
         Ok((did_match, stats, hits))
     }

@@ -18,7 +18,7 @@ use crate::search::output::style::{
     FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
 use crate::search::query::SearchQuery;
-use crate::search::request::SearchCollection;
+use crate::search::request::{CandidateContent, SearchCollection};
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -390,6 +390,19 @@ impl<'a> StandardWorker<'a> {
     }
 
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
+        self.search_input(candidate, None, stop)
+    }
+
+    fn search_content(&mut self, content: &CandidateContent, stop: &AtomicBool) -> FileResult {
+        self.search_input(&content.candidate, Some(&content.bytes), stop)
+    }
+
+    fn search_input(
+        &mut self,
+        candidate: &Candidate,
+        bytes: Option<&[u8]>,
+        stop: &AtomicBool,
+    ) -> FileResult {
         self.bytes.clear();
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -416,9 +429,13 @@ impl<'a> StandardWorker<'a> {
                 self.replace.as_deref(),
                 self.sink_config,
             );
-            let _ = self
-                .searcher
-                .search_path(self.matcher, candidate.abs_path(), &mut sink);
+            if let Some(bytes) = bytes {
+                let _ = self.searcher.search_slice(self.matcher, bytes, &mut sink);
+            } else {
+                let _ = self
+                    .searcher
+                    .search_path(self.matcher, candidate.abs_path(), &mut sink);
+            }
             let n = sink.match_count;
             if let Some(c) = self.match_counter {
                 c.fetch_add(n, Ordering::Relaxed);
@@ -500,20 +517,33 @@ impl<'a> StandardScan<'a> {
     pub fn run(
         &self,
         candidates: &[Candidate],
+        transformed: Option<&[CandidateContent]>,
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len();
+        let n = transformed.map_or(candidates.len(), <[CandidateContent]>::len);
         let mut files = Vec::with_capacity(n);
-        candidates
-            .par_iter()
-            .map_init(
-                || StandardWorker::new(self, collect),
-                |worker: &mut StandardWorker<'_>, candidate: &Candidate| {
-                    worker.search_candidate(candidate, &stop)
-                },
-            )
-            .collect_into_vec(&mut files);
+        if let Some(transformed) = transformed {
+            transformed
+                .par_iter()
+                .map_init(
+                    || StandardWorker::new(self, collect),
+                    |worker: &mut StandardWorker<'_>, content: &CandidateContent| {
+                        worker.search_content(content, &stop)
+                    },
+                )
+                .collect_into_vec(&mut files);
+        } else {
+            candidates
+                .par_iter()
+                .map_init(
+                    || StandardWorker::new(self, collect),
+                    |worker: &mut StandardWorker<'_>, candidate: &Candidate| {
+                        worker.search_candidate(candidate, &stop)
+                    },
+                )
+                .collect_into_vec(&mut files);
+        }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
         for file in files {

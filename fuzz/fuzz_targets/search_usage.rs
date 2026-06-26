@@ -94,6 +94,7 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
+        content_source: None,
     };
     let _ = request.run(&q);
 }

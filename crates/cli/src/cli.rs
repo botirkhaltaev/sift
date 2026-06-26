@@ -10,6 +10,7 @@ use crate::grep::ignore::{
     IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreVcsDecl,
     MessagesDecl, UnrestrictedDecl,
 };
+use crate::grep::input::ContentConfig;
 use crate::grep::output::OutputConfig;
 use crate::grep::output::{
     ColumnDecl, ColumnsDecl, ExtraOutputDecl, FilenameDecl, HeadingDecl, JsonDecl, LineNumberDecl,
@@ -162,6 +163,11 @@ impl Cli {
             } else {
                 GrepMode::Search
             },
+            content: ContentConfig {
+                search_zip: self.engine_decl.content.search_zip,
+                pre: self.engine_decl.content.pre.clone(),
+                pre_globs: self.engine_decl.content.pre_glob.clone(),
+            },
         }
     }
 
@@ -214,6 +220,7 @@ impl Cli {
                 let one_file_system = self.walker_decl.one_file_system;
                 let threads = self.threading.threads;
                 let path_separator = self.threading.path_separator;
+                let content = self.engine_decl.content.clone();
                 let mode = if self.filter_decl.files {
                     GrepMode::ListFiles
                 } else {
@@ -252,6 +259,11 @@ impl Cli {
                     search_paths,
                     threads,
                     mode,
+                    content: ContentConfig {
+                        search_zip: content.search_zip,
+                        pre: content.pre,
+                        pre_globs: content.pre_glob,
+                    },
                 });
 
                 let suppress_errors = SearchFilterCtx::resolve(argv)

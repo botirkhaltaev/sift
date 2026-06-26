@@ -70,6 +70,7 @@ fn run_grep(
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
+        content_source: None,
     }
     .run(query)
     .unwrap()

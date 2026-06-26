@@ -15,7 +15,7 @@ use crate::search::output::SearchOutput;
 use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::search::output::style::FilenameMode;
 use crate::search::query::SearchQuery;
-use crate::search::request::SearchCollection;
+use crate::search::request::{CandidateContent, SearchCollection};
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -126,6 +126,22 @@ fn summary_search_file(
     sink.finish()
 }
 
+fn summary_search_slice(
+    searcher: &mut Searcher,
+    matcher: &RegexMatcher,
+    mode: SearchMode,
+    bytes: &[u8],
+) -> FileSummary {
+    let sink_matcher = if mode == SearchMode::CountMatches {
+        Some(matcher.clone())
+    } else {
+        None
+    };
+    let mut sink = SummarySink::new(mode, sink_matcher);
+    let _ = searcher.search_slice(matcher, bytes, &mut sink);
+    sink.finish()
+}
+
 fn write_summary_record(
     out: &mut Vec<u8>,
     output: SearchOutput,
@@ -211,6 +227,19 @@ impl<'a> SummaryWorker<'a> {
     }
 
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
+        self.search_input(candidate, None, stop)
+    }
+
+    fn search_content(&mut self, content: &CandidateContent, stop: &AtomicBool) -> FileResult {
+        self.search_input(&content.candidate, Some(&content.bytes), stop)
+    }
+
+    fn search_input(
+        &mut self,
+        candidate: &Candidate,
+        bytes: Option<&[u8]>,
+        stop: &AtomicBool,
+    ) -> FileResult {
         if stop.load(Ordering::SeqCst) {
             return FileResult {
                 output: ChunkOutput::empty(),
@@ -219,12 +248,16 @@ impl<'a> SummaryWorker<'a> {
             };
         }
 
-        let result = summary_search_file(
-            &mut self.searcher,
-            self.matcher,
-            self.output.mode,
-            candidate.abs_path(),
-        );
+        let result = if let Some(bytes) = bytes {
+            summary_search_slice(&mut self.searcher, self.matcher, self.output.mode, bytes)
+        } else {
+            summary_search_file(
+                &mut self.searcher,
+                self.matcher,
+                self.output.mode,
+                candidate.abs_path(),
+            )
+        };
         if let Some(c) = self.summary_counter {
             c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
         }
@@ -284,20 +317,33 @@ impl<'a> SummaryScan<'a> {
     pub fn run(
         &self,
         candidates: &[Candidate],
+        transformed: Option<&[CandidateContent]>,
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len();
+        let n = transformed.map_or(candidates.len(), <[CandidateContent]>::len);
         let mut files = Vec::with_capacity(n);
-        candidates
-            .par_iter()
-            .map_init(
-                || SummaryWorker::new(self, collect),
-                |worker: &mut SummaryWorker<'_>, candidate: &Candidate| {
-                    worker.search_candidate(candidate, &stop)
-                },
-            )
-            .collect_into_vec(&mut files);
+        if let Some(transformed) = transformed {
+            transformed
+                .par_iter()
+                .map_init(
+                    || SummaryWorker::new(self, collect),
+                    |worker: &mut SummaryWorker<'_>, content: &CandidateContent| {
+                        worker.search_content(content, &stop)
+                    },
+                )
+                .collect_into_vec(&mut files);
+        } else {
+            candidates
+                .par_iter()
+                .map_init(
+                    || SummaryWorker::new(self, collect),
+                    |worker: &mut SummaryWorker<'_>, candidate: &Candidate| {
+                        worker.search_candidate(candidate, &stop)
+                    },
+                )
+                .collect_into_vec(&mut files);
+        }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
         let mut any_match = false;

@@ -15,6 +15,18 @@ pub struct EngineDecl {
     pub regex_size_limit: Option<String>,
     #[arg(long = "dfa-size-limit", value_name = "NUM+SUFFIX?")]
     pub dfa_size_limit: Option<String>,
+    #[command(flatten)]
+    pub content: ContentDecl,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct ContentDecl {
+    #[arg(short = 'z', long = "search-zip")]
+    pub search_zip: bool,
+    #[arg(long = "pre", value_name = "COMMAND")]
+    pub pre: Option<String>,
+    #[arg(long = "pre-glob", value_name = "GLOB")]
+    pub pre_glob: Vec<String>,
 }
 
 /// Threading and output-buffering flags.
@@ -91,6 +103,26 @@ mod tests {
     fn engine_dfa_size_limit() {
         let cli = Cli::try_parse_from(["sift", "--dfa-size-limit", "50M", "pat"]).unwrap();
         assert_eq!(cli.engine_decl.dfa_size_limit.as_deref(), Some("50M"));
+    }
+
+    #[test]
+    fn engine_search_zip_flag() {
+        let cli = Cli::try_parse_from(["sift", "--search-zip", "pat"]).unwrap();
+        assert!(cli.engine_decl.content.search_zip);
+    }
+
+    #[test]
+    fn engine_search_zip_short_flag() {
+        let cli = Cli::try_parse_from(["sift", "-z", "pat"]).unwrap();
+        assert!(cli.engine_decl.content.search_zip);
+    }
+
+    #[test]
+    fn engine_preprocessor_flags() {
+        let cli =
+            Cli::try_parse_from(["sift", "--pre", "upper", "--pre-glob", "*.txt", "pat"]).unwrap();
+        assert_eq!(cli.engine_decl.content.pre.as_deref(), Some("upper"));
+        assert_eq!(cli.engine_decl.content.pre_glob, ["*.txt"]);
     }
 
     #[test]

@@ -2,6 +2,12 @@ use crate::Candidate;
 use crate::search::output::SearchOutput;
 use crate::search::output::style::SearchSeparators;
 
+#[derive(Clone)]
+pub struct CandidateContent {
+    pub candidate: Candidate,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkTraversal {
     #[default]
@@ -20,6 +26,7 @@ pub struct WalkOptions {
 #[derive(Clone)]
 pub struct SearchExecution<'a> {
     pub candidates: &'a [Candidate],
+    pub transformed: Option<&'a [CandidateContent]>,
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,
