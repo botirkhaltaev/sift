@@ -8,14 +8,14 @@ use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
 use crate::Candidate;
-use crate::search::emit::format::{ANSI_LINE, ANSI_PATH, ANSI_RESET};
+use crate::search::emit::format::ANSI_RESET;
 use crate::search::emit::result::{ChunkOutput, FileResult};
 use crate::search::emit::stats::TextStatsCounters;
 use crate::search::output::SearchOutput;
 use crate::search::output::format::ColumnAction;
 use crate::search::output::mode::OutputEmission;
 use crate::search::output::style::{
-    FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
+    AnsiStyle, FilenameMode, HyperlinkValues, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
 use crate::search::query::SearchQuery;
 use crate::search::request::SearchCollection;
@@ -26,11 +26,19 @@ pub struct SinkConfig {
     pub after_context: usize,
 }
 
+pub struct SinkTarget<'a> {
+    pub display_path: String,
+    pub hyperlink_path: String,
+    pub bytes: &'a mut Vec<u8>,
+    pub separators: &'a SearchSeparators,
+}
+
 pub struct StandardSink<'a> {
     matcher: &'a RegexMatcher,
     output: SearchOutput,
     show_line_numbers: bool,
     display_path: String,
+    hyperlink_path: String,
     bytes: &'a mut Vec<u8>,
     separators: &'a SearchSeparators,
     matched: bool,
@@ -40,28 +48,35 @@ pub struct StandardSink<'a> {
 }
 
 impl<'a> StandardSink<'a> {
-    pub const fn new(
+    #[must_use]
+    pub fn new(
         matcher: &'a RegexMatcher,
         output: SearchOutput,
-        display_path: String,
-        bytes: &'a mut Vec<u8>,
-        separators: &'a SearchSeparators,
+        target: SinkTarget<'a>,
         replace: Option<&'a str>,
         config: SinkConfig,
     ) -> Self {
+        let SinkTarget {
+            display_path,
+            hyperlink_path,
+            bytes,
+            separators,
+        } = target;
+        let show_line_numbers =
+            output.lines.line_number() || config.before_context > 0 || config.after_context > 0;
+        let trim = output.lines.trim();
         Self {
             matcher,
             output,
-            show_line_numbers: output.lines.line_number()
-                || config.before_context > 0
-                || config.after_context > 0,
+            show_line_numbers,
             display_path,
+            hyperlink_path,
             bytes,
             separators,
             matched: false,
             match_count: 0,
             replace,
-            trim: output.lines.trim(),
+            trim,
         }
     }
 }
@@ -276,42 +291,44 @@ impl StandardSink<'_> {
         };
         if print_filename {
             if color {
-                self.bytes.extend_from_slice(ANSI_PATH);
+                self.write_style_start(self.output.records.colors.path);
             }
+            self.start_hyperlink(line_number, column)?;
             write!(self.bytes, "{}", self.display_path)?;
+            self.end_hyperlink();
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
             self.bytes.extend_from_slice(field_sep);
         }
         if self.show_line_numbers {
             if color {
-                self.bytes.extend_from_slice(ANSI_LINE);
+                self.write_style_start(self.output.records.colors.line);
             }
             write!(self.bytes, "{}", line_number.unwrap_or(0))?;
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
             self.bytes.extend_from_slice(field_sep);
         }
         if let Some(col) = column {
             if color {
-                self.bytes.extend_from_slice(ANSI_LINE);
+                self.write_style_start(self.output.records.colors.column);
             }
             write!(self.bytes, "{col}")?;
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
             self.bytes.extend_from_slice(field_sep);
         }
         if let Some(offset) = byte_offset {
             if color {
-                self.bytes.extend_from_slice(ANSI_LINE);
+                self.write_style_start(self.output.records.colors.line);
             }
             let sep = if is_context_line { '-' } else { ':' };
             write!(self.bytes, "{offset}{sep}")?;
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
         }
         Ok(())
@@ -332,12 +349,68 @@ impl StandardSink<'_> {
                 self.bytes.write_all(b"\n")?;
             }
         } else {
-            self.bytes.write_all(line_bytes)?;
+            self.write_matched_line(line_bytes)?;
             if !line_bytes.ends_with(b"\n") {
                 self.bytes.write_all(b"\n")?;
             }
         }
         Ok(true)
+    }
+
+    fn write_matched_line(&mut self, line_bytes: &[u8]) -> io::Result<()> {
+        if !self.output.records.should_color() {
+            return self.bytes.write_all(line_bytes);
+        }
+        let mut spans = Vec::new();
+        self.matcher
+            .find_iter(line_bytes, |m: grep_matcher::Match| {
+                spans.push((m.start(), m.end()));
+                true
+            })
+            .map_err(io::Error::other)?;
+        let mut cursor = 0;
+        for (start, end) in spans {
+            self.bytes.write_all(&line_bytes[cursor..start])?;
+            self.write_style_start(self.output.records.colors.matched);
+            self.bytes.write_all(&line_bytes[start..end])?;
+            self.write_style_end();
+            cursor = end;
+        }
+        self.bytes.write_all(&line_bytes[cursor..])
+    }
+
+    fn write_style_start(&mut self, style: AnsiStyle) {
+        if style.is_plain() {
+            self.bytes.extend_from_slice(b"\x1b[0m");
+        } else {
+            style.write_start(self.bytes);
+        }
+    }
+
+    fn write_style_end(&mut self) {
+        self.bytes.extend_from_slice(ANSI_RESET);
+    }
+
+    fn start_hyperlink(
+        &mut self,
+        line_number: Option<u64>,
+        column: Option<usize>,
+    ) -> io::Result<()> {
+        if let Some(link) = self.output.records.hyperlink.render(HyperlinkValues {
+            path: &self.hyperlink_path,
+            line: line_number,
+            column,
+            host: self.output.records.hyperlink_host.as_deref(),
+        }) {
+            write!(self.bytes, "\x1b]8;;{link}\x1b\\")?;
+        }
+        Ok(())
+    }
+
+    fn end_hyperlink(&mut self) {
+        if !self.output.records.hyperlink.is_empty() {
+            self.bytes.extend_from_slice(b"\x1b]8;;\x1b\\");
+        }
     }
 }
 
@@ -369,7 +442,7 @@ impl<'a> StandardWorker<'a> {
                 true,
             ),
             matcher: scan.matcher,
-            output: scan.output,
+            output: scan.output.clone(),
             separators: scan.separators,
             bytes: Vec::new(),
             match_counter: scan.counters.primary(),
@@ -379,7 +452,7 @@ impl<'a> StandardWorker<'a> {
                 before_context: scan.search.opts().before_context,
                 after_context: scan.search.opts().after_context,
             },
-            records: scan.output.records,
+            records: scan.output.records.clone(),
             lines_flags: scan.output.lines.flags,
             filename_mode: scan.output.lines.filename_mode,
             path_display: scan.output.lines.path_display,
@@ -402,17 +475,21 @@ impl<'a> StandardWorker<'a> {
         let matched = {
             let heading = self.lines_flags.contains(LineStyleFlags::HEADING)
                 && self.filename_mode != FilenameMode::Never;
-            let mut sink_output = self.output;
+            let mut sink_output = self.output.clone();
             if heading {
                 sink_output.lines.filename_mode = FilenameMode::Never;
             }
             let display = candidate.display_path(self.path_display, self.path_separator);
+            let hyperlink_path = candidate.abs_path().display().to_string();
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
-                display,
-                &mut self.bytes,
-                self.separators,
+                SinkTarget {
+                    display_path: display,
+                    hyperlink_path,
+                    bytes: &mut self.bytes,
+                    separators: self.separators,
+                },
                 self.replace.as_deref(),
                 self.sink_config,
             );
@@ -444,7 +521,7 @@ impl<'a> StandardWorker<'a> {
                 {
                     let mut out = Vec::new();
                     if self.records.should_color() {
-                        out.extend_from_slice(ANSI_PATH);
+                        self.records.colors.path.write_start(&mut out);
                     }
                     let display = candidate.display_path(self.path_display, self.path_separator);
                     let _ = write!(out, "{display}");
@@ -524,7 +601,11 @@ impl<'a> StandardScan<'a> {
             }
             outputs.push(file.output);
         }
-        let any_match = ChunkOutput::flush_all(outputs, self.counters.bytes_printed())?;
+        let any_match = ChunkOutput::flush_all(
+            outputs,
+            self.counters.bytes_printed(),
+            self.output.records.buffering,
+        )?;
         Ok((any_match, hits))
     }
 }

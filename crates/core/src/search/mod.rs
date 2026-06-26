@@ -88,8 +88,9 @@ pub use output::format::{ColumnLimit, ColumnOverflow};
 pub use output::mode::{MatchEmissionMode, OutputEmission, SearchMode, ZeroCountMode};
 pub use output::passthru::PassthruMode;
 pub use output::style::{
-    ColorChoice, FilenameMode, LineStyleFlags, PathDisplay, RecordTerminator, SearchLineStyle,
-    SearchRecordStyle, SearchSeparators,
+    ColorChoice, ColorSpecs, FilenameMode, HyperlinkFormat, HyperlinkValues, LineStyleFlags,
+    OutputBuffering, PathDisplay, RecordTerminator, SearchLineStyle, SearchRecordStyle,
+    SearchSeparators,
 };
 pub use output::{SearchOutput, SearchOutputFormat};
 pub use pattern::PatternCompiler;

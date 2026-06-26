@@ -242,7 +242,9 @@ impl Grep {
                 _ => FilenameContext::DirectoryCorpus,
             }
         };
-        let output = out.to_core_output(&self.config.output, filename_ctx);
+        let output = out
+            .to_core_output(&self.config.output, filename_ctx)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let snapshot = daemon
             .and_then(|daemon| {
                 session

@@ -1,10 +1,11 @@
 use clap::{ArgAction, Args};
 use sift_core::search::{
-    ColorChoice, FilenameMode, LineStyleFlags, OutputEmission, PassthruMode, SearchLineStyle,
-    SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
-    ZeroCountMode,
+    ColorChoice, ColorSpecs, FilenameMode, HyperlinkFormat, LineStyleFlags, OutputBuffering,
+    OutputEmission, PassthruMode, SearchLineStyle, SearchMode, SearchOutput, SearchOutputFormat,
+    SearchRecordStyle, SearchSeparators, SearchStats, ZeroCountMode,
 };
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Describes the filename display context for deciding whether to show paths.
 #[derive(Clone, Copy)]
@@ -25,6 +26,9 @@ pub struct OutputConfig {
     pub extra: ExtraOutputDecl,
     pub replace_trim: bool,
     pub path_separator: Option<String>,
+    pub colors: Vec<String>,
+    pub hyperlink_format: Option<String>,
+    pub hostname_bin: Option<String>,
     pub line_number: bool,
     pub separators: SeparatorDecl,
     pub search_paths: Vec<PathBuf>,
@@ -182,6 +186,7 @@ pub struct SearchLineResolveCtx {
 pub struct SearchFormatCtx {
     pub null_data: bool,
     pub color: ColorChoice,
+    pub buffering: OutputBuffering,
 }
 
 #[derive(Clone, Copy)]
@@ -230,6 +235,7 @@ pub struct OutputArgv {
     pub mode: OutputModeFlags,
     pub path: OutputPathFlags,
     pub color: ColorChoice,
+    pub buffering: OutputBuffering,
     pub line_number: Option<bool>,
     pub with_filename: Option<bool>,
 }
@@ -249,6 +255,7 @@ impl OutputArgv {
                 null_data: Self::null_data(tokens),
             },
             color: Self::color(tokens),
+            buffering: Self::buffering(tokens),
             line_number: Self::line_number(tokens),
             with_filename: Self::with_filename(tokens),
         }
@@ -308,6 +315,25 @@ impl OutputArgv {
                 continue;
             }
             i += 1;
+        }
+        result
+    }
+
+    fn buffering(args: &[String]) -> OutputBuffering {
+        let mut last_idx = 0usize;
+        let mut result = OutputBuffering::Auto;
+        for (i, arg) in args.iter().enumerate() {
+            let value = match arg.as_str() {
+                "--line-buffered" => Some(OutputBuffering::Line),
+                "--block-buffered" => Some(OutputBuffering::Block),
+                _ => None,
+            };
+            if let Some(value) = value
+                && i >= last_idx
+            {
+                last_idx = i;
+                result = value;
+            }
         }
         result
     }
@@ -426,7 +452,7 @@ impl OutputArgv {
 fn parse_color_when(s: &str) -> ColorChoice {
     match s {
         "never" => ColorChoice::Never,
-        "always" => ColorChoice::Always,
+        "always" | "ansi" => ColorChoice::Always,
         _ => ColorChoice::Auto,
     }
 }
@@ -453,6 +479,24 @@ fn unescape_separator(s: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+fn resolve_hostname(hostname_bin: Option<&str>) -> Result<Option<String>, String> {
+    let Some(command) = hostname_bin else {
+        return Ok(None);
+    };
+    let output = Command::new(command)
+        .output()
+        .map_err(|e| format!("failed to run --hostname-bin '{command}': {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "--hostname-bin '{command}' exited with status {}",
+            output.status
+        ));
+    }
+    let host = String::from_utf8(output.stdout)
+        .map_err(|e| format!("--hostname-bin '{command}' emitted invalid UTF-8: {e}"))?;
+    Ok(Some(host.trim_end_matches(['\r', '\n']).to_string()))
 }
 
 impl SearchOutputCtx {
@@ -496,6 +540,7 @@ impl SearchOutputCtx {
             format: SearchFormatCtx {
                 null_data: output_argv.path.null_data,
                 color: effective_color,
+                buffering: output_argv.buffering,
             },
             output_format: if output_argv.mode.json {
                 SearchOutputFormat::Json
@@ -522,12 +567,15 @@ impl SearchOutputCtx {
         (out, filter)
     }
 
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns an error when color specs are invalid, hyperlink formats are invalid,
+    /// or the hostname command fails.
     pub fn to_core_output(
         &self,
         config: &OutputConfig,
         filename_ctx: FilenameContext,
-    ) -> SearchOutput {
+    ) -> Result<SearchOutput, String> {
         use super::paths::CorpusScope;
         let path_display = CorpusScope::path_display(&config.search_paths);
         let line_number = Self::effective_line_number(
@@ -536,7 +584,10 @@ impl SearchOutputCtx {
             self.output_format,
         );
         let line_flags = Self::line_style_flags(self, line_number);
-        Self::core_output(
+        let colors = ColorSpecs::from_specs(&config.colors)?;
+        let hyperlink = HyperlinkFormat::parse(config.hyperlink_format.as_deref())?;
+        let hyperlink_host = resolve_hostname(config.hostname_bin.as_deref())?;
+        Ok(Self::core_output(
             self.output_format,
             self.mode.effective_mode,
             self.mode.quiet,
@@ -561,9 +612,13 @@ impl SearchOutputCtx {
                 },
                 color: self.format.color,
                 path_separator: self.path_separator,
+                colors,
+                hyperlink,
+                hyperlink_host,
+                buffering: self.format.buffering,
             },
             self.record.include_zero,
-        )
+        ))
     }
 
     pub fn write_stats(stats: &SearchStats) {

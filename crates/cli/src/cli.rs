@@ -141,6 +141,9 @@ impl Cli {
             extra: self.extra_output.clone(),
             replace_trim: self.replace_decl.trim,
             path_separator: self.threading.path_separator.clone(),
+            colors: self.engine_decl.colors.clone(),
+            hyperlink_format: self.engine_decl.hyperlink_format.clone(),
+            hostname_bin: self.engine_decl.hostname_bin.clone(),
             line_number: self.line_number_decl.line_number,
             separators: self.separator_decl.clone(),
             search_paths: search_paths.to_vec(),
@@ -214,6 +217,9 @@ impl Cli {
                 let one_file_system = self.walker_decl.one_file_system;
                 let threads = self.threading.threads;
                 let path_separator = self.threading.path_separator;
+                let colors = self.engine_decl.colors.clone();
+                let hyperlink_format = self.engine_decl.hyperlink_format.clone();
+                let hostname_bin = self.engine_decl.hostname_bin.clone();
                 let mode = if self.filter_decl.files {
                     GrepMode::ListFiles
                 } else {
@@ -244,6 +250,9 @@ impl Cli {
                         extra: self.extra_output,
                         replace_trim,
                         path_separator,
+                        colors,
+                        hyperlink_format,
+                        hostname_bin,
                         line_number,
                         separators: self.separator_decl,
                         search_paths: search_paths.clone(),

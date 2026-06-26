@@ -1,6 +1,8 @@
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::search::output::style::OutputBuffering;
+
 pub struct FileResult {
     pub output: ChunkOutput,
     pub json_stats: Option<grep_printer::Stats>,
@@ -29,8 +31,18 @@ impl ChunkOutput {
     pub fn flush_all(
         outputs: impl IntoIterator<Item = Self>,
         bytes_printed: Option<&AtomicU64>,
+        buffering: OutputBuffering,
     ) -> crate::Result<bool> {
-        let mut stdout = io::stdout().lock();
+        let stdout = io::stdout();
+        let mut locked = stdout.lock();
+        let mut block;
+        let writer: &mut dyn Write = match buffering {
+            OutputBuffering::Block => {
+                block = io::BufWriter::new(locked);
+                &mut block
+            }
+            OutputBuffering::Auto | OutputBuffering::Line => &mut locked,
+        };
         let mut any_match = false;
         let mut emitted = false;
         for output in outputs {
@@ -39,18 +51,25 @@ impl ChunkOutput {
                 continue;
             }
             if output.heading && emitted {
-                stdout.write_all(b"\n")?;
+                writer.write_all(b"\n")?;
                 if let Some(p) = bytes_printed {
                     p.fetch_add(1, Ordering::Relaxed);
+                }
+                if matches!(buffering, OutputBuffering::Line) {
+                    writer.flush()?;
                 }
             }
             let n = output.bytes.len() as u64;
             if let Some(p) = bytes_printed {
                 p.fetch_add(n, Ordering::Relaxed);
             }
-            stdout.write_all(&output.bytes)?;
+            writer.write_all(&output.bytes)?;
+            if matches!(buffering, OutputBuffering::Line) {
+                writer.flush()?;
+            }
             emitted = true;
         }
+        writer.flush()?;
         Ok(any_match)
     }
 }

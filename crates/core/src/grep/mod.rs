@@ -46,7 +46,7 @@ impl GrepRequest<'_> {
         }
 
         let spec = query.build_query_spec();
-        let output = self.output;
+        let output = self.output.clone();
         let requirement = output.candidate_requirement();
 
         let raw = QueryPlanner::new(spec).candidates(

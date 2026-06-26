@@ -16,7 +16,7 @@ pub enum SearchOutputFormat {
     Json,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SearchOutput {
     pub format: SearchOutputFormat,
     pub mode: SearchMode,
@@ -30,7 +30,7 @@ pub struct SearchOutput {
 impl SearchOutput {
     /// Whether search needs complete candidate coverage or only potential matches.
     #[must_use]
-    pub(crate) const fn candidate_requirement(self) -> CandidateRequirement {
+    pub(crate) const fn candidate_requirement(&self) -> CandidateRequirement {
         match self.mode {
             SearchMode::Count | SearchMode::FilesWithoutMatch => CandidateRequirement::Complete,
             SearchMode::CountMatches if matches!(self.include_zero, ZeroCountMode::Include) => {

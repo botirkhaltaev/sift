@@ -101,7 +101,7 @@ impl SearchQuery {
             return Err(SearchError::InvalidMaxCount.into());
         }
 
-        let output = execution.output;
+        let output = execution.output.clone();
         let candidates = execution.candidates;
 
         if candidates.is_empty() {
@@ -164,7 +164,7 @@ impl SearchQuery {
         execution: &SearchExecution<'_>,
         search_start: Instant,
     ) -> crate::Result<(bool, Option<SearchStats>, Vec<PathBuf>)> {
-        let output = execution.output;
+        let output = execution.output.clone();
         let collect = execution.collect;
         let counters = TextStatsCounters::new(collect.stats);
 

@@ -39,7 +39,7 @@ impl<'a> JsonWorker<'a> {
                 .search
                 .build_searcher(true, scan.search.opts().max_results, true),
             matcher: scan.matcher,
-            output: scan.output,
+            output: scan.output.clone(),
         }
     }
 
@@ -157,7 +157,11 @@ impl<'a> JsonScan<'a> {
             }
             outputs.push(f.output);
         }
-        let any_match = ChunkOutput::flush_all(outputs, None)?;
+        let any_match = ChunkOutput::flush_all(
+            outputs,
+            None,
+            crate::search::output::style::OutputBuffering::Auto,
+        )?;
         let summary_line = format_json_summary_line(self.wall_start.elapsed(), &merged)?;
         let summary_bytes = summary_line.len() as u64 + 1;
         let mut stdout = std::io::stdout().lock();

@@ -8,7 +8,7 @@ use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
 use crate::Candidate;
-use crate::search::emit::format::{ANSI_PATH, ANSI_RESET};
+use crate::search::emit::format::ANSI_RESET;
 use crate::search::emit::result::{ChunkOutput, FileResult};
 use crate::search::emit::stats::TextStatsCounters;
 use crate::search::output::SearchOutput;
@@ -128,14 +128,14 @@ fn summary_search_file(
 
 fn write_summary_record(
     out: &mut Vec<u8>,
-    output: SearchOutput,
+    output: &SearchOutput,
     display_path: &str,
     result: FileSummary,
 ) -> io::Result<()> {
     if output.emission == OutputEmission::Quiet {
         return Ok(());
     }
-    let records = output.records;
+    let records = &output.records;
     match output.mode {
         SearchMode::Count | SearchMode::CountMatches => {
             if result.count == 0 && matches!(output.include_zero, ZeroCountMode::Omit) {
@@ -144,7 +144,7 @@ fn write_summary_record(
             let print_filename = output.lines.filename_mode != FilenameMode::Never;
             if print_filename {
                 if records.should_color() {
-                    out.extend_from_slice(ANSI_PATH);
+                    records.colors.path.write_start(out);
                 }
                 write!(out, "{display_path}")?;
                 if records.should_color() {
@@ -159,7 +159,7 @@ fn write_summary_record(
         SearchMode::FilesWithMatches => {
             if result.matched {
                 if records.should_color() {
-                    out.extend_from_slice(ANSI_PATH);
+                    records.colors.path.write_start(out);
                 }
                 write!(out, "{display_path}")?;
                 if records.should_color() {
@@ -174,7 +174,7 @@ fn write_summary_record(
                 return Ok(());
             }
             if records.should_color() {
-                out.extend_from_slice(ANSI_PATH);
+                records.colors.path.write_start(out);
             }
             write!(out, "{display_path}")?;
             if records.should_color() {
@@ -203,7 +203,7 @@ impl<'a> SummaryWorker<'a> {
                 .search
                 .build_searcher(false, scan.search.opts().max_results, false),
             matcher: scan.matcher,
-            output: scan.output,
+            output: scan.output.clone(),
             summary_counter: scan.counters.primary(),
             files_with_matches: scan.counters.files_with_matches(),
             collect_hits: collect.hits,
@@ -239,7 +239,7 @@ impl<'a> SummaryWorker<'a> {
             self.output.lines.path_display,
             self.output.records.path_separator,
         );
-        let _ = write_summary_record(&mut bytes, self.output, &display, result);
+        let _ = write_summary_record(&mut bytes, &self.output, &display, result);
         if self.output.emission == OutputEmission::Quiet && result.is_success(self.output.mode) {
             stop.store(true, Ordering::SeqCst);
         }
@@ -310,7 +310,11 @@ impl<'a> SummaryScan<'a> {
             any_match |= file.output.matched;
             outputs.push(file.output);
         }
-        ChunkOutput::flush_all(outputs, self.counters.bytes_printed())?;
+        ChunkOutput::flush_all(
+            outputs,
+            self.counters.bytes_printed(),
+            self.output.records.buffering,
+        )?;
         Ok((any_match, hits))
     }
 }
