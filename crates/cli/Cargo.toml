@@ -42,6 +42,7 @@ thiserror = "2"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
+serde_json = "1"
 tempfile = "3"
 
 [[bench]]

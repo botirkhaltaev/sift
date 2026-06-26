@@ -967,6 +967,7 @@ dependencies = [
  "interprocess",
  "notify",
  "rayon",
+ "serde_json",
  "sift-core",
  "tempfile",
  "thiserror",

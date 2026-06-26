@@ -479,7 +479,12 @@ impl SearchOutputCtx {
         } else {
             output_argv.color
         };
-        let print_stats = output_argv.mode.stats || output_argv.mode.json;
+        let json_format = output_argv.mode.json
+            && matches!(
+                effective_mode,
+                SearchMode::Standard | SearchMode::OnlyMatching
+            );
+        let print_stats = output_argv.mode.stats || json_format;
 
         let out = Self {
             mode: SearchModeCtx {
@@ -497,7 +502,7 @@ impl SearchOutputCtx {
                 null_data: output_argv.path.null_data,
                 color: effective_color,
             },
-            output_format: if output_argv.mode.json {
+            output_format: if json_format {
                 SearchOutputFormat::Json
             } else {
                 SearchOutputFormat::Text

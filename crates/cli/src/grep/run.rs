@@ -204,20 +204,6 @@ impl Grep {
                 output_argv.line_number
             };
 
-        if output_argv.mode.json {
-            match effective_mode {
-                SearchMode::Count
-                | SearchMode::CountMatches
-                | SearchMode::FilesWithMatches
-                | SearchMode::FilesWithoutMatch => {
-                    anyhow::bail!(
-                        "sift: --json cannot be used with --count, --count-matches, --files-with-matches, or --files-without-match"
-                    );
-                }
-                SearchMode::Standard | SearchMode::OnlyMatching => {}
-            }
-        }
-
         let session = self.prepare_session(argv)?;
 
         let opts = self
