@@ -5,7 +5,6 @@ use std::{io, path::Path};
 
 #[cfg(test)]
 use grep_matcher::Matcher;
-use grep_regex::RegexMatcher;
 use std::sync::OnceLock;
 
 #[cfg(test)]
@@ -26,8 +25,9 @@ use crate::search::output::SearchOutputFormat;
 use crate::search::output::mode::MatchEmissionMode;
 use crate::search::output::mode::SearchMode;
 use crate::search::request::SearchExecution;
+use matcher::SearchMatcher;
 
-pub mod matcher;
+pub(crate) mod matcher;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
@@ -40,7 +40,7 @@ pub struct Match {
 pub struct SearchQuery {
     patterns: Vec<String>,
     opts: SearchOptions,
-    matcher: OnceLock<RegexMatcher>,
+    matcher: OnceLock<SearchMatcher>,
 }
 
 impl SearchQuery {
@@ -148,7 +148,7 @@ impl SearchQuery {
         ))
     }
 
-    fn resolve_matcher(&self) -> Result<&RegexMatcher, SearchError> {
+    fn resolve_matcher(&self) -> Result<&SearchMatcher, SearchError> {
         if let Some(m) = self.matcher.get() {
             return Ok(m);
         }
@@ -160,7 +160,7 @@ impl SearchQuery {
     fn run_text_output(
         &self,
         candidates: &[crate::Candidate],
-        matcher: &RegexMatcher,
+        matcher: &SearchMatcher,
         execution: &SearchExecution<'_>,
         search_start: Instant,
     ) -> crate::Result<(bool, Option<SearchStats>, Vec<PathBuf>)> {
@@ -305,13 +305,13 @@ impl SearchQuery {
 struct CollectSink {
     path: PathBuf,
     emission: MatchEmissionMode,
-    matcher: RegexMatcher,
+    matcher: SearchMatcher,
     matches: Vec<crate::search::Match>,
 }
 
 #[cfg(test)]
 impl CollectSink {
-    fn new(path: PathBuf, emission: MatchEmissionMode, matcher: RegexMatcher) -> Self {
+    fn new(path: PathBuf, emission: MatchEmissionMode, matcher: SearchMatcher) -> Self {
         Self {
             path,
             emission,

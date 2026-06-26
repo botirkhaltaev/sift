@@ -34,6 +34,7 @@ bitflags = "2"
 clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 fslock = "0.2"
+grep-pcre2 = "0.1"
 interprocess = "2"
 notify = "9.0.0-rc.4"
 rayon = "1"

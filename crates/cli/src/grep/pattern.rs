@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
-use sift_core::search::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions};
+use sift_core::search::{
+    BinaryMode, CaseMode, RegexEngine, SearchMatchFlags, SearchMode, SearchOptions,
+};
 
 use super::argv::Argv;
 use super::engine::{EngineDecl, MultilineDecl};
@@ -103,21 +105,22 @@ impl PatternConfig {
         if self.multiline.crlf {
             opts.flags |= SearchMatchFlags::CRLF;
         }
-        if self.engine.no_unicode {
+        if self.engine.unicode.no_unicode {
             opts.unicode = false;
-        } else if self.engine.unicode {
+        } else if self.engine.unicode.unicode {
             opts.unicode = true;
         }
-        if let Some(ref limit) = self.engine.regex_size_limit
+        if let Some(ref limit) = self.engine.limits.regex_size_limit
             && let Ok(bytes) = limit.parse::<ByteSize>().map(ByteSize::bytes)
         {
             opts.regex_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
         }
-        if let Some(ref limit) = self.engine.dfa_size_limit
+        if let Some(ref limit) = self.engine.limits.dfa_size_limit
             && let Ok(bytes) = limit.parse::<ByteSize>().map(ByteSize::bytes)
         {
             opts.dfa_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
         }
+        opts.regex_engine = pattern_argv.regex_engine;
         opts.replace.clone_from(&self.replace.replace);
         opts.before_context = pattern_argv.before_context;
         opts.after_context = pattern_argv.after_context;
@@ -242,6 +245,7 @@ pub struct PatternArgv {
     pub quiet: bool,
     pub before_context: usize,
     pub after_context: usize,
+    pub regex_engine: RegexEngine,
 }
 
 impl PatternArgv {
@@ -258,7 +262,50 @@ impl PatternArgv {
             quiet,
             before_context,
             after_context,
+            regex_engine: Self::regex_engine(argv),
         }
+    }
+
+    fn regex_engine(argv: &Argv<'_>) -> RegexEngine {
+        let mut last_idx = 0usize;
+        let mut engine = RegexEngine::Default;
+        let raw_args = argv.as_slice();
+        let mut i = 0;
+        while i < raw_args.len() {
+            let arg = &raw_args[i];
+            if arg == "--" {
+                break;
+            }
+            let next = i + 1;
+            let parsed = if arg == "--pcre2" {
+                Some((i, RegexEngine::Pcre2, 0usize))
+            } else if arg == "--no-pcre2" {
+                Some((i, RegexEngine::Default, 0))
+            } else if arg == "--auto-hybrid-regex" {
+                Some((i, RegexEngine::Auto, 0))
+            } else if let Some(value) = arg.strip_prefix("--engine=") {
+                value
+                    .parse::<RegexEngine>()
+                    .ok()
+                    .map(|engine| (i, engine, 0))
+            } else if arg == "--engine" && next < raw_args.len() {
+                raw_args[next]
+                    .parse::<RegexEngine>()
+                    .ok()
+                    .map(|engine| (i, engine, 1))
+            } else {
+                None
+            };
+            if let Some((idx, selected, consumed)) = parsed {
+                if idx >= last_idx {
+                    last_idx = idx;
+                    engine = selected;
+                }
+                i += consumed;
+            }
+            i += 1;
+        }
+        engine
     }
 
     fn case_mode(argv: &Argv<'_>) -> CaseMode {

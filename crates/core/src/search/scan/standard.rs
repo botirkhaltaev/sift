@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::{Captures, Matcher};
-use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
 use rayon::prelude::*;
 
@@ -18,6 +17,7 @@ use crate::search::output::style::{
     FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
 use crate::search::query::SearchQuery;
+use crate::search::query::matcher::SearchMatcher;
 use crate::search::request::SearchCollection;
 
 #[derive(Clone, Copy)]
@@ -27,7 +27,7 @@ pub struct SinkConfig {
 }
 
 pub struct StandardSink<'a> {
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     output: SearchOutput,
     show_line_numbers: bool,
     display_path: String,
@@ -41,7 +41,7 @@ pub struct StandardSink<'a> {
 
 impl<'a> StandardSink<'a> {
     pub const fn new(
-        matcher: &'a RegexMatcher,
+        matcher: &'a SearchMatcher,
         output: SearchOutput,
         display_path: String,
         bytes: &'a mut Vec<u8>,
@@ -342,7 +342,7 @@ impl StandardSink<'_> {
 }
 
 struct StandardWorker<'a> {
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     searcher: Searcher,
     output: SearchOutput,
     separators: &'a SearchSeparators,
@@ -471,7 +471,7 @@ impl<'a> StandardWorker<'a> {
 
 pub struct StandardScan<'a> {
     search: &'a SearchQuery,
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     output: SearchOutput,
     separators: &'a SearchSeparators,
     counters: &'a TextStatsCounters,
@@ -480,7 +480,7 @@ pub struct StandardScan<'a> {
 impl<'a> StandardScan<'a> {
     pub const fn new(
         search: &'a SearchQuery,
-        matcher: &'a RegexMatcher,
+        matcher: &'a SearchMatcher,
         output: SearchOutput,
         separators: &'a SearchSeparators,
         counters: &'a TextStatsCounters,
@@ -529,7 +529,7 @@ impl<'a> StandardScan<'a> {
     }
 }
 
-fn apply_replace(matcher: &RegexMatcher, line: &[u8], replacement: &str) -> String {
+fn apply_replace(matcher: &SearchMatcher, line: &[u8], replacement: &str) -> String {
     let Ok(mut caps) = matcher.new_captures() else {
         return String::from_utf8_lossy(line).into_owned();
     };

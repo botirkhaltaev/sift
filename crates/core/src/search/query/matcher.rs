@@ -1,10 +1,95 @@
-use grep_matcher::LineTerminator;
-use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_matcher::{Captures, LineTerminator, Match, Matcher};
+use grep_pcre2::{RegexMatcher as Pcre2Matcher, RegexMatcherBuilder as Pcre2MatcherBuilder};
+use grep_regex::{RegexCaptures, RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
 use super::SearchQuery;
 use crate::search::SearchError;
-use crate::search::options::BinaryMode;
+use crate::search::options::{BinaryMode, RegexEngine};
+
+#[derive(Clone, Debug)]
+pub enum SearchMatcher {
+    Default(RegexMatcher),
+    Pcre2(Pcre2Matcher),
+}
+
+#[derive(Clone, Debug)]
+pub enum SearchCaptures {
+    Default(RegexCaptures),
+    Pcre2(grep_pcre2::RegexCaptures),
+}
+
+impl Captures for SearchCaptures {
+    fn len(&self) -> usize {
+        match self {
+            Self::Default(captures) => captures.len(),
+            Self::Pcre2(captures) => captures.len(),
+        }
+    }
+
+    fn get(&self, index: usize) -> Option<Match> {
+        match self {
+            Self::Default(captures) => captures.get(index),
+            Self::Pcre2(captures) => captures.get(index),
+        }
+    }
+}
+
+impl Matcher for SearchMatcher {
+    type Captures = SearchCaptures;
+    type Error = String;
+
+    fn find_at(&self, haystack: &[u8], at: usize) -> Result<Option<Match>, Self::Error> {
+        match self {
+            Self::Default(matcher) => matcher.find_at(haystack, at).map_err(|e| e.to_string()),
+            Self::Pcre2(matcher) => matcher.find_at(haystack, at).map_err(|e| e.to_string()),
+        }
+    }
+
+    fn new_captures(&self) -> Result<Self::Captures, Self::Error> {
+        match self {
+            Self::Default(matcher) => matcher
+                .new_captures()
+                .map(SearchCaptures::Default)
+                .map_err(|e| e.to_string()),
+            Self::Pcre2(matcher) => matcher
+                .new_captures()
+                .map(SearchCaptures::Pcre2)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    fn capture_count(&self) -> usize {
+        match self {
+            Self::Default(matcher) => matcher.capture_count(),
+            Self::Pcre2(matcher) => matcher.capture_count(),
+        }
+    }
+
+    fn capture_index(&self, name: &str) -> Option<usize> {
+        match self {
+            Self::Default(matcher) => matcher.capture_index(name),
+            Self::Pcre2(matcher) => matcher.capture_index(name),
+        }
+    }
+
+    fn captures_at(
+        &self,
+        haystack: &[u8],
+        at: usize,
+        captures: &mut Self::Captures,
+    ) -> Result<bool, Self::Error> {
+        match (self, captures) {
+            (Self::Default(matcher), SearchCaptures::Default(captures)) => matcher
+                .captures_at(haystack, at, captures)
+                .map_err(|e| e.to_string()),
+            (Self::Pcre2(matcher), SearchCaptures::Pcre2(captures)) => matcher
+                .captures_at(haystack, at, captures)
+                .map_err(|e| e.to_string()),
+            _ => Err("capture storage does not match regex engine".to_string()),
+        }
+    }
+}
 
 impl SearchQuery {
     /// Builds a regex matcher from the compiled patterns and options.
@@ -12,7 +97,17 @@ impl SearchQuery {
     /// # Errors
     ///
     /// Returns `SearchError::RegexBuild` if pattern compilation fails.
-    pub fn build_matcher(&self) -> Result<RegexMatcher, SearchError> {
+    pub(crate) fn build_matcher(&self) -> Result<SearchMatcher, SearchError> {
+        match self.opts.regex_engine {
+            RegexEngine::Default => self.build_default_matcher(),
+            RegexEngine::Pcre2 => self.build_pcre2_matcher(),
+            RegexEngine::Auto => self
+                .build_default_matcher()
+                .or_else(|_| self.build_pcre2_matcher()),
+        }
+    }
+
+    fn build_default_matcher(&self) -> Result<SearchMatcher, SearchError> {
         let mut builder = RegexMatcherBuilder::new();
         builder.multi_line(true);
         match self.opts.case_mode {
@@ -62,6 +157,40 @@ impl SearchQuery {
         }
         builder
             .build_many(&self.patterns)
+            .map(SearchMatcher::Default)
+            .map_err(|e| SearchError::RegexBuild(e.to_string()))
+    }
+
+    fn build_pcre2_matcher(&self) -> Result<SearchMatcher, SearchError> {
+        let mut builder = Pcre2MatcherBuilder::new();
+        builder.multi_line(true);
+        match self.opts.case_mode {
+            crate::search::options::CaseMode::Sensitive => {}
+            crate::search::options::CaseMode::Insensitive => {
+                builder.caseless(true);
+            }
+            crate::search::options::CaseMode::Smart => {
+                builder.case_smart(true);
+            }
+        }
+        builder.utf(self.opts.unicode);
+        builder.ucp(self.opts.unicode);
+        builder.fixed_strings(self.opts.fixed_strings());
+        if self.opts.word_regexp() {
+            builder.word(true);
+        }
+        if self.opts.line_regexp() {
+            builder.whole_line(true);
+        }
+        if self.opts.crlf() {
+            builder.crlf(true);
+        }
+        if self.opts.multiline() && self.opts.multiline_dotall() {
+            builder.dotall(true);
+        }
+        builder
+            .build_many(&self.patterns)
+            .map(SearchMatcher::Pcre2)
             .map_err(|e| SearchError::RegexBuild(e.to_string()))
     }
 

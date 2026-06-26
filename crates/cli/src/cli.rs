@@ -167,6 +167,12 @@ impl Cli {
 
     #[must_use]
     pub fn dispatch(self, argv: &Argv<'_>) -> ExitCode {
+        if self.engine_decl.regex.pcre2_version {
+            let (major, minor) = grep_pcre2::version();
+            println!("PCRE2 {major}.{minor}");
+            return ExitCode::SUCCESS;
+        }
+
         if self.filter_decl.type_list {
             TypeCatalog::from_decl(&self.filter_decl).print_list();
             return ExitCode::SUCCESS;

@@ -1,20 +1,59 @@
 use clap::Args;
+use sift_core::search::RegexEngine;
 
 /// Regex engine and configuration flags.
 #[derive(Args, Clone)]
 pub struct EngineDecl {
     #[arg(long = "no-config")]
     pub no_config: bool,
+    #[command(flatten)]
+    pub unicode: UnicodeDecl,
+    #[command(flatten)]
+    pub limits: EngineLimitDecl,
+    #[command(flatten)]
+    pub regex: RegexEngineDecl,
+}
+
+/// Unicode mode flags.
+#[derive(Args, Clone)]
+pub struct UnicodeDecl {
     #[arg(long = "unicode")]
     pub unicode: bool,
     #[arg(long = "no-unicode")]
     pub no_unicode: bool,
+}
+
+/// Regex engine resource limit flags.
+#[derive(Args, Clone)]
+pub struct EngineLimitDecl {
     #[arg(long = "colors", value_name = "COLOR_SPEC")]
     pub colors: Vec<String>,
     #[arg(long = "regex-size-limit", value_name = "NUM+SUFFIX?")]
     pub regex_size_limit: Option<String>,
     #[arg(long = "dfa-size-limit", value_name = "NUM+SUFFIX?")]
     pub dfa_size_limit: Option<String>,
+}
+
+/// Regex engine selection flags.
+#[derive(Args, Clone)]
+pub struct RegexEngineDecl {
+    #[arg(long = "engine", value_name = "ENGINE")]
+    pub engine: Option<RegexEngine>,
+    #[command(flatten)]
+    pub pcre2: Pcre2EngineDecl,
+    #[arg(long = "pcre2-version")]
+    pub pcre2_version: bool,
+}
+
+/// PCRE2 engine selection shortcuts.
+#[derive(Args, Clone)]
+pub struct Pcre2EngineDecl {
+    #[arg(long = "pcre2")]
+    pub pcre2: bool,
+    #[arg(long = "no-pcre2")]
+    pub no_pcre2: bool,
+    #[arg(long = "auto-hybrid-regex")]
+    pub auto_hybrid_regex: bool,
 }
 
 /// Threading and output-buffering flags.
@@ -56,6 +95,7 @@ pub struct MultilineDecl {
 mod tests {
     use crate::cli::Cli;
     use clap::Parser;
+    use sift_core::search::RegexEngine;
 
     #[test]
     fn engine_no_config_flag() {
@@ -66,31 +106,62 @@ mod tests {
     #[test]
     fn engine_unicode_flag() {
         let cli = Cli::try_parse_from(["sift", "--unicode", "pat"]).unwrap();
-        assert!(cli.engine_decl.unicode);
+        assert!(cli.engine_decl.unicode.unicode);
     }
 
     #[test]
     fn engine_no_unicode_flag() {
         let cli = Cli::try_parse_from(["sift", "--no-unicode", "pat"]).unwrap();
-        assert!(cli.engine_decl.no_unicode);
+        assert!(cli.engine_decl.unicode.no_unicode);
     }
 
     #[test]
     fn engine_colors_flag() {
         let cli = Cli::try_parse_from(["sift", "--colors", "path:fg:red", "pat"]).unwrap();
-        assert!(!cli.engine_decl.colors.is_empty());
+        assert!(!cli.engine_decl.limits.colors.is_empty());
     }
 
     #[test]
     fn engine_regex_size_limit() {
         let cli = Cli::try_parse_from(["sift", "--regex-size-limit", "10M", "pat"]).unwrap();
-        assert_eq!(cli.engine_decl.regex_size_limit.as_deref(), Some("10M"));
+        assert_eq!(
+            cli.engine_decl.limits.regex_size_limit.as_deref(),
+            Some("10M")
+        );
     }
 
     #[test]
     fn engine_dfa_size_limit() {
         let cli = Cli::try_parse_from(["sift", "--dfa-size-limit", "50M", "pat"]).unwrap();
-        assert_eq!(cli.engine_decl.dfa_size_limit.as_deref(), Some("50M"));
+        assert_eq!(
+            cli.engine_decl.limits.dfa_size_limit.as_deref(),
+            Some("50M")
+        );
+    }
+
+    #[test]
+    fn engine_selection_flag() {
+        let cli = Cli::try_parse_from(["sift", "--engine", "pcre2", "pat"]).unwrap();
+        assert_eq!(cli.engine_decl.regex.engine, Some(RegexEngine::Pcre2));
+    }
+
+    #[test]
+    fn engine_pcre2_flags() {
+        let cli = Cli::try_parse_from(["sift", "--pcre2", "--no-pcre2", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2.pcre2);
+        assert!(cli.engine_decl.regex.pcre2.no_pcre2);
+    }
+
+    #[test]
+    fn engine_auto_hybrid_flag() {
+        let cli = Cli::try_parse_from(["sift", "--auto-hybrid-regex", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2.auto_hybrid_regex);
+    }
+
+    #[test]
+    fn engine_pcre2_version_flag() {
+        let cli = Cli::try_parse_from(["sift", "--pcre2-version", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2_version);
     }
 
     #[test]
@@ -174,7 +245,7 @@ mod tests {
         ])
         .unwrap();
         assert!(cli.engine_decl.no_config);
-        assert!(cli.engine_decl.unicode);
+        assert!(cli.engine_decl.unicode.unicode);
         assert_eq!(cli.threading.threads, Some(8));
         assert!(cli.walker_decl.one_file_system);
         assert!(cli.multiline_decl.multiline);

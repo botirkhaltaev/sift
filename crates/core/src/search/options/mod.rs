@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct SearchMatchFlags: u16 {
@@ -9,6 +11,29 @@ bitflags::bitflags! {
         const MULTILINE        = 1 << 5;
         const MULTILINE_DOTALL = 1 << 6;
         const CRLF             = 1 << 7;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegexEngine {
+    #[default]
+    Default,
+    Pcre2,
+    Auto,
+}
+
+impl FromStr for RegexEngine {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "default" | "rust" => Ok(Self::Default),
+            "pcre2" => Ok(Self::Pcre2),
+            "auto" | "auto-hybrid" => Ok(Self::Auto),
+            other => Err(format!(
+                "unknown regex engine '{other}': expected default, pcre2, or auto"
+            )),
+        }
     }
 }
 
@@ -47,6 +72,7 @@ pub struct SearchOptions {
     pub unicode: bool,
     pub regex_size_limit: usize,
     pub dfa_size_limit: usize,
+    pub regex_engine: RegexEngine,
 }
 
 impl Default for SearchOptions {
@@ -62,6 +88,7 @@ impl Default for SearchOptions {
             unicode: true,
             regex_size_limit: 0,
             dfa_size_limit: 0,
+            regex_engine: RegexEngine::default(),
         }
     }
 }
