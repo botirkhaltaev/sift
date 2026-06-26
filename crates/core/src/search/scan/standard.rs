@@ -90,7 +90,7 @@ impl Sink for StandardSink<'_> {
             self.output.mode,
             crate::search::output::mode::SearchMode::OnlyMatching
         ) {
-            return Ok(self.handle_only_matching(mat));
+            return self.handle_only_matching(mat);
         }
 
         let line_bytes = mat.bytes();
@@ -185,19 +185,26 @@ impl Sink for StandardSink<'_> {
         }
         if let Some(ref sep) = self.separators.context_separator {
             self.bytes.write_all(sep)?;
-            self.bytes.write_all(b"\n")?;
+            self.bytes.write_all(&[self.line_terminator])?;
         }
         Ok(true)
     }
 }
 
 impl StandardSink<'_> {
-    fn handle_only_matching(&mut self, mat: &SinkMatch<'_>) -> bool {
+    fn handle_only_matching(&mut self, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
         let show_column = self.output.lines.flags.contains(LineStyleFlags::COLUMN);
         let line_number = mat.line_number();
         let line = mat.bytes();
         let byte_offset = mat.absolute_byte_offset();
-        let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
+        let mut matches = Vec::new();
+        self.matcher
+            .find_iter(line, |m: grep_matcher::Match| {
+                matches.push(m);
+                true
+            })
+            .map_err(io::Error::other)?;
+        for m in matches {
             let col = if show_column {
                 Some(m.start() + 1)
             } else {
@@ -209,7 +216,7 @@ impl StandardSink<'_> {
             } else {
                 String::from_utf8_lossy(matched_slice).into_owned()
             };
-            let _ = self.write_prefix(
+            self.write_prefix(
                 line_number,
                 false,
                 col,
@@ -218,12 +225,11 @@ impl StandardSink<'_> {
                 } else {
                     None
                 },
-            );
-            let _ = self.bytes.write_all(text.as_bytes());
-            let _ = self.bytes.write_all(&[self.line_terminator]);
-            true
-        });
-        true
+            )?;
+            self.bytes.write_all(text.as_bytes())?;
+            self.bytes.write_all(&[self.line_terminator])?;
+        }
+        Ok(true)
     }
 
     fn handle_max_columns(

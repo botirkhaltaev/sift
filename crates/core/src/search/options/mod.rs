@@ -59,6 +59,11 @@ impl InputEncoding {
             Self::Auto | Self::Raw => None,
         }
     }
+
+    #[must_use]
+    pub const fn uses_decoded_input(&self) -> bool {
+        matches!(self, Self::Auto | Self::Explicit(_))
+    }
 }
 
 impl FromStr for InputEncoding {
@@ -168,6 +173,6 @@ impl SearchOptions {
 
     #[must_use]
     pub const fn precludes_trigram_index(&self) -> bool {
-        self.invert_match()
+        self.invert_match() || self.input_encoding.uses_decoded_input()
     }
 }

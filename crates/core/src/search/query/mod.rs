@@ -387,7 +387,7 @@ mod tests {
         assert!(!opts.multiline());
         assert!(!opts.multiline_dotall());
         assert!(!opts.crlf());
-        assert!(!opts.precludes_trigram_index());
+        assert!(opts.precludes_trigram_index());
         assert_eq!(opts.max_results, None);
         assert_eq!(opts.before_context, 0);
         assert_eq!(opts.after_context, 0);
@@ -396,11 +396,18 @@ mod tests {
     }
 
     #[test]
-    fn search_options_precludes_trigram_index_only_for_invert_match() {
-        let mut opts = SearchOptions::default();
+    fn search_options_precludes_trigram_index_for_decoded_input_and_invert_match() {
+        let mut opts = SearchOptions {
+            input_encoding: crate::search::options::InputEncoding::Raw,
+            ..SearchOptions::default()
+        };
         assert!(!opts.precludes_trigram_index());
 
         opts.flags |= SearchMatchFlags::INVERT_MATCH;
+        assert!(opts.precludes_trigram_index());
+
+        opts.flags.remove(SearchMatchFlags::INVERT_MATCH);
+        opts.input_encoding = crate::search::options::InputEncoding::Auto;
         assert!(opts.precludes_trigram_index());
     }
 

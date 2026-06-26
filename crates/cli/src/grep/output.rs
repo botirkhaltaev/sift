@@ -28,6 +28,7 @@ pub struct OutputConfig {
     pub line_number: bool,
     pub separators: SeparatorDecl,
     pub search_paths: Vec<PathBuf>,
+    pub null_data: bool,
 }
 
 impl OutputConfig {
@@ -181,6 +182,7 @@ pub struct SearchLineResolveCtx {
 #[derive(Clone, Copy)]
 pub struct SearchFormatCtx {
     pub nul_terminated_paths: bool,
+    pub nul_terminated_data: bool,
     pub color: ColorChoice,
 }
 
@@ -495,6 +497,7 @@ impl SearchOutputCtx {
             },
             format: SearchFormatCtx {
                 nul_terminated_paths: output_argv.path.nul_terminated,
+                nul_terminated_data: config.null_data,
                 color: effective_color,
             },
             output_format: if output_argv.mode.json {
@@ -554,7 +557,7 @@ impl SearchOutputCtx {
                 }),
             },
             SearchRecordStyle {
-                terminator: if self.format.nul_terminated_paths {
+                terminator: if self.format.nul_terminated_paths || self.format.nul_terminated_data {
                     sift_core::search::RecordTerminator::Nul
                 } else {
                     sift_core::search::RecordTerminator::Newline

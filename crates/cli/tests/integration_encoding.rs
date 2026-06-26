@@ -23,6 +23,19 @@ fn utf16_bom_is_searched_by_default() {
 }
 
 #[test]
+fn utf16_bom_is_searched_by_default_with_index() {
+    let p = TestProject::new("integration-encoding-utf16-bom-index");
+    p.write("utf16.txt", utf16le_with_bom("alpha\nneedle\nomega\n"));
+    p.build_index();
+
+    let output = p.index_output(["needle"]);
+    common::assert_success(&output);
+
+    let stdout = common::normalize_stdout(&output);
+    assert!(stdout.contains("utf16.txt:needle"), "stdout was {stdout:?}");
+}
+
+#[test]
 fn explicit_utf16le_encoding_searches_without_bom() {
     let p = TestProject::new("integration-encoding-utf16le");
     let bytes: Vec<u8> = "alpha\nneedle\nomega\n"
@@ -32,6 +45,26 @@ fn explicit_utf16le_encoding_searches_without_bom() {
     p.write("utf16le.txt", bytes);
 
     let output = p.walk_output(["--encoding", "utf-16le", "needle"]);
+    common::assert_success(&output);
+
+    let stdout = common::normalize_stdout(&output);
+    assert!(
+        stdout.contains("utf16le.txt:needle"),
+        "stdout was {stdout:?}"
+    );
+}
+
+#[test]
+fn explicit_utf16le_encoding_searches_without_bom_with_index() {
+    let p = TestProject::new("integration-encoding-utf16le-index");
+    let bytes: Vec<u8> = "alpha\nneedle\nomega\n"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    p.write("utf16le.txt", bytes);
+    p.build_index();
+
+    let output = p.index_output(["--encoding", "utf-16le", "needle"]);
     common::assert_success(&output);
 
     let stdout = common::normalize_stdout(&output);

@@ -398,3 +398,47 @@ fn complete_falls_back_to_base() {
         .expect("candidates");
     assert_eq!(result.len(), 2);
 }
+
+#[test]
+fn complete_lazy_snapshot_falls_back_to_base() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    make_parity_corpus(&corpus);
+    let sift_dir = tmp.path().join(".sift");
+    let indexes = build_indexes(&corpus, &sift_dir);
+    fs::write(corpus.join("new.txt"), "offline marker\n").expect("write new file");
+
+    let spec = QuerySpec {
+        patterns: &["beta".to_string()],
+        flags: QueryFlags::empty(),
+    };
+    let filter = default_filter(&corpus);
+    let base = candidates_from_paths(&corpus, &["a/x.txt", "b/y.txt", "new.txt"]);
+    let meta = StoreMeta {
+        coverage: IndexCoverage::Lazy,
+        ..default_meta(&corpus)
+    };
+    let result = QueryPlanner::new(spec)
+        .candidates(
+            CandidatePlan {
+                indexes: &indexes,
+                requirement: CandidateRequirement::Complete,
+                filter: &filter,
+                source: CandidateSource {
+                    store_meta: Some(&meta),
+                    snapshot: SnapshotValidation::Unvalidated,
+                },
+            },
+            || Ok(base),
+        )
+        .expect("candidates");
+    let paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("a/x.txt"),
+            PathBuf::from("b/y.txt"),
+            PathBuf::from("new.txt")
+        ]
+    );
+}
