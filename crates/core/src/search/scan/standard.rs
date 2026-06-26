@@ -37,6 +37,7 @@ pub struct StandardSink<'a> {
     match_count: usize,
     replace: Option<&'a str>,
     trim: bool,
+    line_terminator: u8,
 }
 
 impl<'a> StandardSink<'a> {
@@ -62,7 +63,14 @@ impl<'a> StandardSink<'a> {
             match_count: 0,
             replace,
             trim: output.lines.trim(),
+            line_terminator: b'\n',
         }
+    }
+
+    #[must_use]
+    const fn with_line_terminator(mut self, line_terminator: u8) -> Self {
+        self.line_terminator = line_terminator;
+        self
     }
 }
 
@@ -152,13 +160,13 @@ impl Sink for StandardSink<'_> {
             let s = String::from_utf8_lossy(line_bytes);
             let trimmed = s.trim_start();
             self.bytes.write_all(trimmed.as_bytes())?;
-            if !trimmed.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !trimmed.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else {
             self.bytes.write_all(line_bytes)?;
-            if !line_bytes.ends_with(b"\n") {
-                self.bytes.write_all(b"\n")?;
+            if !line_bytes.ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         }
         Ok(true)
@@ -212,7 +220,7 @@ impl StandardSink<'_> {
                 },
             );
             let _ = self.bytes.write_all(text.as_bytes());
-            let _ = self.bytes.write_all(b"\n");
+            let _ = self.bytes.write_all(&[self.line_terminator]);
             true
         });
         true
@@ -321,20 +329,20 @@ impl StandardSink<'_> {
         if let Some(rep) = self.replace {
             let text = apply_replace(self.matcher, line_bytes, rep);
             self.bytes.write_all(text.as_bytes())?;
-            if !text.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !text.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else if self.trim {
             let trimmed = String::from_utf8_lossy(line_bytes);
             let trimmed = trimmed.trim_start();
             self.bytes.write_all(trimmed.as_bytes())?;
-            if !trimmed.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !trimmed.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else {
             self.bytes.write_all(line_bytes)?;
-            if !line_bytes.ends_with(b"\n") {
-                self.bytes.write_all(b"\n")?;
+            if !line_bytes.ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         }
         Ok(true)
@@ -358,6 +366,7 @@ struct StandardWorker<'a> {
     path_separator: Option<u8>,
     emission: OutputEmission,
     collect_hits: bool,
+    line_terminator: u8,
 }
 
 impl<'a> StandardWorker<'a> {
@@ -386,6 +395,7 @@ impl<'a> StandardWorker<'a> {
             path_separator: scan.output.records.path_separator,
             emission: scan.output.emission,
             collect_hits: collect.hits,
+            line_terminator: scan.search.opts().line_terminator(),
         }
     }
 
@@ -415,7 +425,8 @@ impl<'a> StandardWorker<'a> {
                 self.separators,
                 self.replace.as_deref(),
                 self.sink_config,
-            );
+            )
+            .with_line_terminator(self.line_terminator);
             let _ = self
                 .searcher
                 .search_path(self.matcher, candidate.abs_path(), &mut sink);

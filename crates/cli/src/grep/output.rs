@@ -180,7 +180,7 @@ pub struct SearchLineResolveCtx {
 
 #[derive(Clone, Copy)]
 pub struct SearchFormatCtx {
-    pub null_data: bool,
+    pub nul_terminated_paths: bool,
     pub color: ColorChoice,
 }
 
@@ -223,7 +223,7 @@ pub struct OutputModeFlags {
 #[derive(Clone, Copy, Default)]
 pub struct OutputPathFlags {
     pub glob_case_insensitive: bool,
-    pub null_data: bool,
+    pub nul_terminated: bool,
 }
 
 pub struct OutputArgv {
@@ -246,7 +246,7 @@ impl OutputArgv {
             },
             path: OutputPathFlags {
                 glob_case_insensitive: Self::glob_case_insensitive(tokens),
-                null_data: Self::null_data(tokens),
+                nul_terminated: Self::nul_terminated_paths(tokens),
             },
             color: Self::color(tokens),
             line_number: Self::line_number(tokens),
@@ -280,7 +280,7 @@ impl OutputArgv {
         result
     }
 
-    fn null_data(args: &[String]) -> bool {
+    fn nul_terminated_paths(args: &[String]) -> bool {
         let mut result = false;
         for arg in args {
             match arg.as_str() {
@@ -494,7 +494,7 @@ impl SearchOutputCtx {
                 line_number: line_number_override,
             },
             format: SearchFormatCtx {
-                null_data: output_argv.path.null_data,
+                nul_terminated_paths: output_argv.path.nul_terminated,
                 color: effective_color,
             },
             output_format: if output_argv.mode.json {
@@ -554,7 +554,7 @@ impl SearchOutputCtx {
                 }),
             },
             SearchRecordStyle {
-                terminator: if self.format.null_data {
+                terminator: if self.format.nul_terminated_paths {
                     sift_core::search::RecordTerminator::Nul
                 } else {
                     sift_core::search::RecordTerminator::Newline
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn output_argv_null_short() {
-        assert!(out_argv(&["sift", "-0", "pat"]).path.null_data);
+        assert!(out_argv(&["sift", "-0", "pat"]).path.nul_terminated);
     }
 
     #[test]

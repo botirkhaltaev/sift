@@ -1,4 +1,5 @@
 use clap::Args;
+use sift_core::search::InputEncoding;
 
 /// Regex engine and configuration flags.
 #[derive(Args, Clone)]
@@ -15,6 +16,8 @@ pub struct EngineDecl {
     pub regex_size_limit: Option<String>,
     #[arg(long = "dfa-size-limit", value_name = "NUM+SUFFIX?")]
     pub dfa_size_limit: Option<String>,
+    #[arg(short = 'E', long = "encoding", value_name = "ENCODING")]
+    pub encoding: Option<InputEncoding>,
 }
 
 /// Threading and output-buffering flags.
@@ -48,14 +51,23 @@ pub struct MultilineDecl {
     pub multiline: bool,
     #[arg(long = "multiline-dotall")]
     pub multiline_dotall: bool,
+    #[command(flatten)]
+    pub line_terminator: LineTerminatorDecl,
+}
+
+#[derive(Args, Clone)]
+pub struct LineTerminatorDecl {
     #[arg(long = "crlf")]
     pub crlf: bool,
+    #[arg(long = "null-data")]
+    pub null_data: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use crate::cli::Cli;
     use clap::Parser;
+    use sift_core::search::InputEncoding;
 
     #[test]
     fn engine_no_config_flag() {
@@ -91,6 +103,21 @@ mod tests {
     fn engine_dfa_size_limit() {
         let cli = Cli::try_parse_from(["sift", "--dfa-size-limit", "50M", "pat"]).unwrap();
         assert_eq!(cli.engine_decl.dfa_size_limit.as_deref(), Some("50M"));
+    }
+
+    #[test]
+    fn engine_encoding_flag() {
+        let cli = Cli::try_parse_from(["sift", "--encoding", "utf-16le", "pat"]).unwrap();
+        assert!(matches!(
+            cli.engine_decl.encoding,
+            Some(InputEncoding::Explicit(_))
+        ));
+    }
+
+    #[test]
+    fn engine_encoding_short_flag() {
+        let cli = Cli::try_parse_from(["sift", "-E", "none", "pat"]).unwrap();
+        assert_eq!(cli.engine_decl.encoding, Some(InputEncoding::Raw));
     }
 
     #[test]
@@ -156,7 +183,13 @@ mod tests {
     #[test]
     fn crlf_flag() {
         let cli = Cli::try_parse_from(["sift", "--crlf", "pat"]).unwrap();
-        assert!(cli.multiline_decl.crlf);
+        assert!(cli.multiline_decl.line_terminator.crlf);
+    }
+
+    #[test]
+    fn null_data_flag() {
+        let cli = Cli::try_parse_from(["sift", "--null-data", "pat"]).unwrap();
+        assert!(cli.multiline_decl.line_terminator.null_data);
     }
 
     #[test]
@@ -178,6 +211,6 @@ mod tests {
         assert_eq!(cli.threading.threads, Some(8));
         assert!(cli.walker_decl.one_file_system);
         assert!(cli.multiline_decl.multiline);
-        assert!(cli.multiline_decl.crlf);
+        assert!(cli.multiline_decl.line_terminator.crlf);
     }
 }
