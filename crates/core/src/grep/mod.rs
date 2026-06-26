@@ -5,7 +5,8 @@
 //! the CLI calls. The pipeline is index-agnostic: it works with whatever
 //! index types the `Indexes` registry has opened.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::Candidate;
 use crate::index::Indexes;
@@ -24,6 +25,76 @@ pub struct GrepRun {
     pub hits: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CandidateSortKey {
+    #[default]
+    None,
+    Path,
+    Modified,
+    Accessed,
+    Created,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CandidateSort {
+    pub key: CandidateSortKey,
+    pub reverse: bool,
+}
+
+impl CandidateSort {
+    #[must_use]
+    pub const fn new(key: CandidateSortKey, reverse: bool) -> Self {
+        Self { key, reverse }
+    }
+
+    #[must_use]
+    pub const fn is_sorted(self) -> bool {
+        !matches!(self.key, CandidateSortKey::None)
+    }
+
+    /// Sort candidates in place according to the configured key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when filesystem metadata required by a timestamp
+    /// sort key cannot be read.
+    pub fn sort_candidates(self, candidates: &mut [Candidate]) -> crate::Result<()> {
+        match self.key {
+            CandidateSortKey::None => {}
+            CandidateSortKey::Path => candidates.sort_by(|a, b| a.rel_path().cmp(b.rel_path())),
+            CandidateSortKey::Modified => Self::sort_by_time(candidates, |path| {
+                std::fs::metadata(path).and_then(|meta| meta.modified())
+            })?,
+            CandidateSortKey::Accessed => Self::sort_by_time(candidates, |path| {
+                std::fs::metadata(path).and_then(|meta| meta.accessed())
+            })?,
+            CandidateSortKey::Created => Self::sort_by_time(candidates, |path| {
+                std::fs::metadata(path).and_then(|meta| meta.created())
+            })?,
+        }
+        if self.reverse {
+            candidates.reverse();
+        }
+        Ok(())
+    }
+
+    fn sort_by_time(
+        candidates: &mut [Candidate],
+        timestamp: impl Fn(&Path) -> std::io::Result<SystemTime>,
+    ) -> crate::Result<()> {
+        let mut keyed = Vec::with_capacity(candidates.len());
+        for candidate in candidates.iter().cloned() {
+            let time = timestamp(candidate.abs_path())?;
+            keyed.push((time, candidate.rel_path().to_path_buf(), candidate));
+        }
+        keyed.sort_by_key(|(time, path, _)| (*time, path.clone()));
+        for (slot, (_, _, candidate)) in candidates.iter_mut().zip(keyed) {
+            *slot = candidate;
+        }
+        Ok(())
+    }
+}
+
 /// User-facing request to the grep pipeline.
 pub struct GrepRequest<'a> {
     pub indexes: &'a Indexes,
@@ -32,6 +103,7 @@ pub struct GrepRequest<'a> {
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,
     pub candidate_source: CandidateSource<'a>,
+    pub candidate_sort: CandidateSort,
 }
 
 impl GrepRequest<'_> {
@@ -59,10 +131,11 @@ impl GrepRequest<'_> {
             || self.filter.collect(),
         )?;
 
-        let candidates: Vec<Candidate> = raw
+        let mut candidates: Vec<Candidate> = raw
             .into_par_iter()
             .filter(|c| c.matches(self.filter))
             .collect();
+        self.candidate_sort.sort_candidates(&mut candidates)?;
 
         if candidates.is_empty() {
             return Ok(GrepRun {

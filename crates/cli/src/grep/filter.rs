@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
+use sift_core::grep::{CandidateSort, CandidateSortKey};
 use sift_core::search::{
     CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig,
 };
@@ -110,10 +111,85 @@ pub struct FilterDecl {
     pub type_add: Vec<String>,
     #[arg(long = "type-clear", action = ArgAction::Append, value_name = "TYPE")]
     pub type_clear: Vec<String>,
-    #[arg(long = "sort", value_name = "SORTBY")]
-    pub sort: Option<String>,
-    #[arg(long = "sortr", value_name = "SORTBY")]
-    pub sortr: Option<String>,
+    #[arg(long = "sort", action = ArgAction::Append, value_name = "SORTBY")]
+    pub sort: Vec<String>,
+    #[arg(long = "sortr", action = ArgAction::Append, value_name = "SORTBY")]
+    pub sortr: Vec<String>,
+    #[arg(long = "sort-files")]
+    pub sort_files: bool,
+}
+
+impl FilterDecl {
+    /// Resolve ripgrep-style sort flags from raw argv.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a sort flag is missing a value or uses an unknown key.
+    pub fn sort(&self, argv: &Argv<'_>) -> anyhow::Result<CandidateSort> {
+        let mut sort = None;
+        let mut sortr = None;
+        let mut sort_files = self.sort_files;
+        let mut iter = argv.as_slice().iter().skip(1);
+        while let Some(arg) = iter.next() {
+            if arg == "--" {
+                break;
+            }
+            if arg == "--sort-files" {
+                sort_files = true;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--sort=") {
+                sort = Some(Self::parse_sort_key(value)?);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--sortr=") {
+                sortr = Some(Self::parse_sort_key(value)?);
+                continue;
+            }
+            if arg == "--sort" {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--sort requires a sort key");
+                };
+                sort = Some(Self::parse_sort_key(value)?);
+                continue;
+            }
+            if arg == "--sortr" {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--sortr requires a sort key");
+                };
+                sortr = Some(Self::parse_sort_key(value)?);
+            }
+        }
+
+        Ok(sort.map_or_else(
+            || {
+                sortr.map_or_else(
+                    || {
+                        if sort_files {
+                            CandidateSort::new(CandidateSortKey::Path, false)
+                        } else {
+                            CandidateSort::default()
+                        }
+                    },
+                    |key| CandidateSort::new(key, true),
+                )
+            },
+            |key| CandidateSort::new(key, false),
+        ))
+    }
+
+    fn parse_sort_key(value: &str) -> anyhow::Result<CandidateSortKey> {
+        match value {
+            "none" => Ok(CandidateSortKey::None),
+            "path" => Ok(CandidateSortKey::Path),
+            "modified" => Ok(CandidateSortKey::Modified),
+            "accessed" => Ok(CandidateSortKey::Accessed),
+            "created" => Ok(CandidateSortKey::Created),
+            other => anyhow::bail!(
+                "unknown sort key '{other}': expected none, path, modified, accessed, or created"
+            ),
+        }
+    }
 }
 
 /// Resolved visibility, ignore sources, and glob case for [`CandidateFilterConfig`].

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
+use sift_core::grep::CandidateSort;
 use sift_core::search::{CandidateFilter, SearchMode};
 use sift_core::{
-    CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
+    Candidate, CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
 };
 
 use crate::index::daemon::Daemon;
@@ -29,6 +30,7 @@ pub struct GrepConfig {
     pub search_paths: Vec<PathBuf>,
     pub threads: Option<usize>,
     pub mode: GrepMode,
+    pub candidate_sort: CandidateSort,
 }
 
 /// Grep-mode search and file listing.
@@ -172,6 +174,19 @@ impl Grep {
         }
         all_paths.sort();
         all_paths.dedup();
+        if self.config.candidate_sort.is_sorted() {
+            let mut candidates = all_paths
+                .into_iter()
+                .map(|rel| Candidate::new(rel.clone(), session.scope.filter_root.join(&rel)))
+                .collect::<Vec<_>>();
+            self.config
+                .candidate_sort
+                .sort_candidates(&mut candidates)?;
+            all_paths = candidates
+                .into_iter()
+                .map(|candidate| candidate.rel_path().to_path_buf())
+                .collect();
+        }
         let sep = if output_argv.path.null_data {
             '\0'
         } else {
@@ -269,6 +284,7 @@ impl Grep {
                 store_meta: session.store_meta.as_ref(),
                 snapshot,
             },
+            candidate_sort: self.config.candidate_sort,
         }
         .run(&query)?;
         if let Some(s) = &grep_run.outcome.stats {

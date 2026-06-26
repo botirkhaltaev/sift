@@ -162,6 +162,7 @@ impl Cli {
             } else {
                 GrepMode::Search
             },
+            candidate_sort: sift_core::grep::CandidateSort::default(),
         }
     }
 
@@ -219,6 +220,13 @@ impl Cli {
                 } else {
                     GrepMode::Search
                 };
+                let candidate_sort = match self.filter_decl.sort(argv) {
+                    Ok(sort) => sort,
+                    Err(e) => {
+                        eprintln!("sift: {e}");
+                        return ExitCode::from(2);
+                    }
+                };
 
                 let grep = Grep::new(GrepConfig {
                     pattern: PatternConfig {
@@ -252,6 +260,7 @@ impl Cli {
                     search_paths,
                     threads,
                     mode,
+                    candidate_sort,
                 });
 
                 let suppress_errors = SearchFilterCtx::resolve(argv)
