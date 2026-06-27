@@ -35,6 +35,20 @@ fn piped_stdin_is_searched_when_no_paths_are_given() {
 }
 
 #[test]
+fn piped_stdin_does_not_replace_indexed_default_corpus() {
+    let p = TestProject::new("stdin-indexed-default-corpus");
+    p.write("a.txt", "needle\n");
+    p.build_index();
+    let mut cmd = p.sift();
+    cmd.arg("--sift-dir").arg(p.sift_dir());
+
+    let out = output_with_stdin(cmd, ["needle"], b"no-match\n");
+
+    assert_success(&out);
+    assert_eq!(normalize_stdout(&out), "a.txt:needle\n");
+}
+
+#[test]
 fn explicit_dash_searches_stdin() {
     let p = TestProject::new("stdin-explicit");
     let out = output_with_stdin(p.sift(), ["needle", "-"], b"alpha\nneedle\nomega\n");
@@ -61,6 +75,41 @@ fn stdin_with_filename_uses_ripgrep_stdin_name() {
 
     assert_success(&out);
     assert_stdout_eq(&out, "<stdin>:needle\n");
+}
+
+#[test]
+fn stdin_count_counts_stream_matches() {
+    let p = TestProject::new("stdin-count");
+    let out = output_with_stdin(p.sift(), ["--count", "needle", "-"], b"needle\nneedle\n");
+
+    assert_success(&out);
+    assert_stdout_eq(&out, "2\n");
+}
+
+#[test]
+fn stdin_files_with_matches_prints_stdin_name() {
+    let p = TestProject::new("stdin-files-with-matches");
+    let out = output_with_stdin(
+        p.sift(),
+        ["--files-with-matches", "needle", "-"],
+        b"needle\n",
+    );
+
+    assert_success(&out);
+    assert_stdout_eq(&out, "<stdin>\n");
+}
+
+#[test]
+fn stdin_json_uses_stdin_name() {
+    let p = TestProject::new("stdin-json");
+    let out = output_with_stdin(p.sift(), ["--json", "needle", "-"], b"needle\n");
+
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(r#""text":"<stdin>""#),
+        "expected JSON path to use <stdin>, got: {stdout}"
+    );
 }
 
 #[test]

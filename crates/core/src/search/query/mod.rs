@@ -103,9 +103,9 @@ impl SearchQuery {
 
         let output = execution.output;
         let candidates = execution.candidates;
-        let stdin = execution.stdin;
+        let stream = execution.stream;
 
-        if candidates.is_empty() && stdin.is_none() {
+        if candidates.is_empty() && stream.is_none() {
             return Ok((
                 SearchOutcome {
                     matched: false,
@@ -128,14 +128,14 @@ impl SearchQuery {
                         output,
                         search_start,
                     );
-                    let json_matched = scan.run(candidates, stdin, stats.as_mut())?;
+                    let json_matched = scan.run(candidates, stream, stats.as_mut())?;
                     (json_matched, stats, Vec::new())
                 }
                 _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),
             },
             SearchOutputFormat::Text => {
                 let (did_match, stats, hits) =
-                    self.run_text_output(candidates, stdin, matcher, execution, search_start)?;
+                    self.run_text_output(candidates, stream, matcher, execution, search_start)?;
                 (did_match, stats, hits)
             }
         };
@@ -161,7 +161,7 @@ impl SearchQuery {
     fn run_text_output(
         &self,
         candidates: &[crate::Candidate],
-        stdin: Option<crate::search::request::StdinInput<'_>>,
+        stream: Option<crate::search::request::StreamInput<'_>>,
         matcher: &RegexMatcher,
         execution: &SearchExecution<'_>,
         search_start: Instant,
@@ -179,7 +179,7 @@ impl SearchQuery {
                     execution.separators,
                     &counters,
                 );
-                scan.run(candidates, stdin, collect)?
+                scan.run(candidates, stream, collect)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
@@ -188,19 +188,19 @@ impl SearchQuery {
                 let scan = crate::search::scan::summary::SummaryScan::new(
                     self, matcher, output, &counters,
                 );
-                scan.run(candidates, stdin, collect)?
+                scan.run(candidates, stream, collect)?
             }
         };
 
         let bytes_searched = if collect.stats {
             crate::Candidate::total_file_bytes(candidates)
-                + stdin.map_or(0, |input| {
+                + stream.map_or(0, |input| {
                     u64::try_from(input.bytes.len()).unwrap_or(u64::MAX)
                 })
         } else {
             0
         };
-        let input_count = candidates.len() + usize::from(stdin.is_some());
+        let input_count = candidates.len() + usize::from(stream.is_some());
         let stats = counters.finish(input_count, bytes_searched, search_start.elapsed());
 
         Ok((did_match, stats, hits))
@@ -393,7 +393,7 @@ mod tests {
         assert!(!opts.multiline());
         assert!(!opts.multiline_dotall());
         assert!(!opts.crlf());
-        assert!(!opts.precludes_trigram_index());
+        assert!(opts.precludes_trigram_index());
         assert_eq!(opts.max_results, None);
         assert_eq!(opts.before_context, 0);
         assert_eq!(opts.after_context, 0);
@@ -402,11 +402,18 @@ mod tests {
     }
 
     #[test]
-    fn search_options_precludes_trigram_index_only_for_invert_match() {
-        let mut opts = SearchOptions::default();
+    fn search_options_precludes_trigram_index_for_decoded_input_and_invert_match() {
+        let mut opts = SearchOptions {
+            input_encoding: crate::search::options::InputEncoding::Raw,
+            ..SearchOptions::default()
+        };
         assert!(!opts.precludes_trigram_index());
 
         opts.flags |= SearchMatchFlags::INVERT_MATCH;
+        assert!(opts.precludes_trigram_index());
+
+        opts.flags.remove(SearchMatchFlags::INVERT_MATCH);
+        opts.input_encoding = crate::search::options::InputEncoding::Auto;
         assert!(opts.precludes_trigram_index());
     }
 

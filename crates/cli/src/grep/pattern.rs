@@ -101,8 +101,11 @@ impl PatternConfig {
         if self.multiline.multiline_dotall {
             opts.flags |= SearchMatchFlags::MULTILINE_DOTALL;
         }
-        if self.multiline.crlf {
+        if self.multiline.line_terminator.crlf {
             opts.flags |= SearchMatchFlags::CRLF;
+        }
+        if self.multiline.line_terminator.null_data {
+            opts.flags |= SearchMatchFlags::NULL_DATA;
         }
         if self.engine.no_unicode {
             opts.unicode = false;
@@ -119,6 +122,7 @@ impl PatternConfig {
         {
             opts.dfa_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
         }
+        opts.input_encoding = self.engine.encoding.clone().unwrap_or_default();
         opts.replace.clone_from(&self.replace.replace);
         opts.before_context = pattern_argv.before_context;
         opts.after_context = pattern_argv.after_context;

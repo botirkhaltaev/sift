@@ -123,6 +123,7 @@ impl TestProject {
         let mut cmd = Command::new(exe());
         cmd.current_dir(&self.root);
         cmd.env("SIFT_NO_DAEMON", "1");
+        cmd.env_remove("RIPGREP_CONFIG_PATH");
         cmd
     }
 
@@ -131,6 +132,7 @@ impl TestProject {
         let mut cmd = Command::new(exe());
         cmd.current_dir(&self.root);
         cmd.env_remove("SIFT_NO_DAEMON");
+        cmd.env_remove("RIPGREP_CONFIG_PATH");
         cmd.env("CARGO_BIN_EXE_sift-daemon", daemon_bin());
         cmd
     }

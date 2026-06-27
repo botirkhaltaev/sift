@@ -1,8 +1,8 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use sift_core::grep::CandidateFiles;
-use sift_core::search::{CandidateFilter, SearchMode, StdinInput};
+use sift_core::grep::CandidateDiscovery;
+use sift_core::search::{CandidateFilter, SearchMode, StreamInput};
 use sift_core::{
     CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
 };
@@ -54,9 +54,14 @@ struct GrepSession {
     store_meta: Option<sift_core::StoreMeta>,
 }
 
-struct SearchInputs {
+struct SearchInput {
     paths: Vec<PathBuf>,
     stdin: Option<Vec<u8>>,
+}
+
+struct SearchInputIntent {
+    paths: Vec<PathBuf>,
+    explicit_stdin: bool,
 }
 
 impl GrepOutcome {
@@ -185,7 +190,7 @@ impl Grep {
         }
         all_paths.sort();
         all_paths.dedup();
-        let sep = if output_argv.path.null_data {
+        let sep = if output_argv.path.nul_terminated {
             '\0'
         } else {
             '\n'
@@ -201,7 +206,7 @@ impl Grep {
 
     fn run_search(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<bool> {
         let patterns = ResolvedPatterns::resolve(&self.config.pattern)?;
-        let input = self.resolve_search_inputs(patterns.stdin_consumed)?;
+        let input_intent = self.resolve_search_input_intent();
         let pattern_argv = PatternArgv::resolve(argv);
         let output_argv = OutputArgv::resolve(argv);
 
@@ -232,7 +237,8 @@ impl Grep {
             }
         }
 
-        let session = self.prepare_session(argv, &input.paths)?;
+        let session = self.prepare_session(argv, &input_intent.paths)?;
+        let input = Self::resolve_search_input(input_intent, patterns.stdin_consumed, &session)?;
 
         let opts = self
             .config
@@ -263,8 +269,8 @@ impl Grep {
                 store_meta: session.store_meta.as_ref(),
                 snapshot,
             },
-            candidate_files: Self::candidate_files(&input),
-            stdin: input.stdin.as_deref().map(|bytes| StdinInput {
+            candidate_discovery: Self::candidate_discovery(&input),
+            stream: input.stdin.as_deref().map(|bytes| StreamInput {
                 display_path: STDIN_DISPLAY_PATH,
                 bytes,
             }),
@@ -291,7 +297,7 @@ impl Grep {
 
     fn filename_context(
         out: &SearchOutputCtx,
-        input: &SearchInputs,
+        input: &SearchInput,
         session: &GrepSession,
     ) -> FilenameContext {
         if out.lines.is_path_mode {
@@ -324,15 +330,15 @@ impl Grep {
             )
     }
 
-    const fn candidate_files(input: &SearchInputs) -> CandidateFiles {
+    const fn candidate_discovery(input: &SearchInput) -> CandidateDiscovery {
         if input.stdin.is_some() && input.paths.is_empty() {
-            CandidateFiles::Skip
+            CandidateDiscovery::Skip
         } else {
-            CandidateFiles::Search
+            CandidateDiscovery::Resolve
         }
     }
 
-    fn resolve_search_inputs(&self, stdin_consumed: bool) -> anyhow::Result<SearchInputs> {
+    fn resolve_search_input_intent(&self) -> SearchInputIntent {
         let mut paths = Vec::with_capacity(self.config.search_paths.len());
         let mut explicit_stdin = false;
         for path in &self.config.search_paths {
@@ -343,8 +349,27 @@ impl Grep {
             }
         }
 
-        let implicit_stdin =
-            !stdin_consumed && paths.is_empty() && !explicit_stdin && stdin_is_pipe();
+        SearchInputIntent {
+            paths,
+            explicit_stdin,
+        }
+    }
+
+    fn resolve_search_input(
+        intent: SearchInputIntent,
+        stdin_consumed: bool,
+        session: &GrepSession,
+    ) -> anyhow::Result<SearchInput> {
+        let SearchInputIntent {
+            paths,
+            explicit_stdin,
+        } = intent;
+
+        let implicit_stdin = !stdin_consumed
+            && paths.is_empty()
+            && !explicit_stdin
+            && session.indexes.is_empty()
+            && stdin_is_pipe();
         let stdin = if explicit_stdin || implicit_stdin {
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes)?;
@@ -353,7 +378,7 @@ impl Grep {
             None
         };
 
-        Ok(SearchInputs { paths, stdin })
+        Ok(SearchInput { paths, stdin })
     }
 }
 

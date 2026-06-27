@@ -83,7 +83,7 @@ pub use filter::{
     CandidateFilter, CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
     TypeDef, VisibilityConfig,
 };
-pub use options::{BinaryMode, CaseMode, SearchMatchFlags, SearchOptions};
+pub use options::{BinaryMode, CaseMode, InputEncoding, SearchMatchFlags, SearchOptions};
 pub use output::format::{ColumnLimit, ColumnOverflow};
 pub use output::mode::{MatchEmissionMode, OutputEmission, SearchMode, ZeroCountMode};
 pub use output::passthru::PassthruMode;
@@ -95,7 +95,7 @@ pub use output::{SearchOutput, SearchOutputFormat};
 pub use pattern::PatternCompiler;
 pub use query::Match;
 pub use query::SearchQuery;
-pub use request::{LinkTraversal, SearchCollection, StdinInput, WalkOptions};
+pub use request::{LinkTraversal, SearchCollection, StreamInput, WalkOptions};
 
 #[derive(Debug)]
 pub struct SearchOutcome {

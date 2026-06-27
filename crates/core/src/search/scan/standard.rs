@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::{Captures, Matcher};
@@ -18,7 +18,7 @@ use crate::search::output::style::{
     FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
 use crate::search::query::SearchQuery;
-use crate::search::request::{SearchCollection, StdinInput};
+use crate::search::request::{SearchCollection, StreamInput};
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -37,6 +37,7 @@ pub struct StandardSink<'a> {
     match_count: usize,
     replace: Option<&'a str>,
     trim: bool,
+    line_terminator: u8,
 }
 
 impl<'a> StandardSink<'a> {
@@ -62,7 +63,14 @@ impl<'a> StandardSink<'a> {
             match_count: 0,
             replace,
             trim: output.lines.trim(),
+            line_terminator: b'\n',
         }
+    }
+
+    #[must_use]
+    const fn with_line_terminator(mut self, line_terminator: u8) -> Self {
+        self.line_terminator = line_terminator;
+        self
     }
 }
 
@@ -82,7 +90,7 @@ impl Sink for StandardSink<'_> {
             self.output.mode,
             crate::search::output::mode::SearchMode::OnlyMatching
         ) {
-            return Ok(self.handle_only_matching(mat));
+            return self.handle_only_matching(mat);
         }
 
         let line_bytes = mat.bytes();
@@ -152,13 +160,13 @@ impl Sink for StandardSink<'_> {
             let s = String::from_utf8_lossy(line_bytes);
             let trimmed = s.trim_start();
             self.bytes.write_all(trimmed.as_bytes())?;
-            if !trimmed.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !trimmed.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else {
             self.bytes.write_all(line_bytes)?;
-            if !line_bytes.ends_with(b"\n") {
-                self.bytes.write_all(b"\n")?;
+            if !line_bytes.ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         }
         Ok(true)
@@ -177,19 +185,26 @@ impl Sink for StandardSink<'_> {
         }
         if let Some(ref sep) = self.separators.context_separator {
             self.bytes.write_all(sep)?;
-            self.bytes.write_all(b"\n")?;
+            self.bytes.write_all(&[self.line_terminator])?;
         }
         Ok(true)
     }
 }
 
 impl StandardSink<'_> {
-    fn handle_only_matching(&mut self, mat: &SinkMatch<'_>) -> bool {
+    fn handle_only_matching(&mut self, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
         let show_column = self.output.lines.flags.contains(LineStyleFlags::COLUMN);
         let line_number = mat.line_number();
         let line = mat.bytes();
         let byte_offset = mat.absolute_byte_offset();
-        let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
+        let mut matches = Vec::new();
+        self.matcher
+            .find_iter(line, |m: grep_matcher::Match| {
+                matches.push(m);
+                true
+            })
+            .map_err(io::Error::other)?;
+        for m in matches {
             let col = if show_column {
                 Some(m.start() + 1)
             } else {
@@ -201,7 +216,7 @@ impl StandardSink<'_> {
             } else {
                 String::from_utf8_lossy(matched_slice).into_owned()
             };
-            let _ = self.write_prefix(
+            self.write_prefix(
                 line_number,
                 false,
                 col,
@@ -210,12 +225,11 @@ impl StandardSink<'_> {
                 } else {
                     None
                 },
-            );
-            let _ = self.bytes.write_all(text.as_bytes());
-            let _ = self.bytes.write_all(b"\n");
-            true
-        });
-        true
+            )?;
+            self.bytes.write_all(text.as_bytes())?;
+            self.bytes.write_all(&[self.line_terminator])?;
+        }
+        Ok(true)
     }
 
     fn handle_max_columns(
@@ -321,20 +335,20 @@ impl StandardSink<'_> {
         if let Some(rep) = self.replace {
             let text = apply_replace(self.matcher, line_bytes, rep);
             self.bytes.write_all(text.as_bytes())?;
-            if !text.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !text.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else if self.trim {
             let trimmed = String::from_utf8_lossy(line_bytes);
             let trimmed = trimmed.trim_start();
             self.bytes.write_all(trimmed.as_bytes())?;
-            if !trimmed.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !trimmed.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else {
             self.bytes.write_all(line_bytes)?;
-            if !line_bytes.ends_with(b"\n") {
-                self.bytes.write_all(b"\n")?;
+            if !line_bytes.ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         }
         Ok(true)
@@ -358,6 +372,32 @@ struct StandardWorker<'a> {
     path_separator: Option<u8>,
     emission: OutputEmission,
     collect_hits: bool,
+    line_terminator: u8,
+}
+
+enum SearchTarget<'a> {
+    File {
+        display: String,
+        abs_path: &'a Path,
+        hit: Option<PathBuf>,
+    },
+    Stream(StreamInput<'a>),
+}
+
+impl SearchTarget<'_> {
+    fn display(&self) -> &str {
+        match self {
+            Self::File { display, .. } => display,
+            Self::Stream(input) => input.display_path,
+        }
+    }
+
+    fn hit(self, matched: bool) -> Option<PathBuf> {
+        match self {
+            Self::File { hit, .. } if matched => hit,
+            Self::File { .. } | Self::Stream(_) => None,
+        }
+    }
 }
 
 impl<'a> StandardWorker<'a> {
@@ -386,38 +426,26 @@ impl<'a> StandardWorker<'a> {
             path_separator: scan.output.records.path_separator,
             emission: scan.output.emission,
             collect_hits: collect.hits,
+            line_terminator: scan.search.opts().line_terminator(),
         }
     }
 
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
-        self.search_input(
-            &candidate.display_path(self.path_display, self.path_separator),
-            |searcher, matcher, sink| searcher.search_path(matcher, candidate.abs_path(), sink),
+        self.search_target(
+            SearchTarget::File {
+                display: candidate.display_path(self.path_display, self.path_separator),
+                abs_path: candidate.abs_path(),
+                hit: (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+            },
             stop,
-            (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
         )
     }
 
-    fn search_stdin(&mut self, input: StdinInput<'_>, stop: &AtomicBool) -> FileResult {
-        self.search_input(
-            input.display_path,
-            |searcher, matcher, sink| searcher.search_slice(matcher, input.bytes, sink),
-            stop,
-            None,
-        )
+    fn search_stream(&mut self, input: StreamInput<'_>, stop: &AtomicBool) -> FileResult {
+        self.search_target(SearchTarget::Stream(input), stop)
     }
 
-    fn search_input(
-        &mut self,
-        display: &str,
-        search: impl FnOnce(
-            &mut Searcher,
-            &RegexMatcher,
-            &mut StandardSink<'_>,
-        ) -> Result<(), std::io::Error>,
-        stop: &AtomicBool,
-        hit: Option<PathBuf>,
-    ) -> FileResult {
+    fn search_target(&mut self, target: SearchTarget<'_>, stop: &AtomicBool) -> FileResult {
         self.bytes.clear();
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -426,6 +454,8 @@ impl<'a> StandardWorker<'a> {
                 hit: None,
             };
         }
+
+        let display = target.display().to_string();
 
         let matched = {
             let heading = self.lines_flags.contains(LineStyleFlags::HEADING)
@@ -437,13 +467,22 @@ impl<'a> StandardWorker<'a> {
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
-                display.to_string(),
+                display.clone(),
                 &mut self.bytes,
                 self.separators,
                 self.replace.as_deref(),
                 self.sink_config,
-            );
-            let _ = search(&mut self.searcher, self.matcher, &mut sink);
+            )
+            .with_line_terminator(self.line_terminator);
+            let _ = match &target {
+                SearchTarget::File { abs_path, .. } => {
+                    self.searcher.search_path(self.matcher, abs_path, &mut sink)
+                }
+                SearchTarget::Stream(input) => {
+                    self.searcher
+                        .search_slice(self.matcher, input.bytes, &mut sink)
+                }
+            };
             let n = sink.match_count;
             if let Some(c) = self.match_counter {
                 c.fetch_add(n, Ordering::Relaxed);
@@ -488,7 +527,7 @@ impl<'a> StandardWorker<'a> {
                     && self.emission != OutputEmission::Quiet,
             },
             json_stats: None,
-            hit: matched.then_some(hit).flatten(),
+            hit: target.hit(matched),
         }
     }
 }
@@ -524,11 +563,11 @@ impl<'a> StandardScan<'a> {
     pub fn run(
         &self,
         candidates: &[Candidate],
-        stdin: Option<StdinInput<'_>>,
+        stream: Option<StreamInput<'_>>,
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len() + usize::from(stdin.is_some());
+        let n = candidates.len() + usize::from(stream.is_some());
         let mut files = Vec::with_capacity(n);
         candidates
             .par_iter()
@@ -539,9 +578,9 @@ impl<'a> StandardScan<'a> {
                 },
             )
             .collect_into_vec(&mut files);
-        if let Some(input) = stdin {
+        if let Some(input) = stream {
             let mut worker = StandardWorker::new(self, collect);
-            files.push(worker.search_stdin(input, &stop));
+            files.push(worker.search_stream(input, &stop));
         }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());

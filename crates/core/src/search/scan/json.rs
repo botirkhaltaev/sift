@@ -13,7 +13,7 @@ use crate::search::emit::stats::SearchStats;
 use crate::search::output::SearchOutput;
 use crate::search::output::mode::OutputEmission;
 use crate::search::query::SearchQuery;
-use crate::search::request::StdinInput;
+use crate::search::request::StreamInput;
 
 struct NullWriter;
 
@@ -86,7 +86,7 @@ impl<'a> JsonWorker<'a> {
         }
     }
 
-    fn search_stdin(&mut self, input: StdinInput<'_>, stop: &AtomicBool) -> FileResult {
+    fn search_stream(&mut self, input: StreamInput<'_>, stop: &AtomicBool) -> FileResult {
         let quiet = self.output.emission == OutputEmission::Quiet;
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -178,11 +178,11 @@ impl<'a> JsonScan<'a> {
     pub fn run(
         &self,
         candidates: &[Candidate],
-        stdin: Option<StdinInput<'_>>,
+        stream: Option<StreamInput<'_>>,
         stats: Option<&mut SearchStats>,
     ) -> crate::Result<bool> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len() + usize::from(stdin.is_some());
+        let n = candidates.len() + usize::from(stream.is_some());
         let mut files = Vec::with_capacity(n);
         candidates
             .par_iter()
@@ -193,9 +193,9 @@ impl<'a> JsonScan<'a> {
                 },
             )
             .collect_into_vec(&mut files);
-        if let Some(input) = stdin {
+        if let Some(input) = stream {
             let mut worker = JsonWorker::new(self);
-            files.push(worker.search_stdin(input, &stop));
+            files.push(worker.search_stream(input, &stop));
         }
 
         let mut merged = JsonStats::new();
@@ -215,9 +215,9 @@ impl<'a> JsonScan<'a> {
         if let Some(s) = stats {
             s.fill_from_json(
                 &merged,
-                candidates.len() + usize::from(stdin.is_some()),
+                candidates.len() + usize::from(stream.is_some()),
                 crate::Candidate::total_file_bytes(candidates)
-                    + stdin.map_or(0, |input| {
+                    + stream.map_or(0, |input| {
                         u64::try_from(input.bytes.len()).unwrap_or(u64::MAX)
                     }),
                 self.wall_start.elapsed(),
