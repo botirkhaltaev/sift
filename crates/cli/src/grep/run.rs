@@ -406,17 +406,8 @@ impl Grep {
     }
 }
 
-#[cfg(unix)]
 fn stdin_is_pipe() -> bool {
-    use std::os::unix::fs::FileTypeExt;
+    use std::io::IsTerminal;
 
-    std::fs::metadata("/dev/stdin").is_ok_and(|meta| {
-        let ft = meta.file_type();
-        ft.is_fifo() || ft.is_socket() || ft.is_file()
-    })
-}
-
-#[cfg(not(unix))]
-const fn stdin_is_pipe() -> bool {
-    false
+    !std::io::stdin().is_terminal()
 }
