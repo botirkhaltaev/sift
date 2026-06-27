@@ -112,10 +112,18 @@ impl SearchSourceDecl {
             && self.stream == StreamRequest::Unspecified
             && session.indexes.is_empty()
             && stdin_is_pipe();
-        let streams = if self.stream == StreamRequest::Explicit || implicit_stream {
+        let streams = if self.stream == StreamRequest::Explicit {
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes)?;
             vec![bytes]
+        } else if implicit_stream {
+            let mut bytes = Vec::new();
+            std::io::stdin().read_to_end(&mut bytes)?;
+            if bytes.is_empty() {
+                Vec::new()
+            } else {
+                vec![bytes]
+            }
         } else {
             Vec::new()
         };
