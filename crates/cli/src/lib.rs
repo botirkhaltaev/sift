@@ -17,11 +17,19 @@ use config::ConfigArgs;
 #[must_use]
 pub fn main_entry() -> ExitCode {
     let raw_args = Argv::from_env();
+
+    if let Ok(cli) = Cli::try_parse_from(&raw_args)
+        && cli.command.is_some()
+    {
+        let argv = Argv::new(&raw_args);
+        return cli.dispatch(&argv);
+    }
+
     let config_args = match ConfigArgs::from_env(&raw_args) {
         Ok(args) => args,
         Err(err) => {
             eprintln!("sift: {err}");
-            ConfigArgs::empty()
+            return ExitCode::from(1);
         }
     };
     let argv_storage = config_args.apply(&raw_args);
