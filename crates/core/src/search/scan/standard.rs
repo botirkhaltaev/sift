@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::{Captures, Matcher};
@@ -18,7 +18,7 @@ use crate::search::output::style::{
     FilenameMode, LineStyleFlags, SearchRecordStyle, SearchSeparators,
 };
 use crate::search::query::SearchQuery;
-use crate::search::request::SearchCollection;
+use crate::search::request::{SearchCollection, SearchInput, StreamInput};
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -375,6 +375,31 @@ struct StandardWorker<'a> {
     line_terminator: u8,
 }
 
+enum SearchTarget<'a> {
+    File {
+        display: String,
+        abs_path: &'a Path,
+        hit: Option<PathBuf>,
+    },
+    Stream(StreamInput<'a>),
+}
+
+impl SearchTarget<'_> {
+    fn display(&self) -> &str {
+        match self {
+            Self::File { display, .. } => display,
+            Self::Stream(input) => input.display_path,
+        }
+    }
+
+    fn hit(self, matched: bool) -> Option<PathBuf> {
+        match self {
+            Self::File { hit, .. } if matched => hit,
+            Self::File { .. } | Self::Stream(_) => None,
+        }
+    }
+}
+
 impl<'a> StandardWorker<'a> {
     fn new(scan: &'a StandardScan<'a>, collect: SearchCollection) -> Self {
         Self {
@@ -406,6 +431,21 @@ impl<'a> StandardWorker<'a> {
     }
 
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
+        self.search_target(
+            SearchTarget::File {
+                display: candidate.display_path(self.path_display, self.path_separator),
+                abs_path: candidate.abs_path(),
+                hit: (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+            },
+            stop,
+        )
+    }
+
+    fn search_stream(&mut self, input: StreamInput<'_>, stop: &AtomicBool) -> FileResult {
+        self.search_target(SearchTarget::Stream(input), stop)
+    }
+
+    fn search_target(&mut self, target: SearchTarget<'_>, stop: &AtomicBool) -> FileResult {
         self.bytes.clear();
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -415,6 +455,8 @@ impl<'a> StandardWorker<'a> {
             };
         }
 
+        let display = target.display().to_string();
+
         let matched = {
             let heading = self.lines_flags.contains(LineStyleFlags::HEADING)
                 && self.filename_mode != FilenameMode::Never;
@@ -422,20 +464,25 @@ impl<'a> StandardWorker<'a> {
             if heading {
                 sink_output.lines.filename_mode = FilenameMode::Never;
             }
-            let display = candidate.display_path(self.path_display, self.path_separator);
             let mut sink = StandardSink::new(
                 self.matcher,
                 sink_output,
-                display,
+                display.clone(),
                 &mut self.bytes,
                 self.separators,
                 self.replace.as_deref(),
                 self.sink_config,
             )
             .with_line_terminator(self.line_terminator);
-            let _ = self
-                .searcher
-                .search_path(self.matcher, candidate.abs_path(), &mut sink);
+            let _ = match &target {
+                SearchTarget::File { abs_path, .. } => {
+                    self.searcher.search_path(self.matcher, abs_path, &mut sink)
+                }
+                SearchTarget::Stream(input) => {
+                    self.searcher
+                        .search_slice(self.matcher, input.bytes, &mut sink)
+                }
+            };
             let n = sink.match_count;
             if let Some(c) = self.match_counter {
                 c.fetch_add(n, Ordering::Relaxed);
@@ -463,7 +510,6 @@ impl<'a> StandardWorker<'a> {
                     if self.records.should_color() {
                         out.extend_from_slice(ANSI_PATH);
                     }
-                    let display = candidate.display_path(self.path_display, self.path_separator);
                     let _ = write!(out, "{display}");
                     if self.records.should_color() {
                         out.extend_from_slice(ANSI_RESET);
@@ -481,7 +527,7 @@ impl<'a> StandardWorker<'a> {
                     && self.emission != OutputEmission::Quiet,
             },
             json_stats: None,
-            hit: (matched && self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+            hit: target.hit(matched),
         }
     }
 }
@@ -516,21 +562,33 @@ impl<'a> StandardScan<'a> {
     /// Returns an error if scanning or writing output fails.
     pub fn run(
         &self,
-        candidates: &[Candidate],
+        inputs: &[SearchInput<'_>],
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len();
+        let n = inputs.iter().map(|input| input.count()).sum();
         let mut files = Vec::with_capacity(n);
-        candidates
-            .par_iter()
-            .map_init(
-                || StandardWorker::new(self, collect),
-                |worker: &mut StandardWorker<'_>, candidate: &Candidate| {
-                    worker.search_candidate(candidate, &stop)
-                },
-            )
-            .collect_into_vec(&mut files);
+        for input in inputs {
+            match *input {
+                SearchInput::Candidates(candidates) => {
+                    let mut candidate_files = Vec::with_capacity(candidates.len());
+                    candidates
+                        .par_iter()
+                        .map_init(
+                            || StandardWorker::new(self, collect),
+                            |worker: &mut StandardWorker<'_>, candidate: &Candidate| {
+                                worker.search_candidate(candidate, &stop)
+                            },
+                        )
+                        .collect_into_vec(&mut candidate_files);
+                    files.extend(candidate_files);
+                }
+                SearchInput::Stream(stream) => {
+                    let mut worker = StandardWorker::new(self, collect);
+                    files.push(worker.search_stream(stream, &stop));
+                }
+            }
+        }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
         for file in files {
