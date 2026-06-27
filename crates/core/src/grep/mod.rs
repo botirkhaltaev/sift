@@ -47,7 +47,11 @@ impl GrepRequest<'_> {
 
         let spec = query.build_query_spec();
         let output = self.output;
-        let requirement = output.candidate_requirement();
+        let requirement = if query.opts().precludes_trigram_index() {
+            crate::query::CandidateRequirement::Complete
+        } else {
+            output.candidate_requirement()
+        };
 
         let raw = QueryPlanner::new(spec).candidates(
             CandidatePlan {

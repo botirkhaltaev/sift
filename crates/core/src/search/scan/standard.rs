@@ -37,6 +37,7 @@ pub struct StandardSink<'a> {
     match_count: usize,
     replace: Option<&'a str>,
     trim: bool,
+    line_terminator: u8,
 }
 
 impl<'a> StandardSink<'a> {
@@ -62,7 +63,14 @@ impl<'a> StandardSink<'a> {
             match_count: 0,
             replace,
             trim: output.lines.trim(),
+            line_terminator: b'\n',
         }
+    }
+
+    #[must_use]
+    const fn with_line_terminator(mut self, line_terminator: u8) -> Self {
+        self.line_terminator = line_terminator;
+        self
     }
 }
 
@@ -82,7 +90,7 @@ impl Sink for StandardSink<'_> {
             self.output.mode,
             crate::search::output::mode::SearchMode::OnlyMatching
         ) {
-            return Ok(self.handle_only_matching(mat));
+            return self.handle_only_matching(mat);
         }
 
         let line_bytes = mat.bytes();
@@ -152,13 +160,13 @@ impl Sink for StandardSink<'_> {
             let s = String::from_utf8_lossy(line_bytes);
             let trimmed = s.trim_start();
             self.bytes.write_all(trimmed.as_bytes())?;
-            if !trimmed.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !trimmed.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else {
             self.bytes.write_all(line_bytes)?;
-            if !line_bytes.ends_with(b"\n") {
-                self.bytes.write_all(b"\n")?;
+            if !line_bytes.ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         }
         Ok(true)
@@ -177,19 +185,26 @@ impl Sink for StandardSink<'_> {
         }
         if let Some(ref sep) = self.separators.context_separator {
             self.bytes.write_all(sep)?;
-            self.bytes.write_all(b"\n")?;
+            self.bytes.write_all(&[self.line_terminator])?;
         }
         Ok(true)
     }
 }
 
 impl StandardSink<'_> {
-    fn handle_only_matching(&mut self, mat: &SinkMatch<'_>) -> bool {
+    fn handle_only_matching(&mut self, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
         let show_column = self.output.lines.flags.contains(LineStyleFlags::COLUMN);
         let line_number = mat.line_number();
         let line = mat.bytes();
         let byte_offset = mat.absolute_byte_offset();
-        let _ = self.matcher.find_iter(line, |m: grep_matcher::Match| {
+        let mut matches = Vec::new();
+        self.matcher
+            .find_iter(line, |m: grep_matcher::Match| {
+                matches.push(m);
+                true
+            })
+            .map_err(io::Error::other)?;
+        for m in matches {
             let col = if show_column {
                 Some(m.start() + 1)
             } else {
@@ -201,7 +216,7 @@ impl StandardSink<'_> {
             } else {
                 String::from_utf8_lossy(matched_slice).into_owned()
             };
-            let _ = self.write_prefix(
+            self.write_prefix(
                 line_number,
                 false,
                 col,
@@ -210,12 +225,11 @@ impl StandardSink<'_> {
                 } else {
                     None
                 },
-            );
-            let _ = self.bytes.write_all(text.as_bytes());
-            let _ = self.bytes.write_all(b"\n");
-            true
-        });
-        true
+            )?;
+            self.bytes.write_all(text.as_bytes())?;
+            self.bytes.write_all(&[self.line_terminator])?;
+        }
+        Ok(true)
     }
 
     fn handle_max_columns(
@@ -321,20 +335,20 @@ impl StandardSink<'_> {
         if let Some(rep) = self.replace {
             let text = apply_replace(self.matcher, line_bytes, rep);
             self.bytes.write_all(text.as_bytes())?;
-            if !text.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !text.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else if self.trim {
             let trimmed = String::from_utf8_lossy(line_bytes);
             let trimmed = trimmed.trim_start();
             self.bytes.write_all(trimmed.as_bytes())?;
-            if !trimmed.ends_with('\n') {
-                self.bytes.write_all(b"\n")?;
+            if !trimmed.as_bytes().ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         } else {
             self.bytes.write_all(line_bytes)?;
-            if !line_bytes.ends_with(b"\n") {
-                self.bytes.write_all(b"\n")?;
+            if !line_bytes.ends_with(&[self.line_terminator]) {
+                self.bytes.write_all(&[self.line_terminator])?;
             }
         }
         Ok(true)
@@ -358,6 +372,7 @@ struct StandardWorker<'a> {
     path_separator: Option<u8>,
     emission: OutputEmission,
     collect_hits: bool,
+    line_terminator: u8,
 }
 
 impl<'a> StandardWorker<'a> {
@@ -386,6 +401,7 @@ impl<'a> StandardWorker<'a> {
             path_separator: scan.output.records.path_separator,
             emission: scan.output.emission,
             collect_hits: collect.hits,
+            line_terminator: scan.search.opts().line_terminator(),
         }
     }
 
@@ -415,7 +431,8 @@ impl<'a> StandardWorker<'a> {
                 self.separators,
                 self.replace.as_deref(),
                 self.sink_config,
-            );
+            )
+            .with_line_terminator(self.line_terminator);
             let _ = self
                 .searcher
                 .search_path(self.matcher, candidate.abs_path(), &mut sink);

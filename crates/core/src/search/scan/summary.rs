@@ -150,10 +150,11 @@ fn write_summary_record(
                 if records.should_color() {
                     out.extend_from_slice(ANSI_RESET);
                 }
-                writeln!(out, ":{}", result.count)?;
+                write!(out, ":{}", result.count)?;
             } else {
-                writeln!(out, "{}", result.count)?;
+                write!(out, "{}", result.count)?;
             }
+            records.terminator.write_to(out);
             Ok(())
         }
         SearchMode::FilesWithMatches => {

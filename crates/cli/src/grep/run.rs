@@ -172,7 +172,7 @@ impl Grep {
         }
         all_paths.sort();
         all_paths.dedup();
-        let sep = if output_argv.path.null_data {
+        let sep = if output_argv.path.nul_terminated {
             '\0'
         } else {
             '\n'
