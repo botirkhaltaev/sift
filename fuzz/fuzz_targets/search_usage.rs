@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::grep::{CandidateDiscovery, GrepRequest};
+use sift_core::grep::{GrepInput, GrepRequest};
 use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, OutputEmission, PatternCompiler, SearchCollection,
     SearchMatchFlags, SearchOptions, SearchOutput, SearchOutputFormat, SearchSeparators,
@@ -94,8 +94,7 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
-        candidate_discovery: CandidateDiscovery::Resolve,
-        stream: None,
+        input: GrepInput::Candidates,
     };
     let _ = request.run(&q);
 }

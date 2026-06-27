@@ -102,10 +102,8 @@ impl SearchQuery {
         }
 
         let output = execution.output;
-        let candidates = execution.candidates;
-        let stream = execution.stream;
 
-        if candidates.is_empty() && stream.is_none() {
+        if execution.inputs.is_empty() {
             return Ok((
                 SearchOutcome {
                     matched: false,
@@ -128,14 +126,14 @@ impl SearchQuery {
                         output,
                         search_start,
                     );
-                    let json_matched = scan.run(candidates, stream, stats.as_mut())?;
+                    let json_matched = scan.run(&execution.inputs, stats.as_mut())?;
                     (json_matched, stats, Vec::new())
                 }
                 _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),
             },
             SearchOutputFormat::Text => {
                 let (did_match, stats, hits) =
-                    self.run_text_output(candidates, stream, matcher, execution, search_start)?;
+                    self.run_text_output(matcher, execution, search_start)?;
                 (did_match, stats, hits)
             }
         };
@@ -160,8 +158,6 @@ impl SearchQuery {
 
     fn run_text_output(
         &self,
-        candidates: &[crate::Candidate],
-        stream: Option<crate::search::request::StreamInput<'_>>,
         matcher: &RegexMatcher,
         execution: &SearchExecution<'_>,
         search_start: Instant,
@@ -179,7 +175,7 @@ impl SearchQuery {
                     execution.separators,
                     &counters,
                 );
-                scan.run(candidates, stream, collect)?
+                scan.run(&execution.inputs, collect)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
@@ -188,19 +184,16 @@ impl SearchQuery {
                 let scan = crate::search::scan::summary::SummaryScan::new(
                     self, matcher, output, &counters,
                 );
-                scan.run(candidates, stream, collect)?
+                scan.run(&execution.inputs, collect)?
             }
         };
 
         let bytes_searched = if collect.stats {
-            crate::Candidate::total_file_bytes(candidates)
-                + stream.map_or(0, |input| {
-                    u64::try_from(input.bytes.len()).unwrap_or(u64::MAX)
-                })
+            execution.inputs.iter().map(|input| input.bytes()).sum()
         } else {
             0
         };
-        let input_count = candidates.len() + usize::from(stream.is_some());
+        let input_count = execution.inputs.iter().map(|input| input.count()).sum();
         let stats = counters.finish(input_count, bytes_searched, search_start.elapsed());
 
         Ok((did_match, stats, hits))

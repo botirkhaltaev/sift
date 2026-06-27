@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::Candidate;
 use crate::index::Indexes;
 use crate::query::{CandidatePlan, CandidateSource, QueryPlanner};
-use crate::search::request::{SearchCollection, SearchExecution, StreamInput};
+use crate::search::request::{SearchCollection, SearchExecution, SearchInput, StreamInput};
 use crate::search::{
     CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
     SearchStats,
@@ -24,11 +24,40 @@ pub struct GrepRun {
     pub hits: Vec<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CandidateDiscovery {
-    #[default]
-    Resolve,
-    Skip,
+#[derive(Clone, Copy)]
+pub enum GrepInput<'a> {
+    Candidates,
+    Stream(StreamInput<'a>),
+    CandidatesAndStream(StreamInput<'a>),
+}
+
+impl<'a> GrepInput<'a> {
+    const fn needs_candidates(self) -> bool {
+        matches!(self, Self::Candidates | Self::CandidatesAndStream(_))
+    }
+
+    fn search_inputs(self, candidates: &'a [Candidate]) -> Vec<SearchInput<'a>> {
+        match self {
+            Self::Candidates => {
+                if candidates.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![SearchInput::Candidates(candidates)]
+                }
+            }
+            Self::Stream(stream) => vec![SearchInput::Stream(stream)],
+            Self::CandidatesAndStream(stream) => {
+                if candidates.is_empty() {
+                    vec![SearchInput::Stream(stream)]
+                } else {
+                    vec![
+                        SearchInput::Candidates(candidates),
+                        SearchInput::Stream(stream),
+                    ]
+                }
+            }
+        }
+    }
 }
 
 /// User-facing request to the grep pipeline.
@@ -39,8 +68,7 @@ pub struct GrepRequest<'a> {
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,
     pub candidate_source: CandidateSource<'a>,
-    pub candidate_discovery: CandidateDiscovery,
-    pub stream: Option<StreamInput<'a>>,
+    pub input: GrepInput<'a>,
 }
 
 impl GrepRequest<'_> {
@@ -62,8 +90,8 @@ impl GrepRequest<'_> {
             output.candidate_requirement()
         };
 
-        let raw = match self.candidate_discovery {
-            CandidateDiscovery::Resolve => QueryPlanner::new(spec).candidates(
+        let raw = if self.input.needs_candidates() {
+            QueryPlanner::new(spec).candidates(
                 CandidatePlan {
                     indexes: self.indexes,
                     requirement,
@@ -71,8 +99,9 @@ impl GrepRequest<'_> {
                     source: self.candidate_source,
                 },
                 || self.filter.collect(),
-            )?,
-            CandidateDiscovery::Skip => Vec::new(),
+            )?
+        } else {
+            Vec::new()
         };
 
         let candidates: Vec<Candidate> = raw
@@ -80,7 +109,8 @@ impl GrepRequest<'_> {
             .filter(|c| c.matches(self.filter))
             .collect();
 
-        if candidates.is_empty() && self.stream.is_none() {
+        let inputs = self.input.search_inputs(&candidates);
+        if inputs.is_empty() {
             return Ok(GrepRun {
                 outcome: SearchOutcome {
                     matched: false,
@@ -91,8 +121,7 @@ impl GrepRequest<'_> {
         }
 
         let (outcome, hits) = query.search(&SearchExecution {
-            candidates: &candidates,
-            stream: self.stream,
+            inputs,
             output,
             separators: self.separators,
             collect: self.collect.with_hits(true),

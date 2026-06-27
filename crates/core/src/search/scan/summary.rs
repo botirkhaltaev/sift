@@ -15,7 +15,7 @@ use crate::search::output::SearchOutput;
 use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::search::output::style::FilenameMode;
 use crate::search::query::SearchQuery;
-use crate::search::request::{SearchCollection, StreamInput};
+use crate::search::request::{SearchCollection, SearchInput, StreamInput};
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -330,25 +330,32 @@ impl<'a> SummaryScan<'a> {
     /// Returns an error if scanning or writing output fails.
     pub fn run(
         &self,
-        candidates: &[Candidate],
-        stream: Option<StreamInput<'_>>,
+        inputs: &[SearchInput<'_>],
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = candidates.len() + usize::from(stream.is_some());
+        let n = inputs.iter().map(|input| input.count()).sum();
         let mut files = Vec::with_capacity(n);
-        candidates
-            .par_iter()
-            .map_init(
-                || SummaryWorker::new(self, collect),
-                |worker: &mut SummaryWorker<'_>, candidate: &Candidate| {
-                    worker.search_candidate(candidate, &stop)
-                },
-            )
-            .collect_into_vec(&mut files);
-        if let Some(input) = stream {
-            let mut worker = SummaryWorker::new(self, collect);
-            files.push(worker.search_stream(input, &stop));
+        for input in inputs {
+            match *input {
+                SearchInput::Candidates(candidates) => {
+                    let mut candidate_files = Vec::with_capacity(candidates.len());
+                    candidates
+                        .par_iter()
+                        .map_init(
+                            || SummaryWorker::new(self, collect),
+                            |worker: &mut SummaryWorker<'_>, candidate: &Candidate| {
+                                worker.search_candidate(candidate, &stop)
+                            },
+                        )
+                        .collect_into_vec(&mut candidate_files);
+                    files.extend(candidate_files);
+                }
+                SearchInput::Stream(stream) => {
+                    let mut worker = SummaryWorker::new(self, collect);
+                    files.push(worker.search_stream(stream, &stop));
+                }
+            }
         }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());

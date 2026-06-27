@@ -1,4 +1,4 @@
-use sift_core::grep::{CandidateDiscovery, GrepRequest};
+use sift_core::grep::{GrepInput, GrepRequest};
 use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, SearchCollection, SearchOptions, SearchOutput,
     SearchSeparators,
@@ -30,8 +30,7 @@ fn grep_finds_match_in_indexed_corpus() {
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
-        candidate_discovery: CandidateDiscovery::Resolve,
-        stream: None,
+        input: GrepInput::Candidates,
     }
     .run(&query)
     .expect("grep run");

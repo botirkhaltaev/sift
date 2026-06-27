@@ -499,7 +499,14 @@ fn parse_usize_token(s: &str) -> Option<usize> {
 #[derive(Debug)]
 pub struct ResolvedPatterns {
     pub patterns: Vec<String>,
-    pub stdin_consumed: bool,
+    pub input: PatternInputUse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PatternInputUse {
+    #[default]
+    None,
+    Stdin,
 }
 
 impl ResolvedPatterns {
@@ -508,13 +515,13 @@ impl ResolvedPatterns {
     /// Returns an error if no pattern is provided or if a pattern file cannot be read.
     pub fn resolve(config: &PatternConfig) -> anyhow::Result<Self> {
         let mut patterns = Vec::new();
-        let mut stdin_consumed = false;
+        let mut input = PatternInputUse::None;
         for p in &config.patterns.regexp {
             patterns.push(p.clone());
         }
         if let Some(file) = config.patterns.pattern_file.as_deref() {
             let content = if file == Path::new("-") {
-                stdin_consumed = true;
+                input = PatternInputUse::Stdin;
                 let mut content = String::new();
                 std::io::stdin().read_to_string(&mut content)?;
                 content
@@ -534,10 +541,7 @@ impl ResolvedPatterns {
         if patterns.is_empty() {
             anyhow::bail!("no pattern given");
         }
-        Ok(Self {
-            patterns,
-            stdin_consumed,
-        })
+        Ok(Self { patterns, input })
     }
 }
 
