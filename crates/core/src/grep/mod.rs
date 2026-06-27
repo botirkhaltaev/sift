@@ -1,9 +1,9 @@
 //! Grep pipeline orchestration.
 //!
 //! Bridges the query planner, index registry, candidate filter, and search
-//! engine into a single `GrepRequest::run()` call. This is the primary API
-//! the CLI calls. The pipeline is index-agnostic: it works with whatever
-//! index types the `Indexes` registry has opened.
+//! engine into corpus and stream search operations. The pipeline is
+//! index-agnostic: it works with whatever index types the `Indexes` registry
+//! has opened.
 
 use std::path::PathBuf;
 
@@ -24,39 +24,13 @@ pub struct GrepRun {
     pub hits: Vec<PathBuf>,
 }
 
-#[derive(Clone, Copy)]
-pub enum GrepInput<'a> {
-    Candidates,
-    Stream(StreamInput<'a>),
-    CandidatesAndStream(StreamInput<'a>),
-}
-
-impl<'a> GrepInput<'a> {
-    const fn needs_candidates(self) -> bool {
-        matches!(self, Self::Candidates | Self::CandidatesAndStream(_))
-    }
-
-    fn search_inputs(self, candidates: &'a [Candidate]) -> Vec<SearchInput<'a>> {
-        match self {
-            Self::Candidates => {
-                if candidates.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![SearchInput::Candidates(candidates)]
-                }
-            }
-            Self::Stream(stream) => vec![SearchInput::Stream(stream)],
-            Self::CandidatesAndStream(stream) => {
-                if candidates.is_empty() {
-                    vec![SearchInput::Stream(stream)]
-                } else {
-                    vec![
-                        SearchInput::Candidates(candidates),
-                        SearchInput::Stream(stream),
-                    ]
-                }
-            }
-        }
+impl GrepRun {
+    pub fn merge(&mut self, other: Self) {
+        self.outcome.matched |= other.outcome.matched;
+        merge_stats(&mut self.outcome.stats, other.outcome.stats);
+        self.hits.extend(other.hits);
+        self.hits.sort();
+        self.hits.dedup();
     }
 }
 
@@ -68,19 +42,46 @@ pub struct GrepRequest<'a> {
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,
     pub candidate_source: CandidateSource<'a>,
-    pub input: GrepInput<'a>,
 }
 
 impl GrepRequest<'_> {
-    /// Run the full grep pipeline: resolve candidates, execute search, return outcome.
+    /// Search the configured corpus by resolving file candidates first.
     ///
     /// # Errors
     ///
     /// Returns an error if candidate resolution, regex compilation, or search execution fails.
-    pub fn run(&self, query: &SearchQuery) -> crate::Result<GrepRun> {
-        if query.opts().max_results == Some(0) {
-            return Err(crate::Error::Search(SearchError::InvalidMaxCount));
+    pub fn search_corpus(&self, query: &SearchQuery) -> crate::Result<GrepRun> {
+        let candidates = self.resolve_candidates(query)?;
+        if candidates.is_empty() {
+            return Ok(self.empty_run());
         }
+
+        self.search_inputs(query, vec![SearchInput::Candidates(&candidates)])
+    }
+
+    /// Search named byte streams without resolving corpus candidates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if regex compilation or search execution fails.
+    pub fn search_streams(
+        &self,
+        query: &SearchQuery,
+        streams: &[StreamInput<'_>],
+    ) -> crate::Result<GrepRun> {
+        Self::validate_query(query)?;
+        if streams.is_empty() {
+            return Ok(self.empty_run());
+        }
+
+        self.search_inputs(
+            query,
+            streams.iter().copied().map(SearchInput::Stream).collect(),
+        )
+    }
+
+    fn resolve_candidates(&self, query: &SearchQuery) -> crate::Result<Vec<Candidate>> {
+        Self::validate_query(query)?;
 
         let spec = query.build_query_spec();
         let output = self.output;
@@ -90,43 +91,71 @@ impl GrepRequest<'_> {
             output.candidate_requirement()
         };
 
-        let raw = if self.input.needs_candidates() {
-            QueryPlanner::new(spec).candidates(
-                CandidatePlan {
-                    indexes: self.indexes,
-                    requirement,
-                    filter: self.filter,
-                    source: self.candidate_source,
-                },
-                || self.filter.collect(),
-            )?
-        } else {
-            Vec::new()
-        };
+        let raw = QueryPlanner::new(spec).candidates(
+            CandidatePlan {
+                indexes: self.indexes,
+                requirement,
+                filter: self.filter,
+                source: self.candidate_source,
+            },
+            || self.filter.collect(),
+        )?;
 
-        let candidates: Vec<Candidate> = raw
+        Ok(raw
             .into_par_iter()
             .filter(|c| c.matches(self.filter))
-            .collect();
+            .collect())
+    }
 
-        let inputs = self.input.search_inputs(&candidates);
+    fn search_inputs(
+        &self,
+        query: &SearchQuery,
+        inputs: Vec<SearchInput<'_>>,
+    ) -> crate::Result<GrepRun> {
         if inputs.is_empty() {
-            return Ok(GrepRun {
-                outcome: SearchOutcome {
-                    matched: false,
-                    stats: self.collect.stats.then_some(SearchStats::default()),
-                },
-                hits: Vec::new(),
-            });
+            return Ok(self.empty_run());
         }
 
         let (outcome, hits) = query.search(&SearchExecution {
             inputs,
-            output,
+            output: self.output,
             separators: self.separators,
             collect: self.collect.with_hits(true),
         })?;
 
         Ok(GrepRun { outcome, hits })
+    }
+
+    fn validate_query(query: &SearchQuery) -> crate::Result<()> {
+        if query.opts().max_results == Some(0) {
+            return Err(crate::Error::Search(SearchError::InvalidMaxCount));
+        }
+
+        Ok(())
+    }
+
+    fn empty_run(&self) -> GrepRun {
+        GrepRun {
+            outcome: SearchOutcome {
+                matched: false,
+                stats: self.collect.stats.then_some(SearchStats::default()),
+            },
+            hits: Vec::new(),
+        }
+    }
+}
+
+fn merge_stats(stats: &mut Option<SearchStats>, other: Option<SearchStats>) {
+    match (stats, other) {
+        (Some(stats), Some(other)) => {
+            stats.matches += other.matches;
+            stats.files_with_matches += other.files_with_matches;
+            stats.files_searched += other.files_searched;
+            stats.bytes_printed += other.bytes_printed;
+            stats.bytes_searched += other.bytes_searched;
+            stats.elapsed += other.elapsed;
+        }
+        (stats @ None, other) => *stats = other,
+        (Some(_), None) => {}
     }
 }

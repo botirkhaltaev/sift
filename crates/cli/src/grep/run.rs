@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use sift_core::grep::GrepInput;
+use sift_core::grep::{GrepRequest, GrepRun};
 use sift_core::search::{CandidateFilter, SearchMode, StreamInput};
 use sift_core::{
     CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
@@ -56,7 +56,7 @@ struct GrepSession {
 
 struct SearchSources {
     paths: Vec<PathBuf>,
-    stream: Option<Vec<u8>>,
+    streams: Vec<Vec<u8>>,
 }
 
 struct SearchSourceDecl {
@@ -71,18 +71,18 @@ enum StreamRequest {
 }
 
 impl SearchSources {
-    fn grep_input(&self) -> GrepInput<'_> {
-        match (self.paths.is_empty(), self.stream.as_deref()) {
-            (true, Some(bytes)) => GrepInput::Stream(StreamInput {
+    const fn searches_corpus(&self) -> bool {
+        !self.paths.is_empty() || self.streams.is_empty()
+    }
+
+    fn stream_inputs(&self) -> Vec<StreamInput<'_>> {
+        self.streams
+            .iter()
+            .map(|bytes| StreamInput {
                 display_path: STDIN_DISPLAY_PATH,
                 bytes,
-            }),
-            (false, Some(bytes)) => GrepInput::CandidatesAndStream(StreamInput {
-                display_path: STDIN_DISPLAY_PATH,
-                bytes,
-            }),
-            (_, None) => GrepInput::Candidates,
-        }
+            })
+            .collect()
     }
 }
 
@@ -112,17 +112,17 @@ impl SearchSourceDecl {
             && self.stream == StreamRequest::Unspecified
             && session.indexes.is_empty()
             && stdin_is_pipe();
-        let stream = if self.stream == StreamRequest::Explicit || implicit_stream {
+        let streams = if self.stream == StreamRequest::Explicit || implicit_stream {
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes)?;
-            Some(bytes)
+            vec![bytes]
         } else {
-            None
+            Vec::new()
         };
 
         Ok(SearchSources {
             paths: self.paths,
-            stream,
+            streams,
         })
     }
 }
@@ -322,7 +322,7 @@ impl Grep {
         let output = out.to_core_output(&self.config.output, filename_ctx);
         let snapshot = Self::snapshot_validation(&session, daemon);
 
-        let grep_run = sift_core::grep::GrepRequest {
+        let grep_request = GrepRequest {
             indexes: &session.indexes,
             filter: &session.search_filter,
             output,
@@ -332,9 +332,8 @@ impl Grep {
                 store_meta: session.store_meta.as_ref(),
                 snapshot,
             },
-            input: sources.grep_input(),
-        }
-        .run(&query)?;
+        };
+        let grep_run = Self::search_sources(&grep_request, &query, &sources)?;
         if let Some(s) = &grep_run.outcome.stats {
             SearchOutputCtx::write_stats(s);
         }
@@ -361,7 +360,7 @@ impl Grep {
     ) -> FilenameContext {
         if out.lines.is_path_mode {
             FilenameContext::PathMode
-        } else if sources.stream.is_some() && sources.paths.is_empty() {
+        } else if !sources.streams.is_empty() && sources.paths.is_empty() {
             FilenameContext::SingleFileCorpus
         } else {
             match session.indexes.corpus_kind() {
@@ -369,6 +368,41 @@ impl Grep {
                 _ => FilenameContext::DirectoryCorpus,
             }
         }
+    }
+
+    fn search_sources(
+        request: &GrepRequest<'_>,
+        query: &SearchQuery,
+        sources: &SearchSources,
+    ) -> anyhow::Result<GrepRun> {
+        let mut run = if sources.searches_corpus() {
+            Some(request.search_corpus(query)?)
+        } else {
+            None
+        };
+
+        let streams = sources.stream_inputs();
+        if !streams.is_empty() {
+            let stream_run = request.search_streams(query, &streams)?;
+            if let Some(run) = &mut run {
+                run.merge(stream_run);
+            } else {
+                run = Some(stream_run);
+            }
+        }
+
+        run.map_or_else(
+            || {
+                Ok(GrepRun {
+                    outcome: sift_core::search::SearchOutcome {
+                        matched: false,
+                        stats: None,
+                    },
+                    hits: Vec::new(),
+                })
+            },
+            Ok,
+        )
     }
 
     fn snapshot_validation(session: &GrepSession, daemon: Option<&Daemon>) -> SnapshotValidation {

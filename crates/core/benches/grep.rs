@@ -1,12 +1,12 @@
 //! Grep-style search execution, filtering, and output-mode benchmarks.
 //!
-//! Exercises the public `GrepRequest::run` pipeline.
+//! Exercises the public `GrepRequest::search_corpus` pipeline.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::grep::{GrepInput, GrepRequest};
+use sift_core::grep::GrepRequest;
 use sift_core::search::{
     CandidateFilter, CandidateFilterConfig, ColorChoice, OutputEmission, SearchCollection,
     SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle, SearchSeparators,
@@ -70,9 +70,8 @@ fn run_grep(
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
-        input: GrepInput::Candidates,
     }
-    .run(query)
+    .search_corpus(query)
     .unwrap()
     .outcome
     .matched
