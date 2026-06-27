@@ -113,6 +113,23 @@ fn stdin_json_uses_stdin_name() {
 }
 
 #[test]
+fn mixed_file_and_stdin_json_has_one_summary() {
+    let p = TestProject::new("stdin-json-mixed");
+    p.write("hay.txt", "needle\n");
+    let out = output_with_stdin(p.sift(), ["--json", "needle", "hay.txt", "-"], b"needle\n");
+
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("hay.txt"), "stdout: {stdout}");
+    assert!(stdout.contains(r#""text":"<stdin>""#), "stdout: {stdout}");
+    assert_eq!(
+        stdout.matches(r#""type":"summary""#).count(),
+        1,
+        "expected one JSON summary for the combined search: {stdout}"
+    );
+}
+
+#[test]
 fn pattern_file_dash_reads_patterns_from_stdin() {
     let p = TestProject::new("stdin-pattern-file");
     p.write("hay.txt", "alpha\nneedle\nomega\n");

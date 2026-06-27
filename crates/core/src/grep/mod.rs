@@ -1,7 +1,7 @@
 //! Grep pipeline orchestration.
 //!
 //! Bridges the query planner, index registry, candidate filter, and search
-//! engine into corpus and stream search operations. The pipeline is
+//! engine into grep search operations. The pipeline is
 //! index-agnostic: it works with whatever index types the `Indexes` registry
 //! has opened.
 
@@ -24,14 +24,12 @@ pub struct GrepRun {
     pub hits: Vec<PathBuf>,
 }
 
-impl GrepRun {
-    pub fn merge(&mut self, other: Self) {
-        self.outcome.matched |= other.outcome.matched;
-        merge_stats(&mut self.outcome.stats, other.outcome.stats);
-        self.hits.extend(other.hits);
-        self.hits.sort();
-        self.hits.dedup();
-    }
+#[derive(Clone, Copy)]
+pub enum GrepSource<'a> {
+    /// Resolve and search the configured corpus candidates.
+    Corpus,
+    /// Search named byte streams without resolving corpus candidates.
+    Streams(&'a [StreamInput<'a>]),
 }
 
 /// User-facing request to the grep pipeline.
@@ -45,44 +43,43 @@ pub struct GrepRequest<'a> {
 }
 
 impl GrepRequest<'_> {
-    /// Search the configured corpus by resolving file candidates first.
+    /// Search one or more source kinds as a single grep execution.
     ///
     /// # Errors
     ///
     /// Returns an error if candidate resolution, regex compilation, or search execution fails.
-    pub fn search_corpus(&self, query: &SearchQuery) -> crate::Result<GrepRun> {
-        let candidates = self.resolve_candidates(query)?;
-        if candidates.is_empty() {
-            return Ok(self.empty_run());
-        }
-
-        self.search_inputs(query, vec![SearchInput::Candidates(&candidates)])
-    }
-
-    /// Search named byte streams without resolving corpus candidates.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if regex compilation or search execution fails.
-    pub fn search_streams(
+    pub fn search(
         &self,
         query: &SearchQuery,
-        streams: &[StreamInput<'_>],
+        sources: &[GrepSource<'_>],
     ) -> crate::Result<GrepRun> {
         Self::validate_query(query)?;
-        if streams.is_empty() {
-            return Ok(self.empty_run());
+
+        let mut corpus_requested = false;
+        let mut streams = Vec::new();
+        for source in sources {
+            match *source {
+                GrepSource::Corpus => corpus_requested = true,
+                GrepSource::Streams(source_streams) => streams.extend_from_slice(source_streams),
+            }
         }
 
-        self.search_inputs(
-            query,
-            streams.iter().copied().map(SearchInput::Stream).collect(),
-        )
+        let candidates = if corpus_requested {
+            self.resolve_candidates(query)?
+        } else {
+            Vec::new()
+        };
+
+        let mut inputs = Vec::with_capacity(usize::from(!candidates.is_empty()) + streams.len());
+        if !candidates.is_empty() {
+            inputs.push(SearchInput::Candidates(&candidates));
+        }
+        inputs.extend(streams.into_iter().map(SearchInput::Stream));
+
+        self.search_inputs(query, inputs)
     }
 
     fn resolve_candidates(&self, query: &SearchQuery) -> crate::Result<Vec<Candidate>> {
-        Self::validate_query(query)?;
-
         let spec = query.build_query_spec();
         let output = self.output;
         let requirement = if query.opts().precludes_trigram_index() {
@@ -142,20 +139,5 @@ impl GrepRequest<'_> {
             },
             hits: Vec::new(),
         }
-    }
-}
-
-fn merge_stats(stats: &mut Option<SearchStats>, other: Option<SearchStats>) {
-    match (stats, other) {
-        (Some(stats), Some(other)) => {
-            stats.matches += other.matches;
-            stats.files_with_matches += other.files_with_matches;
-            stats.files_searched += other.files_searched;
-            stats.bytes_printed += other.bytes_printed;
-            stats.bytes_searched += other.bytes_searched;
-            stats.elapsed += other.elapsed;
-        }
-        (stats @ None, other) => *stats = other,
-        (Some(_), None) => {}
     }
 }

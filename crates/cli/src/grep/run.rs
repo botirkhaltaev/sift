@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use sift_core::grep::{GrepRequest, GrepRun};
+use sift_core::grep::{GrepRequest, GrepSource};
 use sift_core::search::{CandidateFilter, SearchMode, StreamInput};
 use sift_core::{
     CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
@@ -374,35 +374,17 @@ impl Grep {
         request: &GrepRequest<'_>,
         query: &SearchQuery,
         sources: &SearchSources,
-    ) -> anyhow::Result<GrepRun> {
-        let mut run = if sources.searches_corpus() {
-            Some(request.search_corpus(query)?)
-        } else {
-            None
-        };
-
+    ) -> anyhow::Result<sift_core::grep::GrepRun> {
         let streams = sources.stream_inputs();
+        let mut grep_sources = Vec::with_capacity(usize::from(sources.searches_corpus()) + 1);
+        if sources.searches_corpus() {
+            grep_sources.push(GrepSource::Corpus);
+        }
         if !streams.is_empty() {
-            let stream_run = request.search_streams(query, &streams)?;
-            if let Some(run) = &mut run {
-                run.merge(stream_run);
-            } else {
-                run = Some(stream_run);
-            }
+            grep_sources.push(GrepSource::Streams(&streams));
         }
 
-        run.map_or_else(
-            || {
-                Ok(GrepRun {
-                    outcome: sift_core::search::SearchOutcome {
-                        matched: false,
-                        stats: None,
-                    },
-                    hits: Vec::new(),
-                })
-            },
-            Ok,
-        )
+        request.search(query, &grep_sources).map_err(Into::into)
     }
 
     fn snapshot_validation(session: &GrepSession, daemon: Option<&Daemon>) -> SnapshotValidation {
