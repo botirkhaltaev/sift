@@ -5,31 +5,31 @@ use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
 use super::SearchQuery;
 use crate::search::SearchError;
-use crate::search::options::{BinaryMode, RegexEngine};
+use crate::search::options::BinaryMode;
 
 #[derive(Clone, Debug)]
 pub enum SearchMatcher {
-    Default(RegexMatcher),
+    Rust(RegexMatcher),
     Pcre2(Pcre2Matcher),
 }
 
 #[derive(Clone, Debug)]
 pub enum SearchCaptures {
-    Default(RegexCaptures),
+    Rust(RegexCaptures),
     Pcre2(grep_pcre2::RegexCaptures),
 }
 
 impl Captures for SearchCaptures {
     fn len(&self) -> usize {
         match self {
-            Self::Default(captures) => captures.len(),
+            Self::Rust(captures) => captures.len(),
             Self::Pcre2(captures) => captures.len(),
         }
     }
 
     fn get(&self, index: usize) -> Option<Match> {
         match self {
-            Self::Default(captures) => captures.get(index),
+            Self::Rust(captures) => captures.get(index),
             Self::Pcre2(captures) => captures.get(index),
         }
     }
@@ -41,16 +41,16 @@ impl Matcher for SearchMatcher {
 
     fn find_at(&self, haystack: &[u8], at: usize) -> Result<Option<Match>, Self::Error> {
         match self {
-            Self::Default(matcher) => matcher.find_at(haystack, at).map_err(|e| e.to_string()),
+            Self::Rust(matcher) => matcher.find_at(haystack, at).map_err(|e| e.to_string()),
             Self::Pcre2(matcher) => matcher.find_at(haystack, at).map_err(|e| e.to_string()),
         }
     }
 
     fn new_captures(&self) -> Result<Self::Captures, Self::Error> {
         match self {
-            Self::Default(matcher) => matcher
+            Self::Rust(matcher) => matcher
                 .new_captures()
-                .map(SearchCaptures::Default)
+                .map(SearchCaptures::Rust)
                 .map_err(|e| e.to_string()),
             Self::Pcre2(matcher) => matcher
                 .new_captures()
@@ -61,14 +61,14 @@ impl Matcher for SearchMatcher {
 
     fn capture_count(&self) -> usize {
         match self {
-            Self::Default(matcher) => matcher.capture_count(),
+            Self::Rust(matcher) => matcher.capture_count(),
             Self::Pcre2(matcher) => matcher.capture_count(),
         }
     }
 
     fn capture_index(&self, name: &str) -> Option<usize> {
         match self {
-            Self::Default(matcher) => matcher.capture_index(name),
+            Self::Rust(matcher) => matcher.capture_index(name),
             Self::Pcre2(matcher) => matcher.capture_index(name),
         }
     }
@@ -80,7 +80,7 @@ impl Matcher for SearchMatcher {
         captures: &mut Self::Captures,
     ) -> Result<bool, Self::Error> {
         match (self, captures) {
-            (Self::Default(matcher), SearchCaptures::Default(captures)) => matcher
+            (Self::Rust(matcher), SearchCaptures::Rust(captures)) => matcher
                 .captures_at(haystack, at, captures)
                 .map_err(|e| e.to_string()),
             (Self::Pcre2(matcher), SearchCaptures::Pcre2(captures)) => matcher
@@ -92,22 +92,7 @@ impl Matcher for SearchMatcher {
 }
 
 impl SearchQuery {
-    /// Builds a regex matcher from the compiled patterns and options.
-    ///
-    /// # Errors
-    ///
-    /// Returns `SearchError::RegexBuild` if pattern compilation fails.
-    pub(crate) fn build_matcher(&self) -> Result<SearchMatcher, SearchError> {
-        match self.opts.regex_engine {
-            RegexEngine::Default => self.build_default_matcher(),
-            RegexEngine::Pcre2 => self.build_pcre2_matcher(),
-            RegexEngine::Auto => self
-                .build_default_matcher()
-                .or_else(|_| self.build_pcre2_matcher()),
-        }
-    }
-
-    fn build_default_matcher(&self) -> Result<SearchMatcher, SearchError> {
+    pub(crate) fn build_rust_matcher(&self) -> Result<SearchMatcher, SearchError> {
         let mut builder = RegexMatcherBuilder::new();
         builder.multi_line(true);
         match self.opts.case_mode {
@@ -157,11 +142,11 @@ impl SearchQuery {
         }
         builder
             .build_many(&self.patterns)
-            .map(SearchMatcher::Default)
+            .map(SearchMatcher::Rust)
             .map_err(|e| SearchError::RegexBuild(e.to_string()))
     }
 
-    fn build_pcre2_matcher(&self) -> Result<SearchMatcher, SearchError> {
+    pub(crate) fn build_pcre2_matcher(&self) -> Result<SearchMatcher, SearchError> {
         let mut builder = Pcre2MatcherBuilder::new();
         builder.multi_line(true);
         match self.opts.case_mode {
@@ -263,10 +248,10 @@ mod tests {
     }
 
     fn search_content(search: &SearchQuery, content: &[u8]) -> Vec<String> {
-        let matcher = search.build_matcher().expect("build matcher");
+        let matcher = search.compile().expect("compile search").matcher();
         let mut sink = CollectStringSink { hits: Vec::new() };
         let mut searcher = search.build_searcher(true, None, true);
-        let _ = searcher.search_slice(&matcher, content, &mut sink);
+        let _ = searcher.search_slice(matcher, content, &mut sink);
         sink.hits
     }
 
@@ -324,7 +309,7 @@ mod tests {
     #[test]
     fn invalid_regex_returns_search_error() {
         let search = make_search(&["("], SearchOptions::default());
-        let result = search.build_matcher();
+        let result = search.compile();
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), SearchError::RegexBuild(_)));
     }
@@ -336,7 +321,7 @@ mod tests {
             ..SearchOptions::default()
         };
         let search = make_search(&["hello"], opts);
-        let result = search.build_matcher();
+        let result = search.compile();
         assert!(result.is_ok());
     }
 
@@ -347,7 +332,7 @@ mod tests {
             ..SearchOptions::default()
         };
         let search = make_search(&["hello"], opts);
-        let result = search.build_matcher();
+        let result = search.compile();
         assert!(result.is_ok());
     }
 
@@ -356,7 +341,7 @@ mod tests {
         let mut opts = SearchOptions::default();
         opts.flags |= SearchMatchFlags::MULTILINE;
         let search = make_search(&["hello"], opts);
-        let result = search.build_matcher();
+        let result = search.compile();
         assert!(result.is_ok());
     }
 
@@ -365,7 +350,7 @@ mod tests {
         let mut opts = SearchOptions::default();
         opts.flags |= SearchMatchFlags::CRLF;
         let search = make_search(&["hello"], opts);
-        let result = search.build_matcher();
+        let result = search.compile();
         assert!(result.is_ok());
     }
 }

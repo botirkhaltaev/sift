@@ -84,7 +84,7 @@ pub use filter::{
     TypeDef, VisibilityConfig,
 };
 pub use options::{
-    BinaryMode, CaseMode, InputEncoding, RegexEngine, SearchMatchFlags, SearchOptions,
+    BinaryMode, CaseMode, InputEncoding, RegexEngineRequest, SearchMatchFlags, SearchOptions,
 };
 pub use output::format::{ColumnLimit, ColumnOverflow};
 pub use output::mode::{MatchEmissionMode, OutputEmission, SearchMode, ZeroCountMode};

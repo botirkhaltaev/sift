@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
 use sift_core::search::{
-    BinaryMode, CaseMode, RegexEngine, SearchMatchFlags, SearchMode, SearchOptions,
+    BinaryMode, CaseMode, RegexEngineRequest, SearchMatchFlags, SearchMode, SearchOptions,
 };
 
 use super::argv::Argv;
@@ -250,7 +250,7 @@ pub struct PatternArgv {
     pub quiet: bool,
     pub before_context: usize,
     pub after_context: usize,
-    pub regex_engine: RegexEngine,
+    pub regex_engine: RegexEngineRequest,
 }
 
 impl PatternArgv {
@@ -271,9 +271,9 @@ impl PatternArgv {
         }
     }
 
-    fn regex_engine(argv: &Argv<'_>) -> RegexEngine {
+    fn regex_engine(argv: &Argv<'_>) -> RegexEngineRequest {
         let mut last_idx = 0usize;
-        let mut engine = RegexEngine::Default;
+        let mut engine = RegexEngineRequest::Rust;
         let raw_args = argv.as_slice();
         let mut i = 0;
         while i < raw_args.len() {
@@ -283,19 +283,19 @@ impl PatternArgv {
             }
             let next = i + 1;
             let parsed = if arg == "--pcre2" {
-                Some((i, RegexEngine::Pcre2, 0usize))
+                Some((i, RegexEngineRequest::Pcre2, 0usize))
             } else if arg == "--no-pcre2" {
-                Some((i, RegexEngine::Default, 0))
+                Some((i, RegexEngineRequest::Rust, 0))
             } else if arg == "--auto-hybrid-regex" {
-                Some((i, RegexEngine::Auto, 0))
+                Some((i, RegexEngineRequest::Auto, 0))
             } else if let Some(value) = arg.strip_prefix("--engine=") {
                 value
-                    .parse::<RegexEngine>()
+                    .parse::<RegexEngineRequest>()
                     .ok()
                     .map(|engine| (i, engine, 0))
             } else if arg == "--engine" && next < raw_args.len() {
                 raw_args[next]
-                    .parse::<RegexEngine>()
+                    .parse::<RegexEngineRequest>()
                     .ok()
                     .map(|engine| (i, engine, 1))
             } else {

@@ -80,6 +80,31 @@ fn auto_engine_falls_back_with_index_and_raw_encoding() {
 }
 
 #[test]
+fn auto_engine_uses_index_when_rust_regex_compiles() {
+    let p = TestProject::new("pcre2-auto-index-rust");
+    p.write("hay.txt", "needle\n");
+    p.write("other.txt", "miss\n");
+    p.build_index();
+
+    let out = p.index_output([
+        "--encoding",
+        "none",
+        "--engine",
+        "auto",
+        "needle",
+        "--stats",
+    ]);
+
+    assert_success(&out);
+    assert_stdout_eq(&out, "hay.txt:needle\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("1 files searched"),
+        "expected auto engine to keep indexed narrowing when Rust regex compiles, got: {stderr:?}"
+    );
+}
+
+#[test]
 fn last_engine_flag_wins() {
     let p = TestProject::new("pcre2-last-wins");
     p.write("hay.txt", "bar\n");
