@@ -102,9 +102,8 @@ impl SearchQuery {
         }
 
         let output = execution.output;
-        let candidates = execution.candidates;
 
-        if candidates.is_empty() {
+        if execution.inputs.is_empty() {
             return Ok((
                 SearchOutcome {
                     matched: false,
@@ -127,14 +126,14 @@ impl SearchQuery {
                         output,
                         search_start,
                     );
-                    let json_matched = scan.run(candidates, stats.as_mut())?;
+                    let json_matched = scan.run(&execution.inputs, stats.as_mut())?;
                     (json_matched, stats, Vec::new())
                 }
                 _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),
             },
             SearchOutputFormat::Text => {
                 let (did_match, stats, hits) =
-                    self.run_text_output(candidates, matcher, execution, search_start)?;
+                    self.run_text_output(matcher, execution, search_start)?;
                 (did_match, stats, hits)
             }
         };
@@ -159,7 +158,6 @@ impl SearchQuery {
 
     fn run_text_output(
         &self,
-        candidates: &[crate::Candidate],
         matcher: &SearchMatcher,
         execution: &SearchExecution<'_>,
         search_start: Instant,
@@ -177,7 +175,7 @@ impl SearchQuery {
                     execution.separators,
                     &counters,
                 );
-                scan.run(candidates, collect)?
+                scan.run(&execution.inputs, collect)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
@@ -186,16 +184,17 @@ impl SearchQuery {
                 let scan = crate::search::scan::summary::SummaryScan::new(
                     self, matcher, output, &counters,
                 );
-                scan.run(candidates, collect)?
+                scan.run(&execution.inputs, collect)?
             }
         };
 
         let bytes_searched = if collect.stats {
-            crate::Candidate::total_file_bytes(candidates)
+            execution.inputs.iter().map(|input| input.bytes()).sum()
         } else {
             0
         };
-        let stats = counters.finish(candidates.len(), bytes_searched, search_start.elapsed());
+        let input_count = execution.inputs.iter().map(|input| input.count()).sum();
+        let stats = counters.finish(input_count, bytes_searched, search_start.elapsed());
 
         Ok((did_match, stats, hits))
     }
@@ -387,7 +386,7 @@ mod tests {
         assert!(!opts.multiline());
         assert!(!opts.multiline_dotall());
         assert!(!opts.crlf());
-        assert!(!opts.precludes_trigram_index());
+        assert!(opts.precludes_trigram_index());
         assert_eq!(opts.max_results, None);
         assert_eq!(opts.before_context, 0);
         assert_eq!(opts.after_context, 0);
@@ -396,11 +395,25 @@ mod tests {
     }
 
     #[test]
-    fn search_options_precludes_trigram_index_only_for_invert_match() {
-        let mut opts = SearchOptions::default();
+    fn search_options_precludes_trigram_index_for_decoded_input_invert_match_and_pcre2() {
+        let mut opts = SearchOptions {
+            input_encoding: crate::search::options::InputEncoding::Raw,
+            ..SearchOptions::default()
+        };
         assert!(!opts.precludes_trigram_index());
 
         opts.flags |= SearchMatchFlags::INVERT_MATCH;
+        assert!(opts.precludes_trigram_index());
+
+        opts.flags.remove(SearchMatchFlags::INVERT_MATCH);
+        opts.input_encoding = crate::search::options::InputEncoding::Auto;
+        assert!(opts.precludes_trigram_index());
+
+        opts.input_encoding = crate::search::options::InputEncoding::Raw;
+        opts.regex_engine = crate::search::options::RegexEngine::Pcre2;
+        assert!(opts.precludes_trigram_index());
+
+        opts.regex_engine = crate::search::options::RegexEngine::Auto;
         assert!(opts.precludes_trigram_index());
     }
 

@@ -18,6 +18,19 @@ fn pcre2_enables_look_around() {
 }
 
 #[test]
+fn pcre2_look_around_works_with_index_and_raw_encoding() {
+    let p = TestProject::new("pcre2-index-look-around");
+    p.write("hay.txt", "foo\nbar\nbaz\n");
+    p.build_index();
+
+    let out = p.index_output(["--encoding", "none", "--pcre2", "(?<=ba)r"]);
+
+    assert_success(&out);
+    assert_stdout_eq(&out, "hay.txt:bar\n");
+    assert_stderr_empty(&out);
+}
+
+#[test]
 fn default_engine_rejects_look_around() {
     let p = TestProject::new("pcre2-default-rejects-look-around");
     p.write("hay.txt", "bar\n");
@@ -47,6 +60,19 @@ fn auto_engine_falls_back_to_pcre2() {
     p.write("hay.txt", "bar\n");
 
     let out = p.walk_output(["--engine", "auto", "(?<=ba)r"]);
+
+    assert_success(&out);
+    assert_stdout_eq(&out, "hay.txt:bar\n");
+    assert_stderr_empty(&out);
+}
+
+#[test]
+fn auto_engine_falls_back_with_index_and_raw_encoding() {
+    let p = TestProject::new("pcre2-auto-index-fallback");
+    p.write("hay.txt", "bar\n");
+    p.build_index();
+
+    let out = p.index_output(["--encoding", "none", "--engine", "auto", "(?<=ba)r"]);
 
     assert_success(&out);
     assert_stdout_eq(&out, "hay.txt:bar\n");

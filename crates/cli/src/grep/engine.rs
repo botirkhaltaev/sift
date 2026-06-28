@@ -1,37 +1,25 @@
 use clap::Args;
-use sift_core::search::RegexEngine;
+use sift_core::search::{InputEncoding, RegexEngine};
 
 /// Regex engine and configuration flags.
 #[derive(Args, Clone)]
 pub struct EngineDecl {
     #[arg(long = "no-config")]
     pub no_config: bool,
-    #[command(flatten)]
-    pub unicode: UnicodeDecl,
-    #[command(flatten)]
-    pub limits: EngineLimitDecl,
-    #[command(flatten)]
-    pub regex: RegexEngineDecl,
-}
-
-/// Unicode mode flags.
-#[derive(Args, Clone)]
-pub struct UnicodeDecl {
     #[arg(long = "unicode")]
     pub unicode: bool,
     #[arg(long = "no-unicode")]
     pub no_unicode: bool,
-}
-
-/// Regex engine resource limit flags.
-#[derive(Args, Clone)]
-pub struct EngineLimitDecl {
     #[arg(long = "colors", value_name = "COLOR_SPEC")]
     pub colors: Vec<String>,
     #[arg(long = "regex-size-limit", value_name = "NUM+SUFFIX?")]
     pub regex_size_limit: Option<String>,
     #[arg(long = "dfa-size-limit", value_name = "NUM+SUFFIX?")]
     pub dfa_size_limit: Option<String>,
+    #[arg(short = 'E', long = "encoding", value_name = "ENCODING")]
+    pub encoding: Option<InputEncoding>,
+    #[command(flatten)]
+    pub regex: RegexEngineDecl,
 }
 
 /// Regex engine selection flags.
@@ -87,15 +75,23 @@ pub struct MultilineDecl {
     pub multiline: bool,
     #[arg(long = "multiline-dotall")]
     pub multiline_dotall: bool,
+    #[command(flatten)]
+    pub line_terminator: LineTerminatorDecl,
+}
+
+#[derive(Args, Clone)]
+pub struct LineTerminatorDecl {
     #[arg(long = "crlf")]
     pub crlf: bool,
+    #[arg(long = "null-data")]
+    pub null_data: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use crate::cli::Cli;
     use clap::Parser;
-    use sift_core::search::RegexEngine;
+    use sift_core::search::{InputEncoding, RegexEngine};
 
     #[test]
     fn engine_no_config_flag() {
@@ -106,37 +102,31 @@ mod tests {
     #[test]
     fn engine_unicode_flag() {
         let cli = Cli::try_parse_from(["sift", "--unicode", "pat"]).unwrap();
-        assert!(cli.engine_decl.unicode.unicode);
+        assert!(cli.engine_decl.unicode);
     }
 
     #[test]
     fn engine_no_unicode_flag() {
         let cli = Cli::try_parse_from(["sift", "--no-unicode", "pat"]).unwrap();
-        assert!(cli.engine_decl.unicode.no_unicode);
+        assert!(cli.engine_decl.no_unicode);
     }
 
     #[test]
     fn engine_colors_flag() {
         let cli = Cli::try_parse_from(["sift", "--colors", "path:fg:red", "pat"]).unwrap();
-        assert!(!cli.engine_decl.limits.colors.is_empty());
+        assert!(!cli.engine_decl.colors.is_empty());
     }
 
     #[test]
     fn engine_regex_size_limit() {
         let cli = Cli::try_parse_from(["sift", "--regex-size-limit", "10M", "pat"]).unwrap();
-        assert_eq!(
-            cli.engine_decl.limits.regex_size_limit.as_deref(),
-            Some("10M")
-        );
+        assert_eq!(cli.engine_decl.regex_size_limit.as_deref(), Some("10M"));
     }
 
     #[test]
     fn engine_dfa_size_limit() {
         let cli = Cli::try_parse_from(["sift", "--dfa-size-limit", "50M", "pat"]).unwrap();
-        assert_eq!(
-            cli.engine_decl.limits.dfa_size_limit.as_deref(),
-            Some("50M")
-        );
+        assert_eq!(cli.engine_decl.dfa_size_limit.as_deref(), Some("50M"));
     }
 
     #[test]
@@ -162,6 +152,21 @@ mod tests {
     fn engine_pcre2_version_flag() {
         let cli = Cli::try_parse_from(["sift", "--pcre2-version", "pat"]).unwrap();
         assert!(cli.engine_decl.regex.pcre2_version);
+    }
+
+    #[test]
+    fn engine_encoding_flag() {
+        let cli = Cli::try_parse_from(["sift", "--encoding", "utf-16le", "pat"]).unwrap();
+        assert!(matches!(
+            cli.engine_decl.encoding,
+            Some(InputEncoding::Explicit(_))
+        ));
+    }
+
+    #[test]
+    fn engine_encoding_short_flag() {
+        let cli = Cli::try_parse_from(["sift", "-E", "none", "pat"]).unwrap();
+        assert_eq!(cli.engine_decl.encoding, Some(InputEncoding::Raw));
     }
 
     #[test]
@@ -227,7 +232,13 @@ mod tests {
     #[test]
     fn crlf_flag() {
         let cli = Cli::try_parse_from(["sift", "--crlf", "pat"]).unwrap();
-        assert!(cli.multiline_decl.crlf);
+        assert!(cli.multiline_decl.line_terminator.crlf);
+    }
+
+    #[test]
+    fn null_data_flag() {
+        let cli = Cli::try_parse_from(["sift", "--null-data", "pat"]).unwrap();
+        assert!(cli.multiline_decl.line_terminator.null_data);
     }
 
     #[test]
@@ -245,10 +256,10 @@ mod tests {
         ])
         .unwrap();
         assert!(cli.engine_decl.no_config);
-        assert!(cli.engine_decl.unicode.unicode);
+        assert!(cli.engine_decl.unicode);
         assert_eq!(cli.threading.threads, Some(8));
         assert!(cli.walker_decl.one_file_system);
         assert!(cli.multiline_decl.multiline);
-        assert!(cli.multiline_decl.crlf);
+        assert!(cli.multiline_decl.line_terminator.crlf);
     }
 }

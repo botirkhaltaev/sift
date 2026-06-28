@@ -144,6 +144,7 @@ impl Cli {
             line_number: self.line_number_decl.line_number,
             separators: self.separator_decl.clone(),
             search_paths: search_paths.to_vec(),
+            null_data: self.multiline_decl.line_terminator.null_data,
         }
     }
 
@@ -220,6 +221,7 @@ impl Cli {
                 let one_file_system = self.walker_decl.one_file_system;
                 let threads = self.threading.threads;
                 let path_separator = self.threading.path_separator;
+                let null_data = self.multiline_decl.line_terminator.null_data;
                 let mode = if self.filter_decl.files {
                     GrepMode::ListFiles
                 } else {
@@ -253,6 +255,7 @@ impl Cli {
                         line_number,
                         separators: self.separator_decl,
                         search_paths: search_paths.clone(),
+                        null_data,
                     },
                     sift_dir: self.paths.sift_dir,
                     search_paths,

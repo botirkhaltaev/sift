@@ -141,9 +141,9 @@ impl SearchQuery {
                 builder.dot_matches_new_line(true);
             }
         } else {
-            builder.line_terminator(Some(b'\n'));
+            builder.line_terminator(Some(self.opts.line_terminator()));
         }
-        if self.opts.multiline() {
+        if self.opts.multiline() || self.opts.null_data() {
             builder.ban_byte(None);
         } else {
             match self.opts.binary_mode {
@@ -207,14 +207,20 @@ impl SearchQuery {
         };
         let line_number = line_number || before_context > 0 || after_context > 0;
         let mut builder = SearcherBuilder::new();
-        let binary_detection = match self.opts.binary_mode {
-            BinaryMode::Quit => BinaryDetection::quit(b'\x00'),
-            BinaryMode::SearchBinary => BinaryDetection::convert(b'\x00'),
-            BinaryMode::AsText => BinaryDetection::none(),
+        let binary_detection = if self.opts.null_data() {
+            BinaryDetection::none()
+        } else {
+            match self.opts.binary_mode {
+                BinaryMode::Quit => BinaryDetection::quit(b'\x00'),
+                BinaryMode::SearchBinary => BinaryDetection::convert(b'\x00'),
+                BinaryMode::AsText => BinaryDetection::none(),
+            }
         };
         builder
+            .encoding(self.opts.input_encoding.explicit())
+            .bom_sniffing(self.opts.input_encoding.bom_sniffing())
             .binary_detection(binary_detection)
-            .line_terminator(LineTerminator::byte(b'\n'))
+            .line_terminator(LineTerminator::byte(self.opts.line_terminator()))
             .invert_match(self.opts.invert_match())
             .line_number(line_number)
             .before_context(before_context)
