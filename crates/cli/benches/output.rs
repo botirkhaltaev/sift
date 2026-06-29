@@ -17,9 +17,19 @@ pub fn bench(c: &mut Criterion) {
     ];
     for (name, argv) in &null_cases {
         let v = args(argv);
-        g.bench_with_input(BenchmarkId::new("null_data", *name), &v, |b, a| {
-            b.iter(|| black_box(OutputArgv::resolve(&Argv::new(black_box(a))).path.null_data));
-        });
+        g.bench_with_input(
+            BenchmarkId::new("nul_terminated_paths", *name),
+            &v,
+            |b, a| {
+                b.iter(|| {
+                    black_box(
+                        OutputArgv::resolve(&Argv::new(black_box(a)))
+                            .path
+                            .nul_terminated,
+                    )
+                });
+            },
+        );
     }
 
     let ctx_argv = args(&["sift", "-A", "5", "-B", "3", "-C", "10", "pattern"]);

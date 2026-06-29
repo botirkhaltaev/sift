@@ -1,4 +1,5 @@
 use clap::Args;
+use sift_core::search::{InputEncoding, RegexEngineRequest};
 
 /// Regex engine and configuration flags.
 #[derive(Args, Clone)]
@@ -17,6 +18,10 @@ pub struct EngineDecl {
     pub dfa_size_limit: Option<String>,
     #[command(flatten)]
     pub content: ContentDecl,
+    #[arg(short = 'E', long = "encoding", value_name = "ENCODING")]
+    pub encoding: Option<InputEncoding>,
+    #[command(flatten)]
+    pub regex: RegexEngineDecl,
 }
 
 #[derive(Args, Clone, Default)]
@@ -27,6 +32,28 @@ pub struct ContentDecl {
     pub pre: Option<String>,
     #[arg(long = "pre-glob", value_name = "GLOB")]
     pub pre_glob: Vec<String>,
+}
+
+/// Regex engine selection flags.
+#[derive(Args, Clone)]
+pub struct RegexEngineDecl {
+    #[arg(long = "engine", value_name = "ENGINE")]
+    pub engine: Option<RegexEngineRequest>,
+    #[command(flatten)]
+    pub pcre2: Pcre2EngineDecl,
+    #[arg(long = "pcre2-version")]
+    pub pcre2_version: bool,
+}
+
+/// PCRE2 engine selection shortcuts.
+#[derive(Args, Clone)]
+pub struct Pcre2EngineDecl {
+    #[arg(long = "pcre2")]
+    pub pcre2: bool,
+    #[arg(long = "no-pcre2")]
+    pub no_pcre2: bool,
+    #[arg(long = "auto-hybrid-regex")]
+    pub auto_hybrid_regex: bool,
 }
 
 /// Threading and output-buffering flags.
@@ -60,14 +87,23 @@ pub struct MultilineDecl {
     pub multiline: bool,
     #[arg(long = "multiline-dotall")]
     pub multiline_dotall: bool,
+    #[command(flatten)]
+    pub line_terminator: LineTerminatorDecl,
+}
+
+#[derive(Args, Clone)]
+pub struct LineTerminatorDecl {
     #[arg(long = "crlf")]
     pub crlf: bool,
+    #[arg(long = "null-data")]
+    pub null_data: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use crate::cli::Cli;
     use clap::Parser;
+    use sift_core::search::{InputEncoding, RegexEngineRequest};
 
     #[test]
     fn engine_no_config_flag() {
@@ -123,6 +159,49 @@ mod tests {
             Cli::try_parse_from(["sift", "--pre", "upper", "--pre-glob", "*.txt", "pat"]).unwrap();
         assert_eq!(cli.engine_decl.content.pre.as_deref(), Some("upper"));
         assert_eq!(cli.engine_decl.content.pre_glob, ["*.txt"]);
+    }
+
+    #[test]
+    fn engine_selection_flag() {
+        let cli = Cli::try_parse_from(["sift", "--engine", "pcre2", "pat"]).unwrap();
+        assert_eq!(
+            cli.engine_decl.regex.engine,
+            Some(RegexEngineRequest::Pcre2)
+        );
+    }
+
+    #[test]
+    fn engine_pcre2_flags() {
+        let cli = Cli::try_parse_from(["sift", "--pcre2", "--no-pcre2", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2.pcre2);
+        assert!(cli.engine_decl.regex.pcre2.no_pcre2);
+    }
+
+    #[test]
+    fn engine_auto_hybrid_flag() {
+        let cli = Cli::try_parse_from(["sift", "--auto-hybrid-regex", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2.auto_hybrid_regex);
+    }
+
+    #[test]
+    fn engine_pcre2_version_flag() {
+        let cli = Cli::try_parse_from(["sift", "--pcre2-version", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2_version);
+    }
+
+    #[test]
+    fn engine_encoding_flag() {
+        let cli = Cli::try_parse_from(["sift", "--encoding", "utf-16le", "pat"]).unwrap();
+        assert!(matches!(
+            cli.engine_decl.encoding,
+            Some(InputEncoding::Explicit(_))
+        ));
+    }
+
+    #[test]
+    fn engine_encoding_short_flag() {
+        let cli = Cli::try_parse_from(["sift", "-E", "none", "pat"]).unwrap();
+        assert_eq!(cli.engine_decl.encoding, Some(InputEncoding::Raw));
     }
 
     #[test]
@@ -188,7 +267,13 @@ mod tests {
     #[test]
     fn crlf_flag() {
         let cli = Cli::try_parse_from(["sift", "--crlf", "pat"]).unwrap();
-        assert!(cli.multiline_decl.crlf);
+        assert!(cli.multiline_decl.line_terminator.crlf);
+    }
+
+    #[test]
+    fn null_data_flag() {
+        let cli = Cli::try_parse_from(["sift", "--null-data", "pat"]).unwrap();
+        assert!(cli.multiline_decl.line_terminator.null_data);
     }
 
     #[test]
@@ -210,6 +295,6 @@ mod tests {
         assert_eq!(cli.threading.threads, Some(8));
         assert!(cli.walker_decl.one_file_system);
         assert!(cli.multiline_decl.multiline);
-        assert!(cli.multiline_decl.crlf);
+        assert!(cli.multiline_decl.line_terminator.crlf);
     }
 }

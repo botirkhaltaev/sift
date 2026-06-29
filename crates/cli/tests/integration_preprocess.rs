@@ -72,6 +72,28 @@ fn preprocessor_stdout_is_searched() {
 
 #[cfg(unix)]
 #[test]
+fn preprocessor_path_with_space_is_not_split() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let p = TestProject::new("preprocessor-path-with-space");
+    p.write("hay.txt", "alpha\nneedle\n");
+    p.write(
+        "upper script.sh",
+        "#!/bin/sh\ntr '[:lower:]' '[:upper:]' < \"$1\"\n",
+    );
+    let script = p.root().join("upper script.sh");
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).unwrap();
+
+    let out = p.walk_output(["--pre", script.to_str().unwrap(), "NEEDLE", "hay.txt"]);
+
+    assert_success(&out);
+    common::assert_stdout_eq(&out, &rel_match("hay.txt", "NEEDLE\n"));
+}
+
+#[cfg(unix)]
+#[test]
 fn indexed_preprocessor_bypasses_raw_index_narrowing() {
     use std::os::unix::fs::PermissionsExt;
 

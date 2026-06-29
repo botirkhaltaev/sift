@@ -98,15 +98,14 @@ impl Preprocessor {
     }
 
     fn read(&self, path: &Path) -> sift_core::Result<Vec<u8>> {
-        let mut parts = self.command.split_whitespace();
-        let Some(program) = parts.next() else {
+        if self.command.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "--pre command is empty",
             )
             .into());
-        };
-        let output = Command::new(program).args(parts).arg(path).output()?;
+        }
+        let output = Command::new(&self.command).arg(path).output()?;
         if output.status.success() {
             Ok(output.stdout)
         } else {

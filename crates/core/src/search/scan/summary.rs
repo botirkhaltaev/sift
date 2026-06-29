@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::Matcher;
-use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
@@ -15,7 +14,8 @@ use crate::search::output::SearchOutput;
 use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::search::output::style::FilenameMode;
 use crate::search::query::SearchQuery;
-use crate::search::request::{CandidateContent, SearchCollection};
+use crate::search::query::matcher::SearchMatcher;
+use crate::search::request::{CandidateContent, SearchCollection, SearchInput, StreamInput};
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -59,14 +59,14 @@ impl FileSummary {
 
 pub struct SummarySink {
     mode: SearchMode,
-    matcher: Option<RegexMatcher>,
+    matcher: Option<SearchMatcher>,
     matched: bool,
     count: usize,
 }
 
 impl SummarySink {
     #[must_use]
-    pub const fn new(mode: SearchMode, matcher: Option<RegexMatcher>) -> Self {
+    pub const fn new(mode: SearchMode, matcher: Option<SearchMatcher>) -> Self {
         Self {
             mode,
             matcher,
@@ -112,7 +112,7 @@ impl Sink for SummarySink {
 
 fn summary_search_file(
     searcher: &mut Searcher,
-    matcher: &RegexMatcher,
+    matcher: &SearchMatcher,
     mode: SearchMode,
     path: &Path,
 ) -> FileSummary {
@@ -128,7 +128,7 @@ fn summary_search_file(
 
 fn summary_search_slice(
     searcher: &mut Searcher,
-    matcher: &RegexMatcher,
+    matcher: &SearchMatcher,
     mode: SearchMode,
     bytes: &[u8],
 ) -> FileSummary {
@@ -166,10 +166,11 @@ fn write_summary_record(
                 if records.should_color() {
                     out.extend_from_slice(ANSI_RESET);
                 }
-                writeln!(out, ":{}", result.count)?;
+                write!(out, ":{}", result.count)?;
             } else {
-                writeln!(out, "{}", result.count)?;
+                write!(out, "{}", result.count)?;
             }
+            records.terminator.write_to(out);
             Ok(())
         }
         SearchMode::FilesWithMatches => {
@@ -204,7 +205,7 @@ fn write_summary_record(
 }
 
 struct SummaryWorker<'a> {
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     searcher: Searcher,
     output: SearchOutput,
     summary_counter: Option<&'a AtomicUsize>,
@@ -227,19 +228,6 @@ impl<'a> SummaryWorker<'a> {
     }
 
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
-        self.search_input(candidate, None, stop)
-    }
-
-    fn search_content(&mut self, content: &CandidateContent, stop: &AtomicBool) -> FileResult {
-        self.search_input(&content.candidate, Some(&content.bytes), stop)
-    }
-
-    fn search_input(
-        &mut self,
-        candidate: &Candidate,
-        bytes: Option<&[u8]>,
-        stop: &AtomicBool,
-    ) -> FileResult {
         if stop.load(Ordering::SeqCst) {
             return FileResult {
                 output: ChunkOutput::empty(),
@@ -247,17 +235,72 @@ impl<'a> SummaryWorker<'a> {
                 hit: None,
             };
         }
+        let result = summary_search_file(
+            &mut self.searcher,
+            self.matcher,
+            self.output.mode,
+            candidate.abs_path(),
+        );
+        self.search_input(
+            &candidate.display_path(
+                self.output.lines.path_display,
+                self.output.records.path_separator,
+            ),
+            result,
+            stop,
+            (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+        )
+    }
 
-        let result = if let Some(bytes) = bytes {
-            summary_search_slice(&mut self.searcher, self.matcher, self.output.mode, bytes)
-        } else {
-            summary_search_file(
-                &mut self.searcher,
-                self.matcher,
-                self.output.mode,
-                candidate.abs_path(),
-            )
-        };
+    fn search_content(&mut self, content: &CandidateContent, stop: &AtomicBool) -> FileResult {
+        if stop.load(Ordering::SeqCst) {
+            return FileResult {
+                output: ChunkOutput::empty(),
+                json_stats: None,
+                hit: None,
+            };
+        }
+        let result = summary_search_slice(
+            &mut self.searcher,
+            self.matcher,
+            self.output.mode,
+            &content.bytes,
+        );
+        self.search_input(
+            &content.candidate.display_path(
+                self.output.lines.path_display,
+                self.output.records.path_separator,
+            ),
+            result,
+            stop,
+            (self.collect_hits).then(|| content.candidate.rel_path().to_path_buf()),
+        )
+    }
+
+    fn search_stream(&mut self, input: StreamInput<'_>, stop: &AtomicBool) -> FileResult {
+        if stop.load(Ordering::SeqCst) {
+            return FileResult {
+                output: ChunkOutput::empty(),
+                json_stats: None,
+                hit: None,
+            };
+        }
+        let result = summary_search_slice(
+            &mut self.searcher,
+            self.matcher,
+            self.output.mode,
+            input.bytes,
+        );
+        self.search_input(input.display_path, result, stop, None)
+    }
+
+    fn search_input(
+        &self,
+        display: &str,
+        result: FileSummary,
+        stop: &AtomicBool,
+        hit: Option<PathBuf>,
+    ) -> FileResult {
         if let Some(c) = self.summary_counter {
             c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
         }
@@ -268,11 +311,7 @@ impl<'a> SummaryWorker<'a> {
         }
         let matched = result.is_success(self.output.mode);
         let mut bytes = Vec::new();
-        let display = candidate.display_path(
-            self.output.lines.path_display,
-            self.output.records.path_separator,
-        );
-        let _ = write_summary_record(&mut bytes, self.output, &display, result);
+        let _ = write_summary_record(&mut bytes, self.output, display, result);
         if self.output.emission == OutputEmission::Quiet && result.is_success(self.output.mode) {
             stop.store(true, Ordering::SeqCst);
         }
@@ -284,14 +323,14 @@ impl<'a> SummaryWorker<'a> {
                 heading: false,
             },
             json_stats: None,
-            hit: (self.collect_hits && result.matched).then(|| candidate.rel_path().to_path_buf()),
+            hit: result.matched.then_some(hit).flatten(),
         }
     }
 }
 
 pub struct SummaryScan<'a> {
     search: &'a SearchQuery,
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     output: SearchOutput,
     counters: &'a TextStatsCounters,
 }
@@ -299,7 +338,7 @@ pub struct SummaryScan<'a> {
 impl<'a> SummaryScan<'a> {
     pub const fn new(
         search: &'a SearchQuery,
-        matcher: &'a RegexMatcher,
+        matcher: &'a SearchMatcher,
         output: SearchOutput,
         counters: &'a TextStatsCounters,
     ) -> Self {
@@ -316,33 +355,45 @@ impl<'a> SummaryScan<'a> {
     /// Returns an error if scanning or writing output fails.
     pub fn run(
         &self,
-        candidates: &[Candidate],
-        transformed: Option<&[CandidateContent]>,
+        inputs: &[SearchInput<'_>],
         collect: SearchCollection,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let stop = AtomicBool::new(false);
-        let n = transformed.map_or(candidates.len(), <[CandidateContent]>::len);
+        let n = inputs.iter().map(|input| input.count()).sum();
         let mut files = Vec::with_capacity(n);
-        if let Some(transformed) = transformed {
-            transformed
-                .par_iter()
-                .map_init(
-                    || SummaryWorker::new(self, collect),
-                    |worker: &mut SummaryWorker<'_>, content: &CandidateContent| {
-                        worker.search_content(content, &stop)
-                    },
-                )
-                .collect_into_vec(&mut files);
-        } else {
-            candidates
-                .par_iter()
-                .map_init(
-                    || SummaryWorker::new(self, collect),
-                    |worker: &mut SummaryWorker<'_>, candidate: &Candidate| {
-                        worker.search_candidate(candidate, &stop)
-                    },
-                )
-                .collect_into_vec(&mut files);
+        for input in inputs {
+            match *input {
+                SearchInput::Candidates(candidates) => {
+                    let mut candidate_files = Vec::with_capacity(candidates.len());
+                    candidates
+                        .par_iter()
+                        .map_init(
+                            || SummaryWorker::new(self, collect),
+                            |worker: &mut SummaryWorker<'_>, candidate: &Candidate| {
+                                worker.search_candidate(candidate, &stop)
+                            },
+                        )
+                        .collect_into_vec(&mut candidate_files);
+                    files.extend(candidate_files);
+                }
+                SearchInput::Transformed(contents) => {
+                    let mut transformed_files = Vec::with_capacity(contents.len());
+                    contents
+                        .par_iter()
+                        .map_init(
+                            || SummaryWorker::new(self, collect),
+                            |worker: &mut SummaryWorker<'_>, content: &CandidateContent| {
+                                worker.search_content(content, &stop)
+                            },
+                        )
+                        .collect_into_vec(&mut transformed_files);
+                    files.extend(transformed_files);
+                }
+                SearchInput::Stream(stream) => {
+                    let mut worker = SummaryWorker::new(self, collect);
+                    files.push(worker.search_stream(stream, &stop));
+                }
+            }
         }
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());

@@ -8,6 +8,42 @@ pub struct CandidateContent {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
+pub struct StreamInput<'a> {
+    pub display_path: &'a str,
+    pub bytes: &'a [u8],
+}
+
+#[derive(Clone, Copy)]
+pub enum SearchInput<'a> {
+    Candidates(&'a [Candidate]),
+    Transformed(&'a [CandidateContent]),
+    Stream(StreamInput<'a>),
+}
+
+impl SearchInput<'_> {
+    #[must_use]
+    pub const fn count(self) -> usize {
+        match self {
+            Self::Candidates(candidates) => candidates.len(),
+            Self::Transformed(contents) => contents.len(),
+            Self::Stream(_) => 1,
+        }
+    }
+
+    #[must_use]
+    pub fn bytes(self) -> u64 {
+        match self {
+            Self::Candidates(candidates) => Candidate::total_file_bytes(candidates),
+            Self::Transformed(contents) => contents
+                .iter()
+                .map(|content| u64::try_from(content.bytes.len()).unwrap_or(u64::MAX))
+                .sum(),
+            Self::Stream(input) => u64::try_from(input.bytes.len()).unwrap_or(u64::MAX),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkTraversal {
     #[default]
@@ -25,8 +61,7 @@ pub struct WalkOptions {
 
 #[derive(Clone)]
 pub struct SearchExecution<'a> {
-    pub candidates: &'a [Candidate],
-    pub transformed: Option<&'a [CandidateContent]>,
+    pub inputs: Vec<SearchInput<'a>>,
     pub output: SearchOutput,
     pub separators: &'a SearchSeparators,
     pub collect: SearchCollection,

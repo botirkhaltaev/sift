@@ -81,6 +81,13 @@ impl<'a> QueryPlanner<'a> {
                 {
                     return base();
                 }
+                if plan
+                    .source
+                    .store_meta
+                    .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
+                {
+                    return base();
+                }
                 Ok(plan.indexes.complete_candidates())
             }
             CandidateRequirement::PotentialMatches => {
