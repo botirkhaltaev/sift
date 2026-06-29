@@ -1,7 +1,7 @@
 use clap::{ArgAction, Args};
-use sift_core::search::{
-    ColorChoice, FilenameMode, LineStyleFlags, OutputEmission, PassthruMode, SearchLineStyle,
-    SearchMode, SearchOutput, SearchOutputFormat, SearchRecordStyle, SearchSeparators, SearchStats,
+use sift_core::grep::{
+    ColorChoice, FilenameMode, GrepLineStyle, GrepMode, GrepOutput, GrepOutputFormat,
+    GrepRecordStyle, GrepSeparators, GrepStats, LineStyleFlags, OutputEmission, PassthruMode,
     ZeroCountMode,
 };
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ pub enum FilenameContext {
 }
 
 use super::argv::Argv;
-use super::filter::SearchFilterCtx;
+use super::filter::GrepFilterCtx;
 
 /// Output-related flags resolved from clap declarations.
 #[derive(Clone)]
@@ -33,7 +33,7 @@ pub struct OutputConfig {
 
 impl OutputConfig {
     #[must_use]
-    pub fn separators(&self) -> SearchSeparators {
+    pub fn separators(&self) -> GrepSeparators {
         let context_separator = if self.separators.suppress_context_sep {
             None
         } else if let Some(ref s) = self.separators.context_sep {
@@ -51,7 +51,7 @@ impl OutputConfig {
             .field_context
             .as_ref()
             .map_or_else(|| b"-".to_vec(), |s| unescape_separator(s));
-        SearchSeparators {
+        GrepSeparators {
             context_separator,
             field_match_separator,
             field_context_separator,
@@ -165,13 +165,13 @@ pub struct StatsDecl {
 // ── Context types for output configuration ──
 
 #[derive(Clone, Copy)]
-pub struct SearchModeCtx {
-    pub effective_mode: SearchMode,
+pub struct GrepModeCtx {
+    pub effective_mode: GrepMode,
     pub quiet: bool,
 }
 
 #[derive(Clone, Copy)]
-pub struct SearchLineResolveCtx {
+pub struct GrepLineResolveCtx {
     pub heading: bool,
     pub with_filename: Option<bool>,
     pub is_path_mode: bool,
@@ -180,36 +180,36 @@ pub struct SearchLineResolveCtx {
 }
 
 #[derive(Clone, Copy)]
-pub struct SearchFormatCtx {
+pub struct GrepFormatCtx {
     pub nul_terminated_paths: bool,
     pub nul_terminated_data: bool,
     pub color: ColorChoice,
 }
 
 #[derive(Clone, Copy)]
-pub struct SearchRecordFlags {
+pub struct GrepRecordFlags {
     pub byte_offset: bool,
     pub trim: bool,
     pub include_zero: bool,
 }
 
 #[derive(Clone, Copy)]
-pub struct SearchColumnResolve {
+pub struct GrepColumnResolve {
     pub max_columns_preview: bool,
 }
 
 #[derive(Clone)]
-pub struct SearchOutputCtx {
-    pub mode: SearchModeCtx,
-    pub lines: SearchLineResolveCtx,
-    pub format: SearchFormatCtx,
-    pub output_format: SearchOutputFormat,
-    pub separators: SearchSeparators,
+pub struct GrepOutputCtx {
+    pub mode: GrepModeCtx,
+    pub lines: GrepLineResolveCtx,
+    pub format: GrepFormatCtx,
+    pub output_format: GrepOutputFormat,
+    pub separators: GrepSeparators,
     pub print_stats: bool,
-    pub record: SearchRecordFlags,
+    pub record: GrepRecordFlags,
     pub path_separator: Option<u8>,
     pub max_columns: Option<u64>,
-    pub columns: SearchColumnResolve,
+    pub columns: GrepColumnResolve,
 }
 
 // ── Argv-order resolution ──
@@ -457,15 +457,15 @@ fn unescape_separator(s: &str) -> Vec<u8> {
     out
 }
 
-impl SearchOutputCtx {
+impl GrepOutputCtx {
     #[must_use]
     pub fn resolve(
         config: &OutputConfig,
         argv: &Argv<'_>,
-        effective_mode: SearchMode,
+        effective_mode: GrepMode,
         quiet: bool,
         line_number_override: Option<bool>,
-    ) -> (Self, SearchFilterCtx) {
+    ) -> (Self, GrepFilterCtx) {
         let output_argv = OutputArgv::resolve(argv);
         let pretty = config.column.pretty;
         let vimgrep = config.column.vimgrep;
@@ -473,7 +473,7 @@ impl SearchOutputCtx {
 
         let is_path_mode = matches!(
             effective_mode,
-            SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
+            GrepMode::FilesWithMatches | GrepMode::FilesWithoutMatch
         );
         let effective_heading = output_argv.mode.heading || pretty;
         let effective_color = if pretty && output_argv.color == ColorChoice::Auto {
@@ -484,30 +484,30 @@ impl SearchOutputCtx {
         let print_stats = output_argv.mode.stats || output_argv.mode.json;
 
         let out = Self {
-            mode: SearchModeCtx {
+            mode: GrepModeCtx {
                 effective_mode,
                 quiet,
             },
-            lines: SearchLineResolveCtx {
+            lines: GrepLineResolveCtx {
                 heading: effective_heading,
                 with_filename: output_argv.with_filename,
                 is_path_mode,
                 column,
                 line_number: line_number_override,
             },
-            format: SearchFormatCtx {
+            format: GrepFormatCtx {
                 nul_terminated_paths: output_argv.path.nul_terminated,
                 nul_terminated_data: config.null_data,
                 color: effective_color,
             },
             output_format: if output_argv.mode.json {
-                SearchOutputFormat::Json
+                GrepOutputFormat::Json
             } else {
-                SearchOutputFormat::Text
+                GrepOutputFormat::Text
             },
             separators: config.separators(),
             print_stats,
-            record: SearchRecordFlags {
+            record: GrepRecordFlags {
                 byte_offset: config.extra.byte_offset,
                 trim: config.replace_trim,
                 include_zero: config.extra.include_zero,
@@ -517,11 +517,11 @@ impl SearchOutputCtx {
                 .as_ref()
                 .and_then(|s| s.as_bytes().first().copied()),
             max_columns: config.columns.max_columns,
-            columns: SearchColumnResolve {
+            columns: GrepColumnResolve {
                 max_columns_preview: config.columns.max_columns_preview,
             },
         };
-        let filter = SearchFilterCtx::resolve(argv);
+        let filter = GrepFilterCtx::resolve(argv);
         (out, filter)
     }
 
@@ -530,7 +530,7 @@ impl SearchOutputCtx {
         &self,
         config: &OutputConfig,
         filename_ctx: FilenameContext,
-    ) -> SearchOutput {
+    ) -> GrepOutput {
         use super::paths::CorpusScope;
         let path_display = CorpusScope::path_display(&config.search_paths);
         let line_number = Self::effective_line_number(
@@ -543,24 +543,24 @@ impl SearchOutputCtx {
             self.output_format,
             self.mode.effective_mode,
             self.mode.quiet,
-            SearchLineStyle {
+            GrepLineStyle {
                 filename_mode: Self::filename_mode(self.lines.with_filename, filename_ctx),
                 flags: line_flags,
                 path_display,
-                columns: self.max_columns.map(|max| sift_core::search::ColumnLimit {
+                columns: self.max_columns.map(|max| sift_core::grep::ColumnLimit {
                     max,
                     overflow: if self.columns.max_columns_preview {
-                        sift_core::search::ColumnOverflow::Preview
+                        sift_core::grep::ColumnOverflow::Preview
                     } else {
-                        sift_core::search::ColumnOverflow::Omit
+                        sift_core::grep::ColumnOverflow::Omit
                     },
                 }),
             },
-            SearchRecordStyle {
+            GrepRecordStyle {
                 terminator: if self.format.nul_terminated_paths || self.format.nul_terminated_data {
-                    sift_core::search::RecordTerminator::Nul
+                    sift_core::grep::RecordTerminator::Nul
                 } else {
-                    sift_core::search::RecordTerminator::Newline
+                    sift_core::grep::RecordTerminator::Newline
                 },
                 color: self.format.color,
                 path_separator: self.path_separator,
@@ -569,7 +569,7 @@ impl SearchOutputCtx {
         )
     }
 
-    pub fn write_stats(stats: &SearchStats) {
+    pub fn write_stats(stats: &GrepStats) {
         eprintln!("{} matches", stats.matches);
         eprintln!("{} files contained matches", stats.files_with_matches);
         eprintln!("{} files searched", stats.files_searched);
@@ -580,14 +580,14 @@ impl SearchOutputCtx {
 
     #[must_use]
     const fn core_output(
-        format: SearchOutputFormat,
-        effective_mode: SearchMode,
+        format: GrepOutputFormat,
+        effective_mode: GrepMode,
         quiet: bool,
-        lines: SearchLineStyle,
-        records: SearchRecordStyle,
+        lines: GrepLineStyle,
+        records: GrepRecordStyle,
         include_zero: bool,
-    ) -> SearchOutput {
-        SearchOutput {
+    ) -> GrepOutput {
+        GrepOutput {
             format,
             mode: effective_mode,
             emission: if quiet {
@@ -644,9 +644,9 @@ impl SearchOutputCtx {
     const fn effective_line_number(
         clap_line_number: bool,
         line_number_override: Option<bool>,
-        output_format: SearchOutputFormat,
+        output_format: GrepOutputFormat,
     ) -> bool {
-        if matches!(output_format, SearchOutputFormat::Json) {
+        if matches!(output_format, GrepOutputFormat::Json) {
             return true;
         }
         match line_number_override {
@@ -707,17 +707,17 @@ mod tests {
     #[test]
     fn filename_mode_single_file_defaults_to_never() {
         assert!(matches!(
-            SearchOutputCtx::filename_mode(None, FilenameContext::SingleFileCorpus),
+            GrepOutputCtx::filename_mode(None, FilenameContext::SingleFileCorpus),
             FilenameMode::Never
         ));
     }
 
     #[test]
     fn effective_line_number_json() {
-        assert!(SearchOutputCtx::effective_line_number(
+        assert!(GrepOutputCtx::effective_line_number(
             false,
             None,
-            SearchOutputFormat::Json
+            GrepOutputFormat::Json
         ));
     }
 

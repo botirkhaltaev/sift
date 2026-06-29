@@ -1,5 +1,5 @@
 use clap::Args;
-use sift_core::search::{InputEncoding, RegexEngineRequest};
+use sift_core::grep::{InputEncoding, RegexEngineRequest};
 
 /// Regex engine and configuration flags.
 #[derive(Args, Clone)]
@@ -103,7 +103,7 @@ pub struct LineTerminatorDecl {
 mod tests {
     use crate::cli::Cli;
     use clap::Parser;
-    use sift_core::search::{InputEncoding, RegexEngineRequest};
+    use sift_core::grep::{InputEncoding, RegexEngineRequest};
 
     #[test]
     fn engine_no_config_flag() {

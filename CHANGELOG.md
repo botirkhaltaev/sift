@@ -6,9 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Breaking
 
-- Make `SearchQuery` fields private and expose search options through `SearchQuery::opts()`
-- Move search-domain types under the public `sift_core::search` module and reduce root re-exports to `SearchError`, `SearchOutcome`, and `SearchQuery`
-- Change `SearchExecution` to borrow candidates instead of taking ownership
+- Replace the old `search` module boundary with a grep-owned architecture under `sift_core::grep`
+- Rename grep-domain public types from `Search*` to `Grep*` and expose `Grep::run` as the single grep entrypoint
+- Replace query-owned execution and scan/request modules with `CandidateResolver`, `GrepInputs`, and `GrepRunner`
 - Replace boolean grep/index modes with `GrepMode`, `UnindexedStrategy`, and `IndexWalkConfig` domain types
 - Change CLI dispatch to consume `Cli` during routing
 
@@ -79,7 +79,7 @@ All notable changes to this project will be documented in this file.
 
 ### Refactor
 
-- Migrate grep/filter helpers to domain-type impls (`PatternConfig::search_options`, `FilterConfig::candidate_config`, `OutputConfig::separators`, `ByteSize`)
+- Migrate grep/filter helpers to domain-type impls (`PatternConfig::grep_options`, `FilterConfig::candidate_config`, `OutputConfig::separators`, `ByteSize`)
 - Migrate core search helpers to domain types (`CandidateFilter::collect`, `WalkOptions::discover_files`, `IgnoreConfig::matcher`)
 - Consolidate daemon into CLI-only `index/daemon.rs` (`Daemon::send`, `Daemon::serve`, `Daemon::ensure_running`); remove `Serve`, coordinator, and core IPC types
 - Remove no-op `DaemonOp::Watch` IPC opcode; reload store metadata before daemon reconciles; fail `serve` on startup reconcile errors; rebind filesystem watcher when corpus root changes
@@ -341,4 +341,3 @@ All notable changes to this project will be documented in this file.
 - skip redundant canonicalize in indexed search
 - cache parallel scan threshold with OnceLock
 - byte-first scanning with regex::bytes::Regex, remove prefilter
-

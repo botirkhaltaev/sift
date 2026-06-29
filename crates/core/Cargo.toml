@@ -58,10 +58,6 @@ name = "index"
 path = "tests/index/main.rs"
 
 [[test]]
-name = "search"
-path = "tests/search/main.rs"
-
-[[test]]
 name = "query"
 path = "tests/query/main.rs"
 

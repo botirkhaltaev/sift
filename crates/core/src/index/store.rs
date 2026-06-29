@@ -373,10 +373,10 @@ impl Drop for WriteLockGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grep::filter::VisibilityConfig;
     use crate::index::config::{IndexBuildConfig, IndexWalkConfig};
     use crate::index::meta::{CorpusMeta, FilterMeta, StoreMeta, WalkMeta};
     use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexCoverage};
-    use crate::search::filter::VisibilityConfig;
     use std::fs;
     use tempfile::TempDir;
 

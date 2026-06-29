@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Thin CLI binary over `sift-core`. Parses flags with clap, maps them to `SearchOptions`/`SearchMatchFlags`, and dispatches to core.
+Thin CLI binary over `sift-core`. Parses flags with clap, maps them to `GrepOptions`/`GrepMatchFlags`, and dispatches to core.
 
 ## Architecture
 
@@ -19,9 +19,9 @@ Two-layer flag model:
 |--------|------------|------------------------|-------------|
 | `grep/argv.rs` | — | `Argv` | `Argv::from_env`, `Argv::new` |
 | `grep/ignore.rs` | `Ignore*Decl`, … | `IgnoreResolution` | `IgnoreResolution::resolve` |
-| `grep/pattern.rs` | `PatternArgs`, … | `PatternConfig`, `PatternArgv`, `ResolvedPatterns` | `ResolvedPatterns::resolve`, `PatternConfig::search_options` |
-| `grep/output.rs` | `LineNumberDecl`, … | `OutputConfig`, `OutputArgv`, `SearchOutputCtx` | `OutputArgv::resolve`, `SearchOutputCtx::resolve`, `OutputConfig::separators` |
-| `grep/filter.rs` | `FilterDecl`, … | `FilterConfig`, `TypeCatalog`, `SearchFilterCtx` | `FilterConfig::candidate_config`, `SearchFilterCtx::resolve` |
+| `grep/pattern.rs` | `PatternArgs`, … | `PatternConfig`, `PatternArgv`, `ResolvedPatterns` | `ResolvedPatterns::resolve`, `PatternConfig::grep_options` |
+| `grep/output.rs` | `LineNumberDecl`, … | `OutputConfig`, `OutputArgv`, `GrepOutputCtx` | `OutputArgv::resolve`, `GrepOutputCtx::resolve`, `OutputConfig::separators` |
+| `grep/filter.rs` | `FilterDecl`, … | `FilterConfig`, `TypeCatalog`, `GrepFilterCtx` | `FilterConfig::candidate_config`, `GrepFilterCtx::resolve` |
 | `grep/paths.rs` | `PathArgs` | `CorpusScope` | `CorpusScope::resolve` |
 | `grep/run.rs` | — | `GrepConfig`, `Grep`, `GrepOutcome` | `Grep::run` |
 | `index/mod.rs` | — | `IndexRequest`, `IndexJob` | `IndexJob::resolve`, `IndexJob::run` |
@@ -66,7 +66,7 @@ p.assert_index_walk_same(["pattern"], "expected\n");
 
 - Global options (e.g. `--sift-dir`) must appear **before** `index` subcommands.
 - Search paths are resolved and must sit under the corpus root in the index metadata.
-- Extend flags by threading new `SearchMatchFlags`/`SearchOptions` fields through to `SearchQuery::new` in core. Do not duplicate regex logic here.
+- Extend flags by threading new `GrepMatchFlags`/`GrepOptions` fields through to `GrepQuery::new` in core. Do not duplicate regex logic here.
 
 ## Testing
 

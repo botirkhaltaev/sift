@@ -14,8 +14,8 @@ use regex_syntax::hir::{self, Hir};
 use crate::index::snapshot::ArtifactData;
 use crate::index::{CorpusKind, FileId, IndexBuildConfig, IndexDestination, IndexSource};
 use crate::query::QuerySpec;
-use crate::search::request::LinkTraversal;
 use crate::walk::FileWalk;
+use crate::walk::LinkTraversal;
 
 use self::build::{FingerprintCollector, IndexTables, PostingTables};
 use self::files::FileFingerprint;

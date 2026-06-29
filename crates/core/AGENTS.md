@@ -8,7 +8,7 @@ The engine is designed around multiple coexisting configured indexes. `IndexConf
 
 ## Public API
 
-Re-exported from `lib.rs`: `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`, `Indexes`, `SearchQuery`, `SearchOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `IndexConfig`, `IndexBuildConfig`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `SearchError`, storage helpers.
+Re-exported from `lib.rs`: `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`, `Indexes`, `Grep`, `GrepQuery`, `GrepCorpus`, `CandidateIndexState`, `GrepOptions`, `QueryPlanner`, `QuerySpec`, `Index`, `IndexConfig`, `IndexBuildConfig`, `FileId`, `IndexId`, `discover_files`, `PatternCompiler`, `GrepError`, storage helpers.
 
 ## Source Map
 
@@ -22,34 +22,35 @@ Re-exported from `lib.rs`: `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`, `In
 | `index/ngram/build.rs` | `IndexTables`: fingerprint collection, N-gram extraction, table construction |
 | `index/ngram/files.rs` | File ID to relative path mapping with fingerprints |
 | `index/ngram/storage/` | Binary persistence format for gram sets, lexicon, postings, and file tables |
-| `grep/mod.rs` | Pipeline orchestration: `GrepRequest`, `run()` |
-| `search/` | Regex execution (scan workers, output, pattern, filter) |
-| `search/options/` | `SearchOptions`, `SearchMatchFlags`, `CaseMode`, `BinaryMode` |
-| `search/query/` | `SearchQuery`, `Match` |
-| `search/pattern/` | `PatternCompiler`: composable regex builder |
-| `search/request/` | `SearchExecution`, `WalkOptions`, `LinkTraversal` |
-| `search/candidates/` | Search candidate collection through `walk::FileWalk` |
-| `search/scan/` | Text / summary / JSON scanning workers |
-| `search/emit/` | Output formatting, result chunks, stats helpers |
-| `search/filter/` | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |
-| `search/output/` | `SearchOutput`, style/mode/format/passthru |
+| `grep/mod.rs` | Public grep entrypoint and stable re-exports |
+| `grep/options/` | `GrepOptions`, `GrepMatchFlags`, `CaseMode`, `BinaryMode` |
+| `grep/query/` | `GrepQuery`, `CompiledGrepQuery`, `Match`, matcher cache |
+| `grep/pattern/` | `PatternCompiler`: composable regex builder |
+| `grep/corpus.rs` | `GrepCorpus`, index state, transformed content source |
+| `grep/candidates.rs` | `CandidateResolver`, `CandidateSet`, candidate coverage, candidate ordering |
+| `grep/input.rs` | `GrepInput`, `GrepInputs`, `GrepStream`, transformed candidate bytes |
+| `grep/runner/` | `GrepRunner`: traversal, parallel reporter execution, and result merging |
+| `grep/sink/` | Per-file grep reporters for standard, summary, and JSON output |
+| `grep/report.rs` | `GrepReport`, `GrepOutcome`, `GrepCollection` |
+| `grep/stats.rs` | `GrepStats` and internal text-mode counters |
+| `grep/filter/` | `CandidateFilter`, `CandidateFilterConfig`, ignore/type_filter |
+| `grep/output/` | `GrepOutput`, style/mode/format/passthru |
 | `candidate.rs` | `Candidate`: single file candidate with `rel_path`, `abs_path`, filtering |
 | `bin/sift_profile/` | `sift-profile`, feature `profile` only |
 
 ## Error Ownership
 
-Each grep sub-module defines its own error type; `grep/mod.rs` aggregates them into a unified `SearchError` via `From` impls:
+Each grep sub-module defines its own error type; `grep/error.rs` aggregates them into a unified `GrepError` via `From` impls:
 
 | Module | Error Type | Mapped To |
 |--------|-----------|-----------|
-| `pattern/` | `CompileError` | `SearchError::RegexBuild` |
-| `filter/` | `FilterError` | `SearchError::RegexBuild`, `SearchError::Ignore` |
-| `output/` | `OutputError` | `SearchError::JsonOutputIncompatibleMode`, `JsonSerialize`, `Io` |
-| `emit/` | `ExecutionError` | `SearchError::InvalidMaxCount`, `Io`, `Ignore` |
+| `pattern/` | `CompileError` | `GrepError::RegexBuild` |
+| `filter/` | `FilterError` | `GrepError::RegexBuild`, `GrepError::Ignore` |
+| `output/` | `OutputError` | `GrepError::JsonOutputIncompatibleMode`, `JsonSerialize`, `Io` |
 
-`SearchError` variants not owned by a sub-module (`EmptyPatterns`, `RegexBuild` direct) live in the aggregate. `crate::Error` aggregates `SearchError` as `Error::Search`.
+`GrepError` variants not owned by a sub-module (`EmptyPatterns`, `RegexBuild` direct) live in the aggregate. `crate::Error` aggregates `GrepError` as `Error::Search`.
 
-Public grep APIs (`SearchQuery::new`, `SearchQuery::run`, `discover_files`, `Indexes::open`) return `crate::Result<T>` and rely on `From<SearchError> for crate::Error`.
+Public grep APIs (`GrepQuery::new`, `Grep::run`, `discover_files`, `Indexes::open`) return `crate::Result<T>` or `GrepError` and rely on `From<GrepError> for crate::Error`.
 
 ## Architecture
 
@@ -80,14 +81,13 @@ impl IndexConfig {
 
 ### Search Flow
 ```text
-grep::run(query, GrepRequest { indexes, filter, output, separators, collect })
-  -> QuerySpec from `SearchQuery::build_query_spec()` (internal)
-  -> Indexes::candidates(spec, coverage) or walk::collect_candidates
-  -> candidate.matches(filter) via par_iter
-  -> SearchExecution { candidates, output, separators, collect }
-  -> query.search(SearchExecution)
-  -> scan with regex engine
-  -> emit output
+Grep::new(GrepQuery).corpus(GrepCorpus).run()
+  -> GrepQuery::compile() and QuerySpec from GrepQuery
+  -> CandidateResolver using QueryPlanner with index coverage or FileWalk fallback
+  -> CandidateSet filtering and ordering
+  -> GrepInputs from paths, transformed bytes, and streams
+  -> GrepRunner over normalized path/byte inputs
+  -> write grep output and return GrepReport
 ```
 
 ### Key Types
@@ -122,9 +122,9 @@ Benchmarks live in `benches/` and mirror the `src/` module layout:
 
 | File | Coverage |
 |------|----------|
-| `query.rs` | `QueryPlanner`, `PatternCompiler`, `SearchQuery::new` |
+| `query.rs` | `QueryPlanner`, `PatternCompiler`, `GrepQuery::new` |
 | `index.rs` | Runtime-width `NGramIndex`, `Indexes`, `Index` enum, candidates, explain, save/reopen |
-| `grep.rs` | `SearchQuery::run`, `CandidateFilter`, output modes |
+| `grep.rs` | `Grep::run`, `CandidateFilter`, output modes |
 
 ### Conventions
 

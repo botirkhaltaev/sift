@@ -2,10 +2,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
+use sift_core::grep::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig};
 use sift_core::grep::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
-use sift_core::search::{
-    CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig,
-};
 
 use super::argv::Argv;
 use super::ignore::{IgnoreResolution, MessageFlags};
@@ -27,7 +25,7 @@ impl FilterConfig {
     /// Returns an error if `max_filesize` parsing fails.
     pub fn candidate_config(
         &self,
-        filter: SearchFilterCtx,
+        filter: GrepFilterCtx,
         scopes: Vec<PathBuf>,
         exclude_paths: Vec<PathBuf>,
     ) -> anyhow::Result<CandidateFilterConfig> {
@@ -196,12 +194,12 @@ impl FilterDecl {
 
 /// Resolved visibility, ignore sources, and glob case for [`CandidateFilterConfig`].
 #[derive(Clone, Copy, Default)]
-pub struct SearchFilterCtx {
+pub struct GrepFilterCtx {
     pub ignore: IgnoreResolution,
     pub glob_case_insensitive: bool,
 }
 
-impl SearchFilterCtx {
+impl GrepFilterCtx {
     #[must_use]
     pub fn resolve(argv: &Argv<'_>) -> Self {
         let output = OutputArgv::resolve(argv);
@@ -569,8 +567,8 @@ mod tests {
     #[test]
     fn search_filter_ctx_hidden_mode_include() {
         use crate::grep::ignore::IgnoreResolution;
-        use sift_core::search::IgnoreSources;
-        let ctx = SearchFilterCtx {
+        use sift_core::grep::IgnoreSources;
+        let ctx = GrepFilterCtx {
             ignore: IgnoreResolution {
                 hidden: true,
                 sources: IgnoreSources::empty(),
@@ -580,15 +578,15 @@ mod tests {
         };
         assert!(matches!(
             ctx.ignore.hidden_mode(),
-            sift_core::search::HiddenMode::Include
+            sift_core::grep::HiddenMode::Include
         ));
     }
 
     #[test]
     fn search_filter_ctx_hidden_mode_respect() {
         use crate::grep::ignore::IgnoreResolution;
-        use sift_core::search::IgnoreSources;
-        let ctx = SearchFilterCtx {
+        use sift_core::grep::IgnoreSources;
+        let ctx = GrepFilterCtx {
             ignore: IgnoreResolution {
                 sources: IgnoreSources::empty(),
                 ..Default::default()
@@ -597,7 +595,7 @@ mod tests {
         };
         assert!(matches!(
             ctx.ignore.hidden_mode(),
-            sift_core::search::HiddenMode::Respect
+            sift_core::grep::HiddenMode::Respect
         ));
     }
 
