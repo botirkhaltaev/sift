@@ -70,6 +70,7 @@ fn run_grep(
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
+        candidate_order: sift_core::grep::CandidateOrder::default(),
     }
     .search(query, &[GrepSource::Corpus])
     .unwrap()

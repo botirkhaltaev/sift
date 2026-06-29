@@ -1,10 +1,10 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use sift_core::grep::{GrepRequest, GrepSource};
+use sift_core::grep::{CandidateOrder, GrepRequest, GrepSource};
 use sift_core::search::{CandidateFilter, SearchMode, StreamInput};
 use sift_core::{
-    CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
+    Candidate, CandidateSource, CorpusKind, IndexCoverage, Indexes, SearchQuery, SnapshotValidation,
 };
 
 use crate::index::daemon::Daemon;
@@ -33,6 +33,7 @@ pub struct GrepConfig {
     pub search_paths: Vec<PathBuf>,
     pub threads: Option<usize>,
     pub mode: GrepMode,
+    pub candidate_order: CandidateOrder,
 }
 
 /// Grep-mode search and file listing.
@@ -261,6 +262,15 @@ impl Grep {
         }
         all_paths.sort();
         all_paths.dedup();
+        let mut candidates = all_paths
+            .into_iter()
+            .map(|rel| Candidate::new(rel.clone(), session.scope.filter_root.join(&rel)))
+            .collect::<Vec<_>>();
+        self.config.candidate_order.order(&mut candidates)?;
+        all_paths = candidates
+            .into_iter()
+            .map(|candidate| candidate.rel_path().to_path_buf())
+            .collect();
         let sep = if output_argv.path.nul_terminated {
             '\0'
         } else {
@@ -340,6 +350,7 @@ impl Grep {
                 store_meta: session.store_meta.as_ref(),
                 snapshot,
             },
+            candidate_order: self.config.candidate_order,
         };
         let grep_run = Self::search_sources(&grep_request, &query, &sources)?;
         if let Some(s) = &grep_run.outcome.stats {
