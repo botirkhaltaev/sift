@@ -182,7 +182,7 @@ impl Cli {
         } else {
             GrepMode::Search
         };
-        let candidate_order = self.filter_decl.sort(argv)?;
+        let candidate_order = self.filter_decl.candidate_order(argv)?;
 
         Ok(Grep::new(GrepConfig {
             pattern: PatternConfig {

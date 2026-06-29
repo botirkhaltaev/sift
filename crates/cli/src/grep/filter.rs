@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
-use sift_core::grep::{CandidateOrder, CandidateOrderKey};
+use sift_core::grep::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
 use sift_core::search::{
     CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig,
 };
@@ -125,39 +125,55 @@ impl FilterDecl {
     /// # Errors
     ///
     /// Returns an error if a sort flag is missing a value or uses an unknown key.
-    pub fn sort(&self, argv: &Argv<'_>) -> anyhow::Result<CandidateOrder> {
-        let mut order = self
-            .sort_files
-            .then_some(CandidateOrder::new(CandidateOrderKey::Path, false));
+    pub fn candidate_order(&self, argv: &Argv<'_>) -> anyhow::Result<CandidateOrder> {
+        let mut order = self.sort_files.then_some(CandidateOrder::new(
+            CandidateOrderKey::Path,
+            CandidateOrderDirection::Ascending,
+        ));
         let mut iter = argv.as_slice().iter().skip(1);
         while let Some(arg) = iter.next() {
             if arg == "--" {
                 break;
             }
             if arg == "--sort-files" {
-                order = Some(CandidateOrder::new(CandidateOrderKey::Path, false));
+                order = Some(CandidateOrder::new(
+                    CandidateOrderKey::Path,
+                    CandidateOrderDirection::Ascending,
+                ));
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--sort=") {
-                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, false));
+                order = Some(CandidateOrder::new(
+                    Self::parse_sort_key(value)?,
+                    CandidateOrderDirection::Ascending,
+                ));
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--sortr=") {
-                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, true));
+                order = Some(CandidateOrder::new(
+                    Self::parse_sort_key(value)?,
+                    CandidateOrderDirection::Descending,
+                ));
                 continue;
             }
             if arg == "--sort" {
                 let Some(value) = iter.next() else {
                     anyhow::bail!("--sort requires a sort key");
                 };
-                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, false));
+                order = Some(CandidateOrder::new(
+                    Self::parse_sort_key(value)?,
+                    CandidateOrderDirection::Ascending,
+                ));
                 continue;
             }
             if arg == "--sortr" {
                 let Some(value) = iter.next() else {
                     anyhow::bail!("--sortr requires a sort key");
                 };
-                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, true));
+                order = Some(CandidateOrder::new(
+                    Self::parse_sort_key(value)?,
+                    CandidateOrderDirection::Descending,
+                ));
             }
         }
 

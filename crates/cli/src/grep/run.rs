@@ -262,19 +262,15 @@ impl Grep {
         }
         all_paths.sort();
         all_paths.dedup();
-        if self.config.candidate_order.is_sorted() {
-            let mut candidates = all_paths
-                .into_iter()
-                .map(|rel| Candidate::new(rel.clone(), session.scope.filter_root.join(&rel)))
-                .collect::<Vec<_>>();
-            self.config
-                .candidate_order
-                .order_candidates(&mut candidates)?;
-            all_paths = candidates
-                .into_iter()
-                .map(|candidate| candidate.rel_path().to_path_buf())
-                .collect();
-        }
+        let mut candidates = all_paths
+            .into_iter()
+            .map(|rel| Candidate::new(rel.clone(), session.scope.filter_root.join(&rel)))
+            .collect::<Vec<_>>();
+        self.config.candidate_order.order(&mut candidates)?;
+        all_paths = candidates
+            .into_iter()
+            .map(|candidate| candidate.rel_path().to_path_buf())
+            .collect();
         let sep = if output_argv.path.nul_terminated {
             '\0'
         } else {
