@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
-use sift_core::grep::{CandidateSort, CandidateSortKey};
+use sift_core::grep::{CandidateOrder, CandidateOrderKey};
 use sift_core::search::{
     CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig,
 };
@@ -125,66 +125,52 @@ impl FilterDecl {
     /// # Errors
     ///
     /// Returns an error if a sort flag is missing a value or uses an unknown key.
-    pub fn sort(&self, argv: &Argv<'_>) -> anyhow::Result<CandidateSort> {
-        let mut sort = None;
-        let mut sortr = None;
-        let mut sort_files = self.sort_files;
+    pub fn sort(&self, argv: &Argv<'_>) -> anyhow::Result<CandidateOrder> {
+        let mut order = self
+            .sort_files
+            .then_some(CandidateOrder::new(CandidateOrderKey::Path, false));
         let mut iter = argv.as_slice().iter().skip(1);
         while let Some(arg) = iter.next() {
             if arg == "--" {
                 break;
             }
             if arg == "--sort-files" {
-                sort_files = true;
+                order = Some(CandidateOrder::new(CandidateOrderKey::Path, false));
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--sort=") {
-                sort = Some(Self::parse_sort_key(value)?);
+                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, false));
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--sortr=") {
-                sortr = Some(Self::parse_sort_key(value)?);
+                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, true));
                 continue;
             }
             if arg == "--sort" {
                 let Some(value) = iter.next() else {
                     anyhow::bail!("--sort requires a sort key");
                 };
-                sort = Some(Self::parse_sort_key(value)?);
+                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, false));
                 continue;
             }
             if arg == "--sortr" {
                 let Some(value) = iter.next() else {
                     anyhow::bail!("--sortr requires a sort key");
                 };
-                sortr = Some(Self::parse_sort_key(value)?);
+                order = Some(CandidateOrder::new(Self::parse_sort_key(value)?, true));
             }
         }
 
-        Ok(sort.map_or_else(
-            || {
-                sortr.map_or_else(
-                    || {
-                        if sort_files {
-                            CandidateSort::new(CandidateSortKey::Path, false)
-                        } else {
-                            CandidateSort::default()
-                        }
-                    },
-                    |key| CandidateSort::new(key, true),
-                )
-            },
-            |key| CandidateSort::new(key, false),
-        ))
+        Ok(order.unwrap_or_default())
     }
 
-    fn parse_sort_key(value: &str) -> anyhow::Result<CandidateSortKey> {
+    fn parse_sort_key(value: &str) -> anyhow::Result<CandidateOrderKey> {
         match value {
-            "none" => Ok(CandidateSortKey::None),
-            "path" => Ok(CandidateSortKey::Path),
-            "modified" => Ok(CandidateSortKey::Modified),
-            "accessed" => Ok(CandidateSortKey::Accessed),
-            "created" => Ok(CandidateSortKey::Created),
+            "none" => Ok(CandidateOrderKey::None),
+            "path" => Ok(CandidateOrderKey::Path),
+            "modified" => Ok(CandidateOrderKey::Modified),
+            "accessed" => Ok(CandidateOrderKey::Accessed),
+            "created" => Ok(CandidateOrderKey::Created),
             other => anyhow::bail!(
                 "unknown sort key '{other}': expected none, path, modified, accessed, or created"
             ),

@@ -1,7 +1,10 @@
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
-use sift_core::search::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions};
+use sift_core::search::{
+    BinaryMode, CaseMode, RegexEngineRequest, SearchMatchFlags, SearchMode, SearchOptions,
+};
 
 use super::argv::Argv;
 use super::engine::{EngineDecl, MultilineDecl};
@@ -100,8 +103,11 @@ impl PatternConfig {
         if self.multiline.multiline_dotall {
             opts.flags |= SearchMatchFlags::MULTILINE_DOTALL;
         }
-        if self.multiline.crlf {
+        if self.multiline.line_terminator.crlf {
             opts.flags |= SearchMatchFlags::CRLF;
+        }
+        if self.multiline.line_terminator.null_data {
+            opts.flags |= SearchMatchFlags::NULL_DATA;
         }
         if self.engine.no_unicode {
             opts.unicode = false;
@@ -118,6 +124,8 @@ impl PatternConfig {
         {
             opts.dfa_size_limit = usize::try_from(bytes).unwrap_or(usize::MAX);
         }
+        opts.regex_engine = pattern_argv.regex_engine;
+        opts.input_encoding = self.engine.encoding.clone().unwrap_or_default();
         opts.replace.clone_from(&self.replace.replace);
         opts.before_context = pattern_argv.before_context;
         opts.after_context = pattern_argv.after_context;
@@ -242,6 +250,7 @@ pub struct PatternArgv {
     pub quiet: bool,
     pub before_context: usize,
     pub after_context: usize,
+    pub regex_engine: RegexEngineRequest,
 }
 
 impl PatternArgv {
@@ -258,7 +267,50 @@ impl PatternArgv {
             quiet,
             before_context,
             after_context,
+            regex_engine: Self::regex_engine(argv),
         }
+    }
+
+    fn regex_engine(argv: &Argv<'_>) -> RegexEngineRequest {
+        let mut last_idx = 0usize;
+        let mut engine = RegexEngineRequest::Rust;
+        let raw_args = argv.as_slice();
+        let mut i = 0;
+        while i < raw_args.len() {
+            let arg = &raw_args[i];
+            if arg == "--" {
+                break;
+            }
+            let next = i + 1;
+            let parsed = if arg == "--pcre2" {
+                Some((i, RegexEngineRequest::Pcre2, 0usize))
+            } else if arg == "--no-pcre2" {
+                Some((i, RegexEngineRequest::Rust, 0))
+            } else if arg == "--auto-hybrid-regex" {
+                Some((i, RegexEngineRequest::Auto, 0))
+            } else if let Some(value) = arg.strip_prefix("--engine=") {
+                value
+                    .parse::<RegexEngineRequest>()
+                    .ok()
+                    .map(|engine| (i, engine, 0))
+            } else if arg == "--engine" && next < raw_args.len() {
+                raw_args[next]
+                    .parse::<RegexEngineRequest>()
+                    .ok()
+                    .map(|engine| (i, engine, 1))
+            } else {
+                None
+            };
+            if let Some((idx, selected, consumed)) = parsed {
+                if idx >= last_idx {
+                    last_idx = idx;
+                    engine = selected;
+                }
+                i += consumed;
+            }
+            i += 1;
+        }
+        engine
     }
 
     fn case_mode(argv: &Argv<'_>) -> CaseMode {
@@ -492,7 +544,17 @@ fn parse_usize_token(s: &str) -> Option<usize> {
 
 /// Patterns resolved from `-e`/`-f`/positional clap declarations.
 #[derive(Debug)]
-pub struct ResolvedPatterns(pub Vec<String>);
+pub struct ResolvedPatterns {
+    pub patterns: Vec<String>,
+    pub input: PatternInputUse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PatternInputUse {
+    #[default]
+    None,
+    Stdin,
+}
 
 impl ResolvedPatterns {
     /// # Errors
@@ -500,11 +562,19 @@ impl ResolvedPatterns {
     /// Returns an error if no pattern is provided or if a pattern file cannot be read.
     pub fn resolve(config: &PatternConfig) -> anyhow::Result<Self> {
         let mut patterns = Vec::new();
+        let mut input = PatternInputUse::None;
         for p in &config.patterns.regexp {
             patterns.push(p.clone());
         }
         if let Some(file) = config.patterns.pattern_file.as_deref() {
-            let content = std::fs::read_to_string(file)?;
+            let content = if file == Path::new("-") {
+                input = PatternInputUse::Stdin;
+                let mut content = String::new();
+                std::io::stdin().read_to_string(&mut content)?;
+                content
+            } else {
+                std::fs::read_to_string(file)?
+            };
             for line in content.lines() {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -518,7 +588,7 @@ impl ResolvedPatterns {
         if patterns.is_empty() {
             anyhow::bail!("no pattern given");
         }
-        Ok(Self(patterns))
+        Ok(Self { patterns, input })
     }
 }
 
@@ -766,7 +836,7 @@ mod tests {
         let patterns =
             ResolvedPatterns::resolve(&pattern_config(&["sift", "-e", "foo", "-e", "bar"]))
                 .unwrap()
-                .0;
+                .patterns;
         assert_eq!(patterns, vec!["foo", "bar"]);
     }
 
@@ -774,7 +844,7 @@ mod tests {
     fn resolve_patterns_positional() {
         let patterns = ResolvedPatterns::resolve(&pattern_config(&["sift", "baz"]))
             .unwrap()
-            .0;
+            .patterns;
         assert_eq!(patterns, vec!["baz"]);
     }
 
@@ -782,7 +852,7 @@ mod tests {
     fn resolve_patterns_regexp_and_positional() {
         let patterns = ResolvedPatterns::resolve(&pattern_config(&["sift", "-e", "foo", "bar"]))
             .unwrap()
-            .0;
+            .patterns;
         assert_eq!(patterns, vec!["foo", "bar"]);
     }
 

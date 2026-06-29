@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct SearchMatchFlags: u16 {
@@ -9,6 +11,30 @@ bitflags::bitflags! {
         const MULTILINE        = 1 << 5;
         const MULTILINE_DOTALL = 1 << 6;
         const CRLF             = 1 << 7;
+        const NULL_DATA        = 1 << 8;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegexEngineRequest {
+    #[default]
+    Rust,
+    Pcre2,
+    Auto,
+}
+
+impl FromStr for RegexEngineRequest {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "default" | "rust" => Ok(Self::Rust),
+            "pcre2" => Ok(Self::Pcre2),
+            "auto" | "auto-hybrid" => Ok(Self::Auto),
+            other => Err(format!(
+                "unknown regex engine '{other}': expected default, pcre2, or auto"
+            )),
+        }
     }
 }
 
@@ -35,6 +61,50 @@ pub enum BinaryMode {
     AsText,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum InputEncoding {
+    #[default]
+    Auto,
+    Raw,
+    Explicit(grep_searcher::Encoding),
+}
+
+impl InputEncoding {
+    #[must_use]
+    pub const fn bom_sniffing(&self) -> bool {
+        matches!(self, Self::Auto | Self::Explicit(_))
+    }
+
+    #[must_use]
+    pub fn explicit(&self) -> Option<grep_searcher::Encoding> {
+        match self {
+            Self::Explicit(encoding) => Some(encoding.clone()),
+            Self::Auto | Self::Raw => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn uses_decoded_input(&self) -> bool {
+        matches!(self, Self::Auto | Self::Explicit(_))
+    }
+}
+
+impl FromStr for InputEncoding {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.eq_ignore_ascii_case("auto") {
+            return Ok(Self::Auto);
+        }
+        if value.eq_ignore_ascii_case("none") {
+            return Ok(Self::Raw);
+        }
+        grep_searcher::Encoding::new(value)
+            .map(Self::Explicit)
+            .map_err(|e| e.to_string())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub flags: SearchMatchFlags,
@@ -43,10 +113,12 @@ pub struct SearchOptions {
     pub before_context: usize,
     pub after_context: usize,
     pub binary_mode: BinaryMode,
+    pub input_encoding: InputEncoding,
     pub replace: Option<String>,
     pub unicode: bool,
     pub regex_size_limit: usize,
     pub dfa_size_limit: usize,
+    pub regex_engine: RegexEngineRequest,
 }
 
 impl Default for SearchOptions {
@@ -58,10 +130,12 @@ impl Default for SearchOptions {
             before_context: 0,
             after_context: 0,
             binary_mode: BinaryMode::default(),
+            input_encoding: InputEncoding::default(),
             replace: None,
             unicode: true,
             regex_size_limit: 0,
             dfa_size_limit: 0,
+            regex_engine: RegexEngineRequest::default(),
         }
     }
 }
@@ -113,7 +187,12 @@ impl SearchOptions {
     }
 
     #[must_use]
-    pub const fn precludes_trigram_index(&self) -> bool {
-        self.invert_match()
+    pub const fn null_data(&self) -> bool {
+        self.flags.contains(SearchMatchFlags::NULL_DATA)
+    }
+
+    #[must_use]
+    pub const fn line_terminator(&self) -> u8 {
+        if self.null_data() { b'\0' } else { b'\n' }
     }
 }

@@ -144,6 +144,7 @@ impl Cli {
             line_number: self.line_number_decl.line_number,
             separators: self.separator_decl.clone(),
             search_paths: search_paths.to_vec(),
+            null_data: self.multiline_decl.line_terminator.null_data,
         }
     }
 
@@ -162,12 +163,72 @@ impl Cli {
             } else {
                 GrepMode::Search
             },
-            candidate_sort: sift_core::grep::CandidateSort::default(),
+            candidate_order: sift_core::grep::CandidateOrder::default(),
         }
+    }
+
+    fn into_grep(self, argv: &Argv<'_>) -> Result<Grep, anyhow::Error> {
+        let search_paths = self.search_scope.paths;
+        let replace_trim = self.replace_decl.trim;
+        let max_count = self.paths.max_count;
+        let line_number = self.line_number_decl.line_number;
+        let follow_links = self.paths.follow;
+        let one_file_system = self.walker_decl.one_file_system;
+        let threads = self.threading.threads;
+        let path_separator = self.threading.path_separator;
+        let null_data = self.multiline_decl.line_terminator.null_data;
+        let mode = if self.filter_decl.files {
+            GrepMode::ListFiles
+        } else {
+            GrepMode::Search
+        };
+        let candidate_order = self.filter_decl.sort(argv)?;
+
+        Ok(Grep::new(GrepConfig {
+            pattern: PatternConfig {
+                patterns: self.patterns,
+                search_flags: self.search_flags,
+                regex1: self.regex1,
+                regex2: self.regex2,
+                multiline: self.multiline_decl,
+                engine: self.engine_decl,
+                binary: self.binary_decl,
+                replace: self.replace_decl,
+                max_count,
+            },
+            filter: FilterConfig {
+                decl: self.filter_decl,
+                glob_patterns: self.glob_flags.glob,
+                follow_links,
+                one_file_system,
+            },
+            output: OutputConfig {
+                column: self.column_decl,
+                columns: self.columns_decl,
+                extra: self.extra_output,
+                replace_trim,
+                path_separator,
+                line_number,
+                separators: self.separator_decl,
+                search_paths: search_paths.clone(),
+                null_data,
+            },
+            sift_dir: self.paths.sift_dir,
+            search_paths,
+            threads,
+            mode,
+            candidate_order,
+        }))
     }
 
     #[must_use]
     pub fn dispatch(self, argv: &Argv<'_>) -> ExitCode {
+        if self.engine_decl.regex.pcre2_version {
+            let (major, minor) = grep_pcre2::version();
+            println!("PCRE2 {major}.{minor}");
+            return ExitCode::SUCCESS;
+        }
+
         if self.filter_decl.type_list {
             TypeCatalog::from_decl(&self.filter_decl).print_list();
             return ExitCode::SUCCESS;
@@ -207,61 +268,13 @@ impl Cli {
             }
             None => {
                 let daemon = self.paths.daemon();
-                let search_paths = self.search_scope.paths;
-                let replace_trim = self.replace_decl.trim;
-                let max_count = self.paths.max_count;
-                let line_number = self.line_number_decl.line_number;
-                let follow_links = self.paths.follow;
-                let one_file_system = self.walker_decl.one_file_system;
-                let threads = self.threading.threads;
-                let path_separator = self.threading.path_separator;
-                let mode = if self.filter_decl.files {
-                    GrepMode::ListFiles
-                } else {
-                    GrepMode::Search
-                };
-                let candidate_sort = match self.filter_decl.sort(argv) {
-                    Ok(sort) => sort,
+                let grep = match self.into_grep(argv) {
+                    Ok(grep) => grep,
                     Err(e) => {
                         eprintln!("sift: {e}");
                         return ExitCode::from(2);
                     }
                 };
-
-                let grep = Grep::new(GrepConfig {
-                    pattern: PatternConfig {
-                        patterns: self.patterns,
-                        search_flags: self.search_flags,
-                        regex1: self.regex1,
-                        regex2: self.regex2,
-                        multiline: self.multiline_decl,
-                        engine: self.engine_decl,
-                        binary: self.binary_decl,
-                        replace: self.replace_decl,
-                        max_count,
-                    },
-                    filter: FilterConfig {
-                        decl: self.filter_decl,
-                        glob_patterns: self.glob_flags.glob,
-                        follow_links,
-                        one_file_system,
-                    },
-                    output: OutputConfig {
-                        column: self.column_decl,
-                        columns: self.columns_decl,
-                        extra: self.extra_output,
-                        replace_trim,
-                        path_separator,
-                        line_number,
-                        separators: self.separator_decl,
-                        search_paths: search_paths.clone(),
-                    },
-                    sift_dir: self.paths.sift_dir,
-                    search_paths,
-                    threads,
-                    mode,
-                    candidate_sort,
-                });
 
                 let suppress_errors = SearchFilterCtx::resolve(argv)
                     .ignore

@@ -5,7 +5,6 @@ use std::{io, path::Path};
 
 #[cfg(test)]
 use grep_matcher::Matcher;
-use grep_regex::RegexMatcher;
 use std::sync::OnceLock;
 
 #[cfg(test)]
@@ -20,14 +19,15 @@ use crate::search::filter::CandidateFilter;
 use crate::search::filter::config::{
     CandidateFilterConfig, HiddenMode, IgnoreConfig, VisibilityConfig,
 };
-use crate::search::options::SearchOptions;
+use crate::search::options::{RegexEngineRequest, SearchOptions};
 use crate::search::output::SearchOutputFormat;
 #[cfg(test)]
 use crate::search::output::mode::MatchEmissionMode;
 use crate::search::output::mode::SearchMode;
 use crate::search::request::SearchExecution;
+use matcher::SearchMatcher;
 
-pub mod matcher;
+pub(crate) mod matcher;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
@@ -40,7 +40,44 @@ pub struct Match {
 pub struct SearchQuery {
     patterns: Vec<String>,
     opts: SearchOptions,
-    matcher: OnceLock<RegexMatcher>,
+    compiled: OnceLock<CompiledSearch>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CompiledSearch {
+    matcher: SearchMatcher,
+    candidate_strategy: CandidateStrategy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolvedRegexEngine {
+    Rust,
+    Pcre2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CandidateStrategy {
+    Indexed,
+    Complete(CompleteCandidateReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompleteCandidateReason {
+    InvertedMatch,
+    DecodedInput,
+    RegexEngineUnsupportedByPlanner,
+}
+
+impl CompiledSearch {
+    #[must_use]
+    pub(crate) const fn matcher(&self) -> &SearchMatcher {
+        &self.matcher
+    }
+
+    #[must_use]
+    pub(crate) const fn candidate_strategy(&self) -> CandidateStrategy {
+        self.candidate_strategy
+    }
 }
 
 impl SearchQuery {
@@ -56,7 +93,7 @@ impl SearchQuery {
         Ok(Self {
             patterns: patterns.to_vec(),
             opts,
-            matcher: OnceLock::new(),
+            compiled: OnceLock::new(),
         })
     }
 
@@ -102,9 +139,8 @@ impl SearchQuery {
         }
 
         let output = execution.output;
-        let candidates = execution.candidates;
 
-        if candidates.is_empty() {
+        if execution.inputs.is_empty() {
             return Ok((
                 SearchOutcome {
                     matched: false,
@@ -115,7 +151,8 @@ impl SearchQuery {
         }
 
         let search_start = Instant::now();
-        let matcher = self.resolve_matcher()?;
+        let compiled = self.compile()?;
+        let matcher = compiled.matcher();
 
         let (did_match, stats, hits) = match output.format {
             SearchOutputFormat::Json => match output.mode {
@@ -127,14 +164,14 @@ impl SearchQuery {
                         output,
                         search_start,
                     );
-                    let json_matched = scan.run(candidates, stats.as_mut())?;
+                    let json_matched = scan.run(&execution.inputs, stats.as_mut())?;
                     (json_matched, stats, Vec::new())
                 }
                 _ => return Err(SearchError::JsonOutputIncompatibleMode.into()),
             },
             SearchOutputFormat::Text => {
                 let (did_match, stats, hits) =
-                    self.run_text_output(candidates, matcher, execution, search_start)?;
+                    self.run_text_output(matcher, execution, search_start)?;
                 (did_match, stats, hits)
             }
         };
@@ -148,19 +185,46 @@ impl SearchQuery {
         ))
     }
 
-    fn resolve_matcher(&self) -> Result<&RegexMatcher, SearchError> {
-        if let Some(m) = self.matcher.get() {
-            return Ok(m);
+    pub(crate) fn compile(&self) -> Result<&CompiledSearch, SearchError> {
+        if let Some(compiled) = self.compiled.get() {
+            return Ok(compiled);
         }
-        let m = self.build_matcher()?;
-        let _ = self.matcher.set(m);
-        Ok(self.matcher.get().expect("just initialised"))
+        let compiled = self.build_compiled_search()?;
+        let _ = self.compiled.set(compiled);
+        Ok(self.compiled.get().expect("just initialised"))
+    }
+
+    fn build_compiled_search(&self) -> Result<CompiledSearch, SearchError> {
+        let (matcher, engine) = match self.opts.regex_engine {
+            RegexEngineRequest::Rust => (self.build_rust_matcher()?, ResolvedRegexEngine::Rust),
+            RegexEngineRequest::Pcre2 => (self.build_pcre2_matcher()?, ResolvedRegexEngine::Pcre2),
+            RegexEngineRequest::Auto => match self.build_rust_matcher() {
+                Ok(matcher) => (matcher, ResolvedRegexEngine::Rust),
+                Err(_) => (self.build_pcre2_matcher()?, ResolvedRegexEngine::Pcre2),
+            },
+        };
+
+        Ok(CompiledSearch {
+            matcher,
+            candidate_strategy: self.candidate_strategy(engine),
+        })
+    }
+
+    fn candidate_strategy(&self, engine: ResolvedRegexEngine) -> CandidateStrategy {
+        if self.opts.invert_match() {
+            CandidateStrategy::Complete(CompleteCandidateReason::InvertedMatch)
+        } else if self.opts.input_encoding.uses_decoded_input() {
+            CandidateStrategy::Complete(CompleteCandidateReason::DecodedInput)
+        } else if engine != ResolvedRegexEngine::Rust {
+            CandidateStrategy::Complete(CompleteCandidateReason::RegexEngineUnsupportedByPlanner)
+        } else {
+            CandidateStrategy::Indexed
+        }
     }
 
     fn run_text_output(
         &self,
-        candidates: &[crate::Candidate],
-        matcher: &RegexMatcher,
+        matcher: &SearchMatcher,
         execution: &SearchExecution<'_>,
         search_start: Instant,
     ) -> crate::Result<(bool, Option<SearchStats>, Vec<PathBuf>)> {
@@ -177,7 +241,7 @@ impl SearchQuery {
                     execution.separators,
                     &counters,
                 );
-                scan.run(candidates, collect)?
+                scan.run(&execution.inputs, collect)?
             }
             SearchMode::Count
             | SearchMode::CountMatches
@@ -186,16 +250,17 @@ impl SearchQuery {
                 let scan = crate::search::scan::summary::SummaryScan::new(
                     self, matcher, output, &counters,
                 );
-                scan.run(candidates, collect)?
+                scan.run(&execution.inputs, collect)?
             }
         };
 
         let bytes_searched = if collect.stats {
-            crate::Candidate::total_file_bytes(candidates)
+            execution.inputs.iter().map(|input| input.bytes()).sum()
         } else {
             0
         };
-        let stats = counters.finish(candidates.len(), bytes_searched, search_start.elapsed());
+        let input_count = execution.inputs.iter().map(|input| input.count()).sum();
+        let stats = counters.finish(input_count, bytes_searched, search_start.elapsed());
 
         Ok((did_match, stats, hits))
     }
@@ -254,7 +319,7 @@ impl SearchQuery {
         filter: &CandidateFilter,
         candidates: &[Candidate],
     ) -> crate::Result<Vec<crate::search::Match>> {
-        let matcher = self.resolve_matcher()?;
+        let matcher = self.compile()?.matcher();
         let mut out = Vec::new();
         let mut searcher = self.build_searcher(true, None, true);
         for candidate in candidates {
@@ -281,7 +346,7 @@ impl SearchQuery {
         &self,
         candidates: &[PathBuf],
     ) -> crate::Result<Vec<crate::search::Match>> {
-        let matcher = self.resolve_matcher()?;
+        let matcher = self.compile()?.matcher();
         let mut out = Vec::new();
         let mut searcher = self.build_searcher(true, None, true);
         for candidate in candidates {
@@ -305,13 +370,13 @@ impl SearchQuery {
 struct CollectSink {
     path: PathBuf,
     emission: MatchEmissionMode,
-    matcher: RegexMatcher,
+    matcher: SearchMatcher,
     matches: Vec<crate::search::Match>,
 }
 
 #[cfg(test)]
 impl CollectSink {
-    fn new(path: PathBuf, emission: MatchEmissionMode, matcher: RegexMatcher) -> Self {
+    fn new(path: PathBuf, emission: MatchEmissionMode, matcher: SearchMatcher) -> Self {
         Self {
             path,
             emission,
@@ -360,6 +425,11 @@ mod tests {
     use super::*;
     use crate::search::options::SearchMatchFlags;
 
+    fn make_search(patterns: &[&str], opts: SearchOptions) -> SearchQuery {
+        let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
+        SearchQuery::new(&patterns, opts).expect("compile search")
+    }
+
     #[test]
     fn case_mode_insensitive_returns_true() {
         assert!(crate::search::options::CaseMode::Insensitive.is_case_insensitive());
@@ -387,7 +457,6 @@ mod tests {
         assert!(!opts.multiline());
         assert!(!opts.multiline_dotall());
         assert!(!opts.crlf());
-        assert!(!opts.precludes_trigram_index());
         assert_eq!(opts.max_results, None);
         assert_eq!(opts.before_context, 0);
         assert_eq!(opts.after_context, 0);
@@ -396,12 +465,52 @@ mod tests {
     }
 
     #[test]
-    fn search_options_precludes_trigram_index_only_for_invert_match() {
-        let mut opts = SearchOptions::default();
-        assert!(!opts.precludes_trigram_index());
+    fn compiled_search_selects_candidate_strategy() {
+        let mut opts = SearchOptions {
+            input_encoding: crate::search::options::InputEncoding::Raw,
+            ..SearchOptions::default()
+        };
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Indexed
+        );
 
         opts.flags |= SearchMatchFlags::INVERT_MATCH;
-        assert!(opts.precludes_trigram_index());
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Complete(CompleteCandidateReason::InvertedMatch)
+        );
+
+        opts.flags.remove(SearchMatchFlags::INVERT_MATCH);
+        opts.input_encoding = crate::search::options::InputEncoding::Auto;
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Complete(CompleteCandidateReason::DecodedInput)
+        );
+
+        opts.input_encoding = crate::search::options::InputEncoding::Raw;
+        opts.regex_engine = crate::search::options::RegexEngineRequest::Pcre2;
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Complete(CompleteCandidateReason::RegexEngineUnsupportedByPlanner)
+        );
+
+        opts.regex_engine = crate::search::options::RegexEngineRequest::Auto;
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Indexed
+        );
+
+        let search = make_search(&["(?<=ba)r"], opts);
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Complete(CompleteCandidateReason::RegexEngineUnsupportedByPlanner)
+        );
     }
 
     #[test]

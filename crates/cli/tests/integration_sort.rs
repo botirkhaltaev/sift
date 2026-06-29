@@ -24,7 +24,7 @@ fn sortr_path_reverses_search_output() {
 }
 
 #[test]
-fn sort_overrides_sortr() {
+fn later_sort_overrides_sortr() {
     let p = TestProject::new("sort-overrides-sortr");
     p.write("a.txt", "needle\n");
     p.write("b.txt", "needle\n");
@@ -36,15 +36,39 @@ fn sort_overrides_sortr() {
 }
 
 #[test]
-fn sort_overrides_later_sortr() {
-    let p = TestProject::new("sort-overrides-later-sortr");
+fn later_sortr_overrides_sort() {
+    let p = TestProject::new("sortr-overrides-earlier-sort");
     p.write("a.txt", "needle\n");
     p.write("b.txt", "needle\n");
 
     let out = p.walk_output(["--sort", "path", "--sortr", "path", "needle"]);
 
     assert_success(&out);
+    assert_eq!(normalize_stdout(&out), "b.txt:needle\na.txt:needle\n");
+}
+
+#[test]
+fn sort_files_overrides_earlier_sortr() {
+    let p = TestProject::new("sort-files-overrides-sortr");
+    p.write("a.txt", "needle\n");
+    p.write("b.txt", "needle\n");
+
+    let out = p.walk_output(["--sortr", "path", "--sort-files", "needle"]);
+
+    assert_success(&out);
     assert_eq!(normalize_stdout(&out), "a.txt:needle\nb.txt:needle\n");
+}
+
+#[test]
+fn later_sortr_overrides_sort_files() {
+    let p = TestProject::new("sortr-overrides-sort-files");
+    p.write("a.txt", "needle\n");
+    p.write("b.txt", "needle\n");
+
+    let out = p.walk_output(["--sort-files", "--sortr", "path", "needle"]);
+
+    assert_success(&out);
+    assert_eq!(normalize_stdout(&out), "b.txt:needle\na.txt:needle\n");
 }
 
 #[test]
