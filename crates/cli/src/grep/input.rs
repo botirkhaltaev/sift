@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
@@ -77,9 +78,10 @@ impl TransformedContent {
     }
 
     fn read_decompressed(&self, path: &Path) -> sift_core::Result<Vec<u8>> {
+        let path = external_tool_path(path);
         let mut reader = self
             .decompressor
-            .build(path)
+            .build(path.as_ref())
             .map_err(|err| std::io::Error::other(err.to_string()))?;
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
@@ -105,7 +107,8 @@ impl Preprocessor {
             )
             .into());
         }
-        let output = Command::new(&self.command).arg(path).output()?;
+        let path = external_tool_path(path);
+        let output = Command::new(&self.command).arg(path.as_ref()).output()?;
         if output.status.success() {
             Ok(output.stdout)
         } else {
@@ -119,6 +122,41 @@ impl Preprocessor {
             .into())
         }
     }
+}
+
+#[cfg(not(windows))]
+const fn external_tool_path(path: &Path) -> Cow<'_, Path> {
+    Cow::Borrowed(path)
+}
+
+#[cfg(windows)]
+fn external_tool_path(path: &Path) -> Cow<'_, Path> {
+    windows_external_tool_path(path).map_or(Cow::Borrowed(path), Cow::Owned)
+}
+
+#[cfg(windows)]
+fn windows_external_tool_path(path: &Path) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf, Prefix};
+
+    let mut components = path.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+
+    let mut normalized = match prefix.kind() {
+        Prefix::VerbatimDisk(disk) => PathBuf::from(format!("{}:\\", char::from(disk))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut path = PathBuf::from(r"\\");
+            path.push(server);
+            path.push(share);
+            path
+        }
+        Prefix::Verbatim(path) => PathBuf::from(path),
+        _ => return None,
+    };
+
+    normalized.extend(components);
+    Some(normalized)
 }
 
 struct PreprocessorGlobs {
