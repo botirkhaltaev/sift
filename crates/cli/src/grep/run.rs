@@ -11,6 +11,7 @@ use crate::index::daemon::Daemon;
 
 use super::argv::Argv;
 use super::filter::{FilterConfig, SearchFilterCtx};
+use super::input::ContentConfig;
 use super::output::{FilenameContext, OutputArgv, OutputConfig, SearchOutputCtx};
 use super::paths::CorpusScope;
 use super::pattern::{PatternArgv, PatternConfig, PatternInputUse, ResolvedPatterns};
@@ -33,6 +34,7 @@ pub struct GrepConfig {
     pub search_paths: Vec<PathBuf>,
     pub threads: Option<usize>,
     pub mode: GrepMode,
+    pub content: ContentConfig,
     pub candidate_order: CandidateOrder,
 }
 
@@ -320,6 +322,7 @@ impl Grep {
 
         let session = self.prepare_session(argv, &source_decl.paths)?;
         let sources = source_decl.resolve(patterns.input, &session)?;
+        let content_source = self.config.content.source()?;
 
         let opts = self
             .config
@@ -350,6 +353,9 @@ impl Grep {
                 store_meta: session.store_meta.as_ref(),
                 snapshot,
             },
+            content_source: content_source
+                .as_ref()
+                .map(|source| source as &dyn sift_core::grep::CandidateContentSource),
             candidate_order: self.config.candidate_order,
         };
         let grep_run = Self::search_sources(&grep_request, &query, &sources)?;

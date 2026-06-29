@@ -12,7 +12,9 @@ use crate::Candidate;
 use crate::index::Indexes;
 use crate::query::{CandidatePlan, CandidateRequirement, CandidateSource, QueryPlanner};
 use crate::search::query::CandidateStrategy;
-use crate::search::request::{SearchCollection, SearchExecution, SearchInput, StreamInput};
+use crate::search::request::{
+    CandidateContent, SearchCollection, SearchExecution, SearchInput, StreamInput,
+};
 use crate::search::{
     CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
     SearchStats,
@@ -24,6 +26,13 @@ pub struct GrepRun {
     pub outcome: SearchOutcome,
     /// Unique rel-paths with at least one pattern hit.
     pub hits: Vec<PathBuf>,
+}
+
+pub trait CandidateContentSource {
+    /// # Errors
+    ///
+    /// Returns an error if transformed content cannot be read for any candidate.
+    fn read(&self, candidates: &[Candidate]) -> crate::Result<Vec<CandidateContent>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -158,6 +167,7 @@ pub struct GrepRequest<'a> {
     pub collect: SearchCollection,
     pub candidate_source: CandidateSource<'a>,
     pub candidate_order: CandidateOrder,
+    pub content_source: Option<&'a dyn CandidateContentSource>,
 }
 
 impl GrepRequest<'_> {
@@ -165,7 +175,8 @@ impl GrepRequest<'_> {
     ///
     /// # Errors
     ///
-    /// Returns an error if candidate resolution, regex compilation, or search execution fails.
+    /// Returns an error if candidate resolution, regex compilation, transformed input, or search
+    /// execution fails.
     pub fn search(
         &self,
         query: &SearchQuery,
@@ -190,8 +201,25 @@ impl GrepRequest<'_> {
             Vec::new()
         };
 
-        let mut inputs = Vec::with_capacity(usize::from(!candidates.is_empty()) + streams.len());
-        if !candidates.is_empty() {
+        let transformed = if corpus_requested {
+            self.content_source
+                .map(|source| source.read(&candidates))
+                .transpose()?
+        } else {
+            None
+        };
+
+        let mut inputs = Vec::with_capacity(
+            transformed
+                .as_ref()
+                .map_or_else(|| usize::from(!candidates.is_empty()), Vec::len)
+                + streams.len(),
+        );
+        if let Some(transformed) = transformed.as_deref() {
+            if !transformed.is_empty() {
+                inputs.push(SearchInput::Transformed(transformed));
+            }
+        } else if !candidates.is_empty() {
             inputs.push(SearchInput::Candidates(&candidates));
         }
         inputs.extend(streams.into_iter().map(SearchInput::Stream));
@@ -206,9 +234,13 @@ impl GrepRequest<'_> {
     ) -> crate::Result<Vec<Candidate>> {
         let spec = query.build_query_spec();
         let output = self.output;
-        let requirement = match candidate_strategy {
-            CandidateStrategy::Indexed => output.candidate_requirement(),
-            CandidateStrategy::Complete(_) => CandidateRequirement::Complete,
+        let requirement = if self.content_source.is_some() {
+            CandidateRequirement::Complete
+        } else {
+            match candidate_strategy {
+                CandidateStrategy::Indexed => output.candidate_requirement(),
+                CandidateStrategy::Complete(_) => CandidateRequirement::Complete,
+            }
         };
 
         let raw = QueryPlanner::new(spec).candidates(

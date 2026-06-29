@@ -2,6 +2,12 @@ use crate::Candidate;
 use crate::search::output::SearchOutput;
 use crate::search::output::style::SearchSeparators;
 
+#[derive(Clone)]
+pub struct CandidateContent {
+    pub candidate: Candidate,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Clone, Copy)]
 pub struct StreamInput<'a> {
     pub display_path: &'a str,
@@ -11,6 +17,7 @@ pub struct StreamInput<'a> {
 #[derive(Clone, Copy)]
 pub enum SearchInput<'a> {
     Candidates(&'a [Candidate]),
+    Transformed(&'a [CandidateContent]),
     Stream(StreamInput<'a>),
 }
 
@@ -19,6 +26,7 @@ impl SearchInput<'_> {
     pub const fn count(self) -> usize {
         match self {
             Self::Candidates(candidates) => candidates.len(),
+            Self::Transformed(contents) => contents.len(),
             Self::Stream(_) => 1,
         }
     }
@@ -27,6 +35,10 @@ impl SearchInput<'_> {
     pub fn bytes(self) -> u64 {
         match self {
             Self::Candidates(candidates) => Candidate::total_file_bytes(candidates),
+            Self::Transformed(contents) => contents
+                .iter()
+                .map(|content| u64::try_from(content.bytes.len()).unwrap_or(u64::MAX))
+                .sum(),
             Self::Stream(input) => u64::try_from(input.bytes.len()).unwrap_or(u64::MAX),
         }
     }

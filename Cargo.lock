@@ -1033,6 +1033,8 @@ dependencies = [
  "clap",
  "criterion",
  "fslock",
+ "globset",
+ "grep-cli",
  "grep-pcre2",
  "ignore",
  "interprocess",

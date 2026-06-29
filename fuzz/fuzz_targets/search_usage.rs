@@ -94,6 +94,7 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
+        content_source: None,
         candidate_order: sift_core::grep::CandidateOrder::default(),
     };
     let _ = request.search(&q, &[GrepSource::Corpus]);

@@ -18,7 +18,7 @@ use crate::search::output::style::{
 };
 use crate::search::query::SearchQuery;
 use crate::search::query::matcher::SearchMatcher;
-use crate::search::request::{SearchCollection, SearchInput, StreamInput};
+use crate::search::request::{CandidateContent, SearchCollection, SearchInput, StreamInput};
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -381,13 +381,18 @@ enum SearchTarget<'a> {
         abs_path: &'a Path,
         hit: Option<PathBuf>,
     },
+    Transformed {
+        display: String,
+        bytes: &'a [u8],
+        hit: Option<PathBuf>,
+    },
     Stream(StreamInput<'a>),
 }
 
 impl SearchTarget<'_> {
     fn display(&self) -> &str {
         match self {
-            Self::File { display, .. } => display,
+            Self::File { display, .. } | Self::Transformed { display, .. } => display,
             Self::Stream(input) => input.display_path,
         }
     }
@@ -395,7 +400,8 @@ impl SearchTarget<'_> {
     fn hit(self, matched: bool) -> Option<PathBuf> {
         match self {
             Self::File { hit, .. } if matched => hit,
-            Self::File { .. } | Self::Stream(_) => None,
+            Self::Transformed { hit, .. } if matched => hit,
+            Self::File { .. } | Self::Transformed { .. } | Self::Stream(_) => None,
         }
     }
 }
@@ -441,6 +447,19 @@ impl<'a> StandardWorker<'a> {
         )
     }
 
+    fn search_transformed(&mut self, content: &CandidateContent, stop: &AtomicBool) -> FileResult {
+        self.search_target(
+            SearchTarget::Transformed {
+                display: content
+                    .candidate
+                    .display_path(self.path_display, self.path_separator),
+                bytes: &content.bytes,
+                hit: (self.collect_hits).then(|| content.candidate.rel_path().to_path_buf()),
+            },
+            stop,
+        )
+    }
+
     fn search_stream(&mut self, input: StreamInput<'_>, stop: &AtomicBool) -> FileResult {
         self.search_target(SearchTarget::Stream(input), stop)
     }
@@ -477,6 +496,9 @@ impl<'a> StandardWorker<'a> {
             let _ = match &target {
                 SearchTarget::File { abs_path, .. } => {
                     self.searcher.search_path(self.matcher, abs_path, &mut sink)
+                }
+                SearchTarget::Transformed { bytes, .. } => {
+                    self.searcher.search_slice(self.matcher, bytes, &mut sink)
                 }
                 SearchTarget::Stream(input) => {
                     self.searcher
@@ -582,6 +604,19 @@ impl<'a> StandardScan<'a> {
                         )
                         .collect_into_vec(&mut candidate_files);
                     files.extend(candidate_files);
+                }
+                SearchInput::Transformed(contents) => {
+                    let mut transformed_files = Vec::with_capacity(contents.len());
+                    contents
+                        .par_iter()
+                        .map_init(
+                            || StandardWorker::new(self, collect),
+                            |worker: &mut StandardWorker<'_>, content: &CandidateContent| {
+                                worker.search_transformed(content, &stop)
+                            },
+                        )
+                        .collect_into_vec(&mut transformed_files);
+                    files.extend(transformed_files);
                 }
                 SearchInput::Stream(stream) => {
                     let mut worker = StandardWorker::new(self, collect);

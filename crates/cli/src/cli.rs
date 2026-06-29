@@ -10,6 +10,7 @@ use crate::grep::ignore::{
     IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreVcsDecl,
     MessagesDecl, UnrestrictedDecl,
 };
+use crate::grep::input::ContentConfig;
 use crate::grep::output::OutputConfig;
 use crate::grep::output::{
     ColumnDecl, ColumnsDecl, ExtraOutputDecl, FilenameDecl, HeadingDecl, JsonDecl, LineNumberDecl,
@@ -163,6 +164,11 @@ impl Cli {
             } else {
                 GrepMode::Search
             },
+            content: ContentConfig {
+                search_zip: self.engine_decl.content.search_zip,
+                pre: self.engine_decl.content.pre.clone(),
+                pre_globs: self.engine_decl.content.pre_glob.clone(),
+            },
             candidate_order: sift_core::grep::CandidateOrder::default(),
         }
     }
@@ -177,6 +183,7 @@ impl Cli {
         let threads = self.threading.threads;
         let path_separator = self.threading.path_separator;
         let null_data = self.multiline_decl.line_terminator.null_data;
+        let content = self.engine_decl.content.clone();
         let mode = if self.filter_decl.files {
             GrepMode::ListFiles
         } else {
@@ -217,6 +224,11 @@ impl Cli {
             search_paths,
             threads,
             mode,
+            content: ContentConfig {
+                search_zip: content.search_zip,
+                pre: content.pre,
+                pre_globs: content.pre_glob,
+            },
             candidate_order,
         }))
     }

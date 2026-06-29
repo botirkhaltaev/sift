@@ -32,6 +32,8 @@ path = "src/bin/sift-daemon.rs"
 anyhow = "1"
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }
+globset = "0.4"
+grep-cli = "0.1"
 ignore = "0.4"
 fslock = "0.2"
 grep-pcre2 = "0.1"

@@ -4,6 +4,7 @@ pub mod argv;
 pub mod engine;
 pub mod filter;
 pub mod ignore;
+pub mod input;
 pub mod output;
 pub mod paths;
 pub mod pattern;

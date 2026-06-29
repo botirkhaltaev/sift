@@ -13,7 +13,7 @@ use crate::search::output::SearchOutput;
 use crate::search::output::mode::OutputEmission;
 use crate::search::query::SearchQuery;
 use crate::search::query::matcher::SearchMatcher;
-use crate::search::request::{SearchInput, StreamInput};
+use crate::search::request::{CandidateContent, SearchInput, StreamInput};
 
 struct NullWriter;
 
@@ -45,6 +45,19 @@ impl<'a> JsonWorker<'a> {
     }
 
     fn search_candidate(&mut self, candidate: &Candidate, stop: &AtomicBool) -> FileResult {
+        self.search_input(candidate, None, stop)
+    }
+
+    fn search_content(&mut self, content: &CandidateContent, stop: &AtomicBool) -> FileResult {
+        self.search_input(&content.candidate, Some(&content.bytes), stop)
+    }
+
+    fn search_input(
+        &mut self,
+        candidate: &Candidate,
+        bytes: Option<&[u8]>,
+        stop: &AtomicBool,
+    ) -> FileResult {
         let quiet = self.output.emission == OutputEmission::Quiet;
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -56,17 +69,25 @@ impl<'a> JsonWorker<'a> {
         let (bytes, file_stats) = if quiet {
             let mut json = JSON::new(NullWriter);
             let mut sink = json.sink_with_path(self.matcher, candidate.abs_path());
-            let _ = self
-                .searcher
-                .search_path(self.matcher, candidate.abs_path(), &mut sink);
+            if let Some(bytes) = bytes {
+                let _ = self.searcher.search_slice(self.matcher, bytes, &mut sink);
+            } else {
+                let _ = self
+                    .searcher
+                    .search_path(self.matcher, candidate.abs_path(), &mut sink);
+            }
             (Vec::new(), sink.stats().clone())
         } else {
             let mut json = JSON::new(Vec::new());
             let file_stats = {
                 let mut sink = json.sink_with_path(self.matcher, candidate.abs_path());
-                let _ = self
-                    .searcher
-                    .search_path(self.matcher, candidate.abs_path(), &mut sink);
+                if let Some(bytes) = bytes {
+                    let _ = self.searcher.search_slice(self.matcher, bytes, &mut sink);
+                } else {
+                    let _ =
+                        self.searcher
+                            .search_path(self.matcher, candidate.abs_path(), &mut sink);
+                }
                 sink.stats().clone()
             };
             (json.into_inner(), file_stats)
@@ -197,6 +218,19 @@ impl<'a> JsonScan<'a> {
                         )
                         .collect_into_vec(&mut candidate_files);
                     files.extend(candidate_files);
+                }
+                SearchInput::Transformed(contents) => {
+                    let mut transformed_files = Vec::with_capacity(contents.len());
+                    contents
+                        .par_iter()
+                        .map_init(
+                            || JsonWorker::new(self),
+                            |worker: &mut JsonWorker<'_>, content: &CandidateContent| {
+                                worker.search_content(content, &stop)
+                            },
+                        )
+                        .collect_into_vec(&mut transformed_files);
+                    files.extend(transformed_files);
                 }
                 SearchInput::Stream(stream) => {
                     let mut worker = JsonWorker::new(self);

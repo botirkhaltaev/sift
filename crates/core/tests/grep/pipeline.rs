@@ -30,6 +30,7 @@ fn grep_finds_match_in_indexed_corpus() {
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
+        content_source: None,
         candidate_order: CandidateOrder::default(),
     }
     .search(&query, &[GrepSource::Corpus])
