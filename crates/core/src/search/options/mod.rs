@@ -16,6 +16,29 @@ bitflags::bitflags! {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegexEngineRequest {
+    #[default]
+    Rust,
+    Pcre2,
+    Auto,
+}
+
+impl FromStr for RegexEngineRequest {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "default" | "rust" => Ok(Self::Rust),
+            "pcre2" => Ok(Self::Pcre2),
+            "auto" | "auto-hybrid" => Ok(Self::Auto),
+            other => Err(format!(
+                "unknown regex engine '{other}': expected default, pcre2, or auto"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaseMode {
     #[default]
     Sensitive,
@@ -95,6 +118,7 @@ pub struct SearchOptions {
     pub unicode: bool,
     pub regex_size_limit: usize,
     pub dfa_size_limit: usize,
+    pub regex_engine: RegexEngineRequest,
 }
 
 impl Default for SearchOptions {
@@ -111,6 +135,7 @@ impl Default for SearchOptions {
             unicode: true,
             regex_size_limit: 0,
             dfa_size_limit: 0,
+            regex_engine: RegexEngineRequest::default(),
         }
     }
 }
@@ -169,10 +194,5 @@ impl SearchOptions {
     #[must_use]
     pub const fn line_terminator(&self) -> u8 {
         if self.null_data() { b'\0' } else { b'\n' }
-    }
-
-    #[must_use]
-    pub const fn precludes_trigram_index(&self) -> bool {
-        self.invert_match() || self.input_encoding.uses_decoded_input()
     }
 }

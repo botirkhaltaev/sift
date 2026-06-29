@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use crate::Candidate;
 use crate::index::Indexes;
-use crate::query::{CandidatePlan, CandidateSource, QueryPlanner};
+use crate::query::{CandidatePlan, CandidateRequirement, CandidateSource, QueryPlanner};
+use crate::search::query::CandidateStrategy;
 use crate::search::request::{SearchCollection, SearchExecution, SearchInput, StreamInput};
 use crate::search::{
     CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
@@ -64,8 +65,10 @@ impl GrepRequest<'_> {
             }
         }
 
+        let compiled = query.compile()?;
+
         let candidates = if corpus_requested {
-            self.resolve_candidates(query)?
+            self.resolve_candidates(query, compiled.candidate_strategy())?
         } else {
             Vec::new()
         };
@@ -79,13 +82,16 @@ impl GrepRequest<'_> {
         self.search_inputs(query, inputs)
     }
 
-    fn resolve_candidates(&self, query: &SearchQuery) -> crate::Result<Vec<Candidate>> {
+    fn resolve_candidates(
+        &self,
+        query: &SearchQuery,
+        candidate_strategy: CandidateStrategy,
+    ) -> crate::Result<Vec<Candidate>> {
         let spec = query.build_query_spec();
         let output = self.output;
-        let requirement = if query.opts().precludes_trigram_index() {
-            crate::query::CandidateRequirement::Complete
-        } else {
-            output.candidate_requirement()
+        let requirement = match candidate_strategy {
+            CandidateStrategy::Indexed => output.candidate_requirement(),
+            CandidateStrategy::Complete(_) => CandidateRequirement::Complete,
         };
 
         let raw = QueryPlanner::new(spec).candidates(

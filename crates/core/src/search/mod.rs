@@ -83,7 +83,9 @@ pub use filter::{
     CandidateFilter, CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
     TypeDef, VisibilityConfig,
 };
-pub use options::{BinaryMode, CaseMode, InputEncoding, SearchMatchFlags, SearchOptions};
+pub use options::{
+    BinaryMode, CaseMode, InputEncoding, RegexEngineRequest, SearchMatchFlags, SearchOptions,
+};
 pub use output::format::{ColumnLimit, ColumnOverflow};
 pub use output::mode::{MatchEmissionMode, OutputEmission, SearchMode, ZeroCountMode};
 pub use output::passthru::PassthruMode;

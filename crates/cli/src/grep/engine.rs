@@ -1,5 +1,5 @@
 use clap::Args;
-use sift_core::search::InputEncoding;
+use sift_core::search::{InputEncoding, RegexEngineRequest};
 
 /// Regex engine and configuration flags.
 #[derive(Args, Clone)]
@@ -18,6 +18,30 @@ pub struct EngineDecl {
     pub dfa_size_limit: Option<String>,
     #[arg(short = 'E', long = "encoding", value_name = "ENCODING")]
     pub encoding: Option<InputEncoding>,
+    #[command(flatten)]
+    pub regex: RegexEngineDecl,
+}
+
+/// Regex engine selection flags.
+#[derive(Args, Clone)]
+pub struct RegexEngineDecl {
+    #[arg(long = "engine", value_name = "ENGINE")]
+    pub engine: Option<RegexEngineRequest>,
+    #[command(flatten)]
+    pub pcre2: Pcre2EngineDecl,
+    #[arg(long = "pcre2-version")]
+    pub pcre2_version: bool,
+}
+
+/// PCRE2 engine selection shortcuts.
+#[derive(Args, Clone)]
+pub struct Pcre2EngineDecl {
+    #[arg(long = "pcre2")]
+    pub pcre2: bool,
+    #[arg(long = "no-pcre2")]
+    pub no_pcre2: bool,
+    #[arg(long = "auto-hybrid-regex")]
+    pub auto_hybrid_regex: bool,
 }
 
 /// Threading and output-buffering flags.
@@ -67,7 +91,7 @@ pub struct LineTerminatorDecl {
 mod tests {
     use crate::cli::Cli;
     use clap::Parser;
-    use sift_core::search::InputEncoding;
+    use sift_core::search::{InputEncoding, RegexEngineRequest};
 
     #[test]
     fn engine_no_config_flag() {
@@ -103,6 +127,34 @@ mod tests {
     fn engine_dfa_size_limit() {
         let cli = Cli::try_parse_from(["sift", "--dfa-size-limit", "50M", "pat"]).unwrap();
         assert_eq!(cli.engine_decl.dfa_size_limit.as_deref(), Some("50M"));
+    }
+
+    #[test]
+    fn engine_selection_flag() {
+        let cli = Cli::try_parse_from(["sift", "--engine", "pcre2", "pat"]).unwrap();
+        assert_eq!(
+            cli.engine_decl.regex.engine,
+            Some(RegexEngineRequest::Pcre2)
+        );
+    }
+
+    #[test]
+    fn engine_pcre2_flags() {
+        let cli = Cli::try_parse_from(["sift", "--pcre2", "--no-pcre2", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2.pcre2);
+        assert!(cli.engine_decl.regex.pcre2.no_pcre2);
+    }
+
+    #[test]
+    fn engine_auto_hybrid_flag() {
+        let cli = Cli::try_parse_from(["sift", "--auto-hybrid-regex", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2.auto_hybrid_regex);
+    }
+
+    #[test]
+    fn engine_pcre2_version_flag() {
+        let cli = Cli::try_parse_from(["sift", "--pcre2-version", "pat"]).unwrap();
+        assert!(cli.engine_decl.regex.pcre2_version);
     }
 
     #[test]

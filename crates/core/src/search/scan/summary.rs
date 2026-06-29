@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use grep_matcher::Matcher;
-use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use rayon::prelude::*;
 
@@ -15,6 +14,7 @@ use crate::search::output::SearchOutput;
 use crate::search::output::mode::{OutputEmission, SearchMode, ZeroCountMode};
 use crate::search::output::style::FilenameMode;
 use crate::search::query::SearchQuery;
+use crate::search::query::matcher::SearchMatcher;
 use crate::search::request::{SearchCollection, SearchInput, StreamInput};
 
 #[derive(Clone, Copy)]
@@ -59,14 +59,14 @@ impl FileSummary {
 
 pub struct SummarySink {
     mode: SearchMode,
-    matcher: Option<RegexMatcher>,
+    matcher: Option<SearchMatcher>,
     matched: bool,
     count: usize,
 }
 
 impl SummarySink {
     #[must_use]
-    pub const fn new(mode: SearchMode, matcher: Option<RegexMatcher>) -> Self {
+    pub const fn new(mode: SearchMode, matcher: Option<SearchMatcher>) -> Self {
         Self {
             mode,
             matcher,
@@ -112,7 +112,7 @@ impl Sink for SummarySink {
 
 fn summary_search_file(
     searcher: &mut Searcher,
-    matcher: &RegexMatcher,
+    matcher: &SearchMatcher,
     mode: SearchMode,
     path: &Path,
 ) -> FileSummary {
@@ -128,7 +128,7 @@ fn summary_search_file(
 
 fn summary_search_slice(
     searcher: &mut Searcher,
-    matcher: &RegexMatcher,
+    matcher: &SearchMatcher,
     mode: SearchMode,
     bytes: &[u8],
 ) -> FileSummary {
@@ -205,7 +205,7 @@ fn write_summary_record(
 }
 
 struct SummaryWorker<'a> {
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     searcher: Searcher,
     output: SearchOutput,
     summary_counter: Option<&'a AtomicUsize>,
@@ -305,7 +305,7 @@ impl<'a> SummaryWorker<'a> {
 
 pub struct SummaryScan<'a> {
     search: &'a SearchQuery,
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     output: SearchOutput,
     counters: &'a TextStatsCounters,
 }
@@ -313,7 +313,7 @@ pub struct SummaryScan<'a> {
 impl<'a> SummaryScan<'a> {
     pub const fn new(
         search: &'a SearchQuery,
-        matcher: &'a RegexMatcher,
+        matcher: &'a SearchMatcher,
         output: SearchOutput,
         counters: &'a TextStatsCounters,
     ) -> Self {

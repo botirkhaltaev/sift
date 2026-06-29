@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use grep_printer::{JSON, Stats as JsonStats};
-use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use rayon::prelude::*;
 
@@ -13,6 +12,7 @@ use crate::search::emit::stats::SearchStats;
 use crate::search::output::SearchOutput;
 use crate::search::output::mode::OutputEmission;
 use crate::search::query::SearchQuery;
+use crate::search::query::matcher::SearchMatcher;
 use crate::search::request::{SearchInput, StreamInput};
 
 struct NullWriter;
@@ -29,7 +29,7 @@ impl std::io::Write for NullWriter {
 
 struct JsonWorker<'a> {
     searcher: Searcher,
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     output: SearchOutput,
 }
 
@@ -152,7 +152,7 @@ fn format_json_summary_line(
 
 pub struct JsonScan<'a> {
     search: &'a SearchQuery,
-    matcher: &'a RegexMatcher,
+    matcher: &'a SearchMatcher,
     output: SearchOutput,
     wall_start: Instant,
 }
@@ -160,7 +160,7 @@ pub struct JsonScan<'a> {
 impl<'a> JsonScan<'a> {
     pub const fn new(
         search: &'a SearchQuery,
-        matcher: &'a RegexMatcher,
+        matcher: &'a SearchMatcher,
         output: SearchOutput,
         wall_start: Instant,
     ) -> Self {
