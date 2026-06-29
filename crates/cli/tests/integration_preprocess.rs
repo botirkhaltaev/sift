@@ -1,24 +1,16 @@
 mod common;
 
-use std::process::Command;
-
 use common::{TestProject, assert_exit_code, assert_success, normalize_stderr, rel_match};
+
+const GZIP_HAYSTACK: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 2, 19, 75, 204, 41, 200, 72, 228, 202, 75, 77, 77, 201, 73, 229,
+    202, 207, 77, 77, 79, 228, 2, 0, 194, 77, 84, 228, 19, 0, 0, 0,
+];
 
 #[test]
 fn search_zip_reads_gzip_content() {
-    if Command::new("gzip").arg("--version").output().is_err() {
-        return;
-    }
-
     let p = TestProject::new("search-zip-gzip");
-    p.write("hay.txt", "alpha\nneedle\nomega\n");
-    let compressed = Command::new("gzip")
-        .arg("-c")
-        .arg(p.root().join("hay.txt"))
-        .output()
-        .unwrap();
-    assert!(compressed.status.success());
-    p.write("hay.txt.gz", compressed.stdout);
+    p.write("hay.txt.gz", GZIP_HAYSTACK);
 
     let out = p.walk_output(["--search-zip", "needle", "hay.txt.gz"]);
 
@@ -28,19 +20,8 @@ fn search_zip_reads_gzip_content() {
 
 #[test]
 fn indexed_search_zip_bypasses_raw_index_narrowing() {
-    if Command::new("gzip").arg("--version").output().is_err() {
-        return;
-    }
-
     let p = TestProject::new("indexed-search-zip-gzip");
-    p.write("hay.txt", "alpha\nneedle\nomega\n");
-    let compressed = Command::new("gzip")
-        .arg("-c")
-        .arg(p.root().join("hay.txt"))
-        .output()
-        .unwrap();
-    assert!(compressed.status.success());
-    p.write("hay.txt.gz", compressed.stdout).build_index();
+    p.write("hay.txt.gz", GZIP_HAYSTACK).build_index();
 
     let out = p.index_output(["--search-zip", "needle", "hay.txt.gz"]);
 
