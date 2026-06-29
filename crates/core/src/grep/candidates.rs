@@ -60,10 +60,6 @@ impl<'a> CandidateResolver<'a> {
             reasons.push(CandidateCoverageReason::MissingIndex);
         }
 
-        if self.corpus.index_state.snapshot == crate::query::SnapshotValidation::Stale {
-            reasons.push(CandidateCoverageReason::StaleSnapshot);
-        }
-
         match self.candidate_strategy {
             CandidateStrategy::Indexed => {
                 if self.output.candidate_requirement() == CandidateRequirement::Complete {
@@ -147,7 +143,6 @@ impl CandidateCoverageReasons {
     const REGEX_ENGINE_UNSUPPORTED_BY_PLANNER: u16 = 1 << 3;
     const TRANSFORMED_CONTENT: u16 = 1 << 4;
     const MISSING_INDEX: u16 = 1 << 5;
-    const STALE_SNAPSHOT: u16 = 1 << 6;
 
     const fn is_empty(self) -> bool {
         self.bits == 0
@@ -166,7 +161,6 @@ pub(crate) enum CandidateCoverageReason {
     RegexEngineUnsupportedByPlanner,
     TransformedContent,
     MissingIndex,
-    StaleSnapshot,
 }
 
 impl CandidateCoverageReason {
@@ -182,7 +176,6 @@ impl CandidateCoverageReason {
             }
             Self::TransformedContent => CandidateCoverageReasons::TRANSFORMED_CONTENT,
             Self::MissingIndex => CandidateCoverageReasons::MISSING_INDEX,
-            Self::StaleSnapshot => CandidateCoverageReasons::STALE_SNAPSHOT,
         }
     }
 }

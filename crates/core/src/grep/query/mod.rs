@@ -93,6 +93,7 @@ impl GrepQuery {
     #[must_use]
     pub fn options(mut self, opts: GrepOptions) -> Self {
         self.opts = opts;
+        self.compiled = OnceLock::new();
         self
     }
 
@@ -413,6 +414,25 @@ mod tests {
         assert_eq!(
             search.compile().unwrap().candidate_strategy(),
             CandidateStrategy::Complete(CompleteCandidateReason::RegexEngineUnsupportedByPlanner)
+        );
+    }
+
+    #[test]
+    fn options_resets_compiled_query() {
+        let raw_opts = GrepOptions {
+            input_encoding: crate::grep::options::InputEncoding::Raw,
+            ..GrepOptions::default()
+        };
+        let search = GrepQuery::new(vec!["needle".to_string()]).expect("create search");
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Complete(CompleteCandidateReason::DecodedInput)
+        );
+
+        let search = search.options(raw_opts);
+        assert_eq!(
+            search.compile().unwrap().candidate_strategy(),
+            CandidateStrategy::Indexed
         );
     }
 
