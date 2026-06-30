@@ -1,6 +1,8 @@
 mod common;
 
-use common::{TestProject, assert_success, normalize_stdout, rel_match};
+use common::{
+    TestProject, assert_stderr_empty, assert_stdout_eq, assert_success, normalize_stdout, rel_match,
+};
 
 // ─── --replace / -r ──────────────────────────────────────────────────────────
 
@@ -21,10 +23,19 @@ fn replace_literal_walk() {
 fn replace_literal_consistent_index_and_walk() {
     let p = TestProject::new("replace-literal-both");
     p.write("a.txt", "hello world\n");
-    p.assert_index_walk_same(
-        &["-r", "planet", "world"],
-        &format!("{}\n", rel_match("a.txt", "hello planet")),
-    );
+    p.build_index();
+    let args = ["-r", "planet", "world"];
+    let expected = format!("{}\n", rel_match("a.txt", "hello planet"));
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, &expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, &expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -77,10 +88,19 @@ fn trim_removes_leading_whitespace_walk() {
 fn trim_consistent_index_and_walk() {
     let p = TestProject::new("trim-both");
     p.write("a.txt", "    hello world\n");
-    p.assert_index_walk_same(
-        &["--trim", "hello"],
-        &format!("{}\n", rel_match("a.txt", "hello world")),
-    );
+    p.build_index();
+    let args = ["--trim", "hello"];
+    let expected = format!("{}\n", rel_match("a.txt", "hello world"));
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, &expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, &expected);
+    assert_stderr_empty(&walk);
 }
 
 // ─── --byte-offset / -b ─────────────────────────────────────────────────────
@@ -102,10 +122,19 @@ fn byte_offset_shows_position_walk() {
 fn byte_offset_consistent_index_and_walk() {
     let p = TestProject::new("byte-offset-both");
     p.write("a.txt", "abc\nhello\n");
-    p.assert_index_walk_same(
-        &["-b", "hello"],
-        &format!("{}\n", rel_match("a.txt", "4:hello")),
-    );
+    p.build_index();
+    let args = ["-b", "hello"];
+    let expected = format!("{}\n", rel_match("a.txt", "4:hello"));
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, &expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, &expected);
+    assert_stderr_empty(&walk);
 }
 
 // ─── --passthru ─────────────────────────────────────────────────────────────

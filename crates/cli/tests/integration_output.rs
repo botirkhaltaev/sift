@@ -2,7 +2,10 @@ mod common;
 
 use std::ffi::OsString;
 
-use common::{TestProject, abs_path, assert_success, normalize_stdout, rel_match};
+use common::{
+    TestProject, abs_path, assert_stderr_empty, assert_stdout_eq, assert_success, normalize_stdout,
+    rel_match,
+};
 
 // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──
 //  Exit codes
@@ -67,7 +70,17 @@ fn files_without_match_is_consistent_between_index_and_walk() {
         p.root().canonicalize().unwrap().into(),
     ];
     let expected = format!("{}\n", abs_path(p.root(), "file.py"));
-    p.assert_index_walk_same(args, &expected);
+    p.build_index();
+
+    let index = p.index_output(args.clone());
+    assert_success(&index);
+    assert_stdout_eq(&index, &expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, &expected);
+    assert_stderr_empty(&walk);
 }
 
 // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──
@@ -78,10 +91,19 @@ fn files_without_match_is_consistent_between_index_and_walk() {
 fn heading_prints_a_single_file_header() {
     let p = TestProject::new("output-heading");
     p.write("sherlock.txt", "For Sherlock Holmes.\n");
-    p.assert_index_walk_same(
-        &["-H", "--heading", "Sherlock", "sherlock.txt"],
-        "sherlock.txt\nFor Sherlock Holmes.\n",
-    );
+    p.build_index();
+    let args = ["-H", "--heading", "Sherlock", "sherlock.txt"];
+    let expected = "sherlock.txt\nFor Sherlock Holmes.\n";
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -89,16 +111,24 @@ fn no_heading_overrides_heading() {
     let p = TestProject::new("output-no-heading");
     p.write("sherlock.txt", "For Sherlock Holmes.\n");
     let expected = format!("{}\n", rel_match("sherlock.txt", "For Sherlock Holmes."));
-    p.assert_index_walk_same(
-        &[
-            "-H",
-            "--heading",
-            "--no-heading",
-            "Sherlock",
-            "sherlock.txt",
-        ],
-        &expected,
-    );
+    p.build_index();
+    let args = [
+        "-H",
+        "--heading",
+        "--no-heading",
+        "Sherlock",
+        "sherlock.txt",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, &expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, &expected);
+    assert_stderr_empty(&walk);
 }
 
 // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──

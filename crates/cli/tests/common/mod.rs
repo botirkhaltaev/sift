@@ -1,7 +1,7 @@
 // Test helpers — not every file uses every helper.
 #![allow(dead_code)]
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
@@ -184,28 +184,6 @@ impl TestProject {
         cmd.args(args);
         cmd.status().unwrap()
     }
-
-    /// Build the index, run both index and walk mode with the same args, and
-    /// assert they produce identical exit code 0, stdout, and empty stderr.
-    #[track_caller]
-    pub fn assert_index_walk_same<I, S>(&self, args: I, expected: &str)
-    where
-        I: IntoIterator<Item = S> + Clone,
-        S: AsRef<OsStr>,
-    {
-        self.build_index();
-        let idx = self.index_output(args.clone());
-        let walk = self.walk_output(args);
-        for (mode, output) in [("index", &idx), ("walk", &walk)] {
-            assert_success(output);
-            let n = normalize_stdout(output);
-            assert_eq!(n, expected, "{mode}: stdout mismatch");
-            assert!(
-                normalize_stderr(output).is_empty(),
-                "{mode}: unexpected stderr"
-            );
-        }
-    }
 }
 
 // ── Normalization ─────────────────────────────────────────────────────────────
@@ -344,32 +322,6 @@ impl BuildIndexOptions {
             .unwrap();
         assert!(status.success(), "build index failed with status {status}");
     }
-}
-
-pub fn assert_index_and_walk_output(cwd: &Path, args: &[OsString], expected_stdout: &str) {
-    let idx = cwd.join(".sift");
-    let missing_idx = fresh_dir("missing-index").join(".sift");
-    BuildIndexOptions::default().run(Some(cwd), &idx, Path::new("."));
-
-    let index = run_search(Some(cwd), &idx, args);
-    let walk = run_search(Some(cwd), &missing_idx, args);
-
-    for (name, output) in [("index", &index), ("walk", &walk)] {
-        assert_success(output);
-        assert_eq!(
-            normalize_stdout(output),
-            expected_stdout,
-            "{name}: stdout mismatch"
-        );
-        assert_eq!(normalize_stderr(output), "", "{name}: stderr mismatch");
-    }
-}
-
-fn run_search(cwd: Option<&Path>, sift_dir: &Path, args: &[OsString]) -> Output {
-    let mut cmd = command(cwd);
-    cmd.arg("--sift-dir").arg(sift_dir);
-    cmd.args(args);
-    cmd.output().unwrap()
 }
 
 pub fn line_path<'a>(line: &'a str, candidates: &[String]) -> &'a str {

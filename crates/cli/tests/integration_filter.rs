@@ -2,7 +2,7 @@ mod common;
 
 use std::process::Command;
 
-use common::{TestProject, assert_success, normalize_stdout};
+use common::{TestProject, assert_stderr_empty, assert_success, normalize_stdout};
 
 // ─── --max-depth ─────────────────────────────────────────────────────────────
 
@@ -425,54 +425,77 @@ fn type_add_then_include_walk() {
     );
 }
 
-// ─── consistency: index vs walk produce same results ─────────────────────────
+// ─── indexed and walk filtering ──────────────────────────────────────────────
 
-fn assert_index_walk_filter_consistent(name: &str, extra_args: &[&str]) {
+fn filter_fixture(name: &str) -> TestProject {
     let p = TestProject::new(name);
     p.mkdir("sub");
     p.write("a.rs", "hello world\n");
     p.write("b.py", "hello world\n");
     p.write("sub/c.rs", "hello world\n");
-    p.build_index();
+    p
+}
 
-    let all_args: Vec<&str> = extra_args
-        .iter()
-        .copied()
-        .chain(std::iter::once("hello"))
-        .collect();
-
-    let index_out = p.index_output(&all_args);
-    assert_success(&index_out);
-    let walk_out = p.walk_output(&all_args);
-    assert_success(&walk_out);
-
-    let mut index_lines: Vec<String> = normalize_stdout(&index_out)
-        .lines()
-        .map(str::to_string)
-        .collect();
-    let mut walk_lines: Vec<String> = normalize_stdout(&walk_out)
-        .lines()
-        .map(str::to_string)
-        .collect();
-    index_lines.sort();
-    walk_lines.sort();
-    assert_eq!(
-        index_lines, walk_lines,
-        "index and walk should produce same results with args: {extra_args:?}"
-    );
+fn sorted_stdout_lines(out: &std::process::Output) -> Vec<String> {
+    let mut lines: Vec<String> = normalize_stdout(out).lines().map(str::to_string).collect();
+    lines.sort();
+    lines
 }
 
 #[test]
 fn type_include_consistent_index_and_walk() {
-    assert_index_walk_filter_consistent("type-consistent", &["-t", "rust"]);
+    let p = filter_fixture("type-consistent");
+    p.build_index();
+    let args = ["-t", "rust", "hello"];
+    let expected = ["a.rs:hello world", "sub/c.rs:hello world"];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stderr_empty(&index);
+    assert_eq!(sorted_stdout_lines(&index), expected);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stderr_empty(&walk);
+    assert_eq!(sorted_stdout_lines(&walk), expected);
 }
 
 #[test]
 fn max_depth_consistent_index_and_walk() {
-    assert_index_walk_filter_consistent("depth-consistent", &["--max-depth", "0"]);
+    let p = filter_fixture("depth-consistent");
+    p.build_index();
+    let args = ["--max-depth", "0", "hello"];
+    let expected = ["a.rs:hello world", "b.py:hello world"];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stderr_empty(&index);
+    assert_eq!(sorted_stdout_lines(&index), expected);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stderr_empty(&walk);
+    assert_eq!(sorted_stdout_lines(&walk), expected);
 }
 
 #[test]
 fn max_filesize_consistent_index_and_walk() {
-    assert_index_walk_filter_consistent("filesize-consistent", &["--max-filesize", "10K"]);
+    let p = filter_fixture("filesize-consistent");
+    p.build_index();
+    let args = ["--max-filesize", "10K", "hello"];
+    let expected = [
+        "a.rs:hello world",
+        "b.py:hello world",
+        "sub/c.rs:hello world",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stderr_empty(&index);
+    assert_eq!(sorted_stdout_lines(&index), expected);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stderr_empty(&walk);
+    assert_eq!(sorted_stdout_lines(&walk), expected);
 }

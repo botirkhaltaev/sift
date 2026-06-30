@@ -47,7 +47,6 @@ p.write("a.txt", "content\n");
 p.build_index();                   // index "." from project root
 let out = p.index_output(["pattern"]);  // search with index
 let out = p.walk_output(["pattern"]);   // search without index
-p.assert_index_walk_same(["pattern"], "expected\n");
 ```
 
 ### Assertions
