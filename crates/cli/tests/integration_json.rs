@@ -1,6 +1,13 @@
 mod common;
 
-use common::TestProject;
+use common::{TestProject, assert_stdout_eq, assert_success, rel_match};
+
+fn json_lines(output: &std::process::Output) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
 
 #[test]
 fn json_emits_begin_match_end_and_summary() {
@@ -9,30 +16,46 @@ fn json_emits_begin_match_end_and_summary() {
     p.build_index();
 
     let output = p.index_output(["hello", "--json"]);
-    common::assert_success(&output);
+    assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
+    let lines: Vec<serde_json::Value> = json_lines(&output);
     assert!(
         lines.len() >= 4,
         "expected begin, match, end, summary lines; got {}: {stdout:?}",
         lines.len()
     );
-    assert!(
-        lines[0].contains("\"type\":\"begin\""),
-        "begin: {}",
-        lines[0]
-    );
-    assert!(
-        lines[1].contains("\"type\":\"match\""),
-        "match: {}",
-        lines[1]
-    );
-    assert!(lines[2].contains("\"type\":\"end\""), "end: {}", lines[2]);
-    assert!(
-        lines[lines.len() - 1].contains("\"type\":\"summary\""),
-        "summary: {}",
-        lines[lines.len() - 1]
-    );
+    assert_eq!(lines[0]["type"], "begin");
+    assert_eq!(lines[1]["type"], "match");
+    assert_eq!(lines[2]["type"], "end");
+    assert_eq!(lines[lines.len() - 1]["type"], "summary");
+    assert_eq!(lines[1]["data"]["lines"]["text"], "hello world\n");
+    assert_eq!(lines[1]["data"]["line_number"], 1);
+    assert_eq!(lines[1]["data"]["absolute_offset"], 0);
+    assert_eq!(lines[1]["data"]["submatches"][0]["match"]["text"], "hello");
+    assert_eq!(lines[1]["data"]["submatches"][0]["start"], 0);
+    assert_eq!(lines[1]["data"]["submatches"][0]["end"], 5);
+    assert!(lines[2]["data"]["stats"]["matches"].as_u64().unwrap() >= 1);
+    assert!(lines[lines.len() - 1]["data"]["stats"]["bytes_searched"].is_number());
+}
+
+#[test]
+fn json_emits_context_events_with_empty_submatches() {
+    let p = TestProject::new("json-context");
+    p.write("a.txt", "before\nhello world\nafter\n");
+    p.build_index();
+
+    let output = p.index_output(["hello", "--json", "-C", "1"]);
+
+    assert_success(&output);
+    let lines = json_lines(&output);
+    assert_eq!(lines[0]["type"], "begin");
+    assert_eq!(lines[1]["type"], "context");
+    assert_eq!(lines[1]["data"]["lines"]["text"], "before\n");
+    assert_eq!(lines[1]["data"]["line_number"], 1);
+    assert_eq!(lines[1]["data"]["submatches"].as_array().unwrap().len(), 0);
+    assert_eq!(lines[2]["type"], "match");
+    assert_eq!(lines[3]["type"], "context");
+    assert_eq!(lines[3]["data"]["lines"]["text"], "after\n");
 }
 
 #[test]
@@ -42,7 +65,7 @@ fn json_implies_stats_on_stderr() {
     p.build_index();
 
     let output = p.index_output(["x", "--json"]);
-    common::assert_success(&output);
+    assert_success(&output);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("matches") && stderr.contains("bytes searched"),
@@ -51,16 +74,49 @@ fn json_implies_stats_on_stderr() {
 }
 
 #[test]
-fn json_with_count_exits_error() {
+fn json_with_count_uses_count_output() {
     let p = TestProject::new("json-bad-count");
     p.write("a.txt", "a\n");
     p.build_index();
 
     let output = p.index_output(["a", "--json", "--count"]);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--json") && stderr.contains("count"),
-        "expected conflict message: {stderr:?}"
-    );
+
+    assert_success(&output);
+    assert_stdout_eq(&output, &rel_match("a.txt", "1\n"));
+}
+
+#[test]
+fn json_with_path_modes_uses_path_output() {
+    let p = TestProject::new("json-path-mode");
+    p.write("a.txt", "a\n");
+    p.build_index();
+
+    let output = p.index_output(["a", "--json", "--files-with-matches"]);
+
+    assert_success(&output);
+    assert_stdout_eq(&output, "a.txt\n");
+}
+
+#[test]
+fn no_json_disables_json_output() {
+    let p = TestProject::new("json-no-json");
+    p.write("a.txt", "a\n");
+    p.build_index();
+
+    let output = p.index_output(["a", "--json", "--no-json"]);
+
+    assert_success(&output);
+    assert_stdout_eq(&output, &rel_match("a.txt", "a\n"));
+}
+
+#[test]
+fn no_json_with_count_uses_count_output() {
+    let p = TestProject::new("json-count-no-json");
+    p.write("a.txt", "a\n");
+    p.build_index();
+
+    let output = p.index_output(["a", "--json", "--no-json", "--count"]);
+
+    assert_success(&output);
+    assert_stdout_eq(&output, &rel_match("a.txt", "1\n"));
 }

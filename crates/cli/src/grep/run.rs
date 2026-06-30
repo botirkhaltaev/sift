@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use sift_core::grep::{CandidateFilter, GrepMode, GrepStream};
 use sift_core::grep::{
-    CandidateIndexState, CandidateOrder, Grep as CoreGrep, GrepCollection, GrepCorpus, GrepQuery,
+    CandidateIndexState, CandidateOrder, Grep as CoreGrep, GrepCollection, GrepCorpus,
 };
 use sift_core::{
     Candidate, CorpusKind, IndexCoverage, Indexes, SnapshotValidation, discover_files,
@@ -12,9 +12,9 @@ use sift_core::{
 use crate::index::daemon::Daemon;
 
 use super::argv::Argv;
-use super::filter::{FilterConfig, GrepFilterCtx};
+use super::filter::FilterConfig;
 use super::input::ContentConfig;
-use super::output::{FilenameContext, GrepOutputCtx, OutputArgv, OutputConfig};
+use super::output::{FilenameContext, OutputArgv, OutputConfig};
 use super::paths::CorpusScope;
 use super::pattern::{PatternArgv, PatternConfig, PatternInputUse, ResolvedPatterns};
 
@@ -185,7 +185,6 @@ impl Grep {
         search_paths: &[PathBuf],
     ) -> anyhow::Result<GrepSession> {
         self.configure_threads();
-        let filter = GrepFilterCtx::resolve(argv);
         let cwd = std::env::current_dir()?;
         let indexes = Indexes::open(&self.config.sift_dir)?;
         let store_meta = sift_core::StoreMeta::read(&self.config.sift_dir).ok();
@@ -197,7 +196,7 @@ impl Grep {
             &self.config.sift_dir,
         )?;
         let filter_config = self.config.filter.candidate_config(
-            filter,
+            argv,
             scope.prefixes.clone(),
             scope.exclude_paths.clone(),
         )?;
@@ -308,50 +307,36 @@ impl Grep {
                 output_argv.line_number
             };
 
-        if output_argv.mode.json {
-            match effective_mode {
-                GrepMode::Count
-                | GrepMode::CountMatches
-                | GrepMode::FilesWithMatches
-                | GrepMode::FilesWithoutMatch => {
-                    anyhow::bail!(
-                        "sift: --json cannot be used with --count, --count-matches, --files-with-matches, or --files-without-match"
-                    );
-                }
-                GrepMode::Standard | GrepMode::OnlyMatching => {}
-            }
-        }
-
         let session = self.prepare_session(argv, &source_decl.paths)?;
         let sources = source_decl.resolve(patterns.input, &session)?;
         let content_source = self.config.content.source()?;
 
-        let opts = self
+        let query = self
             .config
             .pattern
-            .grep_options(&pattern_argv, pattern_argv.only_matching);
-        let query = GrepQuery::new(patterns.patterns)
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .options(opts);
+            .query(patterns.patterns, &pattern_argv)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let (out, _) = GrepOutputCtx::resolve(
-            &self.config.output,
-            argv,
-            effective_mode,
-            pattern_argv.quiet,
-            line_number_override,
-        );
-
-        let filename_ctx = Self::filename_context(&out, &sources, &session);
-        let output = out
-            .to_core_output(&self.config.output, filename_ctx)
+        let filename_ctx = Self::filename_context(effective_mode, &sources, &session);
+        let output = self
+            .config
+            .output
+            .grep_output(
+                &output_argv,
+                effective_mode,
+                pattern_argv.quiet,
+                line_number_override,
+                filename_ctx,
+            )
             .map_err(|e| anyhow::anyhow!(e))?;
+        let separators = self.config.output.separators();
+        let print_stats = OutputConfig::print_stats(&output_argv, effective_mode);
         let snapshot = Self::snapshot_validation(&session, daemon);
 
         let mut grep = CoreGrep::new(query)
             .output(output)
-            .separators(&out.separators)
-            .collect(GrepCollection::hits().with_stats(out.print_stats));
+            .separators(&separators)
+            .collect(GrepCollection::hits().with_stats(print_stats));
         if sources.searches_corpus() {
             let corpus = GrepCorpus::new(
                 &session.indexes,
@@ -376,7 +361,7 @@ impl Grep {
 
         let grep_report = grep.run()?;
         if let Some(s) = grep_report.stats() {
-            GrepOutputCtx::write_stats(s);
+            OutputConfig::write_stats(s);
         }
         let matched = grep_report.matched();
         if let Some(daemon) = daemon
@@ -396,11 +381,11 @@ impl Grep {
     }
 
     fn filename_context(
-        out: &GrepOutputCtx,
+        effective_mode: GrepMode,
         sources: &RunInputs,
         session: &GrepSession,
     ) -> FilenameContext {
-        if out.lines.is_path_mode {
+        if OutputConfig::is_path_mode(effective_mode) {
             FilenameContext::PathMode
         } else if !sources.streams.is_empty() && sources.paths.is_empty() {
             FilenameContext::SingleFileCorpus

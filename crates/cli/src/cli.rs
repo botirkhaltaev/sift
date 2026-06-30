@@ -2,13 +2,12 @@ use std::process::ExitCode;
 
 use crate::grep::Argv;
 use crate::grep::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
-use crate::grep::filter::{FilterConfig, GrepFilterCtx};
-use crate::grep::filter::{FilterDecl, GlobFlags, TypeCatalog};
+use crate::grep::filter::{FilterConfig, FilterDecl, GlobFlags, TypeCatalog};
 use crate::grep::ignore::MessageFlags;
 use crate::grep::ignore::{
     ContextDecl, IgnoreDotDecl, IgnoreExcludeDecl, IgnoreFilesDecl, IgnoreGitDecl,
-    IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreVcsDecl,
-    MessagesDecl, UnrestrictedDecl,
+    IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreResolution,
+    IgnoreVcsDecl, MessagesDecl, UnrestrictedDecl,
 };
 use crate::grep::input::ContentConfig;
 use crate::grep::output::OutputConfig;
@@ -297,8 +296,7 @@ impl Cli {
                     }
                 };
 
-                let suppress_errors = GrepFilterCtx::resolve(argv)
-                    .ignore
+                let suppress_errors = IgnoreResolution::resolve(argv)
                     .msg_flags
                     .contains(MessageFlags::NO_MESSAGES);
                 Self::exit_from_grep(grep.run(argv, daemon.as_ref()), suppress_errors)

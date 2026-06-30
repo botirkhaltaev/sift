@@ -19,9 +19,9 @@ Two-layer flag model:
 |--------|------------|------------------------|-------------|
 | `grep/argv.rs` | — | `Argv` | `Argv::from_env`, `Argv::new` |
 | `grep/ignore.rs` | `Ignore*Decl`, … | `IgnoreResolution` | `IgnoreResolution::resolve` |
-| `grep/pattern.rs` | `PatternArgs`, … | `PatternConfig`, `PatternArgv`, `ResolvedPatterns` | `ResolvedPatterns::resolve`, `PatternConfig::grep_options` |
-| `grep/output.rs` | `LineNumberDecl`, … | `OutputConfig`, `OutputArgv`, `GrepOutputCtx` | `OutputArgv::resolve`, `GrepOutputCtx::resolve`, `OutputConfig::separators` |
-| `grep/filter.rs` | `FilterDecl`, … | `FilterConfig`, `TypeCatalog`, `GrepFilterCtx` | `FilterConfig::candidate_config`, `GrepFilterCtx::resolve` |
+| `grep/pattern.rs` | `PatternArgs`, … | `PatternConfig`, `PatternArgv`, `ResolvedPatterns` | `ResolvedPatterns::resolve`, `PatternConfig::query` |
+| `grep/output.rs` | `LineNumberDecl`, … | `OutputConfig`, `OutputArgv` | `OutputArgv::resolve`, `OutputConfig::grep_output`, `OutputConfig::separators` |
+| `grep/filter.rs` | `FilterDecl`, … | `FilterConfig`, `TypeCatalog` | `FilterConfig::candidate_config` |
 | `grep/paths.rs` | `PathArgs` | `CorpusScope` | `CorpusScope::resolve` |
 | `grep/run.rs` | — | `GrepConfig`, `Grep`, `GrepOutcome` | `Grep::run` |
 | `index/mod.rs` | — | `IndexRequest`, `IndexJob` | `IndexJob::resolve`, `IndexJob::run` |

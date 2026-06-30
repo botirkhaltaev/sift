@@ -17,7 +17,6 @@ pub enum FilenameContext {
 }
 
 use super::argv::Argv;
-use super::filter::GrepFilterCtx;
 
 /// Output-related flags resolved from clap declarations.
 #[derive(Clone)]
@@ -165,57 +164,6 @@ pub struct JsonDecl {
 pub struct StatsDecl {
     #[arg(long = "stats", action = ArgAction::SetTrue)]
     pub stats_flag: bool,
-}
-
-// ── Context types for output configuration ──
-
-#[derive(Clone, Copy)]
-pub struct GrepModeCtx {
-    pub effective_mode: GrepMode,
-    pub quiet: bool,
-}
-
-#[derive(Clone, Copy)]
-pub struct GrepLineResolveCtx {
-    pub heading: bool,
-    pub with_filename: Option<bool>,
-    pub is_path_mode: bool,
-    pub column: bool,
-    pub line_number: Option<bool>,
-}
-
-#[derive(Clone, Copy)]
-pub struct GrepFormatCtx {
-    pub nul_terminated_paths: bool,
-    pub nul_terminated_data: bool,
-    pub color: ColorChoice,
-    pub buffering: OutputBuffering,
-}
-
-#[derive(Clone, Copy)]
-pub struct GrepRecordFlags {
-    pub byte_offset: bool,
-    pub trim: bool,
-    pub include_zero: bool,
-}
-
-#[derive(Clone, Copy)]
-pub struct GrepColumnResolve {
-    pub max_columns_preview: bool,
-}
-
-#[derive(Clone)]
-pub struct GrepOutputCtx {
-    pub mode: GrepModeCtx,
-    pub lines: GrepLineResolveCtx,
-    pub format: GrepFormatCtx,
-    pub output_format: GrepOutputFormat,
-    pub separators: GrepSeparators,
-    pub print_stats: bool,
-    pub record: GrepRecordFlags,
-    pub path_separator: Option<u8>,
-    pub max_columns: Option<u64>,
-    pub columns: GrepColumnResolve,
 }
 
 // ── Argv-order resolution ──
@@ -502,127 +450,114 @@ fn resolve_hostname(hostname_bin: Option<&str>) -> Result<Option<String>, String
     Ok(Some(host.trim_end_matches(['\r', '\n']).to_string()))
 }
 
-impl GrepOutputCtx {
-    #[must_use]
-    pub fn resolve(
-        config: &OutputConfig,
-        argv: &Argv<'_>,
+impl OutputConfig {
+    /// Build the core grep output from resolved argv and CLI configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when color specs are invalid, hyperlink formats are invalid,
+    /// or the hostname command fails.
+    pub fn grep_output(
+        &self,
+        output_argv: &OutputArgv,
         effective_mode: GrepMode,
         quiet: bool,
         line_number_override: Option<bool>,
-    ) -> (Self, GrepFilterCtx) {
-        let output_argv = OutputArgv::resolve(argv);
-        let pretty = config.column.pretty;
-        let vimgrep = config.column.vimgrep;
-        let column = config.column.column || vimgrep;
+        filename_ctx: FilenameContext,
+    ) -> Result<GrepOutput, String> {
+        use super::paths::CorpusScope;
 
-        let is_path_mode = matches!(
-            effective_mode,
-            GrepMode::FilesWithMatches | GrepMode::FilesWithoutMatch
-        );
-        let effective_heading = output_argv.mode.heading || pretty;
+        let pretty = self.column.pretty;
+        let vimgrep = self.column.vimgrep;
+        let output_format = Self::format(output_argv, effective_mode);
         let effective_color = if pretty && output_argv.color == ColorChoice::Auto {
             ColorChoice::Always
         } else {
             output_argv.color
         };
-        let print_stats = output_argv.mode.stats || output_argv.mode.json;
+        let colors = ColorSpecs::from_specs(&self.colors)?;
+        let hyperlink = HyperlinkFormat::parse(self.hyperlink_format.as_deref())?;
+        let hyperlink_host = resolve_hostname(self.hostname_bin.as_deref())?;
 
-        let out = Self {
-            mode: GrepModeCtx {
-                effective_mode,
-                quiet,
-            },
-            lines: GrepLineResolveCtx {
-                heading: effective_heading,
-                with_filename: output_argv.with_filename,
-                is_path_mode,
-                column,
-                line_number: line_number_override,
-            },
-            format: GrepFormatCtx {
-                nul_terminated_paths: output_argv.path.nul_terminated,
-                nul_terminated_data: config.null_data,
-                color: effective_color,
-                buffering: output_argv.buffering,
-            },
-            output_format: if output_argv.mode.json {
-                GrepOutputFormat::Json
+        Ok(GrepOutput {
+            format: output_format,
+            mode: effective_mode,
+            emission: if quiet {
+                OutputEmission::Quiet
             } else {
-                GrepOutputFormat::Text
+                OutputEmission::Normal
             },
-            separators: config.separators(),
-            print_stats,
-            record: GrepRecordFlags {
-                byte_offset: config.extra.byte_offset,
-                trim: config.replace_trim,
-                include_zero: config.extra.include_zero,
+            lines: GrepLineStyle {
+                filename_mode: Self::filename_mode(output_argv.with_filename, filename_ctx),
+                flags: self.line_style_flags(
+                    output_argv.mode.heading || pretty,
+                    self.effective_line_number(line_number_override, output_format),
+                    self.column.column || vimgrep,
+                ),
+                path_display: CorpusScope::path_display(&self.search_paths),
+                columns: self
+                    .columns
+                    .max_columns
+                    .map(|max| sift_core::grep::ColumnLimit {
+                        max,
+                        overflow: if self.columns.max_columns_preview {
+                            sift_core::grep::ColumnOverflow::Preview
+                        } else {
+                            sift_core::grep::ColumnOverflow::Omit
+                        },
+                    }),
             },
-            path_separator: config
-                .path_separator
-                .as_ref()
-                .and_then(|s| s.as_bytes().first().copied()),
-            max_columns: config.columns.max_columns,
-            columns: GrepColumnResolve {
-                max_columns_preview: config.columns.max_columns_preview,
-            },
-        };
-        let filter = GrepFilterCtx::resolve(argv);
-        (out, filter)
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error when color specs are invalid, hyperlink formats are invalid,
-    /// or the hostname command fails.
-    pub fn to_core_output(
-        &self,
-        config: &OutputConfig,
-        filename_ctx: FilenameContext,
-    ) -> Result<GrepOutput, String> {
-        use super::paths::CorpusScope;
-        let path_display = CorpusScope::path_display(&config.search_paths);
-        let line_number = Self::effective_line_number(
-            config.line_number,
-            self.lines.line_number,
-            self.output_format,
-        );
-        let line_flags = Self::line_style_flags(self, line_number);
-        let colors = ColorSpecs::from_specs(&config.colors)?;
-        let hyperlink = HyperlinkFormat::parse(config.hyperlink_format.as_deref())?;
-        let hyperlink_host = resolve_hostname(config.hostname_bin.as_deref())?;
-        Ok(Self::core_output(
-            self.output_format,
-            self.mode.effective_mode,
-            self.mode.quiet,
-            GrepLineStyle {
-                filename_mode: Self::filename_mode(self.lines.with_filename, filename_ctx),
-                flags: line_flags,
-                path_display,
-                columns: self.max_columns.map(|max| sift_core::grep::ColumnLimit {
-                    max,
-                    overflow: if self.columns.max_columns_preview {
-                        sift_core::grep::ColumnOverflow::Preview
-                    } else {
-                        sift_core::grep::ColumnOverflow::Omit
-                    },
-                }),
-            },
-            GrepRecordStyle {
-                terminator: if self.format.nul_terminated_paths || self.format.nul_terminated_data {
+            records: GrepRecordStyle {
+                terminator: if output_argv.path.nul_terminated || self.null_data {
                     sift_core::grep::RecordTerminator::Nul
                 } else {
                     sift_core::grep::RecordTerminator::Newline
                 },
-                color: self.format.color,
-                path_separator: self.path_separator,
+                color: effective_color,
+                path_separator: self
+                    .path_separator
+                    .as_ref()
+                    .and_then(|s| s.as_bytes().first().copied()),
                 colors,
                 hyperlink,
                 hyperlink_host,
-                buffering: self.format.buffering,
+                buffering: output_argv.buffering,
             },
-            self.record.include_zero,
-        ))
+            passthru: PassthruMode::Disabled,
+            include_zero: if self.extra.include_zero {
+                ZeroCountMode::Include
+            } else {
+                ZeroCountMode::Omit
+            },
+        })
+    }
+
+    #[must_use]
+    pub const fn is_path_mode(mode: GrepMode) -> bool {
+        matches!(
+            mode,
+            GrepMode::FilesWithMatches | GrepMode::FilesWithoutMatch
+        )
+    }
+
+    #[must_use]
+    pub const fn format(output_argv: &OutputArgv, effective_mode: GrepMode) -> GrepOutputFormat {
+        if output_argv.mode.json
+            && matches!(effective_mode, GrepMode::Standard | GrepMode::OnlyMatching)
+        {
+            GrepOutputFormat::Json
+        } else {
+            GrepOutputFormat::Text
+        }
+    }
+
+    #[must_use]
+    pub const fn print_stats(output_argv: &OutputArgv, effective_mode: GrepMode) -> bool {
+        output_argv.mode.stats
+            || matches!(
+                Self::format(output_argv, effective_mode),
+                GrepOutputFormat::Json
+            )
     }
 
     pub fn write_stats(stats: &GrepStats) {
@@ -635,49 +570,21 @@ impl GrepOutputCtx {
     }
 
     #[must_use]
-    const fn core_output(
-        format: GrepOutputFormat,
-        effective_mode: GrepMode,
-        quiet: bool,
-        lines: GrepLineStyle,
-        records: GrepRecordStyle,
-        include_zero: bool,
-    ) -> GrepOutput {
-        GrepOutput {
-            format,
-            mode: effective_mode,
-            emission: if quiet {
-                OutputEmission::Quiet
-            } else {
-                OutputEmission::Normal
-            },
-            lines,
-            records,
-            passthru: PassthruMode::Disabled,
-            include_zero: if include_zero {
-                ZeroCountMode::Include
-            } else {
-                ZeroCountMode::Omit
-            },
-        }
-    }
-
-    #[must_use]
-    fn line_style_flags(out: &Self, line_number: bool) -> LineStyleFlags {
+    fn line_style_flags(&self, heading: bool, line_number: bool, column: bool) -> LineStyleFlags {
         let mut f = LineStyleFlags::empty();
-        if out.lines.heading {
+        if heading {
             f |= LineStyleFlags::HEADING;
         }
         if line_number {
             f |= LineStyleFlags::LINE_NUMBER;
         }
-        if out.lines.column {
+        if column {
             f |= LineStyleFlags::COLUMN;
         }
-        if out.record.byte_offset {
+        if self.extra.byte_offset {
             f |= LineStyleFlags::BYTE_OFFSET;
         }
-        if out.record.trim {
+        if self.replace_trim {
             f |= LineStyleFlags::TRIM;
         }
         f
@@ -698,7 +605,7 @@ impl GrepOutputCtx {
 
     #[must_use]
     const fn effective_line_number(
-        clap_line_number: bool,
+        &self,
         line_number_override: Option<bool>,
         output_format: GrepOutputFormat,
     ) -> bool {
@@ -707,7 +614,7 @@ impl GrepOutputCtx {
         }
         match line_number_override {
             Some(val) => val,
-            None => clap_line_number,
+            None => self.line_number,
         }
     }
 }
@@ -763,18 +670,18 @@ mod tests {
     #[test]
     fn filename_mode_single_file_defaults_to_never() {
         assert!(matches!(
-            GrepOutputCtx::filename_mode(None, FilenameContext::SingleFileCorpus),
+            OutputConfig::filename_mode(None, FilenameContext::SingleFileCorpus),
             FilenameMode::Never
         ));
     }
 
     #[test]
     fn effective_line_number_json() {
-        assert!(GrepOutputCtx::effective_line_number(
-            false,
-            None,
-            GrepOutputFormat::Json
-        ));
+        let config = OutputConfig {
+            line_number: false,
+            ..output_config(&["sift", "pat"])
+        };
+        assert!(config.effective_line_number(None, GrepOutputFormat::Json));
     }
 
     fn output_config(args: &[&str]) -> OutputConfig {
