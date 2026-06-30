@@ -5,7 +5,8 @@ use std::hint::black_box;
 
 use std::str::FromStr;
 
-use sift_grep::filter::{ByteSize, FilterDecl, GrepFilterCtx, TypeCatalog};
+use sift_grep::Argv;
+use sift_grep::filter::{ByteSize, FilterDecl, TypeCatalog};
 
 use crate::support::parse_cli;
 
@@ -55,12 +56,12 @@ pub fn bench(c: &mut Criterion) {
     bench_filter_type_defs_variants(&mut g);
 
     let cli_plain = parse_cli(&["pattern"]);
-    let filter_ctx_default = GrepFilterCtx::default();
+    let argv_plain = crate::support::args(&["sift", "pattern"]);
 
     g.bench_function("candidate_config/default", |b| {
         b.iter(|| {
             black_box(cli_plain.filter_config().candidate_config(
-                filter_ctx_default,
+                &Argv::new(black_box(&argv_plain)),
                 vec![],
                 vec![],
             ))
@@ -80,14 +81,11 @@ pub fn bench(c: &mut Criterion) {
         "1MB",
         "pattern",
     ]);
-    let filter_ctx_glob = GrepFilterCtx {
-        glob_case_insensitive: true,
-        ..Default::default()
-    };
+    let argv_glob = crate::support::args(&["sift", "--glob-case-insensitive", "pattern"]);
     g.bench_function("candidate_config/with_glob_and_type", |b| {
         b.iter(|| {
             black_box(cli_glob.filter_config().candidate_config(
-                filter_ctx_glob,
+                &Argv::new(black_box(&argv_glob)),
                 vec![PathBuf::from("")],
                 vec![],
             ))

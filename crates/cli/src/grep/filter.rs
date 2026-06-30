@@ -25,10 +25,11 @@ impl FilterConfig {
     /// Returns an error if `max_filesize` parsing fails.
     pub fn candidate_config(
         &self,
-        filter: GrepFilterCtx,
+        argv: &Argv<'_>,
         scopes: Vec<PathBuf>,
         exclude_paths: Vec<PathBuf>,
     ) -> anyhow::Result<CandidateFilterConfig> {
+        let filter = FilterResolution::resolve(argv);
         let max_filesize = self
             .decl
             .max_filesize
@@ -194,14 +195,14 @@ impl FilterDecl {
 
 /// Resolved visibility, ignore sources, and glob case for [`CandidateFilterConfig`].
 #[derive(Clone, Copy, Default)]
-pub struct GrepFilterCtx {
-    pub ignore: IgnoreResolution,
-    pub glob_case_insensitive: bool,
+struct FilterResolution {
+    ignore: IgnoreResolution,
+    glob_case_insensitive: bool,
 }
 
-impl GrepFilterCtx {
+impl FilterResolution {
     #[must_use]
-    pub fn resolve(argv: &Argv<'_>) -> Self {
+    fn resolve(argv: &Argv<'_>) -> Self {
         let output = OutputArgv::resolve(argv);
         Self {
             ignore: IgnoreResolution::resolve(argv),
@@ -565,10 +566,10 @@ mod tests {
     }
 
     #[test]
-    fn search_filter_ctx_hidden_mode_include() {
+    fn filter_resolution_hidden_mode_include() {
         use crate::grep::ignore::IgnoreResolution;
         use sift_core::grep::IgnoreSources;
-        let ctx = GrepFilterCtx {
+        let ctx = FilterResolution {
             ignore: IgnoreResolution {
                 hidden: true,
                 sources: IgnoreSources::empty(),
@@ -583,10 +584,10 @@ mod tests {
     }
 
     #[test]
-    fn search_filter_ctx_hidden_mode_respect() {
+    fn filter_resolution_hidden_mode_respect() {
         use crate::grep::ignore::IgnoreResolution;
         use sift_core::grep::IgnoreSources;
-        let ctx = GrepFilterCtx {
+        let ctx = FilterResolution {
             ignore: IgnoreResolution {
                 sources: IgnoreSources::empty(),
                 ..Default::default()

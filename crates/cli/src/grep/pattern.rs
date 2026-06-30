@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
 use sift_core::grep::{
-    BinaryMode, CaseMode, GrepMatchFlags, GrepMode, GrepOptions, RegexEngineRequest,
+    BinaryMode, CaseMode, GrepMatchFlags, GrepMode, GrepOptions, GrepQuery, RegexEngineRequest,
 };
 
 use super::argv::Argv;
@@ -75,8 +75,21 @@ impl PatternConfig {
         }
     }
 
+    /// Build the core grep query for resolved pattern strings and argv-derived options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the resolved pattern list is empty.
+    pub fn query(
+        &self,
+        patterns: Vec<String>,
+        pattern_argv: &PatternArgv,
+    ) -> Result<GrepQuery, sift_core::grep::GrepError> {
+        GrepQuery::new(patterns).map(|query| query.options(self.options(pattern_argv)))
+    }
+
     #[must_use]
-    pub fn grep_options(&self, pattern_argv: &PatternArgv, only_matching: bool) -> GrepOptions {
+    fn options(&self, pattern_argv: &PatternArgv) -> GrepOptions {
         let mut opts = GrepOptions {
             case_mode: pattern_argv.case_mode,
             max_results: self.max_count,
@@ -94,7 +107,7 @@ impl PatternConfig {
         if self.regex2.line_regexp {
             opts.flags |= GrepMatchFlags::LINE_REGEXP;
         }
-        if only_matching {
+        if pattern_argv.only_matching {
             opts.flags |= GrepMatchFlags::ONLY_MATCHING;
         }
         if self.multiline.multiline {
@@ -133,7 +146,7 @@ impl PatternConfig {
             opts.before_context = usize::MAX;
             opts.after_context = usize::MAX;
         }
-        if only_matching {
+        if pattern_argv.only_matching {
             opts.before_context = 0;
             opts.after_context = 0;
         }
@@ -856,19 +869,19 @@ mod tests {
         assert_eq!(patterns, vec!["foo", "bar"]);
     }
 
-    // ── GrepFlags / grep_options ──
+    // ── GrepFlags / query options ──
 
     #[test]
-    fn search_options_case_mode_from_argv() {
+    fn query_options_case_mode_from_argv() {
         let config = pattern_config(&["sift", "pat"]);
-        let opts = config.grep_options(&pat(&["sift", "-i", "pat"]), false);
+        let opts = config.options(&pat(&["sift", "-i", "pat"]));
         assert!(matches!(opts.case_mode, CaseMode::Insensitive));
     }
 
     #[test]
-    fn search_options_applies_fixed_strings() {
+    fn query_options_applies_fixed_strings() {
         let config = pattern_config(&["sift", "-F", "pat"]);
-        let opts = config.grep_options(&pat(&["sift", "pat"]), false);
+        let opts = config.options(&pat(&["sift", "pat"]));
         assert!(opts.flags.contains(GrepMatchFlags::FIXED_STRINGS));
     }
 
