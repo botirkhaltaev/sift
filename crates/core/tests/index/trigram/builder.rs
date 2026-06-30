@@ -1,6 +1,6 @@
 use std::fs;
 
-use sift_core::search::VisibilityConfig;
+use sift_core::grep::VisibilityConfig;
 use sift_core::{
     CorpusKind, CorpusSpec, FileId, GramWidth, IndexBuildConfig, IndexWalkConfig, NGramConfig,
 };

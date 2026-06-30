@@ -21,6 +21,7 @@ bstr = "1"
 fslock = "0.2"
 grep-cli = "0.1"
 grep-matcher = "0.1"
+grep-pcre2 = "0.1"
 grep-printer = "0.3"
 grep-regex = "0.1"
 grep-searcher = "0.1"
@@ -55,10 +56,6 @@ harness = false
 [[test]]
 name = "index"
 path = "tests/index/main.rs"
-
-[[test]]
-name = "search"
-path = "tests/search/main.rs"
 
 [[test]]
 name = "query"

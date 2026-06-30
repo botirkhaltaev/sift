@@ -1,17 +1,17 @@
 //! Grep-style search execution, filtering, and output-mode benchmarks.
 //!
-//! Exercises the public `GrepRequest::run` pipeline.
+//! Exercises the public `Grep::run` corpus pipeline.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::grep::GrepRequest;
-use sift_core::search::{
-    CandidateFilter, CandidateFilterConfig, ColorChoice, OutputEmission, SearchCollection,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutput, SearchRecordStyle, SearchSeparators,
+use sift_core::grep::{
+    CandidateFilter, CandidateFilterConfig, ColorChoice, GrepCollection, GrepMatchFlags, GrepMode,
+    GrepOptions, GrepOutput, GrepRecordStyle, GrepSeparators, OutputEmission,
 };
-use sift_core::{CandidateSource, Index, Indexes, NGramIndex, SearchQuery, SnapshotValidation};
+use sift_core::grep::{CandidateIndexState, Grep, GrepCorpus, GrepQuery};
+use sift_core::{Index, Indexes, NGramIndex, SnapshotValidation};
 
 mod common;
 
@@ -32,11 +32,11 @@ fn wrap_index(index: NGramIndex) -> Indexes {
 
 // ─── Grep-specific helpers ───────────────────────────────────────────────────
 
-fn quiet_output(mode: SearchMode) -> SearchOutput {
-    SearchOutput {
+fn quiet_output(mode: GrepMode) -> GrepOutput {
+    GrepOutput {
         mode,
         emission: OutputEmission::Quiet,
-        records: SearchRecordStyle {
+        records: GrepRecordStyle {
             color: ColorChoice::Never,
             ..Default::default()
         },
@@ -44,9 +44,9 @@ fn quiet_output(mode: SearchMode) -> SearchOutput {
     }
 }
 
-fn make_search(patterns: &[&str], opts: SearchOptions) -> SearchQuery {
+fn make_search(patterns: &[&str], opts: GrepOptions) -> (Vec<String>, GrepOptions) {
     let pats: Vec<String> = patterns.iter().map(ToString::to_string).collect();
-    SearchQuery::new(&pats, opts).unwrap()
+    (pats, opts)
 }
 
 fn make_filter(config: &CandidateFilterConfig, root: &Path) -> CandidateFilter {
@@ -56,34 +56,42 @@ fn make_filter(config: &CandidateFilterConfig, root: &Path) -> CandidateFilter {
 fn run_grep(
     indexes: &Indexes,
     filter: &CandidateFilter,
-    query: &SearchQuery,
-    mode: SearchMode,
-    collect: SearchCollection,
+    query: &(Vec<String>, GrepOptions),
+    mode: GrepMode,
+    collect: GrepCollection,
 ) -> bool {
-    GrepRequest {
+    let query = GrepQuery::new(query.0.clone())
+        .unwrap()
+        .options(query.1.clone());
+    let corpus = GrepCorpus::new(
         indexes,
         filter,
-        output: quiet_output(mode),
-        separators: &SearchSeparators::default(),
-        collect,
-        candidate_source: CandidateSource {
+        CandidateIndexState {
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
-    }
-    .run(query)
-    .unwrap()
-    .outcome
-    .matched
+    );
+    Grep::new(query)
+        .corpus(corpus)
+        .output(quiet_output(mode))
+        .separators(&GrepSeparators::default())
+        .collect(collect)
+        .run()
+        .unwrap()
+        .matched()
 }
 
-fn run_standard(indexes: &Indexes, filter: &CandidateFilter, query: &SearchQuery) -> bool {
+fn run_standard(
+    indexes: &Indexes,
+    filter: &CandidateFilter,
+    query: &(Vec<String>, GrepOptions),
+) -> bool {
     run_grep(
         indexes,
         filter,
         query,
-        SearchMode::Standard,
-        SearchCollection::none(),
+        GrepMode::Standard,
+        GrepCollection::none(),
     )
 }
 
@@ -98,19 +106,19 @@ fn bench_indexed_search(c: &mut Criterion) {
     let mut g = c.benchmark_group("grep_indexed");
 
     g.bench_function("literal", |b| {
-        let query = make_search(&["beta"], SearchOptions::default());
+        let query = make_search(&["beta"], GrepOptions::default());
         b.iter(|| black_box(run_standard(&indexes, &filter, &query)));
     });
 
     g.bench_function("required_literal", |b| {
-        let query = make_search(&["[A-Z]+_RESUME"], SearchOptions::default());
+        let query = make_search(&["[A-Z]+_RESUME"], GrepOptions::default());
         b.iter(|| black_box(run_standard(&indexes, &filter, &query)));
     });
 
     g.bench_function("alternation", |b| {
         let query = make_search(
             &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT"],
-            SearchOptions::default(),
+            GrepOptions::default(),
         );
         b.iter(|| black_box(run_standard(&indexes, &filter, &query)));
     });
@@ -118,8 +126,8 @@ fn bench_indexed_search(c: &mut Criterion) {
     g.bench_function("case_insensitive", |b| {
         let query = make_search(
             &["beta"],
-            SearchOptions {
-                case_mode: sift_core::search::CaseMode::Insensitive,
+            GrepOptions {
+                case_mode: sift_core::grep::CaseMode::Insensitive,
                 ..Default::default()
             },
         );
@@ -129,7 +137,7 @@ fn bench_indexed_search(c: &mut Criterion) {
     g.bench_function("full_scan_fallback", |b| {
         let query = make_search(
             &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}"],
-            SearchOptions::default(),
+            GrepOptions::default(),
         );
         b.iter(|| black_box(run_standard(&indexes, &filter, &query)));
     });
@@ -137,8 +145,8 @@ fn bench_indexed_search(c: &mut Criterion) {
     g.bench_function("invert_match", |b| {
         let query = make_search(
             &["beta"],
-            SearchOptions {
-                flags: SearchMatchFlags::INVERT_MATCH,
+            GrepOptions {
+                flags: GrepMatchFlags::INVERT_MATCH,
                 ..Default::default()
             },
         );
@@ -146,14 +154,14 @@ fn bench_indexed_search(c: &mut Criterion) {
     });
 
     g.bench_function("indexed_search_with_stats", |b| {
-        let query = make_search(&["beta"], SearchOptions::default());
+        let query = make_search(&["beta"], GrepOptions::default());
         b.iter(|| {
             black_box(run_grep(
                 &indexes,
                 &filter,
                 &query,
-                SearchMode::Standard,
-                SearchCollection::stats(),
+                GrepMode::Standard,
+                GrepCollection::stats(),
             ))
         });
     });
@@ -173,12 +181,12 @@ fn bench_walk_search(c: &mut Criterion) {
     let mut g = c.benchmark_group("grep_walk");
 
     g.bench_function("literal", |b| {
-        let query = make_search(&["beta"], SearchOptions::default());
+        let query = make_search(&["beta"], GrepOptions::default());
         b.iter(|| black_box(run_standard(&indexes, &filter, &query)));
     });
 
     g.bench_function("full_scan", |b| {
-        let query = make_search(&[".*"], SearchOptions::default());
+        let query = make_search(&[".*"], GrepOptions::default());
         b.iter(|| black_box(run_standard(&indexes, &filter, &query)));
     });
 
@@ -192,7 +200,7 @@ fn bench_output_modes(c: &mut Criterion) {
     let index = fixture.1;
     let indexes = wrap_index(index);
     let filter = make_filter(&CandidateFilterConfig::default(), indexes.root());
-    let query = make_search(&["beta"], SearchOptions::default());
+    let query = make_search(&["beta"], GrepOptions::default());
 
     let mut g = c.benchmark_group("grep_output_modes");
 
@@ -202,8 +210,8 @@ fn bench_output_modes(c: &mut Criterion) {
                 &indexes,
                 &filter,
                 &query,
-                SearchMode::Count,
-                SearchCollection::none(),
+                GrepMode::Count,
+                GrepCollection::none(),
             ))
         });
     });
@@ -214,8 +222,8 @@ fn bench_output_modes(c: &mut Criterion) {
                 &indexes,
                 &filter,
                 &query,
-                SearchMode::FilesWithMatches,
-                SearchCollection::none(),
+                GrepMode::FilesWithMatches,
+                GrepCollection::none(),
             ));
         });
     });
@@ -226,8 +234,8 @@ fn bench_output_modes(c: &mut Criterion) {
                 &indexes,
                 &filter,
                 &query,
-                SearchMode::FilesWithoutMatch,
-                SearchCollection::none(),
+                GrepMode::FilesWithoutMatch,
+                GrepCollection::none(),
             ));
         });
     });

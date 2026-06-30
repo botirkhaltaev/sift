@@ -63,12 +63,12 @@ pub fn bench(c: &mut Criterion) {
 
     let cli_default = parse_cli(&["pattern"]);
     let pattern_argv = PatternArgv::resolve(&Argv::new(&argv_none));
-    g.bench_function("search_options/default", |b| {
+    g.bench_function("grep_options/default", |b| {
         b.iter(|| {
             black_box(
                 cli_default
                     .pattern_config()
-                    .search_options(black_box(&pattern_argv), false),
+                    .grep_options(black_box(&pattern_argv), false),
             )
         });
     });
