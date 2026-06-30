@@ -85,7 +85,7 @@ impl<'a> Grep<'a> {
     }
 
     #[must_use]
-    pub const fn output(mut self, output: GrepOutput) -> Self {
+    pub fn output(mut self, output: GrepOutput) -> Self {
         self.output = output;
         self
     }
@@ -114,8 +114,13 @@ impl<'a> Grep<'a> {
 
         let candidates = if let Some(corpus) = self.corpus.as_ref() {
             let compiled = search.compile()?;
-            CandidateResolver::new(search, corpus, self.output, compiled.candidate_strategy())
-                .resolve()?
+            CandidateResolver::new(
+                search,
+                corpus,
+                self.output.clone(),
+                compiled.candidate_strategy(),
+            )
+            .resolve()?
         } else {
             CandidateSet::new(Vec::new(), candidates::CandidateCoverage::PotentialMatches)
         };

@@ -141,6 +141,9 @@ impl Cli {
             extra: self.extra_output.clone(),
             replace_trim: self.replace_decl.trim,
             path_separator: self.threading.path_separator.clone(),
+            colors: self.engine_decl.colors.clone(),
+            hyperlink_format: self.engine_decl.hyperlink_format.clone(),
+            hostname_bin: self.engine_decl.hostname_bin.clone(),
             line_number: self.line_number_decl.line_number,
             separators: self.separator_decl.clone(),
             search_paths: search_paths.to_vec(),
@@ -182,6 +185,9 @@ impl Cli {
         let threads = self.threading.threads;
         let path_separator = self.threading.path_separator;
         let null_data = self.multiline_decl.line_terminator.null_data;
+        let colors = self.engine_decl.colors.clone();
+        let hyperlink_format = self.engine_decl.hyperlink_format.clone();
+        let hostname_bin = self.engine_decl.hostname_bin.clone();
         let content = self.engine_decl.content.clone();
         let mode = if self.filter_decl.files {
             GrepCommand::ListFiles
@@ -214,6 +220,9 @@ impl Cli {
                 extra: self.extra_output,
                 replace_trim,
                 path_separator,
+                colors,
+                hyperlink_format,
+                hostname_bin,
                 line_number,
                 separators: self.separator_decl,
                 search_paths: search_paths.clone(),

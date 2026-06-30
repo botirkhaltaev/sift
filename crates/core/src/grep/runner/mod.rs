@@ -91,7 +91,7 @@ impl<'a> GrepRunner<'a> {
                             crate::grep::sink::standard::StandardReporter::new(
                                 self.query,
                                 self.compiled.matcher(),
-                                self.output,
+                                &self.output,
                                 self.separators,
                                 &counters,
                                 collect,
@@ -100,7 +100,12 @@ impl<'a> GrepRunner<'a> {
                         |reporter, input| reporter.report(input, &stop),
                     )
                     .collect_into_vec(&mut files);
-                Self::flush_text(files, collect, counters.bytes_printed())?
+                Self::flush_text(
+                    files,
+                    collect,
+                    counters.bytes_printed(),
+                    self.output.records.buffering,
+                )?
             }
             GrepMode::Count
             | GrepMode::CountMatches
@@ -116,7 +121,7 @@ impl<'a> GrepRunner<'a> {
                             crate::grep::sink::summary::SummaryReporter::new(
                                 self.query,
                                 self.compiled.matcher(),
-                                self.output,
+                                self.output.clone(),
                                 &counters,
                                 collect,
                             )
@@ -124,7 +129,12 @@ impl<'a> GrepRunner<'a> {
                         |reporter, input| reporter.report(input, &stop),
                     )
                     .collect_into_vec(&mut files);
-                Self::flush_summary(files, collect, counters.bytes_printed())?
+                Self::flush_summary(
+                    files,
+                    collect,
+                    counters.bytes_printed(),
+                    self.output.records.buffering,
+                )?
             }
         };
 
@@ -142,6 +152,7 @@ impl<'a> GrepRunner<'a> {
         files: Vec<FileResult>,
         collect: GrepCollection,
         bytes_printed: Option<&std::sync::atomic::AtomicU64>,
+        buffering: crate::grep::output::style::OutputBuffering,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
@@ -153,7 +164,7 @@ impl<'a> GrepRunner<'a> {
             }
             outputs.push(file.output);
         }
-        let matched = ChunkOutput::flush_all(outputs, bytes_printed)?;
+        let matched = ChunkOutput::flush_all(outputs, bytes_printed, buffering)?;
         Ok((matched, hits))
     }
 
@@ -161,6 +172,7 @@ impl<'a> GrepRunner<'a> {
         files: Vec<FileResult>,
         collect: GrepCollection,
         bytes_printed: Option<&std::sync::atomic::AtomicU64>,
+        buffering: crate::grep::output::style::OutputBuffering,
     ) -> crate::Result<(bool, Vec<PathBuf>)> {
         let mut hits = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
@@ -174,7 +186,7 @@ impl<'a> GrepRunner<'a> {
             matched |= file.output.matched;
             outputs.push(file.output);
         }
-        ChunkOutput::flush_all(outputs, bytes_printed)?;
+        ChunkOutput::flush_all(outputs, bytes_printed, buffering)?;
         Ok((matched, hits))
     }
 
@@ -194,7 +206,7 @@ impl<'a> GrepRunner<'a> {
                     crate::grep::sink::json::JsonReporter::new(
                         self.query,
                         self.compiled.matcher(),
-                        self.output,
+                        self.output.clone(),
                     )
                 },
                 |reporter, input| reporter.report(input, &stop),
@@ -209,7 +221,7 @@ impl<'a> GrepRunner<'a> {
             }
             outputs.push(file.output);
         }
-        let matched = ChunkOutput::flush_all(outputs, None)?;
+        let matched = ChunkOutput::flush_all(outputs, None, self.output.records.buffering)?;
         let summary_line =
             crate::grep::sink::json::format_json_summary_line(search_start.elapsed(), &merged)?;
         let summary_bytes = summary_line.len() as u64 + 1;

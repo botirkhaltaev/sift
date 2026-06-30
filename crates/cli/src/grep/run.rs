@@ -318,13 +318,17 @@ impl Grep {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let filename_ctx = Self::filename_context(effective_mode, &sources, &session);
-        let output = self.config.output.grep_output(
-            &output_argv,
-            effective_mode,
-            pattern_argv.quiet,
-            line_number_override,
-            filename_ctx,
-        );
+        let output = self
+            .config
+            .output
+            .grep_output(
+                &output_argv,
+                effective_mode,
+                pattern_argv.quiet,
+                line_number_override,
+                filename_ctx,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
         let separators = self.config.output.separators();
         let print_stats = OutputConfig::print_stats(&output_argv, effective_mode);
         let snapshot = Self::snapshot_validation(&session, daemon);

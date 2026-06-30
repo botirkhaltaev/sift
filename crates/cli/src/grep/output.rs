@@ -1,10 +1,12 @@
 use clap::{ArgAction, Args};
+use sift_core::grep::output::style::{ColorSpecs, HyperlinkFormat, OutputBuffering};
 use sift_core::grep::{
     ColorChoice, FilenameMode, GrepLineStyle, GrepMode, GrepOutput, GrepOutputFormat,
     GrepRecordStyle, GrepSeparators, GrepStats, LineStyleFlags, OutputEmission, PassthruMode,
     ZeroCountMode,
 };
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Describes the filename display context for deciding whether to show paths.
 #[derive(Clone, Copy)]
@@ -24,6 +26,9 @@ pub struct OutputConfig {
     pub extra: ExtraOutputDecl,
     pub replace_trim: bool,
     pub path_separator: Option<String>,
+    pub colors: Vec<String>,
+    pub hyperlink_format: Option<String>,
+    pub hostname_bin: Option<String>,
     pub line_number: bool,
     pub separators: SeparatorDecl,
     pub search_paths: Vec<PathBuf>,
@@ -181,6 +186,7 @@ pub struct OutputArgv {
     pub mode: OutputModeFlags,
     pub path: OutputPathFlags,
     pub color: ColorChoice,
+    pub buffering: OutputBuffering,
     pub line_number: Option<bool>,
     pub with_filename: Option<bool>,
 }
@@ -200,6 +206,7 @@ impl OutputArgv {
                 nul_terminated: Self::nul_terminated_paths(tokens),
             },
             color: Self::color(tokens),
+            buffering: Self::buffering(tokens),
             line_number: Self::line_number(tokens),
             with_filename: Self::with_filename(tokens),
         }
@@ -259,6 +266,25 @@ impl OutputArgv {
                 continue;
             }
             i += 1;
+        }
+        result
+    }
+
+    fn buffering(args: &[String]) -> OutputBuffering {
+        let mut last_idx = 0usize;
+        let mut result = OutputBuffering::Auto;
+        for (i, arg) in args.iter().enumerate() {
+            let value = match arg.as_str() {
+                "--line-buffered" => Some(OutputBuffering::Line),
+                "--block-buffered" => Some(OutputBuffering::Block),
+                _ => None,
+            };
+            if let Some(value) = value
+                && i >= last_idx
+            {
+                last_idx = i;
+                result = value;
+            }
         }
         result
     }
@@ -377,7 +403,7 @@ impl OutputArgv {
 fn parse_color_when(s: &str) -> ColorChoice {
     match s {
         "never" => ColorChoice::Never,
-        "always" => ColorChoice::Always,
+        "always" | "ansi" => ColorChoice::Always,
         _ => ColorChoice::Auto,
     }
 }
@@ -406,8 +432,31 @@ fn unescape_separator(s: &str) -> Vec<u8> {
     out
 }
 
+fn resolve_hostname(hostname_bin: Option<&str>) -> Result<Option<String>, String> {
+    let Some(command) = hostname_bin else {
+        return Ok(None);
+    };
+    let output = Command::new(command)
+        .output()
+        .map_err(|e| format!("failed to run --hostname-bin '{command}': {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "--hostname-bin '{command}' exited with status {}",
+            output.status
+        ));
+    }
+    let host = String::from_utf8(output.stdout)
+        .map_err(|e| format!("--hostname-bin '{command}' emitted invalid UTF-8: {e}"))?;
+    Ok(Some(host.trim_end_matches(['\r', '\n']).to_string()))
+}
+
 impl OutputConfig {
-    #[must_use]
+    /// Build the core grep output from resolved argv and CLI configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when color specs are invalid, hyperlink formats are invalid,
+    /// or the hostname command fails.
     pub fn grep_output(
         &self,
         output_argv: &OutputArgv,
@@ -415,7 +464,7 @@ impl OutputConfig {
         quiet: bool,
         line_number_override: Option<bool>,
         filename_ctx: FilenameContext,
-    ) -> GrepOutput {
+    ) -> Result<GrepOutput, String> {
         use super::paths::CorpusScope;
 
         let pretty = self.column.pretty;
@@ -426,8 +475,11 @@ impl OutputConfig {
         } else {
             output_argv.color
         };
+        let colors = ColorSpecs::from_specs(&self.colors)?;
+        let hyperlink = HyperlinkFormat::parse(self.hyperlink_format.as_deref())?;
+        let hyperlink_host = resolve_hostname(self.hostname_bin.as_deref())?;
 
-        GrepOutput {
+        Ok(GrepOutput {
             format: output_format,
             mode: effective_mode,
             emission: if quiet {
@@ -466,6 +518,10 @@ impl OutputConfig {
                     .path_separator
                     .as_ref()
                     .and_then(|s| s.as_bytes().first().copied()),
+                colors,
+                hyperlink,
+                hyperlink_host,
+                buffering: output_argv.buffering,
             },
             passthru: PassthruMode::Disabled,
             include_zero: if self.extra.include_zero {
@@ -473,7 +529,7 @@ impl OutputConfig {
             } else {
                 ZeroCountMode::Omit
             },
-        }
+        })
     }
 
     #[must_use]

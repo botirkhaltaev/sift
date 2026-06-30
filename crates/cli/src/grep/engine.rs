@@ -12,6 +12,10 @@ pub struct EngineDecl {
     pub no_unicode: bool,
     #[arg(long = "colors", value_name = "COLOR_SPEC")]
     pub colors: Vec<String>,
+    #[arg(long = "hyperlink-format", value_name = "FORMAT")]
+    pub hyperlink_format: Option<String>,
+    #[arg(long = "hostname-bin", value_name = "COMMAND")]
+    pub hostname_bin: Option<String>,
     #[arg(long = "regex-size-limit", value_name = "NUM+SUFFIX?")]
     pub regex_size_limit: Option<String>,
     #[arg(long = "dfa-size-limit", value_name = "NUM+SUFFIX?")]
@@ -57,7 +61,7 @@ pub struct Pcre2EngineDecl {
 }
 
 /// Threading and output-buffering flags.
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct ThreadingDecl {
     #[arg(short = 'j', long = "threads", value_name = "NUM")]
     pub threads: Option<usize>,
@@ -127,6 +131,18 @@ mod tests {
     fn engine_colors_flag() {
         let cli = Cli::try_parse_from(["sift", "--colors", "path:fg:red", "pat"]).unwrap();
         assert!(!cli.engine_decl.colors.is_empty());
+    }
+
+    #[test]
+    fn engine_hyperlink_format_flag() {
+        let cli = Cli::try_parse_from(["sift", "--hyperlink-format", "vscode", "pat"]).unwrap();
+        assert_eq!(cli.engine_decl.hyperlink_format.as_deref(), Some("vscode"));
+    }
+
+    #[test]
+    fn engine_hostname_bin_flag() {
+        let cli = Cli::try_parse_from(["sift", "--hostname-bin", "hostname", "pat"]).unwrap();
+        assert_eq!(cli.engine_decl.hostname_bin.as_deref(), Some("hostname"));
     }
 
     #[test]

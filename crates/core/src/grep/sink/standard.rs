@@ -7,12 +7,14 @@ use crate::grep::input::GrepInput;
 use crate::grep::output::GrepOutput;
 use crate::grep::output::format::ColumnAction;
 use crate::grep::output::mode::OutputEmission;
-use crate::grep::output::style::{FilenameMode, GrepRecordStyle, GrepSeparators, LineStyleFlags};
+use crate::grep::output::style::{
+    AnsiStyle, FilenameMode, GrepRecordStyle, GrepSeparators, HyperlinkValues, LineStyleFlags,
+};
 use crate::grep::query::GrepQuery;
 use crate::grep::query::matcher::GrepMatcher;
 use crate::grep::sink::FileReporter;
 use crate::grep::sink::result::{ChunkOutput, FileResult};
-use crate::grep::sink::style::{ANSI_LINE, ANSI_PATH, ANSI_RESET};
+use crate::grep::sink::style::ANSI_RESET;
 use crate::grep::stats::TextStatsCounters;
 use grep_matcher::{Captures, Matcher};
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
@@ -28,6 +30,7 @@ pub struct StandardSink<'a> {
     output: GrepOutput,
     show_line_numbers: bool,
     display_path: String,
+    hyperlink_path: String,
     bytes: &'a mut Vec<u8>,
     separators: &'a GrepSeparators,
     matched: bool,
@@ -37,11 +40,16 @@ pub struct StandardSink<'a> {
     line_terminator: u8,
 }
 
+struct SinkTarget {
+    display_path: String,
+    hyperlink_path: String,
+}
+
 impl<'a> StandardSink<'a> {
-    pub const fn new(
+    fn new(
         matcher: &'a GrepMatcher,
-        output: GrepOutput,
-        display_path: String,
+        output: &GrepOutput,
+        target: SinkTarget,
         bytes: &'a mut Vec<u8>,
         separators: &'a GrepSeparators,
         replace: Option<&'a str>,
@@ -49,11 +57,12 @@ impl<'a> StandardSink<'a> {
     ) -> Self {
         Self {
             matcher,
-            output,
+            output: output.clone(),
             show_line_numbers: output.lines.line_number()
                 || config.before_context > 0
                 || config.after_context > 0,
-            display_path,
+            display_path: target.display_path,
+            hyperlink_path: target.hyperlink_path,
             bytes,
             separators,
             matched: false,
@@ -287,42 +296,44 @@ impl StandardSink<'_> {
         };
         if print_filename {
             if color {
-                self.bytes.extend_from_slice(ANSI_PATH);
+                self.write_style_start(self.output.records.colors.path);
             }
+            self.start_hyperlink(line_number, column)?;
             write!(self.bytes, "{}", self.display_path)?;
+            self.end_hyperlink();
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
             self.bytes.extend_from_slice(field_sep);
         }
         if self.show_line_numbers {
             if color {
-                self.bytes.extend_from_slice(ANSI_LINE);
+                self.write_style_start(self.output.records.colors.line);
             }
             write!(self.bytes, "{}", line_number.unwrap_or(0))?;
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
             self.bytes.extend_from_slice(field_sep);
         }
         if let Some(col) = column {
             if color {
-                self.bytes.extend_from_slice(ANSI_LINE);
+                self.write_style_start(self.output.records.colors.column);
             }
             write!(self.bytes, "{col}")?;
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
             self.bytes.extend_from_slice(field_sep);
         }
         if let Some(offset) = byte_offset {
             if color {
-                self.bytes.extend_from_slice(ANSI_LINE);
+                self.write_style_start(self.output.records.colors.line);
             }
             let sep = if is_context_line { '-' } else { ':' };
             write!(self.bytes, "{offset}{sep}")?;
             if color {
-                self.bytes.extend_from_slice(ANSI_RESET);
+                self.write_style_end();
             }
         }
         Ok(())
@@ -343,12 +354,68 @@ impl StandardSink<'_> {
                 self.bytes.write_all(&[self.line_terminator])?;
             }
         } else {
-            self.bytes.write_all(line_bytes)?;
+            self.write_matched_line(line_bytes)?;
             if !line_bytes.ends_with(&[self.line_terminator]) {
                 self.bytes.write_all(&[self.line_terminator])?;
             }
         }
         Ok(true)
+    }
+
+    fn write_matched_line(&mut self, line_bytes: &[u8]) -> io::Result<()> {
+        if !self.output.records.should_color() {
+            return self.bytes.write_all(line_bytes);
+        }
+        let mut spans = Vec::new();
+        self.matcher
+            .find_iter(line_bytes, |m: grep_matcher::Match| {
+                spans.push((m.start(), m.end()));
+                true
+            })
+            .map_err(io::Error::other)?;
+        let mut cursor = 0;
+        for (start, end) in spans {
+            self.bytes.write_all(&line_bytes[cursor..start])?;
+            self.write_style_start(self.output.records.colors.matched);
+            self.bytes.write_all(&line_bytes[start..end])?;
+            self.write_style_end();
+            cursor = end;
+        }
+        self.bytes.write_all(&line_bytes[cursor..])
+    }
+
+    fn write_style_start(&mut self, style: AnsiStyle) {
+        if style.is_plain() {
+            self.bytes.extend_from_slice(b"\x1b[0m");
+        } else {
+            style.write_start(self.bytes);
+        }
+    }
+
+    fn write_style_end(&mut self) {
+        self.bytes.extend_from_slice(ANSI_RESET);
+    }
+
+    fn start_hyperlink(
+        &mut self,
+        line_number: Option<u64>,
+        column: Option<usize>,
+    ) -> io::Result<()> {
+        if let Some(link) = self.output.records.hyperlink.render(HyperlinkValues {
+            path: &self.hyperlink_path,
+            line: line_number,
+            column,
+            host: self.output.records.hyperlink_host.as_deref(),
+        }) {
+            write!(self.bytes, "\x1b]8;;{link}\x1b\\")?;
+        }
+        Ok(())
+    }
+
+    fn end_hyperlink(&mut self) {
+        if !self.output.records.hyperlink.is_empty() {
+            self.bytes.extend_from_slice(b"\x1b]8;;\x1b\\");
+        }
     }
 }
 
@@ -375,11 +442,13 @@ pub(in crate::grep) struct StandardReporter<'a> {
 enum GrepTarget<'a> {
     File {
         display: String,
+        hyperlink: String,
         abs_path: &'a Path,
         hit: Option<PathBuf>,
     },
     Bytes {
         display: String,
+        hyperlink: String,
         bytes: &'a [u8],
         hit: Option<PathBuf>,
     },
@@ -389,6 +458,12 @@ impl GrepTarget<'_> {
     fn display(&self) -> &str {
         match self {
             Self::File { display, .. } | Self::Bytes { display, .. } => display,
+        }
+    }
+
+    fn hyperlink(&self) -> &str {
+        match self {
+            Self::File { hyperlink, .. } | Self::Bytes { hyperlink, .. } => hyperlink,
         }
     }
 
@@ -405,7 +480,7 @@ impl<'a> StandardReporter<'a> {
     pub(in crate::grep) fn new(
         search: &'a GrepQuery,
         matcher: &'a GrepMatcher,
-        output: GrepOutput,
+        output: &GrepOutput,
         separators: &'a GrepSeparators,
         counters: &'a TextStatsCounters,
         collect: GrepCollection,
@@ -417,7 +492,7 @@ impl<'a> StandardReporter<'a> {
                 true,
             ),
             matcher,
-            output,
+            output: output.clone(),
             separators,
             bytes: Vec::new(),
             match_counter: counters.primary(),
@@ -427,7 +502,7 @@ impl<'a> StandardReporter<'a> {
                 before_context: search.opts().before_context,
                 after_context: search.opts().after_context,
             },
-            records: output.records,
+            records: output.records.clone(),
             lines_flags: output.lines.flags,
             filename_mode: output.lines.filename_mode,
             path_display: output.lines.path_display,
@@ -453,14 +528,18 @@ impl<'a> StandardReporter<'a> {
         let matched = {
             let heading = self.lines_flags.contains(LineStyleFlags::HEADING)
                 && self.filename_mode != FilenameMode::Never;
-            let mut sink_output = self.output;
+            let mut sink_output = self.output.clone();
             if heading {
                 sink_output.lines.filename_mode = FilenameMode::Never;
             }
+            let hyperlink = target.hyperlink().to_string();
             let mut sink = StandardSink::new(
                 self.matcher,
-                sink_output,
-                display.clone(),
+                &sink_output,
+                SinkTarget {
+                    display_path: display.clone(),
+                    hyperlink_path: hyperlink,
+                },
                 &mut self.bytes,
                 self.separators,
                 self.replace.as_deref(),
@@ -500,7 +579,7 @@ impl<'a> StandardReporter<'a> {
                 {
                     let mut out = Vec::new();
                     if self.records.should_color() {
-                        out.extend_from_slice(ANSI_PATH);
+                        self.records.colors.path.write_start(&mut out);
                     }
                     let _ = write!(out, "{display}");
                     if self.records.should_color() {
@@ -530,6 +609,7 @@ impl FileReporter for StandardReporter<'_> {
             GrepInput::Path { candidate } => self.search_target(
                 GrepTarget::File {
                     display: candidate.display_path(self.path_display, self.path_separator),
+                    hyperlink: candidate.abs_path().display().to_string(),
                     abs_path: candidate.abs_path(),
                     hit: (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
                 },
@@ -544,9 +624,14 @@ impl FileReporter for StandardReporter<'_> {
                     || display_path.to_string(),
                     |candidate| candidate.display_path(self.path_display, self.path_separator),
                 );
+                let hyperlink = candidate.map_or_else(
+                    || display_path.to_string(),
+                    |candidate| candidate.abs_path().display().to_string(),
+                );
                 self.search_target(
                     GrepTarget::Bytes {
                         display,
+                        hyperlink,
                         bytes,
                         hit: candidate
                             .filter(|_| self.collect_hits)
