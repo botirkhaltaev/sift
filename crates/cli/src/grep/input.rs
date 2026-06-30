@@ -6,8 +6,8 @@ use std::process::Command;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use grep_cli::DecompressionReaderBuilder;
 use sift_core::Candidate;
+use sift_core::grep::CandidateContent;
 use sift_core::grep::CandidateContentSource;
-use sift_core::search::CandidateContent;
 
 #[derive(Debug, Clone, Default)]
 pub struct ContentConfig {

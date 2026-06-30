@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion};
 use std::hint::black_box;
 
-use sift_core::search::SearchMode;
+use sift_core::grep::GrepMode;
 use sift_grep::Argv;
-use sift_grep::output::{OutputArgv, SearchOutputCtx};
+use sift_grep::output::{GrepOutputCtx, OutputArgv};
 use sift_grep::pattern::PatternArgv;
 
 use crate::support::{args, parse_cli};
@@ -39,12 +39,12 @@ pub fn bench(c: &mut Criterion) {
 
     let cli_default = parse_cli(&["pattern"]);
     let argv_default = args(&["sift", "pattern"]);
-    g.bench_function("SearchOutputCtx_resolve_default", |b| {
+    g.bench_function("GrepOutputCtx_resolve_default", |b| {
         b.iter(|| {
-            black_box(SearchOutputCtx::resolve(
+            black_box(GrepOutputCtx::resolve(
                 &cli_default.grep_config().output,
                 &Argv::new(black_box(&argv_default)),
-                SearchMode::Standard,
+                GrepMode::Standard,
                 false,
                 None,
             ))

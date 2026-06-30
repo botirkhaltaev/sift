@@ -5,296 +5,157 @@
 //! index-agnostic: it works with whatever index types the `Indexes` registry
 //! has opened.
 
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+pub mod candidates;
+pub mod corpus;
+pub mod error;
+pub mod filter;
+pub mod input;
+pub mod options;
+pub mod output;
+pub mod pattern;
+pub mod query;
+pub mod report;
+pub(crate) mod runner;
+pub(crate) mod sink;
+mod stats;
 
-use crate::Candidate;
-use crate::index::Indexes;
-use crate::query::{CandidatePlan, CandidateRequirement, CandidateSource, QueryPlanner};
-use crate::search::query::CandidateStrategy;
-use crate::search::request::{
-    CandidateContent, SearchCollection, SearchExecution, SearchInput, StreamInput,
+use candidates::{CandidateResolver, CandidateSet};
+use input::GrepInputs;
+use runner::GrepRunner;
+
+pub use crate::walk::{LinkTraversal, WalkOptions};
+pub use candidates::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
+pub use corpus::{CandidateContentSource, CandidateIndexState, GrepCorpus};
+pub use error::GrepError;
+pub use filter::{
+    CandidateFilter, CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    TypeDef, VisibilityConfig,
 };
-use crate::search::{
-    CandidateFilter, SearchError, SearchOutcome, SearchOutput, SearchQuery, SearchSeparators,
-    SearchStats,
+pub use input::{CandidateContent, GrepStream};
+pub use options::{
+    BinaryMode, CaseMode, GrepMatchFlags, GrepOptions, InputEncoding, RegexEngineRequest,
 };
-use rayon::prelude::*;
+pub use output::format::{ColumnLimit, ColumnOverflow};
+pub use output::mode::{GrepMode, MatchEmissionMode, OutputEmission, ZeroCountMode};
+pub use output::passthru::PassthruMode;
+pub use output::style::GrepSeparators;
+pub use output::style::{
+    ColorChoice, FilenameMode, GrepLineStyle, GrepRecordStyle, LineStyleFlags, PathDisplay,
+    RecordTerminator,
+};
+pub use output::{GrepOutput, GrepOutputFormat};
+pub use pattern::PatternCompiler;
+pub use query::{GrepQuery, Match};
+pub use report::{GrepCollection, GrepOutcome, GrepReport};
+pub use stats::GrepStats;
 
-/// Result of the grep pipeline.
-pub struct GrepRun {
-    pub outcome: SearchOutcome,
-    /// Unique rel-paths with at least one pattern hit.
-    pub hits: Vec<PathBuf>,
+/// High-level grep execution entrypoint.
+pub struct Grep<'a> {
+    query: GrepQuery,
+    corpus: Option<GrepCorpus<'a>>,
+    streams: &'a [GrepStream<'a>],
+    output: GrepOutput,
+    separators: GrepSeparators,
+    collect: GrepCollection,
 }
 
-pub trait CandidateContentSource {
-    /// # Errors
-    ///
-    /// Returns an error if transformed content cannot be read for any candidate.
-    fn read(&self, candidates: &[Candidate]) -> crate::Result<Vec<CandidateContent>>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CandidateOrderKey {
-    #[default]
-    None,
-    Path,
-    Modified,
-    Accessed,
-    Created,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CandidateOrderDirection {
-    #[default]
-    Ascending,
-    Descending,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CandidateOrder {
-    pub key: CandidateOrderKey,
-    pub direction: CandidateOrderDirection,
-}
-
-impl CandidateOrder {
+impl<'a> Grep<'a> {
     #[must_use]
-    pub const fn new(key: CandidateOrderKey, direction: CandidateOrderDirection) -> Self {
-        Self { key, direction }
+    pub fn new(query: GrepQuery) -> Self {
+        Self {
+            query,
+            corpus: None,
+            streams: &[],
+            output: GrepOutput::default(),
+            separators: GrepSeparators::default(),
+            collect: GrepCollection::default(),
+        }
     }
 
     #[must_use]
-    pub const fn is_sorted(self) -> bool {
-        !matches!(self.key, CandidateOrderKey::None)
+    pub const fn corpus(mut self, corpus: GrepCorpus<'a>) -> Self {
+        self.corpus = Some(corpus);
+        self
     }
 
-    /// Order candidates in place according to the configured key.
-    ///
-    /// # Errors
-    ///
-    /// Returns an I/O error when filesystem metadata required by a timestamp
-    /// ordering key cannot be read.
-    pub fn order(self, candidates: &mut [Candidate]) -> crate::Result<()> {
-        if !self.is_sorted() {
-            return Ok(());
-        }
-
-        let mut keyed = Vec::with_capacity(candidates.len());
-        for candidate in candidates.iter().cloned() {
-            keyed.push(CandidateOrderEntry::new(candidate, self.key)?);
-        }
-
-        keyed.sort_by(|a, b| {
-            a.value
-                .cmp(&b.value)
-                .then_with(|| a.rel_path.cmp(&b.rel_path))
-        });
-        if matches!(self.direction, CandidateOrderDirection::Descending) {
-            keyed.reverse();
-        }
-
-        for (slot, entry) in candidates.iter_mut().zip(keyed) {
-            *slot = entry.candidate;
-        }
-
-        Ok(())
+    #[must_use]
+    pub const fn streams(mut self, streams: &'a [GrepStream<'a>]) -> Self {
+        self.streams = streams;
+        self
     }
-}
 
-struct CandidateOrderEntry {
-    value: CandidateOrderValue,
-    rel_path: PathBuf,
-    candidate: Candidate,
-}
-
-impl CandidateOrderEntry {
-    fn new(candidate: Candidate, key: CandidateOrderKey) -> crate::Result<Self> {
-        let rel_path = candidate.rel_path().to_path_buf();
-        let value = match key {
-            CandidateOrderKey::None | CandidateOrderKey::Path => {
-                CandidateOrderValue::Path(rel_path.clone())
-            }
-            CandidateOrderKey::Modified => CandidateOrderValue::Time(candidate_time(
-                candidate.abs_path(),
-                std::fs::Metadata::modified,
-            )?),
-            CandidateOrderKey::Accessed => CandidateOrderValue::Time(candidate_time(
-                candidate.abs_path(),
-                std::fs::Metadata::accessed,
-            )?),
-            CandidateOrderKey::Created => CandidateOrderValue::Time(candidate_time(
-                candidate.abs_path(),
-                std::fs::Metadata::created,
-            )?),
-        };
-
-        Ok(Self {
-            value,
-            rel_path,
-            candidate,
-        })
+    #[must_use]
+    pub const fn output(mut self, output: GrepOutput) -> Self {
+        self.output = output;
+        self
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum CandidateOrderValue {
-    Path(PathBuf),
-    Time(SystemTime),
-}
+    #[must_use]
+    pub fn separators(mut self, separators: &GrepSeparators) -> Self {
+        self.separators = separators.clone();
+        self
+    }
 
-fn candidate_time(
-    path: &Path,
-    timestamp: impl FnOnce(&std::fs::Metadata) -> std::io::Result<SystemTime>,
-) -> crate::Result<SystemTime> {
-    Ok(timestamp(&std::fs::metadata(path)?)?)
-}
+    #[must_use]
+    pub const fn collect(mut self, collect: GrepCollection) -> Self {
+        self.collect = collect;
+        self
+    }
 
-#[derive(Clone, Copy)]
-pub enum GrepSource<'a> {
-    /// Resolve and search the configured corpus candidates.
-    Corpus,
-    /// Search named byte streams without resolving corpus candidates.
-    Streams(&'a [StreamInput<'a>]),
-}
-
-/// User-facing request to the grep pipeline.
-pub struct GrepRequest<'a> {
-    pub indexes: &'a Indexes,
-    pub filter: &'a CandidateFilter,
-    pub output: SearchOutput,
-    pub separators: &'a SearchSeparators,
-    pub collect: SearchCollection,
-    pub candidate_source: CandidateSource<'a>,
-    pub candidate_order: CandidateOrder,
-    pub content_source: Option<&'a dyn CandidateContentSource>,
-}
-
-impl GrepRequest<'_> {
-    /// Search one or more source kinds as a single grep execution.
+    /// Runs grep over the configured corpus and/or byte streams.
     ///
     /// # Errors
     ///
     /// Returns an error if candidate resolution, regex compilation, transformed input, or search
     /// execution fails.
-    pub fn search(
-        &self,
-        query: &SearchQuery,
-        sources: &[GrepSource<'_>],
-    ) -> crate::Result<GrepRun> {
-        Self::validate_query(query)?;
+    pub fn run(self) -> crate::Result<GrepReport> {
+        let search = &self.query;
+        Self::validate_query(search)?;
 
-        let mut corpus_requested = false;
-        let mut streams = Vec::new();
-        for source in sources {
-            match *source {
-                GrepSource::Corpus => corpus_requested = true,
-                GrepSource::Streams(source_streams) => streams.extend_from_slice(source_streams),
-            }
-        }
-
-        let compiled = query.compile()?;
-
-        let candidates = if corpus_requested {
-            self.resolve_candidates(query, compiled.candidate_strategy())?
+        let candidates = if let Some(corpus) = self.corpus.as_ref() {
+            let compiled = search.compile()?;
+            CandidateResolver::new(search, corpus, self.output, compiled.candidate_strategy())
+                .resolve()?
         } else {
-            Vec::new()
+            CandidateSet::new(Vec::new(), candidates::CandidateCoverage::PotentialMatches)
         };
 
-        let transformed = if corpus_requested {
-            self.content_source
-                .map(|source| source.read(&candidates))
+        let transformed = if let Some(corpus) = self.corpus.as_ref() {
+            let _coverage = candidates.coverage();
+            corpus
+                .content_source
+                .map(|source| source.read(candidates.as_slice()))
                 .transpose()?
         } else {
             None
         };
 
-        let mut inputs = Vec::with_capacity(
-            transformed
-                .as_ref()
-                .map_or_else(|| usize::from(!candidates.is_empty()), Vec::len)
-                + streams.len(),
-        );
+        let mut inputs;
         if let Some(transformed) = transformed.as_deref() {
-            if !transformed.is_empty() {
-                inputs.push(SearchInput::Transformed(transformed));
-            }
-        } else if !candidates.is_empty() {
-            inputs.push(SearchInput::Candidates(&candidates));
-        }
-        inputs.extend(streams.into_iter().map(SearchInput::Stream));
-
-        self.search_inputs(query, inputs)
-    }
-
-    fn resolve_candidates(
-        &self,
-        query: &SearchQuery,
-        candidate_strategy: CandidateStrategy,
-    ) -> crate::Result<Vec<Candidate>> {
-        let spec = query.build_query_spec();
-        let output = self.output;
-        let requirement = if self.content_source.is_some() {
-            CandidateRequirement::Complete
+            inputs = GrepInputs::from_transformed(transformed);
+        } else if !candidates.as_slice().is_empty() {
+            inputs = GrepInputs::from_candidates(candidates.as_slice());
         } else {
-            match candidate_strategy {
-                CandidateStrategy::Indexed => output.candidate_requirement(),
-                CandidateStrategy::Complete(_) => CandidateRequirement::Complete,
-            }
-        };
-
-        let raw = QueryPlanner::new(spec).candidates(
-            CandidatePlan {
-                indexes: self.indexes,
-                requirement,
-                filter: self.filter,
-                source: self.candidate_source,
-            },
-            || self.filter.collect(),
-        )?;
-
-        let mut candidates: Vec<Candidate> = raw
-            .into_par_iter()
-            .filter(|c| c.matches(self.filter))
-            .collect();
-        self.candidate_order.order(&mut candidates)?;
-        Ok(candidates)
-    }
-
-    fn search_inputs(
-        &self,
-        query: &SearchQuery,
-        inputs: Vec<SearchInput<'_>>,
-    ) -> crate::Result<GrepRun> {
-        if inputs.is_empty() {
-            return Ok(self.empty_run());
+            inputs = GrepInputs::empty();
         }
+        inputs.push_streams(self.streams);
 
-        let (outcome, hits) = query.search(&SearchExecution {
-            inputs,
-            output: self.output,
-            separators: self.separators,
-            collect: self.collect.with_hits(true),
-        })?;
-
-        Ok(GrepRun { outcome, hits })
+        let compiled = search.compile()?;
+        GrepRunner::new(
+            search,
+            compiled,
+            self.output,
+            &self.separators,
+            self.collect.with_hits(true),
+        )
+        .run(&inputs)
     }
 
-    fn validate_query(query: &SearchQuery) -> crate::Result<()> {
+    fn validate_query(query: &GrepQuery) -> crate::Result<()> {
         if query.opts().max_results == Some(0) {
-            return Err(crate::Error::Search(SearchError::InvalidMaxCount));
+            return Err(crate::Error::Search(GrepError::InvalidMaxCount));
         }
 
         Ok(())
-    }
-
-    fn empty_run(&self) -> GrepRun {
-        GrepRun {
-            outcome: SearchOutcome {
-                matched: false,
-                stats: self.collect.stats.then_some(SearchStats::default()),
-            },
-            hits: Vec::new(),
-        }
     }
 }

@@ -5,7 +5,7 @@ use std::hint::black_box;
 
 use std::str::FromStr;
 
-use sift_grep::filter::{ByteSize, FilterDecl, SearchFilterCtx, TypeCatalog};
+use sift_grep::filter::{ByteSize, FilterDecl, GrepFilterCtx, TypeCatalog};
 
 use crate::support::parse_cli;
 
@@ -55,7 +55,7 @@ pub fn bench(c: &mut Criterion) {
     bench_filter_type_defs_variants(&mut g);
 
     let cli_plain = parse_cli(&["pattern"]);
-    let filter_ctx_default = SearchFilterCtx::default();
+    let filter_ctx_default = GrepFilterCtx::default();
 
     g.bench_function("candidate_config/default", |b| {
         b.iter(|| {
@@ -80,7 +80,7 @@ pub fn bench(c: &mut Criterion) {
         "1MB",
         "pattern",
     ]);
-    let filter_ctx_glob = SearchFilterCtx {
+    let filter_ctx_glob = GrepFilterCtx {
         glob_case_insensitive: true,
         ..Default::default()
     };

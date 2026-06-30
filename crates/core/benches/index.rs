@@ -8,7 +8,7 @@ use std::fs;
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::search::VisibilityConfig;
+use sift_core::grep::VisibilityConfig;
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
     IndexStore, IndexWalkConfig, Indexes, QueryFlags, QuerySpec, StoreMeta, WalkMeta,

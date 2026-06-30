@@ -23,17 +23,17 @@ IndexConfig::???                         ──IndexStore──>  Index::???(...
 | [`walk/`](src/walk/) | Shared filesystem discovery for search candidates and index builds |
 | [`index/`](src/index/) | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
 | [`index/ngram/`](src/index/ngram/) | Runtime-width N-gram index: build, load, search, and on-disk storage |
-| [`grep/`](src/grep/) | Pipeline orchestration: `GrepRequest`, `run()` |
-| [`search/`](src/search/) | Regex execution, scanning, output formatting, parallelism |
+| [`grep/`](src/grep/) | Grep execution: query/options/filter/output, candidate resolution, scanning, rendering |
 | [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
 
 ## API
 
 ```rust
 use sift_core::{
-    CandidateSource, GrepRequest, GramWidth, IndexBuildConfig, IndexConfig, IndexStore, Indexes,
-    SearchCollection, SearchOptions, SearchQuery, SnapshotValidation,
+    CandidateIndexState, GramWidth, Grep, GrepCorpus, GrepQuery, IndexBuildConfig, IndexConfig,
+    IndexStore, Indexes, SnapshotValidation,
 };
+use sift_core::grep::{GrepCollection, GrepOptions};
 
 // Build indexes (currently trigram-specialized N-gram; extensible to multiple kinds)
 let mut store = IndexStore::open_or_create(&sift_dir, &meta)?;
@@ -42,23 +42,25 @@ store.build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])?;
 // Open all indexes in the store
 let indexes = Indexes::open(&sift_dir)?;
 
-// Search via the grep pipeline
-let query = SearchQuery::new(&patterns, SearchOptions::default())?;
-let run = GrepRequest {
-    indexes: &indexes,
-    filter: &filter,
-    output,
-    separators: &separators,
-    collect: SearchCollection::none(),
-    candidate_source: CandidateSource {
+// Search via the grep pipeline.
+let query = GrepQuery::new(patterns)?.options(GrepOptions::default());
+let corpus = GrepCorpus::new(
+    &indexes,
+    &filter,
+    CandidateIndexState {
         store_meta: Some(&meta),
         snapshot: SnapshotValidation::Unvalidated,
     },
-}
-.run(&query)?;
+);
+let report = Grep::new(query)
+    .corpus(corpus)
+    .output(output)
+    .separators(&separators)
+    .collect(GrepCollection::none())
+    .run()?;
 ```
 
-`SearchQuery` compiles the regex once; repeated `run` calls reuse the compiled matcher and searcher cache.
+`GrepQuery` compiles the regex lazily; `Grep::run` resolves candidates, materializes grep inputs, and runs the matcher through the grep runner.
 
 ## Features
 

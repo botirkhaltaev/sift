@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use crate::grep::Argv;
 use crate::grep::engine::{EngineDecl, MultilineDecl, ThreadingDecl, WalkerDecl};
-use crate::grep::filter::{FilterConfig, SearchFilterCtx};
+use crate::grep::filter::{FilterConfig, GrepFilterCtx};
 use crate::grep::filter::{FilterDecl, GlobFlags, TypeCatalog};
 use crate::grep::ignore::MessageFlags;
 use crate::grep::ignore::{
@@ -19,9 +19,9 @@ use crate::grep::output::{
 use crate::grep::paths::PathArgs;
 use crate::grep::pattern::PatternConfig;
 use crate::grep::pattern::{
-    BinaryDecl, PatternArgs, RegexFlagsA, RegexFlagsB, SearchFlags, SearchScope,
+    BinaryDecl, GrepFlags, GrepScope, PatternArgs, RegexFlagsA, RegexFlagsB,
 };
-use crate::grep::run::{Grep, GrepConfig, GrepMode, GrepOutcome};
+use crate::grep::run::{Grep, GrepCommand, GrepConfig, GrepOutcome};
 use crate::index::{IndexExecution, IndexJob, IndexOperation, IndexRequest};
 use crate::update;
 
@@ -37,7 +37,7 @@ pub struct Cli {
     #[command(flatten)]
     pub patterns: PatternArgs,
     #[command(flatten)]
-    pub search_scope: SearchScope,
+    pub search_scope: GrepScope,
     #[command(flatten)]
     pub regex1: RegexFlagsA,
     #[command(flatten)]
@@ -45,7 +45,7 @@ pub struct Cli {
     #[command(flatten)]
     pub line_number_decl: LineNumberDecl,
     #[command(flatten)]
-    pub search_flags: SearchFlags,
+    pub search_flags: GrepFlags,
     #[command(flatten)]
     pub filename_decl: FilenameDecl,
     #[command(flatten)]
@@ -160,9 +160,9 @@ impl Cli {
             search_paths,
             threads: self.threading.threads,
             mode: if self.filter_decl.files {
-                GrepMode::ListFiles
+                GrepCommand::ListFiles
             } else {
-                GrepMode::Search
+                GrepCommand::Search
             },
             content: ContentConfig {
                 search_zip: self.engine_decl.content.search_zip,
@@ -185,9 +185,9 @@ impl Cli {
         let null_data = self.multiline_decl.line_terminator.null_data;
         let content = self.engine_decl.content.clone();
         let mode = if self.filter_decl.files {
-            GrepMode::ListFiles
+            GrepCommand::ListFiles
         } else {
-            GrepMode::Search
+            GrepCommand::Search
         };
         let candidate_order = self.filter_decl.candidate_order(argv)?;
 
@@ -288,7 +288,7 @@ impl Cli {
                     }
                 };
 
-                let suppress_errors = SearchFilterCtx::resolve(argv)
+                let suppress_errors = GrepFilterCtx::resolve(argv)
                     .ignore
                     .msg_flags
                     .contains(MessageFlags::NO_MESSAGES);

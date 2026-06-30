@@ -18,20 +18,14 @@ fn bench_binary_mode(g: &mut criterion::BenchmarkGroup<'_, criterion::measuremen
         b.iter(|| {
             black_box(
                 config
-                    .search_options(black_box(&pat_default), false)
+                    .grep_options(black_box(&pat_default), false)
                     .binary_mode,
             )
         });
     });
     g.bench_function("binary_mode/text", |b| {
         let config = cli_text.pattern_config();
-        b.iter(|| {
-            black_box(
-                config
-                    .search_options(black_box(&pat_text), false)
-                    .binary_mode,
-            )
-        });
+        b.iter(|| black_box(config.grep_options(black_box(&pat_text), false).binary_mode));
     });
 }
 

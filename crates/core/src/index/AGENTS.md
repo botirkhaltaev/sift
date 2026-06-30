@@ -42,7 +42,7 @@ Today the default configured index is `IndexConfig::ngram(GramWidth::TRIGRAM)` /
 3. Implement `root`, `corpus_kind`, `candidates`, `all_files` in the `Index` match arms.
 4. Create a sibling module to `ngram/` with the implementation.
 
-No changes needed to `Indexes`, `IndexStore`, `QueryPlanner`, `search/`, or `grep/`.
+No changes needed to `Indexes`, `IndexStore`, `QueryPlanner`, or `grep/`.
 
 ## Do NOT
 

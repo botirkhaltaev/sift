@@ -8,9 +8,9 @@ Benchmarks mirror the `src/` module layout and exercise only public APIs.
 
 | File | What it measures |
 |------|------------------|
-| `query.rs` | `QueryPlanner` decisions, `PatternCompiler` shaping/compilation, `SearchQuery::new` |
+| `query.rs` | `QueryPlanner` decisions, `PatternCompiler` shaping/compilation, `GrepQuery::new` |
 | `index.rs` | Runtime-width `NGramIndex` build/open, `Indexes::open`, `Index` enum methods, `candidates`, `explain`, save/reopen |
-| `grep.rs` | `SearchQuery::run` (indexed search / walk search), `CandidateFilter` paths, output modes |
+| `grep.rs` | `Grep::run` (indexed search / walk search), `CandidateFilter` paths, output modes |
 
 Storage is benchmarked indirectly through `index.rs` build/open/save/reopen paths. No direct storage benchmarks.
 
