@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sift_core::search::{IgnoreConfig, VisibilityConfig};
+use sift_core::grep::{IgnoreConfig, VisibilityConfig};
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
     IndexCoverage, IndexStore, IndexWalkConfig, Indexes, NGramConfig, NGramIndex, StoreMeta,

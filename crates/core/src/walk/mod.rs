@@ -1,11 +1,49 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ignore::{DirEntry, Error as IgnoreError, WalkBuilder, WalkState};
 
 use crate::Candidate;
-use crate::search::filter::{HiddenMode, IgnoreSources, VisibilityConfig};
-use crate::search::request::LinkTraversal;
+use crate::grep::filter::{
+    CandidateFilter, HiddenMode, IgnoreConfig, IgnoreSources, VisibilityConfig,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkTraversal {
+    #[default]
+    DoNotFollow,
+    Follow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WalkOptions {
+    pub links: LinkTraversal,
+    pub max_depth: Option<usize>,
+    pub max_filesize: Option<u64>,
+    pub one_file_system: bool,
+}
+
+/// Discovers files under `root` using explicit walk options.
+///
+/// # Errors
+///
+/// Returns an error if the root path cannot be canonicalized or the walk encounters an
+/// inaccessible directory.
+pub fn discover_files(root: &Path, options: &WalkOptions) -> crate::Result<HashSet<PathBuf>> {
+    Ok(FileWalk::new(root)
+        .visibility(VisibilityConfig {
+            hidden: HiddenMode::Include,
+            ignore: IgnoreConfig::disabled(),
+        })
+        .links(options.links)
+        .one_file_system(options.one_file_system)
+        .max_depth(options.max_depth)
+        .max_filesize(options.max_filesize)
+        .collect_paths()?
+        .into_iter()
+        .collect())
+}
 
 /// Reusable filesystem discovery over one corpus root.
 pub struct FileWalk<'a> {
@@ -32,6 +70,22 @@ impl<'a> FileWalk<'a> {
             max_depth: None,
             max_filesize: None,
         }
+    }
+
+    #[must_use]
+    pub fn from_filter(filter: &'a CandidateFilter) -> Self {
+        Self::new(filter.root())
+            .scopes(filter.scopes())
+            .excludes(filter.exclude_paths())
+            .visibility(filter.visibility().clone())
+            .links(if filter.follow_links() {
+                LinkTraversal::Follow
+            } else {
+                LinkTraversal::DoNotFollow
+            })
+            .one_file_system(filter.one_file_system())
+            .max_depth(filter.max_depth())
+            .max_filesize(filter.max_filesize())
     }
 
     #[must_use]
@@ -293,7 +347,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::search::filter::{HiddenMode, IgnoreConfig};
+    use crate::grep::filter::{HiddenMode, IgnoreConfig};
 
     fn raw_visibility() -> VisibilityConfig {
         VisibilityConfig {

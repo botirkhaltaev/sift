@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::Candidate;
+use crate::grep::CandidateFilter;
 use crate::index::Indexes;
 use crate::query::QuerySpec;
-use crate::search::CandidateFilter;
 use crate::{IndexCoverage, StoreMeta};
 
 /// Whether search needs all candidate paths or only potential matches.
@@ -78,6 +78,13 @@ impl<'a> QueryPlanner<'a> {
                     .source
                     .store_meta
                     .is_some_and(|meta| !meta.covers_candidate_filter(plan.filter))
+                {
+                    return base();
+                }
+                if plan
+                    .source
+                    .store_meta
+                    .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
                 {
                     return base();
                 }

@@ -1,15 +1,15 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::grep::GrepRequest;
-use sift_core::search::{
-    CandidateFilter, CandidateFilterConfig, OutputEmission, PatternCompiler, SearchCollection,
-    SearchMatchFlags, SearchOptions, SearchOutput, SearchOutputFormat, SearchSeparators,
+use sift_core::grep::{CandidateIndexState, Grep, GrepCorpus, GrepQuery};
+use sift_core::grep::{
+    CandidateFilter, CandidateFilterConfig, OutputEmission, PatternCompiler, GrepCollection,
+    GrepMatchFlags, GrepOptions, GrepOutput, GrepOutputFormat, GrepSeparators,
     VisibilityConfig,
 };
 use sift_core::{
-    CandidateSource, CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes,
-    NGramConfig, SearchQuery, SnapshotValidation,
+    CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, NGramConfig,
+    SnapshotValidation,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -62,40 +62,43 @@ fn lossy_pattern(data: &[u8]) -> String {
         .collect()
 }
 
-fn opts_from_bytes(data: &[u8]) -> SearchOptions {
+fn opts_from_bytes(data: &[u8]) -> GrepOptions {
     let flags = data
         .first()
-        .map(|b| SearchMatchFlags::from_bits_truncate(u16::from(*b)))
+        .map(|b| GrepMatchFlags::from_bits_truncate(u16::from(*b)))
         .unwrap_or_default();
     let max_results = data.get(1).map(|b| (*b as usize).min(10_000));
-    SearchOptions {
+    GrepOptions {
         flags,
         max_results,
-        ..SearchOptions::default()
+        ..GrepOptions::default()
     }
 }
 
-fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
-    let Ok(q) = SearchQuery::new(patterns, opts.clone()) else {
+fn run_search(indexes: &Indexes, patterns: &[String], opts: &GrepOptions) {
+    let Ok(query) = GrepQuery::new(patterns.to_vec()) else {
         return;
     };
+    let query = query.options(opts.clone());
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), indexes.root()).unwrap();
-    let request = GrepRequest {
+    let corpus = GrepCorpus::new(
         indexes,
-        filter: &filter,
-        output: SearchOutput {
-            format: SearchOutputFormat::Text,
-            emission: OutputEmission::Quiet,
-            ..SearchOutput::default()
-        },
-        separators: &SearchSeparators::default(),
-        collect: SearchCollection::none(),
-        candidate_source: CandidateSource {
+        &filter,
+        CandidateIndexState {
             store_meta: None,
             snapshot: SnapshotValidation::Unvalidated,
         },
-    };
-    let _ = request.run(&q);
+    );
+    let _ = Grep::new(query)
+        .corpus(corpus)
+        .output(GrepOutput {
+            format: GrepOutputFormat::Text,
+            emission: OutputEmission::Quiet,
+            ..GrepOutput::default()
+        })
+        .separators(&GrepSeparators::default())
+        .collect(GrepCollection::none())
+        .run();
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -126,7 +129,7 @@ fuzz_target!(|data: &[u8]| {
     }
 });
 
-fn compile_with_flags(patterns: &[&str], opts: &SearchOptions) -> Result<(), ()> {
+fn compile_with_flags(patterns: &[&str], opts: &GrepOptions) -> Result<(), ()> {
     PatternCompiler::new()
         .fixed_strings(opts.fixed_strings())
         .word_regexp(opts.word_regexp())

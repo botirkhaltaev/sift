@@ -17,22 +17,23 @@
 //! IndexStore::build(configs) -> snapshot with index artifacts
 //! Indexes::open(sift_dir)  -> registry of opened indexes
 //! QueryPlanner::candidates -> intersect index candidate sets
-//! SearchQuery::run          -> regex scan over narrowed candidates
+//! Grep::run                 -> resolve candidates and scan matches
 //! ```
 //!
 //! **Walking:** [`WalkBuilder`] from the [`ignore`] crate.
 
 pub mod candidate;
 pub mod grep;
-pub use grep::GrepRun;
 mod index;
 pub mod query;
-pub mod search;
+
 pub(crate) mod walk;
 
 pub use candidate::Candidate;
+pub use grep::{CandidateIndexState, Grep, GrepCorpus, GrepQuery, GrepReport};
+pub use walk::discover_files;
 
-pub use search::{SearchError, SearchOutcome, SearchQuery};
+pub use grep::{GrepError, GrepOutcome};
 
 pub use ignore::{Walk, WalkBuilder};
 
@@ -68,7 +69,7 @@ pub enum Error {
     Index(#[from] IndexError),
 
     #[error(transparent)]
-    Search(#[from] SearchError),
+    Search(#[from] GrepError),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -91,7 +92,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::{CaseMode, SearchOptions, VisibilityConfig};
+    use crate::grep::{CaseMode, GrepOptions, VisibilityConfig};
     use std::fs;
     use tempfile::TempDir;
 
@@ -134,7 +135,9 @@ mod tests {
         let index = Index::NGram(tri);
 
         let pat = vec![r"let\s+x".to_string()];
-        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = GrepQuery::new(pat)
+            .expect("compile search")
+            .options(GrepOptions::default());
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), 1);
         assert!(hits[0].file.ends_with("src/lib.rs"));
@@ -153,8 +156,8 @@ mod tests {
         let index = build_index_in_tmp(&tmp, &corpus);
 
         let pat = vec!["beta".to_string()];
-        let opts = SearchOptions::default();
-        let q = SearchQuery::new(&pat, opts).expect("compile search");
+        let opts = GrepOptions::default();
+        let q = GrepQuery::new(pat).expect("compile search").options(opts);
         let naive = q.collect_walk_matches(&corpus).expect("walk search");
         let hits = q.collect_index_matches(&index).expect("index search");
         assert_eq!(hits, naive);
@@ -184,7 +187,9 @@ mod tests {
         let index = Index::NGram(tri);
 
         let pat = vec!["needle".to_string()];
-        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = GrepQuery::new(pat)
+            .expect("compile search")
+            .options(GrepOptions::default());
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), n_files);
     }
@@ -200,7 +205,9 @@ mod tests {
         let index = build_index_in_tmp(&tmp, &corpus);
 
         let pat = vec!["one".to_string(), "three".to_string()];
-        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = GrepQuery::new(pat)
+            .expect("compile search")
+            .options(GrepOptions::default());
         let mut from_index = q.collect_index_matches(&index).expect("index search");
         let mut from_walk = q.collect_walk_matches(&corpus).expect("walk search");
         from_index.sort_by(|a, b| (&a.file, a.line, &a.text).cmp(&(&b.file, b.line, &b.text)));
@@ -218,7 +225,9 @@ mod tests {
         let index = build_index_in_tmp(&tmp, &corpus);
 
         let pat = vec!["hello".to_string(), "foo".to_string()];
-        let q = SearchQuery::new(&pat, SearchOptions::default()).expect("compile search");
+        let q = GrepQuery::new(pat)
+            .expect("compile search")
+            .options(GrepOptions::default());
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), 2);
     }
@@ -233,11 +242,11 @@ mod tests {
         let index = build_index_in_tmp(&tmp, &corpus);
 
         let pat = vec!["hello".to_string()];
-        let opts = SearchOptions {
+        let opts = GrepOptions {
             case_mode: CaseMode::Insensitive,
-            ..SearchOptions::default()
+            ..GrepOptions::default()
         };
-        let q = SearchQuery::new(&pat, opts).expect("compile search");
+        let q = GrepQuery::new(pat).expect("compile search").options(opts);
         let hits = q.collect_index_matches(&index).expect("search");
         assert_eq!(hits.len(), 1);
     }

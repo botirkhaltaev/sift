@@ -12,7 +12,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use sift_core::search::VisibilityConfig;
+use sift_core::grep::VisibilityConfig;
 use sift_core::{
     CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, NGramConfig, NGramIndex,
 };

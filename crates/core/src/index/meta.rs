@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::search::filter::{CandidateFilter, VisibilityConfig};
+use crate::grep::filter::{CandidateFilter, VisibilityConfig};
 
 use super::config::{CorpusKind, CorpusSpec, IndexBuildConfig, IndexWalkConfig};
 use super::{IndexConfig, IndexError};
@@ -172,7 +172,7 @@ impl StoreMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::filter::IgnoreConfig;
+    use crate::grep::filter::IgnoreConfig;
     use tempfile::TempDir;
 
     #[test]

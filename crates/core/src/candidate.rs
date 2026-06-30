@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::search::output::style::PathDisplay;
+use crate::grep::output::style::PathDisplay;
 
 /// A candidate file that might match a query.
 ///
@@ -126,7 +126,7 @@ impl Candidate {
 
     /// Check all configured filter rules: depth, filesize, and path-based rules.
     #[must_use]
-    pub fn matches(&self, filter: &crate::search::filter::CandidateFilter) -> bool {
+    pub fn matches(&self, filter: &crate::grep::filter::CandidateFilter) -> bool {
         self.within_depth(filter.max_depth())
             && self.within_filesize(filter.max_filesize())
             && filter.matches_candidate(self)

@@ -27,6 +27,6 @@ back each implemented row with `sift`-only golden tests. Do not spawn `rg` at ru
 ## Implementation Notes
 
 - Path display is resolved in CLI based on user-provided scopes only.
-- Core receives resolved `PathDisplay` through `SearchLineStyle`.
+- Core receives resolved `PathDisplay` through `GrepLineStyle`.
 - All output paths (standard, heading, summary) use `display_path_for_candidate()`.
 - No runtime `rg` dependency in tests; use `ripgrep/` clone as manual reference only.
