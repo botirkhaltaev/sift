@@ -11,7 +11,7 @@ use crate::grep::query::GrepQuery;
 use crate::grep::query::matcher::GrepMatcher;
 use crate::grep::sink::FileReporter;
 use crate::grep::sink::result::{ChunkOutput, FileResult};
-use crate::grep::sink::style::{ANSI_PATH, ANSI_RESET};
+use crate::grep::sink::style::ANSI_RESET;
 use crate::grep::stats::TextStatsCounters;
 use grep_matcher::Matcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
@@ -157,7 +157,7 @@ fn write_summary_record(
             let print_filename = output.lines.filename_mode != FilenameMode::Never;
             if print_filename {
                 if records.should_color() {
-                    out.extend_from_slice(ANSI_PATH);
+                    records.colors.path.write_start(out);
                 }
                 write!(out, "{display_path}")?;
                 if records.should_color() {
@@ -173,7 +173,7 @@ fn write_summary_record(
         GrepMode::FilesWithMatches => {
             if result.matched {
                 if records.should_color() {
-                    out.extend_from_slice(ANSI_PATH);
+                    records.colors.path.write_start(out);
                 }
                 write!(out, "{display_path}")?;
                 if records.should_color() {
@@ -188,7 +188,7 @@ fn write_summary_record(
                 return Ok(());
             }
             if records.should_color() {
-                out.extend_from_slice(ANSI_PATH);
+                records.colors.path.write_start(out);
             }
             write!(out, "{display_path}")?;
             if records.should_color() {
@@ -245,7 +245,7 @@ impl<'a> SummaryReporter<'a> {
         }
         let matched = result.is_success(self.output.mode);
         let mut bytes = Vec::new();
-        let _ = write_summary_record(&mut bytes, self.output, display, result);
+        let _ = write_summary_record(&mut bytes, self.output.clone(), display, result);
         if self.output.emission == OutputEmission::Quiet && result.is_success(self.output.mode) {
             stop.store(true, Ordering::SeqCst);
         }

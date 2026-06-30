@@ -16,7 +16,7 @@ pub enum GrepOutputFormat {
     Json,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GrepOutput {
     pub format: GrepOutputFormat,
     pub mode: GrepMode,
@@ -30,7 +30,7 @@ pub struct GrepOutput {
 impl GrepOutput {
     /// Whether search needs complete candidate coverage or only potential matches.
     #[must_use]
-    pub(crate) const fn candidate_requirement(self) -> CandidateRequirement {
+    pub(crate) const fn candidate_requirement(&self) -> CandidateRequirement {
         match self.mode {
             GrepMode::Count | GrepMode::FilesWithoutMatch => CandidateRequirement::Complete,
             GrepMode::CountMatches if matches!(self.include_zero, ZeroCountMode::Include) => {

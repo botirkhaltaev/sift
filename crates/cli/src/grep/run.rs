@@ -343,7 +343,9 @@ impl Grep {
         );
 
         let filename_ctx = Self::filename_context(&out, &sources, &session);
-        let output = out.to_core_output(&self.config.output, filename_ctx);
+        let output = out
+            .to_core_output(&self.config.output, filename_ctx)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let snapshot = Self::snapshot_validation(&session, daemon);
 
         let mut grep = CoreGrep::new(query)
