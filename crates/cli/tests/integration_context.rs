@@ -2,7 +2,9 @@
 
 mod common;
 
-use common::{TestProject, assert_success, normalize_stdout};
+use common::{
+    TestProject, assert_stderr_empty, assert_stdout_eq, assert_success, normalize_stdout,
+};
 
 #[test]
 fn context_c_shows_surrounding_lines() {
@@ -112,18 +114,26 @@ fn custom_context_separator_index_and_walk() {
         "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
     );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\n===\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    p.assert_index_walk_same(
-        &[
-            "-n",
-            "-C",
-            "1",
-            "--context-separator",
-            "===",
-            "match",
-            "t.txt",
-        ],
-        expected,
-    );
+    p.build_index();
+    let args = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "===",
+        "match",
+        "t.txt",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -134,10 +144,18 @@ fn no_context_separator_suppresses_break_line() {
         "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
     );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    p.assert_index_walk_same(
-        &["-n", "-C", "1", "--no-context-separator", "match", "t.txt"],
-        expected,
-    );
+    p.build_index();
+    let args = ["-n", "-C", "1", "--no-context-separator", "match", "t.txt"];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -148,10 +166,18 @@ fn context_separator_empty_string_prints_blank_line() {
         "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
     );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\n\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    p.assert_index_walk_same(
-        &["-n", "-C", "1", "--context-separator", "", "match", "t.txt"],
-        expected,
-    );
+    p.build_index();
+    let args = ["-n", "-C", "1", "--context-separator", "", "match", "t.txt"];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -162,18 +188,26 @@ fn context_separator_with_escape_sequences() {
         "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
     );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\n---\n---\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    p.assert_index_walk_same(
-        &[
-            "-n",
-            "-C",
-            "1",
-            "--context-separator",
-            "---\\n---",
-            "match",
-            "t.txt",
-        ],
-        expected,
-    );
+    p.build_index();
+    let args = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "---\\n---",
+        "match",
+        "t.txt",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 // ─── --field-match-separator ─────────────────────────────────────────────────
@@ -183,10 +217,18 @@ fn field_match_separator_index_and_walk() {
     let p = TestProject::new("field-match-sep");
     p.write("t.txt", "hello world\n");
     let expected = "t.txt=1=hello world\n";
-    p.assert_index_walk_same(
-        &["-n", "--field-match-separator", "=", "hello", "t.txt"],
-        expected,
-    );
+    p.build_index();
+    let args = ["-n", "--field-match-separator", "=", "hello", "t.txt"];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 // ─── --field-context-separator ───────────────────────────────────────────────
@@ -196,18 +238,26 @@ fn field_context_separator_index_and_walk() {
     let p = TestProject::new("field-ctx-sep");
     p.write("t.txt", "alpha\nbeta match\ngamma\n");
     let expected = "t.txt~1~alpha\nt.txt:2:beta match\nt.txt~3~gamma\n";
-    p.assert_index_walk_same(
-        &[
-            "-n",
-            "-C",
-            "1",
-            "--field-context-separator",
-            "~",
-            "match",
-            "t.txt",
-        ],
-        expected,
-    );
+    p.build_index();
+    let args = [
+        "-n",
+        "-C",
+        "1",
+        "--field-context-separator",
+        "~",
+        "match",
+        "t.txt",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -215,20 +265,28 @@ fn field_match_and_context_separator_combined() {
     let p = TestProject::new("field-both-sep");
     p.write("t.txt", "alpha\nbeta match\ngamma\n");
     let expected = "t.txt~1~alpha\nt.txt|2|beta match\nt.txt~3~gamma\n";
-    p.assert_index_walk_same(
-        &[
-            "-n",
-            "-C",
-            "1",
-            "--field-match-separator",
-            "|",
-            "--field-context-separator",
-            "~",
-            "match",
-            "t.txt",
-        ],
-        expected,
-    );
+    p.build_index();
+    let args = [
+        "-n",
+        "-C",
+        "1",
+        "--field-match-separator",
+        "|",
+        "--field-context-separator",
+        "~",
+        "match",
+        "t.txt",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -240,22 +298,30 @@ fn all_separator_flags_combined() {
     );
     let expected =
         "t.txt|1|m1 match\nt.txt~2~filler\n***\nt.txt~5~filler\nt.txt|6|m2 match\nt.txt~7~gamma\n";
-    p.assert_index_walk_same(
-        &[
-            "-n",
-            "-C",
-            "1",
-            "--context-separator",
-            "***",
-            "--field-match-separator",
-            "|",
-            "--field-context-separator",
-            "~",
-            "match",
-            "t.txt",
-        ],
-        expected,
-    );
+    p.build_index();
+    let args = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "***",
+        "--field-match-separator",
+        "|",
+        "--field-context-separator",
+        "~",
+        "match",
+        "t.txt",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
 
 #[test]
@@ -266,17 +332,25 @@ fn no_context_separator_overrides_context_separator() {
         "m1 match\nfiller\nfiller\nfiller\nfiller\nm2 match\n",
     );
     let expected = "t.txt:1:m1 match\nt.txt-2-filler\nt.txt-5-filler\nt.txt:6:m2 match\n";
-    p.assert_index_walk_same(
-        &[
-            "-n",
-            "-C",
-            "1",
-            "--context-separator",
-            "===",
-            "--no-context-separator",
-            "match",
-            "t.txt",
-        ],
-        expected,
-    );
+    p.build_index();
+    let args = [
+        "-n",
+        "-C",
+        "1",
+        "--context-separator",
+        "===",
+        "--no-context-separator",
+        "match",
+        "t.txt",
+    ];
+
+    let index = p.index_output(args);
+    assert_success(&index);
+    assert_stdout_eq(&index, expected);
+    assert_stderr_empty(&index);
+
+    let walk = p.walk_output(args);
+    assert_success(&walk);
+    assert_stdout_eq(&walk, expected);
+    assert_stderr_empty(&walk);
 }
