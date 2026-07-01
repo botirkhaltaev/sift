@@ -16,7 +16,8 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - Single compile path: `query.compile()` once, then `CandidatePolicyConfig::policy`
-- `CompiledQuery::match_input` for per-input matching; `CompiledQuery::report` / `Query::search` for library reports; `SearcherConfig::searcher` builds ripgrep searchers; `SearchPrinter::print` owns CLI formatting
+- `CompiledQuery::match_input` for per-input matching; `CompiledQuery::report` / `Query::search` for library reports; `SearchPrinter::print` returns `PrintOutcome`
+- Core `Stats` is search-only; CLI `OutputStats` adds `bytes_printed` for `--stats`
 - Query layer renames: `ResolutionStrategy`, `ResolutionConfig`, `ResolutionPlan`
 - Split `index/ngram/mod.rs` into focused submodules (config, index, lifecycle, literals, candidates)
 
