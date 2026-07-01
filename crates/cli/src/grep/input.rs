@@ -206,7 +206,7 @@ impl InputSources {
             }
         }
         for bytes in &self.stdin_bytes {
-            inputs.push_bytes(
+            inputs.push_explicit_bytes(
                 Cow::Owned(STDIN_DISPLAY_PATH.to_string()),
                 Cow::Owned(bytes.clone()),
                 None,

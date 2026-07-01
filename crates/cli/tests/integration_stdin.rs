@@ -4,7 +4,10 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
-use common::{TestProject, assert_exit_code, assert_stdout_eq, assert_success, normalize_stdout};
+use common::{
+    TestProject, assert_exit_code, assert_stderr_empty, assert_stdout_contains, assert_stdout_eq,
+    assert_stdout_not_contains, assert_success, normalize_stdout,
+};
 
 fn output_with_stdin<I, S>(mut cmd: Command, args: I, stdin: &[u8]) -> Output
 where
@@ -109,6 +112,28 @@ fn stdin_files_with_matches_prints_stdin_name() {
 
     assert_success(&out);
     assert_stdout_eq(&out, "<stdin>\n");
+}
+
+#[test]
+fn binary_stdin_reports_match_before_nul() {
+    let p = TestProject::new("stdin-binary-before-nul");
+    let out = output_with_stdin(p.sift(), ["findme"], b"findme\0later\n");
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "binary file matches");
+    assert_stdout_contains(&out, "found \"/0\" byte around offset 6");
+    assert_stdout_not_contains(&out, "findme");
+    assert_stderr_empty(&out);
+}
+
+#[test]
+fn binary_stdin_count_reports_match_before_nul() {
+    let p = TestProject::new("stdin-binary-count-before-nul");
+    let out = output_with_stdin(p.sift(), ["--count", "findme"], b"findme\0later\n");
+
+    assert_success(&out);
+    assert_stdout_eq(&out, "1\n");
+    assert_stderr_empty(&out);
 }
 
 #[test]

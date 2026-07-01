@@ -301,8 +301,9 @@ impl InputPrinter for AggregatePrinter<'_> {
                 path,
                 bytes: _,
                 candidate,
+                explicit,
             } => {
-                let result = self.search_summary(input);
+                let result = self.search_summary(input).explicit_binary(*explicit);
                 let display = candidate.map_or_else(
                     || path.to_string(),
                     |candidate| {

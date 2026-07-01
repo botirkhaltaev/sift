@@ -470,6 +470,7 @@ enum GrepTarget {
         display: String,
         hyperlink: String,
         hit: Option<PathBuf>,
+        explicit: bool,
     },
 }
 
@@ -496,8 +497,7 @@ impl GrepTarget {
 
     const fn explicit_file(&self) -> bool {
         match self {
-            Self::File { explicit, .. } => *explicit,
-            Self::Bytes { .. } => false,
+            Self::File { explicit, .. } | Self::Bytes { explicit, .. } => *explicit,
         }
     }
 }
@@ -683,6 +683,7 @@ impl InputPrinter for LinePrinter<'_> {
                 path,
                 bytes: _,
                 candidate,
+                explicit,
             } => {
                 let display = candidate.map_or_else(
                     || path.to_string(),
@@ -700,6 +701,7 @@ impl InputPrinter for LinePrinter<'_> {
                         hit: candidate
                             .filter(|_| self.collect_hits)
                             .map(|candidate| candidate.rel_path().to_path_buf()),
+                        explicit: *explicit,
                     },
                     stop,
                 )

@@ -12,6 +12,7 @@ pub enum Input<'a> {
         path: Cow<'a, str>,
         bytes: Cow<'a, [u8]>,
         candidate: Option<&'a Candidate>,
+        explicit: bool,
     },
 }
 
@@ -81,10 +82,30 @@ impl<'a> Inputs<'a> {
         bytes: Cow<'a, [u8]>,
         candidate: Option<&'a Candidate>,
     ) {
+        self.push_bytes_input(path, bytes, candidate, false);
+    }
+
+    pub fn push_explicit_bytes(
+        &mut self,
+        path: Cow<'a, str>,
+        bytes: Cow<'a, [u8]>,
+        candidate: Option<&'a Candidate>,
+    ) {
+        self.push_bytes_input(path, bytes, candidate, true);
+    }
+
+    fn push_bytes_input(
+        &mut self,
+        path: Cow<'a, str>,
+        bytes: Cow<'a, [u8]>,
+        candidate: Option<&'a Candidate>,
+        explicit: bool,
+    ) {
         self.items.push(Input::Bytes {
             path,
             bytes,
             candidate,
+            explicit,
         });
     }
 
