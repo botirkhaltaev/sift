@@ -36,11 +36,8 @@ fn bench_filter_type_defs_variants(g: &mut BenchmarkGroup<'_, WallTime>) {
             &argv,
             |b, argv| {
                 b.iter(|| {
-                    black_box(
-                        TypeCatalog::from_argv(&Argv::new(black_box(argv)))
-                            .unwrap()
-                            .into_definitions(),
-                    )
+                    let catalog = TypeCatalog::from_argv(&Argv::new(black_box(argv))).unwrap();
+                    black_box(catalog.definitions().len())
                 });
             },
         );
@@ -65,11 +62,8 @@ pub fn bench(c: &mut Criterion) {
         &argv_default,
         |b, argv| {
             b.iter(|| {
-                black_box(
-                    TypeCatalog::from_argv(&Argv::new(black_box(argv)))
-                        .unwrap()
-                        .into_definitions(),
-                )
+                let catalog = TypeCatalog::from_argv(&Argv::new(black_box(argv))).unwrap();
+                black_box(catalog.definitions().len())
             });
         },
     );
@@ -102,7 +96,21 @@ pub fn bench(c: &mut Criterion) {
         "1MB",
         "pattern",
     ]);
-    let argv_glob = crate::support::args(&["sift", "--glob-case-insensitive", "pattern"]);
+    let argv_glob = crate::support::args(&[
+        "sift",
+        "--glob-case-insensitive",
+        "-g",
+        "*.rs",
+        "-g",
+        "*.toml",
+        "-t",
+        "rust",
+        "--max-depth",
+        "10",
+        "--max-filesize",
+        "1MB",
+        "pattern",
+    ]);
     g.bench_function("candidate_config/with_glob_and_type", |b| {
         b.iter(|| {
             black_box(cli_glob.filter_config().candidate_config(

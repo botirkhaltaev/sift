@@ -83,16 +83,10 @@ pub struct GlobConfig {
     pub case_insensitive: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct TypeDef {
-    pub name: String,
-    pub globs: Vec<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeSelection {
-    Include(String),
-    Exclude(String),
+pub enum TypeFilterRule {
+    Include { name: String, globs: Vec<String> },
+    Exclude { name: String, globs: Vec<String> },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -104,9 +98,6 @@ pub struct CandidateFilterConfig {
     pub follow_links: bool,
     pub max_depth: Option<usize>,
     pub max_filesize: Option<u64>,
-    pub type_definitions: Vec<TypeDef>,
-    pub type_selections: Vec<TypeSelection>,
-    pub type_include: Vec<String>,
-    pub type_exclude: Vec<String>,
+    pub type_filters: Vec<TypeFilterRule>,
     pub one_file_system: bool,
 }

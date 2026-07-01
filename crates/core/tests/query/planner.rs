@@ -65,10 +65,7 @@ fn default_filter_config() -> CandidateFilterConfig {
         follow_links: false,
         max_depth: None,
         max_filesize: None,
-        type_definitions: Vec::new(),
-        type_selections: Vec::new(),
-        type_include: Vec::new(),
-        type_exclude: Vec::new(),
+        type_filters: Vec::new(),
         one_file_system: false,
     }
 }

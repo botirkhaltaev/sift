@@ -4,7 +4,7 @@ use std::str::FromStr;
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
 use ignore::types::TypesBuilder;
 use sift_core::grep::{
-    CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, TypeSelection, VisibilityConfig,
+    CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeFilterRule, VisibilityConfig,
 };
 use sift_core::grep::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
 
@@ -47,15 +47,8 @@ impl FilterConfig {
 
         let glob_ci = filter.glob_case_insensitive || !self.decl.iglob.is_empty();
 
-        let needs_type_defs = !self.decl.type_include.is_empty()
-            || !self.decl.type_exclude.is_empty()
-            || !self.decl.type_add.is_empty()
-            || !self.decl.type_clear.is_empty();
-        let type_definitions = if needs_type_defs {
-            TypeCatalog::from_argv(argv)?.into_definitions()
-        } else {
-            Vec::new()
-        };
+        let type_catalog = TypeCatalog::from_argv(argv)?;
+        let type_filters = type_catalog.filters(argv)?;
 
         Ok(CandidateFilterConfig {
             scopes,
@@ -83,10 +76,7 @@ impl FilterConfig {
             follow_links: self.follow_links,
             max_depth: self.decl.max_depth,
             max_filesize,
-            type_definitions,
-            type_selections: FilterDecl::type_selections(argv)?,
-            type_include: self.decl.type_include.clone(),
-            type_exclude: self.decl.type_exclude.clone(),
+            type_filters,
             one_file_system: self.one_file_system,
         })
     }
@@ -194,38 +184,6 @@ impl FilterDecl {
                 "unknown sort key '{other}': expected none, path, modified, accessed, or created"
             ),
         }
-    }
-
-    fn type_selections(argv: &Argv<'_>) -> anyhow::Result<Vec<TypeSelection>> {
-        let mut selections = Vec::new();
-        let mut iter = argv.as_slice().iter().skip(1);
-        while let Some(arg) = iter.next() {
-            if arg == "--" {
-                break;
-            }
-            if let Some(name) = arg.strip_prefix("--type=") {
-                selections.push(TypeSelection::Include(name.to_owned()));
-                continue;
-            }
-            if arg == "--type" || arg == "-t" {
-                let Some(name) = iter.next() else {
-                    anyhow::bail!("{arg} requires a file type");
-                };
-                selections.push(TypeSelection::Include(name.clone()));
-                continue;
-            }
-            if let Some(name) = arg.strip_prefix("--type-not=") {
-                selections.push(TypeSelection::Exclude(name.to_owned()));
-                continue;
-            }
-            if arg == "--type-not" || arg == "-T" {
-                let Some(name) = iter.next() else {
-                    anyhow::bail!("{arg} requires a file type");
-                };
-                selections.push(TypeSelection::Exclude(name.clone()));
-            }
-        }
-        Ok(selections)
     }
 }
 
@@ -355,6 +313,12 @@ pub struct TypeCatalog {
     defs: Vec<TypeDef>,
 }
 
+#[derive(Clone)]
+pub struct TypeDef {
+    name: String,
+    globs: Vec<String>,
+}
+
 impl TypeCatalog {
     fn builder() -> TypesBuilder {
         let mut builder = TypesBuilder::new();
@@ -419,14 +383,76 @@ impl TypeCatalog {
         Self { defs }
     }
 
-    #[must_use]
-    pub fn definitions(&self) -> &[TypeDef] {
-        &self.defs
+    /// Resolve ordered `-t` / `-T` filters against this catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a type flag is missing a value or references an unknown type.
+    pub fn filters(&self, argv: &Argv<'_>) -> anyhow::Result<Vec<TypeFilterRule>> {
+        let mut filters = Vec::new();
+        let mut iter = argv.as_slice().iter().skip(1);
+        while let Some(arg) = iter.next() {
+            if arg == "--" {
+                break;
+            }
+            if let Some(name) = arg.strip_prefix("--type=") {
+                filters.push(self.filter(name, false)?);
+                continue;
+            }
+            if arg == "--type" || arg == "-t" {
+                let Some(name) = iter.next() else {
+                    anyhow::bail!("{arg} requires a file type");
+                };
+                filters.push(self.filter(name, false)?);
+                continue;
+            }
+            if let Some(name) = arg.strip_prefix("--type-not=") {
+                filters.push(self.filter(name, true)?);
+                continue;
+            }
+            if arg == "--type-not" || arg == "-T" {
+                let Some(name) = iter.next() else {
+                    anyhow::bail!("{arg} requires a file type");
+                };
+                filters.push(self.filter(name, true)?);
+            }
+        }
+        Ok(filters)
+    }
+
+    fn filter(&self, name: &str, exclude: bool) -> anyhow::Result<TypeFilterRule> {
+        let globs = self.globs(name)?;
+        if exclude {
+            Ok(TypeFilterRule::Exclude {
+                name: name.to_string(),
+                globs,
+            })
+        } else {
+            Ok(TypeFilterRule::Include {
+                name: name.to_string(),
+                globs,
+            })
+        }
+    }
+
+    fn globs(&self, name: &str) -> anyhow::Result<Vec<String>> {
+        if name == "all" {
+            return Ok(self
+                .defs
+                .iter()
+                .flat_map(|def| def.globs.iter().cloned())
+                .collect());
+        }
+        self.defs
+            .iter()
+            .find(|def| def.name == name)
+            .map(|def| def.globs.clone())
+            .ok_or_else(|| anyhow::anyhow!("unknown file type: '{name}'"))
     }
 
     #[must_use]
-    pub fn into_definitions(self) -> Vec<TypeDef> {
-        self.defs
+    pub fn definitions(&self) -> &[TypeDef] {
+        &self.defs
     }
 
     /// Print sorted type definitions for `--type-list`.
@@ -493,21 +519,23 @@ mod tests {
 
     #[test]
     fn builtin_type_defs_contains_rust() {
-        let defs = catalog(&["sift"]).into_definitions();
+        let catalog = catalog(&["sift"]);
+        let defs = catalog.definitions();
         assert!(defs.iter().any(|d| d.name == "rust"));
     }
 
     #[test]
     fn builtin_type_defs_contains_python() {
-        let defs = catalog(&["sift"]).into_definitions();
+        let catalog = catalog(&["sift"]);
+        let defs = catalog.definitions();
         assert!(defs.iter().any(|d| d.name == "py"));
         assert!(defs.iter().any(|d| d.name == "python"));
     }
 
     #[test]
     fn builtin_type_defs_non_empty() {
-        let defs = catalog(&["sift"]).into_definitions();
-        assert!(!defs.is_empty());
+        let catalog = catalog(&["sift"]);
+        assert!(!catalog.definitions().is_empty());
     }
 
     #[test]
