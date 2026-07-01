@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::grep::candidates::CandidateOrder;
 use crate::grep::filter::CandidateFilter;
 use crate::grep::input::CandidateContent;
@@ -26,6 +28,7 @@ pub struct GrepCorpus<'a> {
     pub(crate) index_state: CandidateIndexState<'a>,
     pub(crate) order: CandidateOrder,
     pub(crate) content_source: Option<&'a dyn CandidateContentSource>,
+    pub(crate) explicit_files: &'a [PathBuf],
 }
 
 impl<'a> GrepCorpus<'a> {
@@ -41,6 +44,7 @@ impl<'a> GrepCorpus<'a> {
             index_state,
             order: CandidateOrder::default(),
             content_source: None,
+            explicit_files: &[],
         }
     }
 
@@ -53,6 +57,12 @@ impl<'a> GrepCorpus<'a> {
     #[must_use]
     pub fn content_source(mut self, source: Option<&'a dyn CandidateContentSource>) -> Self {
         self.content_source = source;
+        self
+    }
+
+    #[must_use]
+    pub const fn explicit_files(mut self, files: &'a [PathBuf]) -> Self {
+        self.explicit_files = files;
         self
     }
 }

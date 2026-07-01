@@ -332,6 +332,7 @@ impl Grep {
         let separators = self.config.output.separators();
         let print_stats = OutputConfig::print_stats(&output_argv, effective_mode);
         let snapshot = Self::snapshot_validation(&session, daemon);
+        let explicit_files = Self::explicit_files(&session);
 
         let mut grep = CoreGrep::new(query)
             .output(output)
@@ -351,6 +352,7 @@ impl Grep {
                     .as_ref()
                     .map(|source| source as &dyn sift_core::grep::CandidateContentSource),
             )
+            .explicit_files(&explicit_files)
             .order(self.config.candidate_order);
             grep = grep.corpus(corpus);
         }
@@ -413,6 +415,16 @@ impl Grep {
                     Err(_) => SnapshotValidation::Unvalidated,
                 },
             )
+    }
+
+    fn explicit_files(session: &GrepSession) -> Vec<PathBuf> {
+        session
+            .scope
+            .prefixes
+            .iter()
+            .filter(|prefix| session.scope.filter_root.join(prefix).is_file())
+            .cloned()
+            .collect()
     }
 }
 

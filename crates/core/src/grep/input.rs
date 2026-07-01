@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::path::PathBuf;
 
 use crate::Candidate;
 
@@ -17,6 +18,7 @@ pub struct GrepStream<'a> {
 pub(crate) enum GrepInput<'a> {
     Path {
         candidate: &'a Candidate,
+        explicit: bool,
     },
     Bytes {
         display_path: Cow<'a, str>,
@@ -29,7 +31,7 @@ impl GrepInput<'_> {
     #[must_use]
     pub(crate) fn bytes(&self) -> u64 {
         match self {
-            Self::Path { candidate } => candidate
+            Self::Path { candidate, .. } => candidate
                 .cached_size()
                 .unwrap_or_else(|| std::fs::metadata(candidate.abs_path()).map_or(0, |m| m.len())),
             Self::Bytes { bytes, .. } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
@@ -48,11 +50,16 @@ impl<'a> GrepInputs<'a> {
     }
 
     #[must_use]
-    pub(crate) fn from_candidates(candidates: &'a [Candidate]) -> Self {
+    pub(crate) fn from_candidates(candidates: &'a [Candidate], explicit_files: &[PathBuf]) -> Self {
         Self {
             inputs: candidates
                 .iter()
-                .map(|candidate| GrepInput::Path { candidate })
+                .map(|candidate| GrepInput::Path {
+                    candidate,
+                    explicit: explicit_files
+                        .iter()
+                        .any(|path| path == candidate.rel_path()),
+                })
                 .collect(),
         }
     }

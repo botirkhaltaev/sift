@@ -20,6 +20,7 @@ use grep_searcher::{Searcher, Sink, SinkMatch};
 pub struct FileSummary {
     pub matched: bool,
     pub count: usize,
+    pub binary_byte_offset: Option<u64>,
 }
 
 impl FileSummary {
@@ -52,6 +53,17 @@ impl FileSummary {
             GrepMode::FilesWithoutMatch | GrepMode::Standard | GrepMode::OnlyMatching => false,
         }
     }
+
+    #[must_use]
+    pub const fn explicit_binary(mut self, explicit: bool) -> Self {
+        if explicit && self.binary_byte_offset.is_some() {
+            self.matched = true;
+            if self.count == 0 {
+                self.count = 1;
+            }
+        }
+        self
+    }
 }
 
 pub struct SummarySink {
@@ -59,6 +71,7 @@ pub struct SummarySink {
     matcher: Option<GrepMatcher>,
     matched: bool,
     count: usize,
+    binary_byte_offset: Option<u64>,
 }
 
 impl SummarySink {
@@ -69,6 +82,7 @@ impl SummarySink {
             matcher,
             matched: false,
             count: 0,
+            binary_byte_offset: None,
         }
     }
 
@@ -77,6 +91,7 @@ impl SummarySink {
         FileSummary {
             matched: self.matched,
             count: self.count,
+            binary_byte_offset: self.binary_byte_offset,
         }
     }
 }
@@ -104,6 +119,16 @@ impl Sink for SummarySink {
             self.mode,
             GrepMode::Count | GrepMode::CountMatches
         ))
+    }
+
+    fn binary_data(
+        &mut self,
+        searcher: &Searcher,
+        binary_byte_offset: u64,
+    ) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
+        self.binary_byte_offset.get_or_insert(binary_byte_offset);
+        Ok(true)
     }
 }
 
@@ -272,13 +297,17 @@ impl FileReporter for SummaryReporter<'_> {
             };
         }
         match input {
-            GrepInput::Path { candidate } => {
+            GrepInput::Path {
+                candidate,
+                explicit,
+            } => {
                 let result = summary_search_file(
                     &mut self.searcher,
                     self.matcher,
                     self.output.mode,
                     candidate.abs_path(),
-                );
+                )
+                .explicit_binary(*explicit);
                 self.record(
                     &candidate.display_path(
                         self.output.lines.path_display,

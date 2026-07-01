@@ -139,7 +139,12 @@ impl<'a> Grep<'a> {
         if let Some(transformed) = transformed.as_deref() {
             inputs = GrepInputs::from_transformed(transformed);
         } else if !candidates.as_slice().is_empty() {
-            inputs = GrepInputs::from_candidates(candidates.as_slice());
+            inputs = GrepInputs::from_candidates(
+                candidates.as_slice(),
+                self.corpus
+                    .as_ref()
+                    .map_or(&[], |corpus| corpus.explicit_files),
+            );
         } else {
             inputs = GrepInputs::empty();
         }

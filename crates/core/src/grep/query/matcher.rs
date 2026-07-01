@@ -128,18 +128,7 @@ impl GrepQuery {
         } else {
             builder.line_terminator(Some(self.opts.line_terminator()));
         }
-        if self.opts.multiline() || self.opts.null_data() {
-            builder.ban_byte(None);
-        } else {
-            match self.opts.binary_mode {
-                BinaryMode::AsText => {
-                    builder.ban_byte(None);
-                }
-                _ => {
-                    builder.ban_byte(Some(b'\x00'));
-                }
-            }
-        }
+        builder.ban_byte(None);
         builder
             .build_many(&self.patterns)
             .map(GrepMatcher::Rust)

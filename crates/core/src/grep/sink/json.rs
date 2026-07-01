@@ -151,7 +151,7 @@ impl<'a> JsonReporter<'a> {
 impl FileReporter for JsonReporter<'_> {
     fn report(&mut self, input: &GrepInput<'_>, stop: &AtomicBool) -> FileResult {
         match input {
-            GrepInput::Path { candidate } => self.search_candidate_input(candidate, None, stop),
+            GrepInput::Path { candidate, .. } => self.search_candidate_input(candidate, None, stop),
             GrepInput::Bytes {
                 display_path,
                 bytes,

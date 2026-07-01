@@ -1,6 +1,9 @@
 mod common;
 
-use common::{TestProject, assert_stdout_contains, assert_success, normalize_stdout};
+use common::{
+    TestProject, assert_stderr_empty, assert_stdout_contains, assert_stdout_not_contains,
+    assert_success, normalize_stdout,
+};
 
 // ─── default (quit on NUL) ───────────────────────────────────────────────────
 
@@ -33,6 +36,21 @@ fn default_skips_binary_file_index() {
     let out = p.index_output(["match_here"]);
     assert_success(&out);
     assert_stdout_contains(&out, "text.txt");
+}
+
+#[test]
+fn default_recursive_suppresses_binary_match_before_nul() {
+    let p = TestProject::new("binary-default-recursive-before-nul");
+    p.write("binary.txt", b"findme\x00later\n");
+
+    let out = p.walk_output(["findme"]);
+    assert!(
+        !out.status.success(),
+        "recursive binary-only search should not match"
+    );
+    assert_stdout_not_contains(&out, "binary file matches");
+    assert_stdout_not_contains(&out, "findme");
+    assert_stderr_empty(&out);
 }
 
 // ─── -a / --text ─────────────────────────────────────────────────────────────
@@ -70,27 +88,93 @@ fn text_flag_finds_match_after_nul_walk() {
     assert_stdout_contains(&out, "findme");
 }
 
-// ─── --binary ────────────────────────────────────────────────────────────────
+// ─── --binary / explicit binary reporting ────────────────────────────────────
 
 #[test]
-fn binary_flag_continues_after_nul_walk() {
+fn binary_flag_reports_binary_match_walk() {
     let p = TestProject::new("binary-flag-walk");
     p.write("mixed.txt", b"findme\nmore\x00stuff\n");
 
     let out = p.walk_output(["--binary", "findme"]);
     assert_success(&out);
-    assert_stdout_contains(&out, "findme");
+    assert_stdout_contains(&out, "mixed.txt: binary file matches");
+    assert_stdout_contains(&out, "found \"/0\" byte around offset 11");
+    assert_stdout_not_contains(&out, "findme");
+    assert_stderr_empty(&out);
 }
 
 #[test]
-fn binary_flag_continues_after_nul_index() {
+fn binary_flag_reports_binary_match_index() {
     let p = TestProject::new("binary-flag-index");
     p.write("mixed.txt", b"findme\nmore\x00stuff\n");
     p.build_index();
 
     let out = p.index_output(["--binary", "findme"]);
     assert_success(&out);
-    assert_stdout_contains(&out, "findme");
+    assert_stdout_contains(&out, "mixed.txt: binary file matches");
+    assert_stdout_contains(&out, "found \"/0\" byte around offset 11");
+    assert_stdout_not_contains(&out, "findme");
+    assert_stderr_empty(&out);
+}
+
+#[test]
+fn explicit_binary_file_reports_match_before_nul() {
+    let p = TestProject::new("binary-explicit-file");
+    p.write("binary.txt", b"findme\x00later\n");
+
+    let out = p.walk_output(["findme", "binary.txt"]);
+    assert_success(&out);
+    assert_stdout_contains(&out, "binary file matches");
+    assert_stdout_contains(&out, "found \"/0\" byte around offset 6");
+    assert_stdout_not_contains(&out, "findme");
+    assert_stderr_empty(&out);
+}
+
+#[test]
+fn indexed_explicit_binary_file_reports_match_before_nul() {
+    let p = TestProject::new("binary-explicit-file-index");
+    p.write("binary.txt", b"findme\x00later\n");
+    p.build_index();
+
+    let out = p.index_output(["findme", "binary.txt"]);
+    assert_success(&out);
+    assert_stdout_contains(&out, "binary file matches");
+    assert_stdout_contains(&out, "found \"/0\" byte around offset 6");
+    assert_stdout_not_contains(&out, "findme");
+    assert_stderr_empty(&out);
+}
+
+#[test]
+fn no_messages_does_not_suppress_binary_match_output() {
+    let p = TestProject::new("binary-no-messages");
+    p.write("binary.txt", b"findme\x00later\n");
+
+    let out = p.walk_output(["--no-messages", "findme", "binary.txt"]);
+    assert_success(&out);
+    assert_stdout_contains(&out, "binary file matches");
+    assert_stderr_empty(&out);
+}
+
+#[test]
+fn count_reports_explicit_binary_match_before_nul() {
+    let p = TestProject::new("binary-count-explicit-file");
+    p.write("binary.txt", b"findme\x00later\n");
+
+    let out = p.walk_output(["-c", "findme", "binary.txt"]);
+    assert_success(&out);
+    assert_stdout_contains(&out, "1");
+    assert_stderr_empty(&out);
+}
+
+#[test]
+fn files_with_matches_reports_explicit_binary_match_before_nul() {
+    let p = TestProject::new("binary-files-explicit-file");
+    p.write("binary.txt", b"findme\x00later\n");
+
+    let out = p.walk_output(["-l", "findme", "binary.txt"]);
+    assert_success(&out);
+    assert_stdout_contains(&out, "binary.txt");
+    assert_stderr_empty(&out);
 }
 
 // ─── text overrides binary ───────────────────────────────────────────────────
