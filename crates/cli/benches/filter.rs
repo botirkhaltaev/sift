@@ -6,27 +6,42 @@ use std::hint::black_box;
 use std::str::FromStr;
 
 use sift_grep::Argv;
-use sift_grep::filter::{ByteSize, FilterDecl, TypeCatalog};
+use sift_grep::filter::{ByteSize, TypeCatalog};
 
 use crate::support::parse_cli;
 
 fn bench_filter_type_defs_variants(g: &mut BenchmarkGroup<'_, WallTime>) {
-    let decl_clear = FilterDecl {
-        type_clear: vec!["rust".into(), "py".into(), "js".into()],
-        ..Default::default()
-    };
-    let decl_add = FilterDecl {
-        type_add: vec!["mytype:*.my".into(), "rust:*.rsx".into()],
-        ..Default::default()
-    };
-
-    let type_cases = [("with_clear", &decl_clear), ("with_add", &decl_add)];
-    for (name, decl) in &type_cases {
+    for name in ["with_clear", "with_add"] {
+        let argv = match name {
+            "with_clear" => crate::support::args(&[
+                "sift",
+                "--type-clear",
+                "rust",
+                "--type-clear",
+                "py",
+                "--type-clear",
+                "js",
+            ]),
+            "with_add" => crate::support::args(&[
+                "sift",
+                "--type-add",
+                "mytype:*.my",
+                "--type-add",
+                "rust:*.rsx",
+            ]),
+            _ => unreachable!(),
+        };
         g.bench_with_input(
-            BenchmarkId::new("TypeCatalog::from_decl", *name),
-            decl,
-            |b, d| {
-                b.iter(|| black_box(TypeCatalog::from_decl(black_box(d)).into_definitions()));
+            BenchmarkId::new("TypeCatalog::from_argv", name),
+            &argv,
+            |b, argv| {
+                b.iter(|| {
+                    black_box(
+                        TypeCatalog::from_argv(&Argv::new(black_box(argv)))
+                            .unwrap()
+                            .into_definitions(),
+                    )
+                });
             },
         );
     }
@@ -44,12 +59,18 @@ pub fn bench(c: &mut Criterion) {
         });
     });
 
-    let decl_default = FilterDecl::default();
+    let argv_default = crate::support::args(&["sift"]);
     g.bench_with_input(
-        BenchmarkId::new("TypeCatalog::from_decl", "default"),
-        &decl_default,
-        |b, d| {
-            b.iter(|| black_box(TypeCatalog::from_decl(black_box(d)).into_definitions()));
+        BenchmarkId::new("TypeCatalog::from_argv", "default"),
+        &argv_default,
+        |b, argv| {
+            b.iter(|| {
+                black_box(
+                    TypeCatalog::from_argv(&Argv::new(black_box(argv)))
+                        .unwrap()
+                        .into_definitions(),
+                )
+            });
         },
     );
 

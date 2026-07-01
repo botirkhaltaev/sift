@@ -89,6 +89,12 @@ pub struct TypeDef {
     pub globs: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeSelection {
+    Include(String),
+    Exclude(String),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CandidateFilterConfig {
     pub scopes: Vec<PathBuf>,
@@ -99,6 +105,7 @@ pub struct CandidateFilterConfig {
     pub max_depth: Option<usize>,
     pub max_filesize: Option<u64>,
     pub type_definitions: Vec<TypeDef>,
+    pub type_selections: Vec<TypeSelection>,
     pub type_include: Vec<String>,
     pub type_exclude: Vec<String>,
     pub one_file_system: bool,

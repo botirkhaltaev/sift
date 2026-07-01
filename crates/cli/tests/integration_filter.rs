@@ -2,7 +2,10 @@ mod common;
 
 use std::process::Command;
 
-use common::{TestProject, assert_stderr_empty, assert_success, normalize_stdout};
+use common::{
+    TestProject, assert_exit_code, assert_stderr_empty, assert_success, normalize_stderr,
+    normalize_stdout,
+};
 
 // ─── --max-depth ─────────────────────────────────────────────────────────────
 
@@ -312,7 +315,8 @@ fn type_list_output() {
     let stdout = normalize_stdout(&out);
     assert!(stdout.contains("rust: *.rs"), "should list rust type");
     assert!(stdout.contains("py: *.py"), "should list py type");
-    assert!(stdout.contains("js: *.js"), "should list js type");
+    assert!(stdout.contains("js:"), "should list js type");
+    assert!(stdout.contains("*.js"), "js type should include *.js");
 }
 
 #[test]
@@ -352,6 +356,177 @@ fn type_clear_removes_builtin() {
         stdout.contains("py:"),
         "other types should still exist after clearing rust"
     );
+}
+
+#[test]
+fn type_clear_then_type_add_redefines_type() {
+    let out = Command::new(env!("CARGO_BIN_EXE_sift"))
+        .arg("--type-clear")
+        .arg("rust")
+        .arg("--type-add")
+        .arg("rust:*.rsx")
+        .arg("--type-list")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(
+        stdout.contains("rust: *.rsx"),
+        "later --type-add should redefine cleared rust type, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("rust: *.rs\n"),
+        "cleared built-in rust glob should not survive redefinition: {stdout}"
+    );
+}
+
+#[test]
+fn type_add_then_type_clear_removes_custom_type() {
+    let out = Command::new(env!("CARGO_BIN_EXE_sift"))
+        .arg("--type-add")
+        .arg("custom:*.custom")
+        .arg("--type-clear")
+        .arg("custom")
+        .arg("--type-list")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(
+        !stdout.contains("custom:"),
+        "later --type-clear should remove custom type, got: {stdout}"
+    );
+}
+
+#[test]
+fn type_add_include_unknown_type_errors() {
+    let out = Command::new(env!("CARGO_BIN_EXE_sift"))
+        .arg("--type-add")
+        .arg("combo:include:rust,notatype")
+        .arg("--type-list")
+        .output()
+        .unwrap();
+    assert_exit_code(&out, 2);
+    let stderr = normalize_stderr(&out);
+    assert!(
+        stderr.contains("invalid type definition 'combo:include:rust,notatype'"),
+        "expected invalid include diagnostic, got: {stderr}"
+    );
+}
+
+#[test]
+fn type_all_includes_known_file_types() {
+    let p = TestProject::new("type-all-include");
+    p.write("src.rs", "hello\n");
+    p.write("script.py", "hello\n");
+    p.write("data.unknownext", "hello\n");
+
+    p.build_index();
+    let indexed = p.index_output(["-t", "all", "hello"]);
+    assert_success(&indexed);
+    let indexed_stdout = normalize_stdout(&indexed);
+    assert!(
+        indexed_stdout.contains("src.rs"),
+        "rust file should match -t all with index"
+    );
+    assert!(
+        indexed_stdout.contains("script.py"),
+        "python file should match -t all with index"
+    );
+    assert!(
+        !indexed_stdout.contains("data.unknownext"),
+        "unknown type should not match -t all with index"
+    );
+
+    let out = p.walk_output(["-t", "all", "hello"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(stdout.contains("src.rs"), "rust file should match -t all");
+    assert!(
+        stdout.contains("script.py"),
+        "python file should match -t all"
+    );
+    assert!(
+        !stdout.contains("data.unknownext"),
+        "unknown type should not match -t all"
+    );
+}
+
+#[test]
+fn type_not_all_excludes_known_file_types() {
+    let p = TestProject::new("type-all-exclude");
+    p.write("src.rs", "hello\n");
+    p.write("script.py", "hello\n");
+    p.write("data.unknownext", "hello\n");
+
+    p.build_index();
+    let indexed = p.index_output(["-T", "all", "hello"]);
+    assert_success(&indexed);
+    let indexed_stdout = normalize_stdout(&indexed);
+    assert!(
+        !indexed_stdout.contains("src.rs"),
+        "rust file should be excluded by -T all with index"
+    );
+    assert!(
+        !indexed_stdout.contains("script.py"),
+        "python file should be excluded by -T all with index"
+    );
+    assert!(
+        indexed_stdout.contains("data.unknownext"),
+        "unknown type should remain searchable with -T all with index"
+    );
+
+    let out = p.walk_output(["-T", "all", "hello"]);
+    assert_success(&out);
+    let stdout = normalize_stdout(&out);
+    assert!(
+        !stdout.contains("src.rs"),
+        "rust file should be excluded by -T all"
+    );
+    assert!(
+        !stdout.contains("script.py"),
+        "python file should be excluded by -T all"
+    );
+    assert!(
+        stdout.contains("data.unknownext"),
+        "unknown type should remain searchable with -T all"
+    );
+}
+
+#[test]
+fn later_type_include_overrides_type_exclude() {
+    let p = TestProject::new("type-order-include");
+    p.write("a.rs", "hello\n");
+    p.write("b.py", "hello\n");
+
+    p.build_index();
+    let indexed = p.index_output(["-T", "rust", "-t", "rust", "hello"]);
+    assert_success(&indexed);
+    let indexed_stdout = normalize_stdout(&indexed);
+    assert!(indexed_stdout.contains("a.rs"));
+    assert!(!indexed_stdout.contains("b.py"));
+
+    let walked = p.walk_output(["-T", "rust", "-t", "rust", "hello"]);
+    assert_success(&walked);
+    let walked_stdout = normalize_stdout(&walked);
+    assert!(walked_stdout.contains("a.rs"));
+    assert!(!walked_stdout.contains("b.py"));
+}
+
+#[test]
+fn later_type_exclude_overrides_type_include() {
+    let p = TestProject::new("type-order-exclude");
+    p.write("a.rs", "hello\n");
+    p.write("b.py", "hello\n");
+
+    p.build_index();
+    let indexed = p.index_output(["-t", "rust", "-T", "rust", "hello"]);
+    assert_exit_code(&indexed, 1);
+    assert_stderr_empty(&indexed);
+
+    let walked = p.walk_output(["-t", "rust", "-T", "rust", "hello"]);
+    assert_exit_code(&walked, 1);
+    assert_stderr_empty(&walked);
 }
 
 // ─── --sort ──────────────────────────────────────────────────────────────────

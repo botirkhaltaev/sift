@@ -29,7 +29,7 @@ pub use corpus::{CandidateContentSource, CandidateIndexState, GrepCorpus};
 pub use error::GrepError;
 pub use filter::{
     CandidateFilter, CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    TypeDef, VisibilityConfig,
+    TypeDef, TypeSelection, VisibilityConfig,
 };
 pub use input::{CandidateContent, GrepStream};
 pub use options::{

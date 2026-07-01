@@ -250,8 +250,16 @@ impl Cli {
         }
 
         if self.filter_decl.type_list {
-            TypeCatalog::from_decl(&self.filter_decl).print_list();
-            return ExitCode::SUCCESS;
+            return match TypeCatalog::from_argv(argv) {
+                Ok(catalog) => {
+                    catalog.print_list();
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("sift: {e}");
+                    ExitCode::from(2)
+                }
+            };
         }
 
         match self.command {

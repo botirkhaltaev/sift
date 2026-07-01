@@ -14,7 +14,7 @@ use ::ignore::overrides::{Override, OverrideBuilder};
 
 pub use config::{
     CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, TypeDef,
-    VisibilityConfig,
+    TypeSelection, VisibilityConfig,
 };
 
 #[derive(Debug)]
