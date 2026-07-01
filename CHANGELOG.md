@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0](https://github.com/botirk38/sift/releases/tag/v0.7.0) — 2026-07-01
+
+### Breaking
+
+- Grep entity APIs: `CompiledQuery::report` replaces internal `search_inputs` and `Query::search_with`; `SearcherConfig::searcher` replaces `Query::build_searcher`; `CandidatePolicyConfig::policy` replaces `CandidatePolicy::from_compiled`
+- Grep architecture revamp: rename core types (`Session`, `Query`, `Report`, `Inputs`, `CandidatePolicy`, `MatchOptions`, …) and remove legacy adapters (`GrepContext`, `ResolvedGrep`, `GrepInput`, `Stream`, `PreparedFile`, `ScanSummary`)
+- `Query` owns `candidates(session, policy)` and `search(inputs, stats_mode)`; `Session` is data-only
+- CLI orchestration renamed (`Run`, `RunConfig`, `InputSources`, `SearchPrinter`, `PrintSpec`, `PrintExtras`)
+- Replace bool-bag policy/request pairs with typed enums (`CorpusState`, `IndexFallback`, `StatsMode`)
+- Split core into layered modules: `index/`, `grep/` (public search API), internal `corpus/` and `query/`
+
+### Refactor
+
+- Single compile path: `query.compile()` once, then `CandidatePolicyConfig::policy`
+- `CompiledQuery::match_input` for per-input matching; `CompiledQuery::report` / `Query::search` for library reports; `SearcherConfig::searcher` builds ripgrep searchers; `SearchPrinter::print` owns CLI formatting
+- Query layer renames: `ResolutionStrategy`, `ResolutionConfig`, `ResolutionPlan`
+- Split `index/ngram/mod.rs` into focused submodules (config, index, lifecycle, literals, candidates)
+
 ## [0.6.0](https://github.com/botirk38/sift/releases/tag/v0.6.0) — 2026-06-24
 
 ### Breaking

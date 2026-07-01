@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion};
 use std::hint::black_box;
 
-use sift_core::grep::{GrepMode, GrepOutputFormat};
 use sift_grep::Argv;
-use sift_grep::output::{FilenameContext, OutputArgv, OutputConfig};
+use sift_grep::format::{PrintFormat, PrintMode};
+use sift_grep::output::{FilenameContext, OutputArgv, OutputDecl};
 use sift_grep::pattern::PatternArgv;
 
 use crate::support::{args, parse_cli};
@@ -39,13 +39,16 @@ pub fn bench(c: &mut Criterion) {
 
     let cli_default = parse_cli(&["pattern"]);
     let argv_default = args(&["sift", "pattern"]);
-    g.bench_function("GrepOutput/default", |b| {
+    g.bench_function("PrintSpec/default", |b| {
         b.iter(|| {
-            let output = cli_default.grep_config().output;
+            let output = cli_default
+                .run_config(&Argv::new(&argv_default))
+                .unwrap()
+                .output;
             let output_argv = OutputArgv::resolve(&Argv::new(black_box(&argv_default)));
-            black_box(output.grep_output(
+            black_box(output.print_spec(
                 &output_argv,
-                GrepMode::Standard,
+                PrintMode::Standard,
                 false,
                 None,
                 FilenameContext::DirectoryCorpus,
@@ -53,13 +56,11 @@ pub fn bench(c: &mut Criterion) {
         });
     });
 
-    g.bench_function("GrepOutput/format_json", |b| {
+    g.bench_function("PrintSpec/format_json", |b| {
         let argv = args(&["sift", "--json", "pattern"]);
         b.iter(|| {
             let output_argv = OutputArgv::resolve(&Argv::new(black_box(&argv)));
-            black_box(
-                OutputConfig::format(&output_argv, GrepMode::Standard) == GrepOutputFormat::Json,
-            )
+            black_box(OutputDecl::format(&output_argv, PrintMode::Standard) == PrintFormat::Json)
         });
     });
 

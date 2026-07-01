@@ -1,35 +1,44 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use crate::Candidate;
+use crate::corpus::Candidate;
 
-#[derive(Clone)]
-pub struct CandidateContent {
-    pub candidate: Candidate,
-    pub bytes: Vec<u8>,
-}
-
-#[derive(Clone, Copy)]
-pub struct GrepStream<'a> {
-    pub display_path: &'a str,
-    pub bytes: &'a [u8],
-}
-
-pub(crate) enum GrepInput<'a> {
+pub enum Input<'a> {
     Path {
         candidate: &'a Candidate,
         explicit: bool,
     },
     Bytes {
-        display_path: Cow<'a, str>,
+        path: Cow<'a, str>,
         bytes: Cow<'a, [u8]>,
         candidate: Option<&'a Candidate>,
     },
 }
 
-impl GrepInput<'_> {
+impl Input<'_> {
+    /// Display path for matching and optional corpus rel-path for hit tracking.
     #[must_use]
-    pub(crate) fn bytes(&self) -> u64 {
+    pub fn paths(&self) -> (PathBuf, Option<PathBuf>) {
+        match self {
+            Self::Path { candidate, .. } => (
+                candidate.abs_path().to_path_buf(),
+                Some(candidate.rel_path().to_path_buf()),
+            ),
+            Self::Bytes {
+                path, candidate, ..
+            } => {
+                let display = candidate.map_or_else(
+                    || PathBuf::from(path.as_ref()),
+                    |c| c.abs_path().to_path_buf(),
+                );
+                let hit = candidate.map(|c| c.rel_path().to_path_buf());
+                (display, hit)
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn byte_len(&self) -> u64 {
         match self {
             Self::Path { candidate, .. } => candidate
                 .cached_size()
@@ -39,71 +48,63 @@ impl GrepInput<'_> {
     }
 }
 
-pub(crate) struct GrepInputs<'a> {
-    inputs: Vec<GrepInput<'a>>,
+pub struct Inputs<'a> {
+    items: Vec<Input<'a>>,
 }
 
-impl<'a> GrepInputs<'a> {
+impl<'a> Inputs<'a> {
     #[must_use]
-    pub(crate) const fn empty() -> Self {
-        Self { inputs: Vec::new() }
-    }
-
-    #[must_use]
-    pub(crate) fn from_candidates(candidates: &'a [Candidate], explicit_files: &[PathBuf]) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            inputs: candidates
-                .iter()
-                .map(|candidate| GrepInput::Path {
-                    candidate,
-                    explicit: explicit_files
-                        .iter()
-                        .any(|path| path == candidate.rel_path()),
-                })
-                .collect(),
+            items: Vec::with_capacity(capacity),
         }
     }
 
-    #[must_use]
-    pub(crate) fn from_transformed(contents: &'a [CandidateContent]) -> Self {
-        Self {
-            inputs: contents
-                .iter()
-                .map(|content| GrepInput::Bytes {
-                    display_path: Cow::Borrowed(""),
-                    bytes: Cow::Borrowed(content.bytes.as_slice()),
-                    candidate: Some(&content.candidate),
-                })
-                .collect(),
-        }
+    pub fn push_path(&mut self, candidate: &'a Candidate) {
+        self.push_candidate(candidate, false);
     }
 
-    pub(crate) fn push_streams(&mut self, streams: &'a [GrepStream<'a>]) {
-        self.inputs
-            .extend(streams.iter().map(|stream| GrepInput::Bytes {
-                display_path: Cow::Borrowed(stream.display_path),
-                bytes: Cow::Borrowed(stream.bytes),
-                candidate: None,
-            }));
+    pub fn push_explicit_path(&mut self, candidate: &'a Candidate) {
+        self.push_candidate(candidate, true);
     }
 
-    #[must_use]
-    pub(crate) const fn is_empty(&self) -> bool {
-        self.inputs.is_empty()
+    fn push_candidate(&mut self, candidate: &'a Candidate, explicit: bool) {
+        self.items.push(Input::Path {
+            candidate,
+            explicit,
+        });
     }
 
-    #[must_use]
-    pub(crate) const fn len(&self) -> usize {
-        self.inputs.len()
+    pub fn push_bytes(
+        &mut self,
+        path: Cow<'a, str>,
+        bytes: Cow<'a, [u8]>,
+        candidate: Option<&'a Candidate>,
+    ) {
+        self.items.push(Input::Bytes {
+            path,
+            bytes,
+            candidate,
+        });
     }
 
     #[must_use]
-    pub(crate) fn byte_count(&self) -> u64 {
-        self.inputs.iter().map(GrepInput::bytes).sum()
+    pub const fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 
     #[must_use]
-    pub(crate) fn as_slice(&self) -> &[GrepInput<'a>] {
-        &self.inputs
+    pub const fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    #[must_use]
+    pub fn byte_count(&self) -> u64 {
+        self.items.iter().map(Input::byte_len).sum()
+    }
+
+    #[must_use]
+    pub fn as_slice(&self) -> &[Input<'_>] {
+        &self.items
     }
 }

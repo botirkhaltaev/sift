@@ -19,6 +19,7 @@ struct MemorySnapshotData {
 }
 
 impl MemorySnapshotStore {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             snapshots: BTreeMap::new(),

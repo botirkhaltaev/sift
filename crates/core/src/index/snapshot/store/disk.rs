@@ -18,6 +18,11 @@ pub struct DiskSnapshotStore {
 }
 
 impl DiskSnapshotStore {
+    /// Open a disk-backed snapshot store at `dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `CURRENT` exists but cannot be read.
     pub fn open(dir: &Path) -> crate::Result<Self> {
         let current_path = dir.join(CURRENT_FILE);
         let current_id = if current_path.exists() {
@@ -32,6 +37,10 @@ impl DiskSnapshotStore {
     }
 
     /// Read `CURRENT` from disk afresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `CURRENT` exists but cannot be read.
     pub fn read_current_id(dir: &Path) -> crate::Result<Option<String>> {
         let current_path = dir.join(CURRENT_FILE);
         if current_path.exists() {
@@ -41,10 +50,12 @@ impl DiskSnapshotStore {
         }
     }
 
+    #[must_use]
     pub fn leases_dir(&self) -> PathBuf {
         self.dir.join(super::super::lease::LEASES_DIR)
     }
 
+    #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -76,6 +87,11 @@ impl DiskSnapshotStore {
         format!("{:010x}-{:08x}", d.as_secs(), d.subsec_nanos())
     }
 
+    /// Collect snapshot IDs referenced by non-stale lease files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a lease directory entry cannot be read.
     pub fn active_lease_ids(dir: &Path) -> crate::Result<Vec<String>> {
         let leases_dir = dir.join(super::super::lease::LEASES_DIR);
         let Ok(entries) = std::fs::read_dir(&leases_dir) else {

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::grep::filter::VisibilityConfig;
+use crate::corpus::filter::VisibilityConfig;
 
 /// Whether the index was built from a directory or a single file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

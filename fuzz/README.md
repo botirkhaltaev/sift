@@ -1,6 +1,6 @@
 # Fuzz
 
-LibFuzzer targets for `sift-core`. Exercises `GrepQuery`, indexed grep execution, and `PatternCompiler`.
+LibFuzzer targets for `sift-core`. Exercises `Query`, indexed search, and `PatternCompiler`.
 
 ## Setup
 
@@ -28,7 +28,7 @@ cd fuzz && cargo fuzz run search_usage -- -max_total_time=30
 
 | Target | Description |
 |--------|-------------|
-| `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `GrepOptions` into `GrepQuery::new` then `Grep::run` |
+| `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `MatchOptions` via `Query::candidates` / `Query::search` |
 | `compile_only` | Fuzzes `PatternCompiler` only (no filesystem) |
 
 ## Layout

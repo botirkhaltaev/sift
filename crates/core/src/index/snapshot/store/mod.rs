@@ -10,12 +10,24 @@ use super::manifest::SnapshotManifest;
 /// A readable snapshot with access to its manifest and named artifacts.
 pub trait SnapshotRead {
     fn manifest(&self) -> &SnapshotManifest;
+
+    /// Load a named artifact from the snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the namespace or artifact is missing, or I/O/mmap fails.
     fn artifact(&self, namespace: &str, name: &str) -> crate::Result<ArtifactData>;
 }
 
 /// A writable snapshot transaction that accepts named byte artifacts.
 pub trait SnapshotWrite {
     fn id(&self) -> &SnapshotId;
+
+    /// Store a named artifact in the in-progress snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the artifact cannot be written.
     fn put_artifact(&mut self, namespace: &str, name: &str, bytes: Vec<u8>) -> crate::Result<()>;
 }
 
@@ -26,8 +38,25 @@ pub trait SnapshotWriterSession {
     type Read: SnapshotRead;
     type Write: SnapshotWrite;
 
+    /// Open the current snapshot for reading within this writer session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current snapshot cannot be opened or leased.
     fn current(&self) -> crate::Result<Option<Self::Read>>;
+
+    /// Begin a new in-progress snapshot write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write transaction cannot be started.
     fn begin(&mut self) -> crate::Result<Self::Write>;
+
+    /// Commit `write` and make it the current snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if publishing the manifest or updating `CURRENT` fails.
     fn publish(
         &mut self,
         write: Self::Write,
@@ -47,6 +76,18 @@ pub trait SnapshotStore {
         Self: 'a;
 
     fn current_id(&self) -> Option<&SnapshotId>;
+
+    /// Open the current snapshot for reading.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current snapshot cannot be opened or leased.
     fn current(&self) -> crate::Result<Option<Self::Read>>;
+
+    /// Acquire exclusive write access to the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write lock cannot be acquired.
     fn writer(&mut self) -> crate::Result<Self::Writer<'_>>;
 }

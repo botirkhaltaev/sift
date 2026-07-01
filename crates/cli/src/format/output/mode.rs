@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GrepMode {
+pub enum PrintMode {
     #[default]
     Standard,
     OnlyMatching,

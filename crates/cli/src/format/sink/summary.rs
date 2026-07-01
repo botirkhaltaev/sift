@@ -1,20 +1,18 @@
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use crate::grep::GrepCollection;
-use crate::grep::input::GrepInput;
-use crate::grep::output::GrepOutput;
-use crate::grep::output::mode::{GrepMode, OutputEmission, ZeroCountMode};
-use crate::grep::output::style::FilenameMode;
-use crate::grep::query::GrepQuery;
-use crate::grep::query::matcher::GrepMatcher;
-use crate::grep::sink::FileReporter;
-use crate::grep::sink::result::{ChunkOutput, FileResult};
-use crate::grep::sink::style::ANSI_RESET;
-use crate::grep::stats::TextStatsCounters;
-use grep_matcher::Matcher;
+use crate::format::collection::PrintExtras;
+use crate::format::output::PrintSpec;
+use crate::format::output::mode::{OutputEmission, PrintMode, ZeroCountMode};
+use crate::format::output::style::FilenameMode;
+use crate::format::sink::InputPrinter;
+use crate::format::sink::result::{ChunkOutput, FileResult};
+use crate::format::sink::style::ANSI_RESET;
+use crate::format::stats::TextStatsCounters;
+use grep_matcher::Matcher as GrepMatcherTrait;
 use grep_searcher::{Searcher, Sink, SinkMatch};
+use sift_core::grep::{CompiledQuery, Input, Matcher, Query, SearcherConfig};
 
 #[derive(Clone, Copy)]
 pub struct FileSummary {
@@ -25,32 +23,32 @@ pub struct FileSummary {
 
 impl FileSummary {
     #[must_use]
-    pub fn tally(&self, mode: GrepMode) -> usize {
+    pub fn tally(&self, mode: PrintMode) -> usize {
         match mode {
-            GrepMode::Count | GrepMode::CountMatches => self.count,
-            GrepMode::FilesWithMatches => usize::from(self.matched),
-            GrepMode::FilesWithoutMatch => usize::from(!self.matched),
-            GrepMode::Standard | GrepMode::OnlyMatching => 0,
+            PrintMode::Count | PrintMode::CountMatches => self.count,
+            PrintMode::FilesWithMatches => usize::from(self.matched),
+            PrintMode::FilesWithoutMatch => usize::from(!self.matched),
+            PrintMode::Standard | PrintMode::OnlyMatching => 0,
         }
     }
 
     #[must_use]
-    pub const fn is_success(&self, mode: GrepMode) -> bool {
+    pub const fn is_success(&self, mode: PrintMode) -> bool {
         match mode {
-            GrepMode::Count | GrepMode::CountMatches => self.count > 0,
-            GrepMode::FilesWithMatches | GrepMode::Standard | GrepMode::OnlyMatching => {
+            PrintMode::Count | PrintMode::CountMatches => self.count > 0,
+            PrintMode::FilesWithMatches | PrintMode::Standard | PrintMode::OnlyMatching => {
                 self.matched
             }
-            GrepMode::FilesWithoutMatch => !self.matched,
+            PrintMode::FilesWithoutMatch => !self.matched,
         }
     }
 
     #[must_use]
-    pub const fn had_positive_hit(&self, mode: GrepMode) -> bool {
+    pub const fn had_positive_hit(&self, mode: PrintMode) -> bool {
         match mode {
-            GrepMode::Count | GrepMode::CountMatches => self.count > 0,
-            GrepMode::FilesWithMatches => self.matched,
-            GrepMode::FilesWithoutMatch | GrepMode::Standard | GrepMode::OnlyMatching => false,
+            PrintMode::Count | PrintMode::CountMatches => self.count > 0,
+            PrintMode::FilesWithMatches => self.matched,
+            PrintMode::FilesWithoutMatch | PrintMode::Standard | PrintMode::OnlyMatching => false,
         }
     }
 
@@ -67,8 +65,8 @@ impl FileSummary {
 }
 
 pub struct SummarySink {
-    mode: GrepMode,
-    matcher: Option<GrepMatcher>,
+    mode: PrintMode,
+    matcher: Option<Matcher>,
     matched: bool,
     count: usize,
     binary_byte_offset: Option<u64>,
@@ -76,7 +74,7 @@ pub struct SummarySink {
 
 impl SummarySink {
     #[must_use]
-    pub const fn new(mode: GrepMode, matcher: Option<GrepMatcher>) -> Self {
+    pub const fn new(mode: PrintMode, matcher: Option<Matcher>) -> Self {
         Self {
             mode,
             matcher,
@@ -102,7 +100,7 @@ impl Sink for SummarySink {
     fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         std::hint::black_box(searcher);
         self.matched = true;
-        if self.mode == GrepMode::CountMatches {
+        if self.mode == PrintMode::CountMatches {
             if let Some(ref matcher) = self.matcher {
                 let line = mat.bytes();
                 let mut n = 0;
@@ -117,7 +115,7 @@ impl Sink for SummarySink {
         }
         Ok(matches!(
             self.mode,
-            GrepMode::Count | GrepMode::CountMatches
+            PrintMode::Count | PrintMode::CountMatches
         ))
     }
 
@@ -132,41 +130,9 @@ impl Sink for SummarySink {
     }
 }
 
-fn summary_search_file(
-    searcher: &mut Searcher,
-    matcher: &GrepMatcher,
-    mode: GrepMode,
-    path: &Path,
-) -> FileSummary {
-    let sink_matcher = if mode == GrepMode::CountMatches {
-        Some(matcher.clone())
-    } else {
-        None
-    };
-    let mut sink = SummarySink::new(mode, sink_matcher);
-    let _ = searcher.search_path(matcher, path, &mut sink);
-    sink.finish()
-}
-
-fn summary_search_slice(
-    searcher: &mut Searcher,
-    matcher: &GrepMatcher,
-    mode: GrepMode,
-    bytes: &[u8],
-) -> FileSummary {
-    let sink_matcher = if mode == GrepMode::CountMatches {
-        Some(matcher.clone())
-    } else {
-        None
-    };
-    let mut sink = SummarySink::new(mode, sink_matcher);
-    let _ = searcher.search_slice(matcher, bytes, &mut sink);
-    sink.finish()
-}
-
 fn write_summary_record(
     out: &mut Vec<u8>,
-    output: GrepOutput,
+    output: PrintSpec,
     display_path: &str,
     result: FileSummary,
 ) -> io::Result<()> {
@@ -175,7 +141,7 @@ fn write_summary_record(
     }
     let records = output.records;
     match output.mode {
-        GrepMode::Count | GrepMode::CountMatches => {
+        PrintMode::Count | PrintMode::CountMatches => {
             if result.count == 0 && matches!(output.include_zero, ZeroCountMode::Omit) {
                 return Ok(());
             }
@@ -195,7 +161,7 @@ fn write_summary_record(
             records.terminator.write_to(out);
             Ok(())
         }
-        GrepMode::FilesWithMatches => {
+        PrintMode::FilesWithMatches => {
             if result.matched {
                 if records.should_color() {
                     records.colors.path.write_start(out);
@@ -208,7 +174,7 @@ fn write_summary_record(
             }
             Ok(())
         }
-        GrepMode::FilesWithoutMatch => {
+        PrintMode::FilesWithoutMatch => {
             if result.matched {
                 return Ok(());
             }
@@ -222,35 +188,54 @@ fn write_summary_record(
             records.terminator.write_to(out);
             Ok(())
         }
-        GrepMode::Standard | GrepMode::OnlyMatching => unreachable!(),
+        PrintMode::Standard | PrintMode::OnlyMatching => unreachable!(),
     }
 }
 
-pub(in crate::grep) struct SummaryReporter<'a> {
-    matcher: &'a GrepMatcher,
+pub(in crate::format) struct AggregatePrinter<'a> {
+    compiled: &'a CompiledQuery,
+    matcher: &'a Matcher,
     searcher: Searcher,
-    output: GrepOutput,
+    output: PrintSpec,
     summary_counter: Option<&'a AtomicUsize>,
     files_with_matches: Option<&'a AtomicUsize>,
     collect_hits: bool,
 }
 
-impl<'a> SummaryReporter<'a> {
-    pub(in crate::grep) fn new(
-        search: &'a GrepQuery,
-        matcher: &'a GrepMatcher,
-        output: GrepOutput,
+impl<'a> AggregatePrinter<'a> {
+    pub(in crate::format) fn new(
+        search: &'a Query,
+        compiled: &'a CompiledQuery,
+        output: PrintSpec,
         counters: &'a TextStatsCounters,
-        collect: GrepCollection,
+        collect: PrintExtras,
     ) -> Self {
         Self {
-            searcher: search.build_searcher(false, search.opts().max_results, false),
-            matcher,
+            compiled,
+            searcher: SearcherConfig {
+                line_numbers: false,
+                max_matches: search.opts().max_results,
+                include_context: false,
+            }
+            .searcher(search),
+            matcher: compiled.matcher(),
             output,
             summary_counter: counters.primary(),
             files_with_matches: counters.files_with_matches(),
-            collect_hits: collect.hits,
+            collect_hits: collect.collect_hits(),
         }
+    }
+
+    fn search_summary(&mut self, input: &Input<'_>) -> FileSummary {
+        let sink_matcher = if self.output.mode == PrintMode::CountMatches {
+            Some(self.matcher.clone())
+        } else {
+            None
+        };
+        let mut sink = SummarySink::new(self.output.mode, sink_matcher);
+        self.compiled
+            .match_input(input, &mut self.searcher, &mut sink);
+        sink.finish()
     }
 
     fn record(
@@ -287,8 +272,8 @@ impl<'a> SummaryReporter<'a> {
     }
 }
 
-impl FileReporter for SummaryReporter<'_> {
-    fn report(&mut self, input: &GrepInput<'_>, stop: &AtomicBool) -> FileResult {
+impl InputPrinter for AggregatePrinter<'_> {
+    fn report(&mut self, input: &Input<'_>, stop: &AtomicBool) -> FileResult {
         if stop.load(Ordering::SeqCst) {
             return FileResult {
                 output: ChunkOutput::empty(),
@@ -297,17 +282,11 @@ impl FileReporter for SummaryReporter<'_> {
             };
         }
         match input {
-            GrepInput::Path {
+            Input::Path {
                 candidate,
                 explicit,
             } => {
-                let result = summary_search_file(
-                    &mut self.searcher,
-                    self.matcher,
-                    self.output.mode,
-                    candidate.abs_path(),
-                )
-                .explicit_binary(*explicit);
+                let result = self.search_summary(input).explicit_binary(*explicit);
                 self.record(
                     &candidate.display_path(
                         self.output.lines.path_display,
@@ -318,15 +297,14 @@ impl FileReporter for SummaryReporter<'_> {
                     (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
                 )
             }
-            GrepInput::Bytes {
-                display_path,
-                bytes,
+            Input::Bytes {
+                path,
+                bytes: _,
                 candidate,
             } => {
-                let result =
-                    summary_search_slice(&mut self.searcher, self.matcher, self.output.mode, bytes);
+                let result = self.search_summary(input);
                 let display = candidate.map_or_else(
-                    || display_path.to_string(),
+                    || path.to_string(),
                     |candidate| {
                         candidate.display_path(
                             self.output.lines.path_display,

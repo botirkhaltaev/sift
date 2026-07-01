@@ -15,6 +15,11 @@ pub struct GramSet {
 }
 
 impl GramSet {
+    /// Build a gram set from strictly sorted unique grams.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `grams` is not sorted and unique.
     pub fn new(grams: Vec<Gram>) -> std::io::Result<Self> {
         let mut prev: Option<Gram> = None;
         for gram in &grams {
@@ -66,6 +71,11 @@ impl GramSet {
         Ok(())
     }
 
+    /// Decode a delta-varint encoded gram set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload is malformed or contains non-monotonic values.
     pub fn decode(width: GramWidth, bytes: &[u8]) -> std::io::Result<Self> {
         let mut out = Vec::new();
         let mut pos = 0usize;
@@ -106,6 +116,11 @@ pub struct GramSets {
 }
 
 impl GramSets {
+    /// Encode gram sets into the on-disk file format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if offsets overflow or per-set encoding fails.
     pub fn encode(width: GramWidth, sets: &[GramSet]) -> std::io::Result<Vec<u8>> {
         let count = sets.len();
         let offset_table_start = GRAMS_MAGIC.len() + 12;
@@ -146,17 +161,32 @@ impl GramSets {
         Ok(file_bytes)
     }
 
+    /// Write gram sets to a file and return a memory-mapped instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if encoding, writing, or reopening fails.
     pub fn create(path: &Path, width: GramWidth, sets: &[GramSet]) -> std::io::Result<Self> {
         let data = Self::encode(width, sets)?;
         std::fs::write(path, &data)?;
         Self::open(path, width)
     }
 
+    /// Open gram sets from a memory-mapped file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened or the format is invalid.
     pub fn open(path: &Path, width: GramWidth) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
         Self::from_artifact(ArtifactData::Mmap(mmap), width)
     }
 
+    /// Validate and wrap in-memory or mmap artifact bytes as gram sets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header or offset table is invalid.
     pub fn from_artifact(data: ArtifactData, width: GramWidth) -> std::io::Result<Self> {
         let bytes = data.as_ref();
         let (count, offset_table_start) = Self::validate(bytes, width)?;
@@ -225,6 +255,11 @@ impl GramSets {
         Ok((count, offset_table_start))
     }
 
+    /// Look up the gram set for `file_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `file_id` is out of bounds or the stored set is malformed.
     pub fn get(&self, file_id: usize) -> std::io::Result<GramSet> {
         if file_id >= self.count {
             return Err(std::io::Error::new(

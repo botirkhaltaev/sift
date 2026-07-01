@@ -9,18 +9,18 @@ use crate::grep::ignore::{
     IgnoreGlobalDecl, IgnoreMessagesDecl, IgnoreNoDecl, IgnoreParentDecl, IgnoreResolution,
     IgnoreVcsDecl, MessagesDecl, UnrestrictedDecl,
 };
-use crate::grep::input::ContentConfig;
-use crate::grep::output::OutputConfig;
+use crate::grep::input::ContentTransformConfig;
+use crate::grep::output::OutputDecl;
 use crate::grep::output::{
     ColumnDecl, ColumnsDecl, ExtraOutputDecl, FilenameDecl, HeadingDecl, JsonDecl, LineNumberDecl,
     NullColorDecl, ReplaceDecl, SeparatorDecl, StatsDecl,
 };
 use crate::grep::paths::PathArgs;
-use crate::grep::pattern::PatternConfig;
+use crate::grep::pattern::PatternDecl;
 use crate::grep::pattern::{
     BinaryDecl, GrepFlags, GrepScope, PatternArgs, RegexFlagsA, RegexFlagsB,
 };
-use crate::grep::run::{Grep, GrepCommand, GrepConfig, GrepOutcome};
+use crate::grep::run::{Run, RunConfig, RunMode, RunResult};
 use crate::index::{IndexExecution, IndexJob, IndexOperation, IndexRequest};
 use crate::update;
 
@@ -109,8 +109,8 @@ pub struct Cli {
 
 impl Cli {
     #[must_use]
-    pub fn pattern_config(&self) -> PatternConfig {
-        PatternConfig {
+    pub fn pattern_config(&self) -> PatternDecl {
+        PatternDecl {
             patterns: self.patterns.clone(),
             search_flags: self.search_flags.clone(),
             regex1: self.regex1.clone(),
@@ -134,8 +134,8 @@ impl Cli {
     }
 
     #[must_use]
-    fn output_config(&self, search_paths: &[PathBuf]) -> OutputConfig {
-        OutputConfig {
+    fn output_config(&self, search_paths: &[PathBuf]) -> OutputDecl {
+        OutputDecl {
             column: self.column_decl.clone(),
             columns: self.columns_decl.clone(),
             extra: self.extra_output.clone(),
@@ -151,10 +151,14 @@ impl Cli {
         }
     }
 
-    #[must_use]
-    pub fn grep_config(&self) -> GrepConfig {
+    /// Build a resolved run configuration from parsed CLI state and argv ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sort/order flags are invalid.
+    pub fn run_config(&self, argv: &Argv<'_>) -> Result<RunConfig, anyhow::Error> {
         let search_paths = self.search_scope.paths.clone();
-        GrepConfig {
+        Ok(RunConfig {
             pattern: self.pattern_config(),
             filter: self.filter_config(),
             output: self.output_config(&search_paths),
@@ -162,20 +166,20 @@ impl Cli {
             search_paths,
             threads: self.threading.threads,
             mode: if self.filter_decl.files {
-                GrepCommand::ListFiles
+                RunMode::ListFiles
             } else {
-                GrepCommand::Search
+                RunMode::Search
             },
-            content: ContentConfig {
+            content: ContentTransformConfig {
                 search_zip: self.engine_decl.content.search_zip,
                 pre: self.engine_decl.content.pre.clone(),
                 pre_globs: self.engine_decl.content.pre_glob.clone(),
             },
-            candidate_order: sift_core::grep::CandidateOrder::default(),
-        }
+            candidate_order: self.filter_decl.candidate_order(argv)?,
+        })
     }
 
-    fn into_grep(self, argv: &Argv<'_>) -> Result<Grep, anyhow::Error> {
+    fn into_run(self, argv: &Argv<'_>) -> Result<Run, anyhow::Error> {
         let search_paths = self.search_scope.paths;
         let replace_trim = self.replace_decl.trim;
         let max_count = self.paths.max_count;
@@ -190,14 +194,14 @@ impl Cli {
         let hostname_bin = self.engine_decl.hostname_bin.clone();
         let content = self.engine_decl.content.clone();
         let mode = if self.filter_decl.files {
-            GrepCommand::ListFiles
+            RunMode::ListFiles
         } else {
-            GrepCommand::Search
+            RunMode::Search
         };
         let candidate_order = self.filter_decl.candidate_order(argv)?;
 
-        Ok(Grep::new(GrepConfig {
-            pattern: PatternConfig {
+        Ok(Run::new(RunConfig {
+            pattern: PatternDecl {
                 patterns: self.patterns,
                 search_flags: self.search_flags,
                 regex1: self.regex1,
@@ -214,7 +218,7 @@ impl Cli {
                 follow_links,
                 one_file_system,
             },
-            output: OutputConfig {
+            output: OutputDecl {
                 column: self.column_decl,
                 columns: self.columns_decl,
                 extra: self.extra_output,
@@ -232,7 +236,7 @@ impl Cli {
             search_paths,
             threads,
             mode,
-            content: ContentConfig {
+            content: ContentTransformConfig {
                 search_zip: content.search_zip,
                 pre: content.pre,
                 pre_globs: content.pre_glob,
@@ -296,8 +300,8 @@ impl Cli {
             }
             None => {
                 let daemon = self.paths.daemon();
-                let grep = match self.into_grep(argv) {
-                    Ok(grep) => grep,
+                let run = match self.into_run(argv) {
+                    Ok(run) => run,
                     Err(e) => {
                         eprintln!("sift: {e}");
                         return ExitCode::from(2);
@@ -307,18 +311,18 @@ impl Cli {
                 let suppress_errors = IgnoreResolution::resolve(argv)
                     .msg_flags
                     .contains(MessageFlags::NO_MESSAGES);
-                Self::exit_from_grep(grep.run(argv, daemon.as_ref()), suppress_errors)
+                Self::exit_from_run(run.execute(argv, daemon.as_ref()), suppress_errors)
             }
         }
     }
 
-    fn exit_from_grep(
-        result: Result<GrepOutcome, anyhow::Error>,
+    fn exit_from_run(
+        result: Result<RunResult, anyhow::Error>,
         suppress_error_messages: bool,
     ) -> ExitCode {
         match result {
             Ok(outcome) if outcome.succeeded() => ExitCode::SUCCESS,
-            Ok(GrepOutcome::Files { .. } | GrepOutcome::Search { .. }) => ExitCode::from(1),
+            Ok(RunResult::Files { .. } | RunResult::Search { .. }) => ExitCode::from(1),
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>()
                     && ioe.kind() == std::io::ErrorKind::BrokenPipe

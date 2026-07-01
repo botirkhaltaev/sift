@@ -998,7 +998,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sift-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bitflags",
  "bstr",
@@ -1007,7 +1007,6 @@ dependencies = [
  "grep-cli",
  "grep-matcher",
  "grep-pcre2",
- "grep-printer",
  "grep-regex",
  "grep-searcher",
  "ignore",
@@ -1019,14 +1018,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "termcolor",
  "thiserror",
  "unsigned-varint",
 ]
 
 [[package]]
 name = "sift-grep"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -1035,7 +1033,11 @@ dependencies = [
  "fslock",
  "globset",
  "grep-cli",
+ "grep-matcher",
  "grep-pcre2",
+ "grep-printer",
+ "grep-regex",
+ "grep-searcher",
  "ignore",
  "interprocess",
  "notify",
@@ -1043,6 +1045,7 @@ dependencies = [
  "serde_json",
  "sift-core",
  "tempfile",
+ "termcolor",
  "thiserror",
 ]
 
