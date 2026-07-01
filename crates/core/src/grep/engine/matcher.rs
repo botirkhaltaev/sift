@@ -1,5 +1,6 @@
 use grep_matcher::{
-    Captures as GrepMatcherCaptures, LineTerminator, Match, Matcher as GrepMatcherTrait,
+    ByteSet, Captures as GrepMatcherCaptures, LineMatchKind, LineTerminator, Match,
+    Matcher as GrepMatcherTrait,
 };
 use grep_pcre2::{RegexMatcher as Pcre2Matcher, RegexMatcherBuilder as Pcre2MatcherBuilder};
 use grep_regex::{RegexCaptures, RegexMatcher, RegexMatcherBuilder};
@@ -48,6 +49,24 @@ impl GrepMatcherTrait for Matcher {
         }
     }
 
+    fn try_find_iter<F, E>(
+        &self,
+        haystack: &[u8],
+        on_match: F,
+    ) -> Result<Result<(), E>, Self::Error>
+    where
+        F: FnMut(Match) -> Result<bool, E>,
+    {
+        match self {
+            Self::Rust(matcher) => matcher
+                .try_find_iter(haystack, on_match)
+                .map_err(|e| e.to_string()),
+            Self::Pcre2(matcher) => matcher
+                .try_find_iter(haystack, on_match)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
     fn new_captures(&self) -> Result<Self::Captures, Self::Error> {
         match self {
             Self::Rust(matcher) => matcher
@@ -89,6 +108,42 @@ impl GrepMatcherTrait for Matcher {
                 .captures_at(haystack, at, captures)
                 .map_err(|e| e.to_string()),
             _ => Err("capture storage does not match regex engine".to_string()),
+        }
+    }
+
+    fn shortest_match_at(&self, haystack: &[u8], at: usize) -> Result<Option<usize>, Self::Error> {
+        match self {
+            Self::Rust(matcher) => matcher
+                .shortest_match_at(haystack, at)
+                .map_err(|e| e.to_string()),
+            Self::Pcre2(matcher) => matcher
+                .shortest_match_at(haystack, at)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    fn non_matching_bytes(&self) -> Option<&ByteSet> {
+        match self {
+            Self::Rust(matcher) => matcher.non_matching_bytes(),
+            Self::Pcre2(matcher) => matcher.non_matching_bytes(),
+        }
+    }
+
+    fn line_terminator(&self) -> Option<LineTerminator> {
+        match self {
+            Self::Rust(matcher) => matcher.line_terminator(),
+            Self::Pcre2(matcher) => matcher.line_terminator(),
+        }
+    }
+
+    fn find_candidate_line(&self, haystack: &[u8]) -> Result<Option<LineMatchKind>, Self::Error> {
+        match self {
+            Self::Rust(matcher) => matcher
+                .find_candidate_line(haystack)
+                .map_err(|e| e.to_string()),
+            Self::Pcre2(matcher) => matcher
+                .find_candidate_line(haystack)
+                .map_err(|e| e.to_string()),
         }
     }
 }
