@@ -183,6 +183,7 @@ impl InputSources {
         &self,
         candidates: &'a [Candidate],
         transform: Option<&ContentTransform>,
+        explicit_files: &[PathBuf],
     ) -> sift_core::Result<Inputs<'a>> {
         let mut inputs = Inputs::with_capacity(candidates.len() + self.stdin_bytes.len());
         for candidate in candidates {
@@ -194,11 +195,18 @@ impl InputSources {
                     Some(candidate),
                 );
             } else {
-                inputs.push_path(candidate);
+                let explicit = explicit_files
+                    .iter()
+                    .any(|path| path == candidate.rel_path());
+                if explicit {
+                    inputs.push_explicit_path(candidate);
+                } else {
+                    inputs.push_path(candidate);
+                }
             }
         }
         for bytes in &self.stdin_bytes {
-            inputs.push_bytes(
+            inputs.push_explicit_bytes(
                 Cow::Owned(STDIN_DISPLAY_PATH.to_string()),
                 Cow::Owned(bytes.clone()),
                 None,

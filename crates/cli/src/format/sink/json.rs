@@ -58,7 +58,7 @@ impl<'a> JsonPrinter<'a> {
         }
 
         let path = match input {
-            Input::Path { candidate } => candidate.abs_path(),
+            Input::Path { candidate, .. } => candidate.abs_path(),
             Input::Bytes { path, .. } => std::path::Path::new(path.as_ref()),
         };
 

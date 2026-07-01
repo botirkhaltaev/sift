@@ -27,7 +27,7 @@ impl CompiledQuery {
     ) {
         let matcher = self.matcher();
         match input {
-            Input::Path { candidate } => {
+            Input::Path { candidate, .. } => {
                 let _ = searcher.search_path(matcher, candidate.abs_path(), sink);
             }
             Input::Bytes { bytes, .. } => {

@@ -15,12 +15,13 @@ use crate::format::sink::style::ANSI_RESET;
 use crate::format::stats::TextStatsCounters;
 use grep_matcher::{Captures, Matcher as GrepMatcherTrait};
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
-use sift_core::grep::{CompiledQuery, Input, Matcher, Query, SearcherConfig};
+use sift_core::grep::{BinaryMode, CompiledQuery, Input, Matcher, Query, SearcherConfig};
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
     pub before_context: usize,
     pub after_context: usize,
+    pub binary_mode: BinaryMode,
 }
 
 pub struct StandardSink<'a> {
@@ -33,6 +34,8 @@ pub struct StandardSink<'a> {
     separators: &'a PrintSeparators,
     matched: bool,
     match_count: usize,
+    binary_byte_offset: Option<u64>,
+    binary_mode: BinaryMode,
     replace: Option<&'a str>,
     trim: bool,
     line_terminator: u8,
@@ -65,6 +68,8 @@ impl<'a> StandardSink<'a> {
             separators,
             matched: false,
             match_count: 0,
+            binary_byte_offset: None,
+            binary_mode: config.binary_mode,
             replace,
             trim: output.lines.trim(),
             line_terminator: b'\n',
@@ -94,6 +99,9 @@ impl Sink for StandardSink<'_> {
             self.output.mode,
             crate::format::output::mode::PrintMode::OnlyMatching
         ) {
+            if self.binary_mode == BinaryMode::Binary && self.binary_byte_offset.is_some() {
+                return Ok(true);
+            }
             return self.handle_only_matching(mat);
         }
 
@@ -103,6 +111,9 @@ impl Sink for StandardSink<'_> {
         }
 
         let col = self.compute_first_column(mat);
+        if self.binary_mode == BinaryMode::Binary && self.binary_byte_offset.is_some() {
+            return Ok(true);
+        }
         self.write_prefix(
             mat.line_number(),
             false,
@@ -191,6 +202,16 @@ impl Sink for StandardSink<'_> {
             self.bytes.write_all(sep)?;
             self.bytes.write_all(&[self.line_terminator])?;
         }
+        Ok(true)
+    }
+
+    fn binary_data(
+        &mut self,
+        searcher: &Searcher,
+        binary_byte_offset: u64,
+    ) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
+        self.binary_byte_offset.get_or_insert(binary_byte_offset);
         Ok(true)
     }
 }
@@ -443,11 +464,13 @@ enum GrepTarget {
         display: String,
         hyperlink: String,
         hit: Option<PathBuf>,
+        explicit: bool,
     },
     Bytes {
         display: String,
         hyperlink: String,
         hit: Option<PathBuf>,
+        explicit: bool,
     },
 }
 
@@ -469,6 +492,12 @@ impl GrepTarget {
             Self::File { hit, .. } if matched => hit,
             Self::Bytes { hit, .. } if matched => hit,
             Self::File { .. } | Self::Bytes { .. } => None,
+        }
+    }
+
+    const fn explicit_file(&self) -> bool {
+        match self {
+            Self::File { explicit, .. } | Self::Bytes { explicit, .. } => *explicit,
         }
     }
 }
@@ -500,6 +529,7 @@ impl<'a> LinePrinter<'a> {
             sink_config: SinkConfig {
                 before_context: search.opts().before_context,
                 after_context: search.opts().after_context,
+                binary_mode: search.opts().binary_mode,
             },
             records: output.records.clone(),
             lines_flags: output.lines.flags,
@@ -529,7 +559,7 @@ impl<'a> LinePrinter<'a> {
 
         let display = target.display().to_string();
 
-        let matched = {
+        let (sink_matched, binary_byte_offset) = {
             let heading = self.lines_flags.contains(LineStyleFlags::HEADING)
                 && self.filename_mode != FilenameMode::Never;
             let mut sink_output = self.output.clone();
@@ -553,16 +583,20 @@ impl<'a> LinePrinter<'a> {
             self.compiled
                 .match_input(input, &mut self.searcher, &mut sink);
             let n = sink.match_count;
+            let binary_byte_offset = sink.binary_byte_offset;
             if let Some(c) = self.match_counter {
                 c.fetch_add(n, Ordering::Relaxed);
             }
-            if sink.matched
-                && let Some(c) = self.files_with_matches
-            {
-                c.fetch_add(1, Ordering::Relaxed);
-            }
-            sink.matched
+            (sink.matched, binary_byte_offset)
         };
+
+        let binary_match = binary_byte_offset.is_some()
+            && (self.sink_config.binary_mode == BinaryMode::Binary
+                || (self.sink_config.binary_mode == BinaryMode::Quit && target.explicit_file()));
+        let matched = sink_matched || binary_match;
+        if matched && let Some(c) = self.files_with_matches {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
 
         if self.emission == OutputEmission::Quiet && matched {
             stop.store(true, Ordering::SeqCst);
@@ -570,7 +604,9 @@ impl<'a> LinePrinter<'a> {
 
         FileResult {
             output: ChunkOutput {
-                bytes: if matched
+                bytes: if matched && binary_byte_offset.is_some() {
+                    self.binary_output(binary_byte_offset, &display)
+                } else if matched
                     && self.lines_flags.contains(LineStyleFlags::HEADING)
                     && self.filename_mode != FilenameMode::Never
                     && self.emission != OutputEmission::Quiet
@@ -599,17 +635,47 @@ impl<'a> LinePrinter<'a> {
             hit: target.hit(matched),
         }
     }
+
+    fn binary_output(&mut self, offset: Option<u64>, display: &str) -> Vec<u8> {
+        let Some(offset) = offset else {
+            return std::mem::take(&mut self.bytes);
+        };
+        self.bytes.clear();
+        if self.emission == OutputEmission::Quiet {
+            return Vec::new();
+        }
+        if self.filename_mode != FilenameMode::Never {
+            if self.records.should_color() {
+                self.records.colors.path.write_start(&mut self.bytes);
+            }
+            let _ = write!(self.bytes, "{display}");
+            if self.records.should_color() {
+                self.bytes.extend_from_slice(ANSI_RESET);
+            }
+            self.bytes.extend_from_slice(b": ");
+        }
+        let _ = write!(
+            self.bytes,
+            "binary file matches (found \"\\0\" byte around offset {offset})"
+        );
+        self.records.terminator.write_to(&mut self.bytes);
+        std::mem::take(&mut self.bytes)
+    }
 }
 
 impl InputPrinter for LinePrinter<'_> {
     fn report(&mut self, input: &Input<'_>, stop: &AtomicBool) -> FileResult {
         match input {
-            Input::Path { candidate } => self.search_target(
+            Input::Path {
+                candidate,
+                explicit,
+            } => self.search_target(
                 input,
                 GrepTarget::File {
                     display: candidate.display_path(self.path_display, self.path_separator),
                     hyperlink: candidate.abs_path().display().to_string(),
                     hit: (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
+                    explicit: *explicit,
                 },
                 stop,
             ),
@@ -617,6 +683,7 @@ impl InputPrinter for LinePrinter<'_> {
                 path,
                 bytes: _,
                 candidate,
+                explicit,
             } => {
                 let display = candidate.map_or_else(
                     || path.to_string(),
@@ -634,6 +701,7 @@ impl InputPrinter for LinePrinter<'_> {
                         hit: candidate
                             .filter(|_| self.collect_hits)
                             .map(|candidate| candidate.rel_path().to_path_buf()),
+                        explicit: *explicit,
                     },
                     stop,
                 )

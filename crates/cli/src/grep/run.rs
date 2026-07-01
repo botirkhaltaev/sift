@@ -245,7 +245,11 @@ impl Run {
         };
 
         let inputs = sources
-            .build_inputs(&candidates, transform.as_ref())
+            .build_inputs(
+                &candidates,
+                transform.as_ref(),
+                &Self::explicit_files(&session),
+            )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let print_stats = OutputDecl::print_stats(&output_argv, effective_mode);
@@ -304,5 +308,15 @@ impl Run {
                 Ok(false) => SnapshotTrust::Stale,
                 Err(_) => SnapshotTrust::Unvalidated,
             })
+    }
+
+    fn explicit_files(session: &PreparedSession) -> Vec<PathBuf> {
+        session
+            .scope
+            .prefixes
+            .iter()
+            .filter(|prefix| session.scope.filter_root.join(prefix).is_file())
+            .cloned()
+            .collect()
     }
 }

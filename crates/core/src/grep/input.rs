@@ -6,11 +6,13 @@ use crate::corpus::Candidate;
 pub enum Input<'a> {
     Path {
         candidate: &'a Candidate,
+        explicit: bool,
     },
     Bytes {
         path: Cow<'a, str>,
         bytes: Cow<'a, [u8]>,
         candidate: Option<&'a Candidate>,
+        explicit: bool,
     },
 }
 
@@ -19,7 +21,7 @@ impl Input<'_> {
     #[must_use]
     pub fn paths(&self) -> (PathBuf, Option<PathBuf>) {
         match self {
-            Self::Path { candidate } => (
+            Self::Path { candidate, .. } => (
                 candidate.abs_path().to_path_buf(),
                 Some(candidate.rel_path().to_path_buf()),
             ),
@@ -39,7 +41,7 @@ impl Input<'_> {
     #[must_use]
     pub fn byte_len(&self) -> u64 {
         match self {
-            Self::Path { candidate } => candidate
+            Self::Path { candidate, .. } => candidate
                 .cached_size()
                 .unwrap_or_else(|| std::fs::metadata(candidate.abs_path()).map_or(0, |m| m.len())),
             Self::Bytes { bytes, .. } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
@@ -60,7 +62,18 @@ impl<'a> Inputs<'a> {
     }
 
     pub fn push_path(&mut self, candidate: &'a Candidate) {
-        self.items.push(Input::Path { candidate });
+        self.push_candidate(candidate, false);
+    }
+
+    pub fn push_explicit_path(&mut self, candidate: &'a Candidate) {
+        self.push_candidate(candidate, true);
+    }
+
+    fn push_candidate(&mut self, candidate: &'a Candidate, explicit: bool) {
+        self.items.push(Input::Path {
+            candidate,
+            explicit,
+        });
     }
 
     pub fn push_bytes(
@@ -69,10 +82,30 @@ impl<'a> Inputs<'a> {
         bytes: Cow<'a, [u8]>,
         candidate: Option<&'a Candidate>,
     ) {
+        self.push_bytes_input(path, bytes, candidate, false);
+    }
+
+    pub fn push_explicit_bytes(
+        &mut self,
+        path: Cow<'a, str>,
+        bytes: Cow<'a, [u8]>,
+        candidate: Option<&'a Candidate>,
+    ) {
+        self.push_bytes_input(path, bytes, candidate, true);
+    }
+
+    fn push_bytes_input(
+        &mut self,
+        path: Cow<'a, str>,
+        bytes: Cow<'a, [u8]>,
+        candidate: Option<&'a Candidate>,
+        explicit: bool,
+    ) {
         self.items.push(Input::Bytes {
             path,
             bytes,
             candidate,
+            explicit,
         });
     }
 

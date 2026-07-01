@@ -18,6 +18,7 @@ use sift_core::grep::{CompiledQuery, Input, Matcher, Query, SearcherConfig};
 pub struct FileSummary {
     pub matched: bool,
     pub count: usize,
+    pub binary_byte_offset: Option<u64>,
 }
 
 impl FileSummary {
@@ -50,6 +51,17 @@ impl FileSummary {
             PrintMode::FilesWithoutMatch | PrintMode::Standard | PrintMode::OnlyMatching => false,
         }
     }
+
+    #[must_use]
+    pub const fn explicit_binary(mut self, explicit: bool) -> Self {
+        if explicit && self.binary_byte_offset.is_some() {
+            self.matched = true;
+            if self.count == 0 {
+                self.count = 1;
+            }
+        }
+        self
+    }
 }
 
 pub struct SummarySink {
@@ -57,6 +69,7 @@ pub struct SummarySink {
     matcher: Option<Matcher>,
     matched: bool,
     count: usize,
+    binary_byte_offset: Option<u64>,
 }
 
 impl SummarySink {
@@ -67,6 +80,7 @@ impl SummarySink {
             matcher,
             matched: false,
             count: 0,
+            binary_byte_offset: None,
         }
     }
 
@@ -75,6 +89,7 @@ impl SummarySink {
         FileSummary {
             matched: self.matched,
             count: self.count,
+            binary_byte_offset: self.binary_byte_offset,
         }
     }
 }
@@ -102,6 +117,16 @@ impl Sink for SummarySink {
             self.mode,
             PrintMode::Count | PrintMode::CountMatches
         ))
+    }
+
+    fn binary_data(
+        &mut self,
+        searcher: &Searcher,
+        binary_byte_offset: u64,
+    ) -> Result<bool, Self::Error> {
+        std::hint::black_box(searcher);
+        self.binary_byte_offset.get_or_insert(binary_byte_offset);
+        Ok(true)
     }
 }
 
@@ -257,8 +282,11 @@ impl InputPrinter for AggregatePrinter<'_> {
             };
         }
         match input {
-            Input::Path { candidate } => {
-                let result = self.search_summary(input);
+            Input::Path {
+                candidate,
+                explicit,
+            } => {
+                let result = self.search_summary(input).explicit_binary(*explicit);
                 self.record(
                     &candidate.display_path(
                         self.output.lines.path_display,
@@ -273,8 +301,9 @@ impl InputPrinter for AggregatePrinter<'_> {
                 path,
                 bytes: _,
                 candidate,
+                explicit,
             } => {
-                let result = self.search_summary(input);
+                let result = self.search_summary(input).explicit_binary(*explicit);
                 let display = candidate.map_or_else(
                     || path.to_string(),
                     |candidate| {

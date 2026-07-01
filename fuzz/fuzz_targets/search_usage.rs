@@ -2,9 +2,9 @@
 
 use libfuzzer_sys::fuzz_target;
 use sift_core::grep::{
-    CandidateFilter, CandidateFilterConfig, CandidatePolicy, CandidatePolicyConfig,
-    CandidateScope, CorpusState, IndexFallback, Inputs, MatchFlags, MatchOptions, PatternCompiler,
-    Query, Session, StatsMode, VisibilityConfig,
+    CandidateFilter, CandidateFilterConfig, CandidatePolicyConfig, CandidateScope, CorpusState,
+    IndexFallback, Inputs, MatchFlags, MatchOptions, PatternCompiler, Query, Session, StatsMode,
+    VisibilityConfig,
 };
 use sift_core::{
     CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, NGramConfig,
