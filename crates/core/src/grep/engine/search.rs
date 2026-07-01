@@ -107,16 +107,15 @@ impl CompiledQuery {
         let (display_path, hit_path) = input.paths();
         let mut sink = MatchCollector {
             path: display_path,
-            only_matching,
-            matcher: self.matcher().clone(),
+            matcher: only_matching.then(|| self.matcher().clone()),
             matches: Vec::new(),
-            matched: false,
         };
         self.match_input(input, searcher, &mut sink);
+        let matched = !sink.matches.is_empty();
         FileOutcome {
-            matched: sink.matched,
+            matched,
             matches: sink.matches,
-            hit_path: sink.matched.then_some(hit_path).flatten(),
+            hit_path: matched.then_some(hit_path).flatten(),
         }
     }
 }
@@ -129,31 +128,25 @@ struct FileOutcome {
 
 struct MatchCollector {
     path: PathBuf,
-    only_matching: bool,
-    matcher: Matcher,
+    matcher: Option<Matcher>,
     matches: Vec<Match>,
-    matched: bool,
 }
 
 impl Sink for MatchCollector {
     type Error = io::Error;
 
-    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
-        self.matched = true;
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
-        if self.only_matching {
-            let _ = self
-                .matcher
-                .find_iter(line_bytes, |m: grep_matcher::Match| {
-                    self.matches.push(Match {
-                        file: self.path.clone(),
-                        line,
-                        text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()]).into_owned(),
-                    });
-                    true
+        if let Some(matcher) = self.matcher.as_ref() {
+            let _ = matcher.find_iter(line_bytes, |m: grep_matcher::Match| {
+                self.matches.push(Match {
+                    file: self.path.clone(),
+                    line,
+                    text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()]).into_owned(),
                 });
+                true
+            });
         } else {
             self.matches.push(Match {
                 file: self.path.clone(),
