@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use sift_core::grep::{
-    CandidateFilter, CandidateFilterConfig, CandidatePolicy, CandidatePolicyConfig,
+    CandidateFilter, CandidateFilterConfig, CandidatePolicyConfig,
     CandidateScope, CorpusState, IndexFallback, Inputs, MatchOptions, Query, Session, StatsMode,
 };
 use tempfile::TempDir;

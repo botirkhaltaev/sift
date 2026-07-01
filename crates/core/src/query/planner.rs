@@ -51,13 +51,13 @@ impl<'a> QueryPlanner<'a> {
         walk_on_stale: bool,
     ) -> ResolutionPlan {
         let strategy = match coverage {
-            CandidateCoverage::Complete => Self::plan_complete(ctx),
+            CandidateCoverage::Complete => Self::plan_complete(ctx, walk_on_stale),
             CandidateCoverage::PotentialMatches => self.plan_potential(ctx, walk_on_stale),
         };
         ResolutionPlan { strategy }
     }
 
-    fn plan_complete(ctx: PlanContext<'_>) -> super::plan::ResolutionStrategy {
+    fn plan_complete(ctx: PlanContext<'_>, walk_on_stale: bool) -> super::plan::ResolutionStrategy {
         use super::plan::ResolutionStrategy;
         if ctx.indexes.is_empty() {
             return ResolutionStrategy::WalkAll;
@@ -72,6 +72,9 @@ impl<'a> QueryPlanner<'a> {
             .store_meta
             .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
         {
+            return ResolutionStrategy::WalkAll;
+        }
+        if walk_on_stale {
             return ResolutionStrategy::WalkAll;
         }
         ResolutionStrategy::AllIndexed

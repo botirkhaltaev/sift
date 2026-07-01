@@ -332,4 +332,33 @@ mod tests {
             vec![PathBuf::from("a/x.txt"), PathBuf::from("b/y.txt")]
         );
     }
+
+    #[test]
+    fn stale_complete_coverage_walks_entire_corpus() {
+        let tmp = TempDir::new().expect("tempdir");
+        let corpus = tmp.path().join("corpus");
+        make_parity_corpus(&corpus);
+        let sift_dir = tmp.path().join(".sift");
+        let indexes = build_indexes(&corpus, &sift_dir);
+        let spec = QuerySpec {
+            patterns: &["zzz".to_string()],
+            flags: QueryFlags::empty(),
+        };
+        let filter = default_filter(&corpus);
+        let meta = default_meta(&corpus);
+        let result = resolve(
+            &indexes,
+            &filter,
+            spec,
+            CandidateCoverage::Complete,
+            Some(&meta),
+            ResolutionFallback::WalkOnStaleSnapshot,
+        );
+        let mut paths: Vec<_> = result.iter().map(|c| c.rel_path().to_path_buf()).collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("a/x.txt"), PathBuf::from("b/y.txt")]
+        );
+    }
 }
