@@ -1,52 +1,39 @@
-use std::collections::HashSet;
-use std::path::PathBuf;
-
-use crate::Candidate;
-use crate::grep::CandidateFilter;
+use crate::corpus::CandidateCoverage;
+use crate::corpus::filter::CandidateFilter;
 use crate::index::Indexes;
-use crate::query::QuerySpec;
+use crate::query::{ResolutionPlan, QuerySpec};
 use crate::{IndexCoverage, StoreMeta};
 
-/// Whether search needs all candidate paths or only potential matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CandidateRequirement {
-    Complete,
-    PotentialMatches,
-}
-
-/// Whether the opened snapshot has been validated as a complete read version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SnapshotValidation {
-    #[default]
-    Unvalidated,
-    Validated,
-    Stale,
-}
-
-/// Candidate source policy for a grep run.
+/// Inputs for pure candidate planning.
 #[derive(Clone, Copy)]
-pub struct CandidateSource<'a> {
-    pub store_meta: Option<&'a StoreMeta>,
-    pub snapshot: SnapshotValidation,
-}
-
-/// Inputs for candidate planning.
-#[derive(Clone, Copy)]
-pub struct CandidatePlan<'a> {
+pub struct PlanContext<'a> {
     pub indexes: &'a Indexes,
-    pub requirement: CandidateRequirement,
     pub filter: &'a CandidateFilter,
-    pub source: CandidateSource<'a>,
+    pub store_meta: Option<&'a StoreMeta>,
+    /// Whether the query can be narrowed by the index layer.
+    pub index_capable: bool,
 }
 
-/// Plans candidate selection by consulting the index registry and falling back
-/// to a filesystem walk when no index can narrow the query.
-///
-/// The planner is the single coordination point between the search pipeline
-/// and the index layer. It is index-agnostic: it calls `Indexes::candidates()`
-/// without knowing which index types are present.
+/// Plans candidate selection without performing I/O.
 pub struct QueryPlanner<'a> {
-    spec: QuerySpec<'a>,
+    pub(crate) spec: QuerySpec<'a>,
+}
+
+impl<'a> PlanContext<'a> {
+    #[must_use]
+    pub const fn new(
+        indexes: &'a Indexes,
+        filter: &'a CandidateFilter,
+        store_meta: Option<&'a StoreMeta>,
+        index_capable: bool,
+    ) -> Self {
+        Self {
+            indexes,
+            filter,
+            store_meta,
+            index_capable,
+        }
+    }
 }
 
 impl<'a> QueryPlanner<'a> {
@@ -55,97 +42,57 @@ impl<'a> QueryPlanner<'a> {
         Self { spec }
     }
 
-    /// Resolve candidates using indexes or the lazy base provider.
-    ///
-    /// Lazy stores may merge filesystem walk results for paths not present in
-    /// the current snapshot. Complete stores use snapshot candidates unless an
-    /// explicit stale validation result requires a conservative walk fallback.
-    ///
-    /// # Errors
-    ///
-    /// Delegates to `base` when fallback is triggered; returns `base` errors unchanged.
-    pub fn candidates(
-        &self,
-        plan: CandidatePlan<'_>,
-        base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
-    ) -> crate::Result<Vec<Candidate>> {
-        match plan.requirement {
-            CandidateRequirement::Complete => {
-                if plan.indexes.is_empty() {
-                    return base();
-                }
-                if plan
-                    .source
-                    .store_meta
-                    .is_some_and(|meta| !meta.covers_candidate_filter(plan.filter))
-                {
-                    return base();
-                }
-                if plan
-                    .source
-                    .store_meta
-                    .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
-                {
-                    return base();
-                }
-                Ok(plan.indexes.complete_candidates())
-            }
-            CandidateRequirement::PotentialMatches => {
-                if plan.indexes.is_empty() {
-                    return base();
-                }
-                match plan.indexes.candidates(&self.spec) {
-                    None => base(),
-                    Some(snapshot_hits) => Self::resolve_index_hits(plan, snapshot_hits, base),
-                }
-            }
-        }
-    }
-
-    fn resolve_index_hits(
-        plan: CandidatePlan<'_>,
-        snapshot_hits: Vec<Candidate>,
-        base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
-    ) -> crate::Result<Vec<Candidate>> {
-        let Some(meta) = plan.source.store_meta else {
-            return Ok(snapshot_hits);
+    /// Decide how candidates should be resolved for this query.
+    #[must_use]
+    pub fn plan(
+        self,
+        ctx: PlanContext<'_>,
+        coverage: CandidateCoverage,
+        walk_on_stale: bool,
+    ) -> ResolutionPlan {
+        let strategy = match coverage {
+            CandidateCoverage::Complete => Self::plan_complete(ctx),
+            CandidateCoverage::PotentialMatches => self.plan_potential(ctx, walk_on_stale),
         };
-
-        if !meta.covers_candidate_filter(plan.filter) {
-            return base();
-        }
-
-        match meta.coverage {
-            IndexCoverage::Complete => {
-                if plan.source.snapshot == SnapshotValidation::Stale {
-                    base()
-                } else {
-                    Ok(snapshot_hits)
-                }
-            }
-            IndexCoverage::Lazy => Self::merge_unindexed(plan, snapshot_hits, base),
-        }
+        ResolutionPlan { strategy }
     }
 
-    fn merge_unindexed(
-        plan: CandidatePlan<'_>,
-        mut snapshot_hits: Vec<Candidate>,
-        base: impl FnOnce() -> crate::Result<Vec<Candidate>>,
-    ) -> crate::Result<Vec<Candidate>> {
-        let indexed_paths = plan.indexes.indexed_rel_paths();
-        let walked = base()?;
-        let mut seen: HashSet<PathBuf> = snapshot_hits
-            .iter()
-            .map(|c| c.rel_path().to_path_buf())
-            .collect();
-        for candidate in walked {
-            if indexed_paths.contains(candidate.rel_path()) {
-                continue;
-            }
-            if seen.insert(candidate.rel_path().to_path_buf()) {
-                snapshot_hits.push(candidate);
-            }
+    fn plan_complete(ctx: PlanContext<'_>) -> super::plan::ResolutionStrategy {
+        use super::plan::ResolutionStrategy;
+        if ctx.indexes.is_empty() {
+            return ResolutionStrategy::WalkAll;
         }
-        Ok(snapshot_hits)
+        if ctx
+            .store_meta
+            .is_some_and(|meta| !meta.covers_candidate_filter(ctx.filter))
+        {
+            return ResolutionStrategy::WalkAll;
+        }
+        if ctx
+            .store_meta
+            .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
+        {
+            return ResolutionStrategy::WalkAll;
+        }
+        ResolutionStrategy::AllIndexed
+    }
+
+    fn plan_potential(
+        self,
+        ctx: PlanContext<'_>,
+        walk_on_stale: bool,
+    ) -> super::plan::ResolutionStrategy {
+        use super::plan::ResolutionStrategy;
+        if ctx.indexes.is_empty() || !ctx.index_capable {
+            return ResolutionStrategy::WalkAll;
+        }
+        if ctx.indexes.candidates(&self.spec).is_none() {
+            return if walk_on_stale {
+                ResolutionStrategy::WalkAll
+            } else {
+                ResolutionStrategy::AllIndexed
+            };
+        }
+        ResolutionStrategy::UseIndex
     }
 }

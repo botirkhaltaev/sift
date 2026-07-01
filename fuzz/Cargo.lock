@@ -227,21 +227,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "grep-printer"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd76035e87871f51c1ee5b793e32122b3ccf9c692662d9622ef1686ff5321acb"
-dependencies = [
- "bstr",
- "grep-matcher",
- "grep-searcher",
- "log",
- "serde",
- "serde_json",
- "termcolor",
-]
-
-[[package]]
 name = "grep-regex"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -579,7 +564,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sift-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bitflags",
  "bstr",
@@ -587,7 +572,6 @@ dependencies = [
  "grep-cli",
  "grep-matcher",
  "grep-pcre2",
- "grep-printer",
  "grep-regex",
  "grep-searcher",
  "ignore",
@@ -598,7 +582,6 @@ dependencies = [
  "regex-syntax",
  "serde",
  "serde_json",
- "termcolor",
  "thiserror",
  "unsigned-varint",
 ]

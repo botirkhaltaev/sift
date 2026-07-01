@@ -1,11 +1,12 @@
 pub mod cli;
 pub mod config;
+pub mod format;
 pub mod grep;
 pub mod index;
 pub mod update;
 
 // Stable paths for benchmarks and integration tests that import submodules directly.
-pub use grep::run::{Grep, GrepCommand, GrepConfig, GrepOutcome};
+pub use grep::run::{Run, RunMode, RunConfig, RunResult};
 pub use grep::{Argv, engine, filter, ignore, output, paths, pattern};
 
 use std::process::ExitCode;

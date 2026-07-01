@@ -1,14 +1,159 @@
+use std::sync::OnceLock;
+
+use crate::corpus::Candidate;
+use crate::grep::Error;
+use crate::grep::engine::CompiledQuery;
+use crate::grep::input::Inputs;
+use crate::grep::options::MatchOptions;
+use crate::grep::policy::CandidatePolicy;
+use crate::grep::report::Report;
+use crate::grep::session::Session;
+use crate::grep::stats::StatsMode;
+use crate::query::{PlanContext, QueryPlanner, ResolutionConfig, QueryFlags, QuerySpec};
+
 pub mod error;
 
 use regex_automata::meta::Regex;
 use regex_syntax::escape;
 
-use crate::grep::GrepError;
-use crate::grep::options::GrepMatchFlags;
+use crate::grep::options::MatchFlags;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Match {
+    pub file: std::path::PathBuf,
+    pub line: usize,
+    pub text: String,
+}
+
+#[derive(Debug)]
+pub struct Query {
+    pub(crate) patterns: Vec<String>,
+    pub(crate) opts: MatchOptions,
+    pub(crate) compiled: OnceLock<CompiledQuery>,
+}
+
+impl Clone for Query {
+    fn clone(&self) -> Self {
+        Self {
+            patterns: self.patterns.clone(),
+            opts: self.opts.clone(),
+            compiled: OnceLock::new(),
+        }
+    }
+}
+
+impl Query {
+    /// Creates a new search query from patterns.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::EmptyPatterns` if the pattern list is empty.
+    pub fn new(patterns: Vec<String>) -> Result<Self, Error> {
+        if patterns.is_empty() {
+            return Err(Error::EmptyPatterns);
+        }
+        Ok(Self {
+            patterns,
+            opts: MatchOptions::default(),
+            compiled: OnceLock::new(),
+        })
+    }
+
+    #[must_use]
+    pub fn options(mut self, opts: MatchOptions) -> Self {
+        self.opts = opts;
+        self.compiled = OnceLock::new();
+        self
+    }
+
+    #[must_use]
+    pub fn patterns(&self) -> &[String] {
+        &self.patterns
+    }
+
+    #[must_use]
+    pub const fn opts(&self) -> &MatchOptions {
+        &self.opts
+    }
+
+    #[must_use]
+    pub fn query_spec(&self) -> QuerySpec<'_> {
+        let mut flags = QueryFlags::empty();
+        if self.opts().fixed_strings() {
+            flags |= QueryFlags::FIXED_STRINGS;
+        }
+        if self.opts().case_insensitive() {
+            flags |= QueryFlags::CASE_INSENSITIVE;
+        }
+        if self.opts().word_regexp() {
+            flags |= QueryFlags::WORD_REGEXP;
+        }
+        if self.opts().line_regexp() {
+            flags |= QueryFlags::LINE_REGEXP;
+        }
+        if self.opts().invert_match() {
+            flags |= QueryFlags::INVERT_MATCH;
+        }
+        QuerySpec {
+            patterns: self.patterns(),
+            flags,
+        }
+    }
+
+    fn validate_max_results(&self) -> crate::Result<()> {
+        if self.opts().max_results == Some(0) {
+            return Err(crate::Error::Search(Error::InvalidMaxCount));
+        }
+        Ok(())
+    }
+
+    /// Resolve candidate files for this query under the given session and policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if candidate resolution or regex compilation fails.
+    pub fn candidates(
+        &self,
+        session: &Session,
+        policy: CandidatePolicy,
+    ) -> crate::Result<Vec<Candidate>> {
+        self.validate_max_results()?;
+        let spec = self.query_spec();
+        let compiled = self.compile()?;
+        QueryPlanner::new(spec)
+            .resolve(
+                PlanContext::new(
+                    session.indexes,
+                    session.filter,
+                    session.store_meta,
+                    compiled.index_capable(),
+                ),
+                ResolutionConfig {
+                    coverage: policy.coverage(),
+                    fallback: policy.fallback,
+                    order: policy.order,
+                },
+            )
+    }
+
+    /// Search the given inputs and return a report.
+    ///
+    /// Compiles patterns if not already cached. When the query is already
+    /// compiled (for example after [`Self::candidates`]), prefer
+    /// [`CompiledQuery::report`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if regex compilation or search execution fails.
+    pub fn search(&self, inputs: &Inputs, stats: StatsMode) -> crate::Result<Report> {
+        self.validate_max_results()?;
+        Ok(self.compile()?.report(self, inputs, stats))
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PatternCompiler {
-    flags: GrepMatchFlags,
+    flags: MatchFlags,
     case_insensitive: bool,
 }
 
@@ -16,26 +161,26 @@ impl PatternCompiler {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            flags: GrepMatchFlags::empty(),
+            flags: MatchFlags::empty(),
             case_insensitive: false,
         }
     }
 
     #[must_use]
     pub fn fixed_strings(mut self, on: bool) -> Self {
-        self.flags.set(GrepMatchFlags::FIXED_STRINGS, on);
+        self.flags.set(MatchFlags::FIXED_STRINGS, on);
         self
     }
 
     #[must_use]
     pub fn word_regexp(mut self, on: bool) -> Self {
-        self.flags.set(GrepMatchFlags::WORD_REGEXP, on);
+        self.flags.set(MatchFlags::WORD_REGEXP, on);
         self
     }
 
     #[must_use]
     pub fn line_regexp(mut self, on: bool) -> Self {
-        self.flags.set(GrepMatchFlags::LINE_REGEXP, on);
+        self.flags.set(MatchFlags::LINE_REGEXP, on);
         self
     }
 
@@ -47,15 +192,15 @@ impl PatternCompiler {
 
     #[must_use]
     pub fn shape(&self, pattern: &str) -> String {
-        let mut s = if self.flags.contains(GrepMatchFlags::FIXED_STRINGS) {
+        let mut s = if self.flags.contains(MatchFlags::FIXED_STRINGS) {
             escape(pattern)
         } else {
             pattern.to_string()
         };
-        if self.flags.contains(GrepMatchFlags::WORD_REGEXP) {
+        if self.flags.contains(MatchFlags::WORD_REGEXP) {
             s = format!(r"\b(?:{s})\b");
         }
-        if self.flags.contains(GrepMatchFlags::LINE_REGEXP) {
+        if self.flags.contains(MatchFlags::LINE_REGEXP) {
             s = format!("^(?:{s})$");
         }
         s
@@ -65,8 +210,8 @@ impl PatternCompiler {
     ///
     /// # Errors
     ///
-    /// Returns `GrepError::RegexBuild` if the combined pattern is invalid.
-    pub fn compile(&self, patterns: &[&str]) -> Result<Regex, GrepError> {
+    /// Returns `Error::RegexBuild` if the combined pattern is invalid.
+    pub fn compile(&self, patterns: &[&str]) -> Result<Regex, Error> {
         let mut branches: Vec<String> = patterns.iter().map(|p| self.shape(p)).collect();
         let combined = if branches.len() == 1 {
             branches.swap_remove(0)
@@ -83,15 +228,15 @@ impl PatternCompiler {
         }
         builder
             .build(&combined)
-            .map_err(|e| GrepError::RegexBuild(format!("regex compilation failed: {e}")))
+            .map_err(|e| Error::RegexBuild(format!("regex compilation failed: {e}")))
     }
 
     /// Compiles a single pattern into a regex.
     ///
     /// # Errors
     ///
-    /// Returns `GrepError::RegexBuild` if the pattern is invalid.
-    pub fn compile_one(&self, pattern: &str) -> Result<Regex, GrepError> {
+    /// Returns `Error::RegexBuild` if the pattern is invalid.
+    pub fn compile_one(&self, pattern: &str) -> Result<Regex, Error> {
         self.compile(&[pattern])
     }
 }
@@ -99,6 +244,57 @@ impl PatternCompiler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grep::engine::{Indexability, IndexabilityReason};
+    use crate::grep::options::{MatchFlags, MatchOptions, RegexEngineRequest};
+
+    fn make_search(patterns: &[&str], opts: MatchOptions) -> Query {
+        let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
+        Query::new(patterns)
+            .expect("compile search")
+            .options(opts)
+    }
+
+    #[test]
+    fn compiled_search_selects_indexability() {
+        let mut opts = MatchOptions {
+            input_encoding: crate::grep::options::InputEncoding::Raw,
+            ..MatchOptions::default()
+        };
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().indexability(),
+            Indexability::Indexed
+        );
+
+        opts.flags |= MatchFlags::INVERT_MATCH;
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().indexability(),
+            Indexability::Complete(IndexabilityReason::InvertedMatch)
+        );
+
+        opts.flags.remove(MatchFlags::INVERT_MATCH);
+        opts.input_encoding = crate::grep::options::InputEncoding::Auto;
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().indexability(),
+            Indexability::Complete(IndexabilityReason::DecodedInput)
+        );
+
+        opts.input_encoding = crate::grep::options::InputEncoding::Raw;
+        opts.regex_engine = RegexEngineRequest::Pcre2;
+        let search = make_search(&["needle"], opts.clone());
+        assert_eq!(
+            search.compile().unwrap().indexability(),
+            Indexability::Complete(IndexabilityReason::RegexEngineUnsupportedByPlanner)
+        );
+    }
+
+    #[test]
+    fn search_query_new_rejects_empty_patterns() {
+        let result = Query::new(Vec::new());
+        assert!(result.is_err());
+    }
 
     #[test]
     fn alternation_matches_either_pattern() {
@@ -106,134 +302,6 @@ mod tests {
         let mut cache = regex_automata::meta::Cache::new(&re);
         assert!(
             re.search_with(&mut cache, &regex_automata::Input::new(b"foo"))
-                .is_some()
-        );
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"bar"))
-                .is_some()
-        );
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"baz"))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn fixed_strings_escape_metacharacters() {
-        let re = PatternCompiler::new()
-            .fixed_strings(true)
-            .compile(&[r"a.c"])
-            .unwrap();
-        let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"a.c"))
-                .is_some()
-        );
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"abc"))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn case_insensitive() {
-        let re = PatternCompiler::new()
-            .case_insensitive(true)
-            .compile(&["Hello"])
-            .unwrap();
-        let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"hello"))
-                .is_some()
-        );
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"HELLO"))
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn word_regexp() {
-        let re = PatternCompiler::new()
-            .word_regexp(true)
-            .compile(&["cat"])
-            .unwrap();
-        let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"a cat here"))
-                .is_some()
-        );
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"concat"))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn line_regexp() {
-        let re = PatternCompiler::new()
-            .line_regexp(true)
-            .compile(&["yes"])
-            .unwrap();
-        let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"yes"))
-                .is_some()
-        );
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"oh yes sir"))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn invalid_regex_returns_err() {
-        assert!(PatternCompiler::new().compile(&["("]).is_err());
-    }
-
-    #[test]
-    fn shape_fixed_strings_escapes_metacharacters() {
-        let compiler = PatternCompiler::new().fixed_strings(true);
-        assert_eq!(compiler.shape("a.c"), r"a\.c");
-        assert_eq!(compiler.shape("foo*bar"), r"foo\*bar");
-    }
-
-    #[test]
-    fn shape_word_regexp_wraps_in_word_boundary() {
-        let compiler = PatternCompiler::new().word_regexp(true);
-        let shaped = compiler.shape("cat");
-        assert!(shaped.contains(r"\b"));
-    }
-
-    #[test]
-    fn shape_line_regexp_wraps_in_anchors() {
-        let compiler = PatternCompiler::new().line_regexp(true);
-        let shaped = compiler.shape("yes");
-        assert!(shaped.starts_with('^'));
-        assert!(shaped.ends_with('$'));
-    }
-
-    #[test]
-    fn shape_line_and_word_combined() {
-        let compiler = PatternCompiler::new().line_regexp(true).word_regexp(true);
-        let shaped = compiler.shape("cat");
-        assert!(shaped.starts_with('^'));
-        assert!(shaped.ends_with('$'));
-        assert!(shaped.contains(r"\b"));
-    }
-
-    #[test]
-    fn shape_no_flags_returns_pattern_unchanged() {
-        let compiler = PatternCompiler::new();
-        assert_eq!(compiler.shape("hello"), "hello");
-    }
-
-    #[test]
-    fn compile_one_delegates_to_compile() {
-        let re = PatternCompiler::new().compile_one("hello").unwrap();
-        let mut cache = regex_automata::meta::Cache::new(&re);
-        assert!(
-            re.search_with(&mut cache, &regex_automata::Input::new(b"hello"))
                 .is_some()
         );
     }

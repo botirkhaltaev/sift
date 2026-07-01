@@ -19,6 +19,11 @@ impl Postings {
         self.data.as_ref()
     }
 
+    /// Validate and wrap in-memory or mmap artifact bytes as postings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header or payload length is invalid.
     pub fn from_artifact(data: ArtifactData) -> std::io::Result<Self> {
         let bytes = data.as_ref();
         let payload_len = Self::validate(bytes)?;

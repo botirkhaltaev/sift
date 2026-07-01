@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use crate::grep::output::format::ColumnLimit;
+use crate::format::output::format::ColumnLimit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilenameMode {
@@ -26,12 +26,7 @@ pub enum OutputBuffering {
     Block,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PathDisplay {
-    #[default]
-    Relative,
-    Absolute,
-}
+pub use sift_core::grep::PathDisplay;
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -45,14 +40,14 @@ bitflags::bitflags! {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct GrepLineStyle {
+pub struct PrintLineStyle {
     pub filename_mode: FilenameMode,
     pub flags: LineStyleFlags,
     pub path_display: PathDisplay,
     pub columns: Option<ColumnLimit>,
 }
 
-impl GrepLineStyle {
+impl PrintLineStyle {
     #[must_use]
     pub const fn heading(self) -> bool {
         self.flags.contains(LineStyleFlags::HEADING)
@@ -82,7 +77,7 @@ pub enum RecordTerminator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct GrepRecordStyle {
+pub struct PrintRecordStyle {
     pub terminator: RecordTerminator,
     pub color: ColorChoice,
     pub path_separator: Option<u8>,
@@ -92,7 +87,7 @@ pub struct GrepRecordStyle {
     pub buffering: OutputBuffering,
 }
 
-impl GrepRecordStyle {
+impl PrintRecordStyle {
     #[must_use]
     pub fn should_color(&self) -> bool {
         match self.color {
@@ -485,13 +480,13 @@ impl RecordTerminator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GrepSeparators {
+pub struct PrintSeparators {
     pub context_separator: Option<Vec<u8>>,
     pub field_match_separator: Vec<u8>,
     pub field_context_separator: Vec<u8>,
 }
 
-impl Default for GrepSeparators {
+impl Default for PrintSeparators {
     fn default() -> Self {
         Self {
             context_separator: Some(b"--".to_vec()),
@@ -507,7 +502,7 @@ mod tests {
 
     #[test]
     fn search_line_style_defaults() {
-        let style = GrepLineStyle::default();
+        let style = PrintLineStyle::default();
         assert!(!style.heading());
         assert!(!style.line_number());
         assert!(!style.byte_offset());
@@ -516,7 +511,7 @@ mod tests {
 
     #[test]
     fn search_record_style_defaults() {
-        let style = GrepRecordStyle::default();
+        let style = PrintRecordStyle::default();
         assert!(matches!(style.terminator, RecordTerminator::Newline));
         assert_eq!(style.color, ColorChoice::Auto);
         assert!(style.path_separator.is_none());
@@ -524,7 +519,7 @@ mod tests {
 
     #[test]
     fn search_separators_defaults() {
-        let sep = GrepSeparators::default();
+        let sep = PrintSeparators::default();
         assert_eq!(sep.context_separator, Some(b"--".to_vec()));
         assert_eq!(sep.field_match_separator, b":".to_vec());
         assert_eq!(sep.field_context_separator, b"-".to_vec());

@@ -15,7 +15,7 @@ bitflags::bitflags! {
 /// Describes what the user is searching for (patterns + flags) without
 /// referencing any specific index type. Each index kind interprets the
 /// spec independently to narrow candidates.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct QuerySpec<'a> {
     pub patterns: &'a [String],
     pub flags: QueryFlags,

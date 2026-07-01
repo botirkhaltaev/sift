@@ -1,10 +1,11 @@
-use clap::{ArgAction, Args};
-use sift_core::grep::output::style::{ColorSpecs, HyperlinkFormat, OutputBuffering};
-use sift_core::grep::{
-    ColorChoice, FilenameMode, GrepLineStyle, GrepMode, GrepOutput, GrepOutputFormat,
-    GrepRecordStyle, GrepSeparators, GrepStats, LineStyleFlags, OutputEmission, PassthruMode,
-    ZeroCountMode,
+use crate::format::output::style::{ColorSpecs, HyperlinkFormat, OutputBuffering};
+use crate::format::{
+    ColorChoice, ColumnLimit, ColumnOverflow, FilenameMode, PrintLineStyle, PrintMode, PrintSpec,
+    PrintFormat, PrintRecordStyle, PrintSeparators, LineStyleFlags, OutputEmission,
+    PassthruMode, RecordTerminator, ZeroCountMode,
 };
+use clap::{ArgAction, Args};
+use sift_core::grep::Stats;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -20,7 +21,7 @@ use super::argv::Argv;
 
 /// Output-related flags resolved from clap declarations.
 #[derive(Clone)]
-pub struct OutputConfig {
+pub struct OutputDecl {
     pub column: ColumnDecl,
     pub columns: ColumnsDecl,
     pub extra: ExtraOutputDecl,
@@ -35,9 +36,9 @@ pub struct OutputConfig {
     pub null_data: bool,
 }
 
-impl OutputConfig {
+impl OutputDecl {
     #[must_use]
-    pub fn separators(&self) -> GrepSeparators {
+    pub fn separators(&self) -> PrintSeparators {
         let context_separator = if self.separators.suppress_context_sep {
             None
         } else if let Some(ref s) = self.separators.context_sep {
@@ -55,7 +56,7 @@ impl OutputConfig {
             .field_context
             .as_ref()
             .map_or_else(|| b"-".to_vec(), |s| unescape_separator(s));
-        GrepSeparators {
+        PrintSeparators {
             context_separator,
             field_match_separator,
             field_context_separator,
@@ -450,21 +451,21 @@ fn resolve_hostname(hostname_bin: Option<&str>) -> Result<Option<String>, String
     Ok(Some(host.trim_end_matches(['\r', '\n']).to_string()))
 }
 
-impl OutputConfig {
+impl OutputDecl {
     /// Build the core grep output from resolved argv and CLI configuration.
     ///
     /// # Errors
     ///
     /// Returns an error when color specs are invalid, hyperlink formats are invalid,
     /// or the hostname command fails.
-    pub fn grep_output(
+    pub fn print_spec(
         &self,
         output_argv: &OutputArgv,
-        effective_mode: GrepMode,
+        effective_mode: PrintMode,
         quiet: bool,
         line_number_override: Option<bool>,
         filename_ctx: FilenameContext,
-    ) -> Result<GrepOutput, String> {
+    ) -> Result<PrintSpec, String> {
         use super::paths::CorpusScope;
 
         let pretty = self.column.pretty;
@@ -479,7 +480,7 @@ impl OutputConfig {
         let hyperlink = HyperlinkFormat::parse(self.hyperlink_format.as_deref())?;
         let hyperlink_host = resolve_hostname(self.hostname_bin.as_deref())?;
 
-        Ok(GrepOutput {
+        Ok(PrintSpec {
             format: output_format,
             mode: effective_mode,
             emission: if quiet {
@@ -487,7 +488,7 @@ impl OutputConfig {
             } else {
                 OutputEmission::Normal
             },
-            lines: GrepLineStyle {
+            lines: PrintLineStyle {
                 filename_mode: Self::filename_mode(output_argv.with_filename, filename_ctx),
                 flags: self.line_style_flags(
                     output_argv.mode.heading || pretty,
@@ -495,23 +496,20 @@ impl OutputConfig {
                     self.column.column || vimgrep,
                 ),
                 path_display: CorpusScope::path_display(&self.search_paths),
-                columns: self
-                    .columns
-                    .max_columns
-                    .map(|max| sift_core::grep::ColumnLimit {
-                        max,
-                        overflow: if self.columns.max_columns_preview {
-                            sift_core::grep::ColumnOverflow::Preview
-                        } else {
-                            sift_core::grep::ColumnOverflow::Omit
-                        },
-                    }),
+                columns: self.columns.max_columns.map(|max| ColumnLimit {
+                    max,
+                    overflow: if self.columns.max_columns_preview {
+                        ColumnOverflow::Preview
+                    } else {
+                        ColumnOverflow::Omit
+                    },
+                }),
             },
-            records: GrepRecordStyle {
+            records: PrintRecordStyle {
                 terminator: if output_argv.path.nul_terminated || self.null_data {
-                    sift_core::grep::RecordTerminator::Nul
+                    RecordTerminator::Nul
                 } else {
-                    sift_core::grep::RecordTerminator::Newline
+                    RecordTerminator::Newline
                 },
                 color: effective_color,
                 path_separator: self
@@ -533,34 +531,34 @@ impl OutputConfig {
     }
 
     #[must_use]
-    pub const fn is_path_mode(mode: GrepMode) -> bool {
+    pub const fn is_path_mode(mode: PrintMode) -> bool {
         matches!(
             mode,
-            GrepMode::FilesWithMatches | GrepMode::FilesWithoutMatch
+            PrintMode::FilesWithMatches | PrintMode::FilesWithoutMatch
         )
     }
 
     #[must_use]
-    pub const fn format(output_argv: &OutputArgv, effective_mode: GrepMode) -> GrepOutputFormat {
+    pub const fn format(output_argv: &OutputArgv, effective_mode: PrintMode) -> PrintFormat {
         if output_argv.mode.json
-            && matches!(effective_mode, GrepMode::Standard | GrepMode::OnlyMatching)
+            && matches!(effective_mode, PrintMode::Standard | PrintMode::OnlyMatching)
         {
-            GrepOutputFormat::Json
+            PrintFormat::Json
         } else {
-            GrepOutputFormat::Text
+            PrintFormat::Text
         }
     }
 
     #[must_use]
-    pub const fn print_stats(output_argv: &OutputArgv, effective_mode: GrepMode) -> bool {
+    pub const fn print_stats(output_argv: &OutputArgv, effective_mode: PrintMode) -> bool {
         output_argv.mode.stats
             || matches!(
                 Self::format(output_argv, effective_mode),
-                GrepOutputFormat::Json
+                PrintFormat::Json
             )
     }
 
-    pub fn write_stats(stats: &GrepStats) {
+    pub fn write_stats(stats: &Stats) {
         eprintln!("{} matches", stats.matches);
         eprintln!("{} files contained matches", stats.files_with_matches);
         eprintln!("{} files searched", stats.files_searched);
@@ -607,9 +605,9 @@ impl OutputConfig {
     const fn effective_line_number(
         &self,
         line_number_override: Option<bool>,
-        output_format: GrepOutputFormat,
+        output_format: PrintFormat,
     ) -> bool {
-        if matches!(output_format, GrepOutputFormat::Json) {
+        if matches!(output_format, PrintFormat::Json) {
             return true;
         }
         match line_number_override {
@@ -670,24 +668,27 @@ mod tests {
     #[test]
     fn filename_mode_single_file_defaults_to_never() {
         assert!(matches!(
-            OutputConfig::filename_mode(None, FilenameContext::SingleFileCorpus),
+            OutputDecl::filename_mode(None, FilenameContext::SingleFileCorpus),
             FilenameMode::Never
         ));
     }
 
     #[test]
     fn effective_line_number_json() {
-        let config = OutputConfig {
+        let config = OutputDecl {
             line_number: false,
             ..output_config(&["sift", "pat"])
         };
-        assert!(config.effective_line_number(None, GrepOutputFormat::Json));
+        assert!(config.effective_line_number(None, PrintFormat::Json));
     }
 
-    fn output_config(args: &[&str]) -> OutputConfig {
-        crate::cli::Cli::try_parse_from(args)
+    fn output_config(flag_args: &[&str]) -> OutputDecl {
+        let flag_vec = args(flag_args);
+        let argv = Argv::new(&flag_vec);
+        crate::cli::Cli::try_parse_from(flag_args)
             .unwrap()
-            .grep_config()
+            .run_config(&argv)
+            .unwrap()
             .output
     }
 

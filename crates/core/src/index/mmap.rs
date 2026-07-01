@@ -10,6 +10,10 @@ use memmap2::Mmap;
 
 /// Memory-map a file for read access.
 ///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened or mapped.
+///
 /// # Safety invariant
 ///
 /// `Mmap::map` dereferences the raw OS mapping pointer. The OS manages

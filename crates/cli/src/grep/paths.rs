@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use crate::format::PathDisplay;
 use clap::Args;
-use sift_core::grep::PathDisplay;
 use sift_core::{Indexes, StoreMeta};
 
 #[derive(Args)]

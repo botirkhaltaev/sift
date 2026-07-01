@@ -5,82 +5,94 @@ use std::time::Instant;
 
 use grep_printer::Stats as JsonStats;
 use rayon::prelude::*;
+use sift_core::grep::Query;
+use sift_core::grep::Stats;
+use sift_core::grep::CompiledQuery;
+use sift_core::grep::Inputs;
+use sift_core::grep::Report;
 
-use crate::grep::input::{GrepInput, GrepInputs};
-use crate::grep::output::GrepOutputFormat;
-use crate::grep::output::mode::GrepMode;
-use crate::grep::output::style::GrepSeparators;
-use crate::grep::query::{CompiledGrepQuery, GrepQuery};
-use crate::grep::sink::FileReporter;
-use crate::grep::sink::result::{ChunkOutput, FileResult};
-use crate::grep::stats::{GrepStats, TextStatsCounters};
-use crate::grep::{GrepCollection, GrepError, GrepOutcome, GrepOutput, GrepReport};
+use crate::format::stats::StatsExt;
 
-pub(super) struct GrepRunner<'a> {
-    query: &'a GrepQuery,
-    compiled: &'a CompiledGrepQuery,
-    output: GrepOutput,
-    separators: &'a GrepSeparators,
-    collect: GrepCollection,
+use crate::format::collection::PrintExtras;
+use crate::format::output::mode::PrintMode;
+use crate::format::output::style::PrintSeparators;
+use crate::format::output::{PrintFormat, PrintSpec};
+use crate::format::sink::InputPrinter;
+use crate::format::sink::result::{ChunkOutput, FileResult};
+use crate::format::stats::TextStatsCounters;
+
+pub struct SearchPrinter<'a> {
+    query: &'a Query,
+    compiled: &'a CompiledQuery,
+    print_spec: PrintSpec,
+    separators: &'a PrintSeparators,
+    extras: PrintExtras,
 }
 
-impl<'a> GrepRunner<'a> {
-    pub(crate) const fn new(
-        query: &'a GrepQuery,
-        compiled: &'a CompiledGrepQuery,
-        output: GrepOutput,
-        separators: &'a GrepSeparators,
-        collect: GrepCollection,
+impl<'a> SearchPrinter<'a> {
+    #[must_use]
+    pub const fn new(
+        query: &'a Query,
+        compiled: &'a CompiledQuery,
+        print_spec: PrintSpec,
+        separators: &'a PrintSeparators,
+        extras: PrintExtras,
     ) -> Self {
         Self {
             query,
             compiled,
-            output,
+            print_spec,
             separators,
-            collect,
+            extras,
         }
     }
 
-    pub(crate) fn run(self, inputs: &GrepInputs<'_>) -> crate::Result<GrepReport> {
+    /// Scan inputs and write formatted output to stdout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if search or output formatting fails.
+    pub fn print(self, inputs: &Inputs<'_>) -> sift_core::Result<Report> {
         if inputs.is_empty() {
-            return Ok(GrepReport {
-                outcome: GrepOutcome {
-                    matched: false,
-                    stats: self.collect.stats.then_some(GrepStats::default()),
-                },
-                hits: Vec::new(),
+            return Ok(Report {
+                matched: false,
+                matches: Vec::new(),
+                hit_paths: Vec::new(),
+                stats: self.extras.collect_stats().then_some(Stats::default()),
             });
         }
 
         let search_start = Instant::now();
-        let (matched, stats, hits) = match self.output.format {
-            GrepOutputFormat::Json => match self.output.mode {
-                GrepMode::Standard | GrepMode::OnlyMatching => {
-                    let mut stats = self.collect.stats.then_some(GrepStats::default());
+        let (matched, stats, hit_paths) = match self.print_spec.format {
+            PrintFormat::Json => match self.print_spec.mode {
+                PrintMode::Standard | PrintMode::OnlyMatching => {
+                    let mut stats = self.extras.collect_stats().then_some(Stats::default());
                     let matched = self.run_json(inputs, search_start, stats.as_mut())?;
                     (matched, stats, Vec::new())
                 }
-                _ => return Err(GrepError::JsonOutputIncompatibleMode.into()),
+                _ => return Err(sift_core::GrepError::JsonOutputIncompatibleMode.into()),
             },
-            GrepOutputFormat::Text => self.run_text(inputs, search_start)?,
+            PrintFormat::Text => self.run_text(inputs, search_start)?,
         };
 
-        Ok(GrepReport {
-            outcome: GrepOutcome { matched, stats },
-            hits,
+        Ok(Report {
+            matched,
+            matches: Vec::new(),
+            hit_paths,
+            stats,
         })
     }
 
     fn run_text(
         &self,
-        inputs: &GrepInputs<'_>,
+        inputs: &Inputs<'_>,
         search_start: Instant,
-    ) -> crate::Result<(bool, Option<GrepStats>, Vec<PathBuf>)> {
-        let collect = self.collect;
-        let counters = TextStatsCounters::new(collect.stats);
+    ) -> sift_core::Result<(bool, Option<Stats>, Vec<PathBuf>)> {
+        let extras = self.extras;
+        let counters = TextStatsCounters::new(extras.collect_stats());
 
-        let (matched, hits) = match self.output.mode {
-            GrepMode::Standard | GrepMode::OnlyMatching => {
+        let (matched, hit_paths) = match self.print_spec.mode {
+            PrintMode::Standard | PrintMode::OnlyMatching => {
                 let stop = AtomicBool::new(false);
                 let mut files = Vec::with_capacity(inputs.len());
                 inputs
@@ -88,13 +100,13 @@ impl<'a> GrepRunner<'a> {
                     .par_iter()
                     .map_init(
                         || {
-                            crate::grep::sink::standard::StandardReporter::new(
+                            crate::format::sink::standard::LinePrinter::new(
                                 self.query,
-                                self.compiled.matcher(),
-                                &self.output,
+                                self.compiled,
+                                &self.print_spec,
                                 self.separators,
                                 &counters,
-                                collect,
+                                extras,
                             )
                         },
                         |reporter, input| reporter.report(input, &stop),
@@ -102,15 +114,15 @@ impl<'a> GrepRunner<'a> {
                     .collect_into_vec(&mut files);
                 Self::flush_text(
                     files,
-                    collect,
+                    extras,
                     counters.bytes_printed(),
-                    self.output.records.buffering,
+                    self.print_spec.records.buffering,
                 )?
             }
-            GrepMode::Count
-            | GrepMode::CountMatches
-            | GrepMode::FilesWithMatches
-            | GrepMode::FilesWithoutMatch => {
+            PrintMode::Count
+            | PrintMode::CountMatches
+            | PrintMode::FilesWithMatches
+            | PrintMode::FilesWithoutMatch => {
                 let stop = AtomicBool::new(false);
                 let mut files = Vec::with_capacity(inputs.len());
                 inputs
@@ -118,12 +130,12 @@ impl<'a> GrepRunner<'a> {
                     .par_iter()
                     .map_init(
                         || {
-                            crate::grep::sink::summary::SummaryReporter::new(
+                            crate::format::sink::summary::AggregatePrinter::new(
                                 self.query,
-                                self.compiled.matcher(),
-                                self.output.clone(),
+                                self.compiled,
+                                self.print_spec.clone(),
                                 &counters,
-                                collect,
+                                extras,
                             )
                         },
                         |reporter, input| reporter.report(input, &stop),
@@ -131,71 +143,71 @@ impl<'a> GrepRunner<'a> {
                     .collect_into_vec(&mut files);
                 Self::flush_summary(
                     files,
-                    collect,
+                    extras,
                     counters.bytes_printed(),
-                    self.output.records.buffering,
+                    self.print_spec.records.buffering,
                 )?
             }
         };
 
-        let bytes_searched = if collect.stats {
+        let bytes_searched = if extras.collect_stats() {
             inputs.byte_count()
         } else {
             0
         };
         let stats = counters.finish(inputs.len(), bytes_searched, search_start.elapsed());
 
-        Ok((matched, stats, hits))
+        Ok((matched, stats, hit_paths))
     }
 
     fn flush_text(
         files: Vec<FileResult>,
-        collect: GrepCollection,
+        extras: PrintExtras,
         bytes_printed: Option<&std::sync::atomic::AtomicU64>,
-        buffering: crate::grep::output::style::OutputBuffering,
-    ) -> crate::Result<(bool, Vec<PathBuf>)> {
-        let mut hits = Vec::new();
+        buffering: crate::format::output::style::OutputBuffering,
+    ) -> sift_core::Result<(bool, Vec<PathBuf>)> {
+        let mut hit_paths = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
         for file in files {
-            if collect.hits
+            if extras.collect_hits()
                 && let Some(hit) = file.hit
             {
-                hits.push(hit);
+                hit_paths.push(hit);
             }
             outputs.push(file.output);
         }
         let matched = ChunkOutput::flush_all(outputs, bytes_printed, buffering)?;
-        Ok((matched, hits))
+        Ok((matched, hit_paths))
     }
 
     fn flush_summary(
         files: Vec<FileResult>,
-        collect: GrepCollection,
+        extras: PrintExtras,
         bytes_printed: Option<&std::sync::atomic::AtomicU64>,
-        buffering: crate::grep::output::style::OutputBuffering,
-    ) -> crate::Result<(bool, Vec<PathBuf>)> {
-        let mut hits = Vec::new();
+        buffering: crate::format::output::style::OutputBuffering,
+    ) -> sift_core::Result<(bool, Vec<PathBuf>)> {
+        let mut hit_paths = Vec::new();
         let mut outputs = Vec::with_capacity(files.len());
         let mut matched = false;
         for file in files {
-            if collect.hits
+            if extras.collect_hits()
                 && let Some(hit) = file.hit
             {
-                hits.push(hit);
+                hit_paths.push(hit);
             }
             matched |= file.output.matched;
             outputs.push(file.output);
         }
         ChunkOutput::flush_all(outputs, bytes_printed, buffering)?;
-        Ok((matched, hits))
+        Ok((matched, hit_paths))
     }
 
     fn run_json(
         &self,
-        inputs: &GrepInputs<'_>,
+        inputs: &Inputs<'_>,
         search_start: Instant,
-        stats: Option<&mut GrepStats>,
-    ) -> crate::Result<bool> {
+        stats: Option<&mut Stats>,
+    ) -> sift_core::Result<bool> {
         let stop = AtomicBool::new(false);
         let mut files = Vec::with_capacity(inputs.len());
         inputs
@@ -203,10 +215,10 @@ impl<'a> GrepRunner<'a> {
             .par_iter()
             .map_init(
                 || {
-                    crate::grep::sink::json::JsonReporter::new(
+                    crate::format::sink::json::JsonPrinter::new(
                         self.query,
-                        self.compiled.matcher(),
-                        self.output.clone(),
+                        self.compiled,
+                        self.print_spec.clone(),
                     )
                 },
                 |reporter, input| reporter.report(input, &stop),
@@ -221,9 +233,9 @@ impl<'a> GrepRunner<'a> {
             }
             outputs.push(file.output);
         }
-        let matched = ChunkOutput::flush_all(outputs, None, self.output.records.buffering)?;
+        let matched = ChunkOutput::flush_all(outputs, None, self.print_spec.records.buffering)?;
         let summary_line =
-            crate::grep::sink::json::format_json_summary_line(search_start.elapsed(), &merged)?;
+            crate::format::sink::json::JsonPrinter::summary_line(search_start.elapsed(), &merged)?;
         let summary_bytes = summary_line.len() as u64 + 1;
         let mut stdout = std::io::stdout().lock();
         stdout.write_all(summary_line.as_bytes())?;
@@ -232,7 +244,7 @@ impl<'a> GrepRunner<'a> {
             stats.fill_from_json(
                 &merged,
                 inputs.len(),
-                inputs.as_slice().iter().map(GrepInput::bytes).sum(),
+                inputs.as_slice().iter().map(Input::byte_len).sum(),
                 search_start.elapsed(),
                 summary_bytes,
             );
@@ -240,3 +252,5 @@ impl<'a> GrepRunner<'a> {
         Ok(matched)
     }
 }
+
+use sift_core::grep::Input;
