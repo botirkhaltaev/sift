@@ -1,12 +1,53 @@
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::format::output::style::OutputBuffering;
 
-pub(in crate::format) struct FileResult {
-    pub(in crate::format) output: ChunkOutput,
-    pub(in crate::format) json_stats: Option<grep_printer::Stats>,
-    pub(in crate::format) hit: Option<std::path::PathBuf>,
+pub(in crate::format) enum FileResult {
+    Text {
+        output: ChunkOutput,
+        hit: Option<PathBuf>,
+    },
+    Json {
+        output: ChunkOutput,
+        stats: grep_printer::Stats,
+    },
+}
+
+impl FileResult {
+    pub(in crate::format) const fn text_empty() -> Self {
+        Self::Text {
+            output: ChunkOutput::empty(),
+            hit: None,
+        }
+    }
+
+    pub(in crate::format) const fn output(&self) -> &ChunkOutput {
+        match self {
+            Self::Text { output, .. } | Self::Json { output, .. } => output,
+        }
+    }
+
+    pub(in crate::format) fn into_output(self) -> ChunkOutput {
+        match self {
+            Self::Text { output, .. } | Self::Json { output, .. } => output,
+        }
+    }
+
+    pub(in crate::format) const fn hit(&self) -> Option<&PathBuf> {
+        match self {
+            Self::Text { hit, .. } => hit.as_ref(),
+            Self::Json { .. } => None,
+        }
+    }
+
+    pub(in crate::format) const fn json_stats(&self) -> Option<&grep_printer::Stats> {
+        match self {
+            Self::Json { stats, .. } => Some(stats),
+            Self::Text { .. } => None,
+        }
+    }
 }
 
 pub(in crate::format) struct ChunkOutput {

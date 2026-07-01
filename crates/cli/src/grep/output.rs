@@ -5,7 +5,6 @@ use crate::format::{
     PrintSpec, RecordTerminator, ZeroCountMode,
 };
 use clap::{ArgAction, Args};
-use sift_core::grep::Stats;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -556,15 +555,6 @@ impl OutputDecl {
     pub const fn print_stats(output_argv: &OutputArgv, effective_mode: PrintMode) -> bool {
         output_argv.mode.stats
             || matches!(Self::format(output_argv, effective_mode), PrintFormat::Json)
-    }
-
-    pub fn write_stats(stats: &Stats) {
-        eprintln!("{} matches", stats.matches);
-        eprintln!("{} files contained matches", stats.files_with_matches);
-        eprintln!("{} files searched", stats.files_searched);
-        eprintln!("{} bytes printed", stats.bytes_printed);
-        eprintln!("{} bytes searched", stats.bytes_searched);
-        eprintln!("{:.6}s elapsed", stats.elapsed.as_secs_f64());
     }
 
     #[must_use]

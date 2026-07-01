@@ -1,19 +1,26 @@
-use std::io::Write as _;
 use std::path::PathBuf;
+
+use sift_core::grep::Inputs;
+
+use crate::format::collection::PrintExtras;
+use crate::format::stats::OutputStats;
+
+/// Result of formatting a search run to stdout.
+pub struct PrintOutcome {
+    pub matched: bool,
+    pub hit_paths: Vec<PathBuf>,
+    pub stats: Option<OutputStats>,
+}
+
+use std::io::Write as _;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use grep_printer::Stats as JsonStats;
 use rayon::prelude::*;
 use sift_core::grep::CompiledQuery;
-use sift_core::grep::Inputs;
 use sift_core::grep::Query;
-use sift_core::grep::Report;
-use sift_core::grep::Stats;
 
-use crate::format::stats::StatsExt;
-
-use crate::format::collection::PrintExtras;
 use crate::format::output::mode::PrintMode;
 use crate::format::output::style::PrintSeparators;
 use crate::format::output::{PrintFormat, PrintSpec};
@@ -52,13 +59,12 @@ impl<'a> SearchPrinter<'a> {
     /// # Errors
     ///
     /// Returns an error if search or output formatting fails.
-    pub fn print(self, inputs: &Inputs<'_>) -> sift_core::Result<Report> {
+    pub fn print(self, inputs: &Inputs<'_>) -> sift_core::Result<PrintOutcome> {
         if inputs.is_empty() {
-            return Ok(Report {
+            return Ok(PrintOutcome {
                 matched: false,
-                matches: Vec::new(),
                 hit_paths: Vec::new(),
-                stats: self.extras.collect_stats().then_some(Stats::default()),
+                stats: self.extras.collect_stats().then(OutputStats::default),
             });
         }
 
@@ -66,7 +72,7 @@ impl<'a> SearchPrinter<'a> {
         let (matched, stats, hit_paths) = match self.print_spec.format {
             PrintFormat::Json => match self.print_spec.mode {
                 PrintMode::Standard | PrintMode::OnlyMatching => {
-                    let mut stats = self.extras.collect_stats().then_some(Stats::default());
+                    let mut stats = self.extras.collect_stats().then(OutputStats::default);
                     let matched = self.run_json(inputs, search_start, stats.as_mut())?;
                     (matched, stats, Vec::new())
                 }
@@ -75,9 +81,8 @@ impl<'a> SearchPrinter<'a> {
             PrintFormat::Text => self.run_text(inputs, search_start)?,
         };
 
-        Ok(Report {
+        Ok(PrintOutcome {
             matched,
-            matches: Vec::new(),
             hit_paths,
             stats,
         })
@@ -87,7 +92,7 @@ impl<'a> SearchPrinter<'a> {
         &self,
         inputs: &Inputs<'_>,
         search_start: Instant,
-    ) -> sift_core::Result<(bool, Option<Stats>, Vec<PathBuf>)> {
+    ) -> sift_core::Result<(bool, Option<OutputStats>, Vec<PathBuf>)> {
         let extras = self.extras;
         let counters = TextStatsCounters::new(extras.collect_stats());
 
@@ -170,11 +175,11 @@ impl<'a> SearchPrinter<'a> {
         let mut outputs = Vec::with_capacity(files.len());
         for file in files {
             if extras.collect_hits()
-                && let Some(hit) = file.hit
+                && let Some(hit) = file.hit()
             {
-                hit_paths.push(hit);
+                hit_paths.push(hit.clone());
             }
-            outputs.push(file.output);
+            outputs.push(file.into_output());
         }
         let matched = ChunkOutput::flush_all(outputs, bytes_printed, buffering)?;
         Ok((matched, hit_paths))
@@ -191,12 +196,12 @@ impl<'a> SearchPrinter<'a> {
         let mut matched = false;
         for file in files {
             if extras.collect_hits()
-                && let Some(hit) = file.hit
+                && let Some(hit) = file.hit()
             {
-                hit_paths.push(hit);
+                hit_paths.push(hit.clone());
             }
-            matched |= file.output.matched;
-            outputs.push(file.output);
+            matched |= file.output().matched;
+            outputs.push(file.into_output());
         }
         ChunkOutput::flush_all(outputs, bytes_printed, buffering)?;
         Ok((matched, hit_paths))
@@ -206,7 +211,7 @@ impl<'a> SearchPrinter<'a> {
         &self,
         inputs: &Inputs<'_>,
         search_start: Instant,
-        stats: Option<&mut Stats>,
+        stats: Option<&mut OutputStats>,
     ) -> sift_core::Result<bool> {
         let stop = AtomicBool::new(false);
         let mut files = Vec::with_capacity(inputs.len());
@@ -228,10 +233,10 @@ impl<'a> SearchPrinter<'a> {
         let mut merged = JsonStats::new();
         let mut outputs = Vec::with_capacity(files.len());
         for file in files {
-            if let Some(stats) = file.json_stats {
-                merged += &stats;
+            if let Some(file_stats) = file.json_stats() {
+                merged += file_stats;
             }
-            outputs.push(file.output);
+            outputs.push(file.into_output());
         }
         let matched = ChunkOutput::flush_all(outputs, None, self.print_spec.records.buffering)?;
         let summary_line =
@@ -240,8 +245,8 @@ impl<'a> SearchPrinter<'a> {
         let mut stdout = std::io::stdout().lock();
         stdout.write_all(summary_line.as_bytes())?;
         stdout.write_all(b"\n")?;
-        if let Some(stats) = stats {
-            stats.fill_from_json(
+        if let Some(out_stats) = stats {
+            *out_stats = OutputStats::from_json(
                 &merged,
                 inputs.len(),
                 inputs.as_slice().iter().map(Input::byte_len).sum(),

@@ -4,34 +4,49 @@ use std::time::Duration;
 use grep_printer::Stats as JsonStats;
 use sift_core::grep::Stats;
 
-pub(in crate::format) trait StatsExt {
-    fn fill_from_json(
-        &mut self,
-        merged: &JsonStats,
-        candidates_len: usize,
-        bytes_searched_sum: u64,
-        elapsed: Duration,
-        summary_line_bytes: u64,
-    );
+/// Statistics for a printed search run (`--stats`, JSON summary).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OutputStats {
+    pub search: Stats,
+    pub bytes_printed: u64,
 }
 
-impl StatsExt for Stats {
-    fn fill_from_json(
-        &mut self,
+impl OutputStats {
+    pub(in crate::format) const fn from_search(search: Stats, bytes_printed: u64) -> Self {
+        Self {
+            search,
+            bytes_printed,
+        }
+    }
+
+    pub(in crate::format) fn from_json(
         merged: &JsonStats,
         candidates_len: usize,
         bytes_searched_sum: u64,
         elapsed: Duration,
         summary_line_bytes: u64,
-    ) {
+    ) -> Self {
         use std::convert::TryFrom;
-        self.matches = usize::try_from(merged.matches()).unwrap_or(usize::MAX);
-        self.files_with_matches =
-            usize::try_from(merged.searches_with_match()).unwrap_or(usize::MAX);
-        self.files_searched = candidates_len;
-        self.bytes_printed = merged.bytes_printed() + summary_line_bytes;
-        self.bytes_searched = bytes_searched_sum;
-        self.elapsed = elapsed;
+        Self {
+            search: Stats {
+                matches: usize::try_from(merged.matches()).unwrap_or(usize::MAX),
+                files_with_matches: usize::try_from(merged.searches_with_match())
+                    .unwrap_or(usize::MAX),
+                files_searched: candidates_len,
+                bytes_searched: bytes_searched_sum,
+                elapsed,
+            },
+            bytes_printed: merged.bytes_printed() + summary_line_bytes,
+        }
+    }
+
+    pub fn write_stderr(&self) {
+        eprintln!("{} matches", self.search.matches);
+        eprintln!("{} files contained matches", self.search.files_with_matches);
+        eprintln!("{} files searched", self.search.files_searched);
+        eprintln!("{} bytes printed", self.bytes_printed);
+        eprintln!("{} bytes searched", self.search.bytes_searched);
+        eprintln!("{:.6}s elapsed", self.search.elapsed.as_secs_f64());
     }
 }
 
@@ -71,17 +86,19 @@ impl TextStatsCounters {
         candidates_len: usize,
         bytes_searched: u64,
         elapsed: Duration,
-    ) -> Option<Stats> {
+    ) -> Option<OutputStats> {
         if !self.collect_stats {
             return None;
         }
-        Some(Stats {
-            matches: self.primary.load(Ordering::Relaxed),
-            files_with_matches: self.files_with_matches.load(Ordering::Relaxed),
-            files_searched: candidates_len,
-            bytes_printed: self.bytes_printed.load(Ordering::Relaxed),
-            bytes_searched,
-            elapsed,
-        })
+        Some(OutputStats::from_search(
+            Stats {
+                matches: self.primary.load(Ordering::Relaxed),
+                files_with_matches: self.files_with_matches.load(Ordering::Relaxed),
+                files_searched: candidates_len,
+                bytes_searched,
+                elapsed,
+            },
+            self.bytes_printed.load(Ordering::Relaxed),
+        ))
     }
 }

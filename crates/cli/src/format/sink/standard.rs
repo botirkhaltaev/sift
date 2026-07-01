@@ -520,11 +520,7 @@ impl<'a> LinePrinter<'a> {
     ) -> FileResult {
         self.bytes.clear();
         if stop.load(Ordering::SeqCst) {
-            return FileResult {
-                output: ChunkOutput::empty(),
-                json_stats: None,
-                hit: None,
-            };
+            return FileResult::text_empty();
         }
 
         let display = target.display().to_string();
@@ -568,7 +564,7 @@ impl<'a> LinePrinter<'a> {
             stop.store(true, Ordering::SeqCst);
         }
 
-        FileResult {
+        FileResult::Text {
             output: ChunkOutput {
                 bytes: if matched
                     && self.lines_flags.contains(LineStyleFlags::HEADING)
@@ -595,7 +591,6 @@ impl<'a> LinePrinter<'a> {
                     && self.filename_mode != FilenameMode::Never
                     && self.emission != OutputEmission::Quiet,
             },
-            json_stats: None,
             hit: target.hit(matched),
         }
     }

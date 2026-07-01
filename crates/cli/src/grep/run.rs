@@ -250,21 +250,21 @@ impl Run {
 
         let print_stats = OutputDecl::print_stats(&output_argv, effective_mode);
         let extras = PrintExtras::hits().with_stats(print_stats);
-        let report = SearchPrinter::new(&query, compiled, print_spec, &separators, extras)
+        let outcome = SearchPrinter::new(&query, compiled, print_spec, &separators, extras)
             .print(&inputs)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        if let Some(s) = report.stats.as_ref() {
-            OutputDecl::write_stats(s);
+        if let Some(s) = outcome.stats.as_ref() {
+            s.write_stderr();
         }
-        let matched = report.matched;
+        let matched = outcome.matched;
         if let Some(daemon) = daemon
             && session
                 .store_meta
                 .as_ref()
                 .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
         {
-            let paths = session.indexes.unindexed_hits(report.hit_paths);
+            let paths = session.indexes.unindexed_hits(outcome.hit_paths);
             if !paths.is_empty()
                 && let Err(e) = daemon.index(paths)
             {

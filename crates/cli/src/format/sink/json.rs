@@ -50,11 +50,7 @@ impl<'a> JsonPrinter<'a> {
     fn search_input(&mut self, input: &Input<'_>, stop: &AtomicBool) -> FileResult {
         let quiet = self.output.emission == OutputEmission::Quiet;
         if stop.load(Ordering::SeqCst) {
-            return FileResult {
-                output: ChunkOutput::empty(),
-                json_stats: None,
-                hit: None,
-            };
+            return FileResult::text_empty();
         }
 
         let path = match input {
@@ -83,14 +79,13 @@ impl<'a> JsonPrinter<'a> {
         if quiet && had_match {
             stop.store(true, Ordering::SeqCst);
         }
-        FileResult {
+        FileResult::Json {
             output: ChunkOutput {
                 bytes,
                 matched: had_match,
                 heading: false,
             },
-            json_stats: Some(file_stats),
-            hit: None,
+            stats: file_stats,
         }
     }
 }

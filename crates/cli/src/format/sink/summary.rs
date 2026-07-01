@@ -235,13 +235,12 @@ impl<'a> AggregatePrinter<'a> {
             stop.store(true, Ordering::SeqCst);
         }
 
-        FileResult {
+        FileResult::Text {
             output: ChunkOutput {
                 bytes,
                 matched,
                 heading: false,
             },
-            json_stats: None,
             hit: result.matched.then_some(hit).flatten(),
         }
     }
@@ -250,11 +249,7 @@ impl<'a> AggregatePrinter<'a> {
 impl InputPrinter for AggregatePrinter<'_> {
     fn report(&mut self, input: &Input<'_>, stop: &AtomicBool) -> FileResult {
         if stop.load(Ordering::SeqCst) {
-            return FileResult {
-                output: ChunkOutput::empty(),
-                json_stats: None,
-                hit: None,
-            };
+            return FileResult::text_empty();
         }
         match input {
             Input::Path { candidate } => {

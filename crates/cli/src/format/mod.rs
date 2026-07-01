@@ -13,4 +13,5 @@ pub use output::style::{
     PrintSeparators, RecordTerminator,
 };
 pub use output::{PrintFormat, PrintSpec};
-pub use printer::SearchPrinter;
+pub use printer::{PrintOutcome, SearchPrinter};
+pub use stats::OutputStats;

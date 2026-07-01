@@ -85,7 +85,6 @@ impl CompiledQuery {
             matches: match_count,
             files_with_matches,
             files_searched: inputs.len(),
-            bytes_printed: 0,
             bytes_searched: inputs.byte_count(),
             elapsed: search_start.elapsed(),
         });
