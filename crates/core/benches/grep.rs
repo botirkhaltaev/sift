@@ -7,10 +7,9 @@ use std::hint::black_box;
 use std::path::Path;
 
 use sift_core::grep::{
-    CandidateFilter, CandidateFilterConfig, CandidatePolicy, CandidatePolicyConfig,
-    CandidateScope, CorpusState, Inputs, MatchFlags, MatchOptions, Query, Session, StatsMode,
+    CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidatePolicyConfig, CandidateScope,
+    CorpusState, IndexFallback, Inputs, MatchFlags, MatchOptions, Query, Session, StatsMode,
 };
-use sift_core::query::ResolutionFallback;
 use sift_core::{Index, Indexes, NGramIndex};
 
 mod common;
@@ -50,21 +49,18 @@ fn run_grep(
         .options(query.1.clone());
     let compiled = query.compile().unwrap();
     let policy = CandidatePolicyConfig {
-            output_scope: CandidateScope::Indexed,
-            corpus: CorpusState::Indexed,
-            fallback: ResolutionFallback::WalkOnStaleSnapshot,
-            order: Default::default(),
-        }
-        .policy(compiled);
+        output_scope: CandidateScope::Indexed,
+        corpus: CorpusState::Indexed,
+        fallback: IndexFallback::WalkOnStaleSnapshot,
+        order: CandidateOrder::default(),
+    }
+    .policy(compiled);
     let candidates = query.candidates(&session, policy).unwrap();
     let mut inputs = Inputs::with_capacity(candidates.len());
     for candidate in &candidates {
         inputs.push_path(candidate);
     }
-    query
-        .search(&inputs, StatsMode::Off)
-        .unwrap()
-        .matched()
+    query.search(&inputs, StatsMode::Off).unwrap().matched()
 }
 
 fn bench_indexed_search(c: &mut Criterion) {

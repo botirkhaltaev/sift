@@ -23,7 +23,9 @@ impl Input<'_> {
                 candidate.abs_path().to_path_buf(),
                 Some(candidate.rel_path().to_path_buf()),
             ),
-            Self::Bytes { path, candidate, .. } => {
+            Self::Bytes {
+                path, candidate, ..
+            } => {
                 let display = candidate
                     .map(|c| c.abs_path().to_path_buf())
                     .unwrap_or_else(|| PathBuf::from(path.as_ref()));

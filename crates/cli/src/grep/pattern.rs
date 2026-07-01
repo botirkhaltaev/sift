@@ -2,9 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
-use sift_core::grep::{
-    BinaryMode, CaseMode, MatchFlags, MatchOptions, Query, RegexEngineRequest,
-};
+use sift_core::grep::{BinaryMode, CaseMode, MatchFlags, MatchOptions, Query, RegexEngineRequest};
 
 use crate::format::PrintMode;
 

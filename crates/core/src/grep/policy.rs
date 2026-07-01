@@ -67,11 +67,8 @@ pub struct CandidatePolicy {
 impl CandidatePolicyConfig {
     #[must_use]
     pub const fn policy(self, compiled: &CompiledQuery) -> CandidatePolicy {
-        let scope = CandidateScope::resolve(
-            self.output_scope,
-            compiled.indexability(),
-            self.corpus,
-        );
+        let scope =
+            CandidateScope::resolve(self.output_scope, compiled.indexability(), self.corpus);
         CandidatePolicy {
             scope,
             corpus: self.corpus,

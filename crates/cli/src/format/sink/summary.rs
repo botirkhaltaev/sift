@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::format::collection::PrintExtras;
 use crate::format::output::PrintSpec;
-use crate::format::output::mode::{PrintMode, OutputEmission, ZeroCountMode};
+use crate::format::output::mode::{OutputEmission, PrintMode, ZeroCountMode};
 use crate::format::output::style::FilenameMode;
 use crate::format::sink::InputPrinter;
 use crate::format::sink::result::{ChunkOutput, FileResult};

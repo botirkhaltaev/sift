@@ -9,7 +9,7 @@ use crate::grep::policy::CandidatePolicy;
 use crate::grep::report::Report;
 use crate::grep::session::Session;
 use crate::grep::stats::StatsMode;
-use crate::query::{PlanContext, QueryPlanner, ResolutionConfig, QueryFlags, QuerySpec};
+use crate::query::{PlanContext, QueryFlags, QueryPlanner, QuerySpec, ResolutionConfig};
 
 pub mod error;
 
@@ -120,20 +120,19 @@ impl Query {
         self.validate_max_results()?;
         let spec = self.query_spec();
         let compiled = self.compile()?;
-        QueryPlanner::new(spec)
-            .resolve(
-                PlanContext::new(
-                    session.indexes,
-                    session.filter,
-                    session.store_meta,
-                    compiled.index_capable(),
-                ),
-                ResolutionConfig {
-                    coverage: policy.coverage(),
-                    fallback: policy.fallback,
-                    order: policy.order,
-                },
-            )
+        QueryPlanner::new(spec).resolve(
+            PlanContext::new(
+                session.indexes,
+                session.filter,
+                session.store_meta,
+                compiled.index_capable(),
+            ),
+            ResolutionConfig {
+                coverage: policy.coverage(),
+                fallback: policy.fallback,
+                order: policy.order,
+            },
+        )
     }
 
     /// Search the given inputs and return a report.
@@ -249,9 +248,7 @@ mod tests {
 
     fn make_search(patterns: &[&str], opts: MatchOptions) -> Query {
         let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
-        Query::new(patterns)
-            .expect("compile search")
-            .options(opts)
+        Query::new(patterns).expect("compile search").options(opts)
     }
 
     #[test]

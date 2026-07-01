@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
 use sift_core::grep::{
-    CandidateFilter, CandidateFilterConfig, CandidatePolicyConfig,
-    CandidateScope, CorpusState, IndexFallback, Inputs, MatchOptions, Query, Session, StatsMode,
+    CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidatePolicyConfig, CandidateScope,
+    CorpusState, IndexFallback, Inputs, MatchOptions, Query, Session, StatsMode,
 };
 use tempfile::TempDir;
 
@@ -26,21 +26,19 @@ fn grep_finds_match_in_indexed_corpus() {
     let session = Session::new(&indexes, &filter, None);
     let compiled = query.compile().expect("compile");
     let policy = CandidatePolicyConfig {
-            output_scope: CandidateScope::Indexed,
-            corpus: CorpusState::Indexed,
-            fallback: IndexFallback::WalkOnStaleSnapshot,
-            order: Default::default(),
-        }
-        .policy(compiled);
+        output_scope: CandidateScope::Indexed,
+        corpus: CorpusState::Indexed,
+        fallback: IndexFallback::WalkOnStaleSnapshot,
+        order: CandidateOrder::default(),
+    }
+    .policy(compiled);
     let candidates = query.candidates(&session, policy).expect("candidates");
     let mut inputs = Inputs::with_capacity(candidates.len());
     for candidate in &candidates {
         inputs.push_path(candidate);
     }
 
-    let report = query
-        .search(&inputs, StatsMode::Off)
-        .expect("grep run");
+    let report = query.search(&inputs, StatsMode::Off).expect("grep run");
     assert!(report.matched());
 }
 
@@ -57,9 +55,7 @@ fn grep_finds_match_in_stdin_stream() {
         None,
     );
 
-    let report = query
-        .search(&inputs, StatsMode::Off)
-        .expect("grep run");
+    let report = query.search(&inputs, StatsMode::Off).expect("grep run");
     assert!(report.matched());
     assert_eq!(report.matches.len(), 1);
     assert!(report.matches[0].text.contains("needle"));

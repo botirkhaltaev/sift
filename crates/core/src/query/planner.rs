@@ -1,7 +1,7 @@
 use crate::corpus::CandidateCoverage;
 use crate::corpus::filter::CandidateFilter;
 use crate::index::Indexes;
-use crate::query::{ResolutionPlan, QuerySpec};
+use crate::query::{QuerySpec, ResolutionPlan};
 use crate::{IndexCoverage, StoreMeta};
 
 /// Inputs for pure candidate planning.

@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion};
 use std::hint::black_box;
 
 use sift_grep::Argv;
-use sift_grep::format::{PrintMode, PrintFormat};
+use sift_grep::format::{PrintFormat, PrintMode};
 use sift_grep::output::{FilenameContext, OutputArgv, OutputDecl};
 use sift_grep::pattern::PatternArgv;
 
@@ -41,7 +41,10 @@ pub fn bench(c: &mut Criterion) {
     let argv_default = args(&["sift", "pattern"]);
     g.bench_function("PrintSpec/default", |b| {
         b.iter(|| {
-            let output = cli_default.run_config(&Argv::new(&argv_default)).unwrap().output;
+            let output = cli_default
+                .run_config(&Argv::new(&argv_default))
+                .unwrap()
+                .output;
             let output_argv = OutputArgv::resolve(&Argv::new(black_box(&argv_default)));
             black_box(output.print_spec(
                 &output_argv,
@@ -57,9 +60,7 @@ pub fn bench(c: &mut Criterion) {
         let argv = args(&["sift", "--json", "pattern"]);
         b.iter(|| {
             let output_argv = OutputArgv::resolve(&Argv::new(black_box(&argv)));
-            black_box(
-                OutputDecl::format(&output_argv, PrintMode::Standard) == PrintFormat::Json,
-            )
+            black_box(OutputDecl::format(&output_argv, PrintMode::Standard) == PrintFormat::Json)
         });
     });
 

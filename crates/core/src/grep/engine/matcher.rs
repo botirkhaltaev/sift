@@ -1,4 +1,6 @@
-use grep_matcher::{Captures as GrepMatcherCaptures, LineTerminator, Match, Matcher as GrepMatcherTrait};
+use grep_matcher::{
+    Captures as GrepMatcherCaptures, LineTerminator, Match, Matcher as GrepMatcherTrait,
+};
 use grep_pcre2::{RegexMatcher as Pcre2Matcher, RegexMatcherBuilder as Pcre2MatcherBuilder};
 use grep_regex::{RegexCaptures, RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
@@ -116,8 +118,7 @@ impl SearcherConfig {
         } else {
             (0, 0)
         };
-        let line_number =
-            self.line_numbers || before_context > 0 || after_context > 0;
+        let line_number = self.line_numbers || before_context > 0 || after_context > 0;
         let mut builder = SearcherBuilder::new();
         let binary_detection = if query.opts.null_data() {
             BinaryDetection::none()

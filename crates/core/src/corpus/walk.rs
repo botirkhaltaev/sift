@@ -4,9 +4,7 @@ use std::sync::{Arc, Mutex};
 use ignore::{DirEntry, Error as IgnoreError, WalkBuilder, WalkState};
 
 use crate::corpus::candidate::Candidate;
-use crate::corpus::filter::{
-    CandidateFilter, HiddenMode, IgnoreSources, VisibilityConfig,
-};
+use crate::corpus::filter::{CandidateFilter, HiddenMode, IgnoreSources, VisibilityConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkTraversal {

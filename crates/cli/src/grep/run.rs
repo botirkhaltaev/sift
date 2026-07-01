@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use sift_core::grep::{
-    CandidatePolicyConfig, CorpusState, FileWalk, IndexFallback, Session,
-};
+use sift_core::grep::{CandidatePolicyConfig, CorpusState, FileWalk, IndexFallback, Session};
 use sift_core::{CorpusKind, IndexCoverage, Indexes};
 
 use crate::format::{PrintExtras, PrintMode, SearchPrinter};
@@ -94,9 +92,7 @@ impl Run {
     /// Returns an error if I/O operations fail, paths are invalid, or filter config building fails.
     pub fn execute(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<RunResult> {
         match self.config.mode {
-            RunMode::ListFiles => self
-                .run_files(argv)
-                .map(|found| RunResult::Files { found }),
+            RunMode::ListFiles => self.run_files(argv).map(|found| RunResult::Files { found }),
             RunMode::Search => self
                 .run_search(argv, daemon)
                 .map(|matched| RunResult::Search { matched }),
@@ -227,12 +223,12 @@ impl Run {
             IndexFallback::IndexHitsOnly
         };
         let policy = CandidatePolicyConfig {
-                output_scope: print_spec.candidate_scope(),
-                corpus,
-                fallback,
-                order: self.config.candidate_order,
-            }
-            .policy(compiled);
+            output_scope: print_spec.candidate_scope(),
+            corpus,
+            fallback,
+            order: self.config.candidate_order,
+        }
+        .policy(compiled);
 
         let session_data = Session::new(
             &session.indexes,
@@ -303,13 +299,10 @@ impl Run {
                     .snapshot_id()
                     .map(|id| daemon.validate_snapshot(id))
             })
-            .map_or(
-                SnapshotTrust::Unvalidated,
-                |validation| match validation {
-                    Ok(true) => SnapshotTrust::Validated,
-                    Ok(false) => SnapshotTrust::Stale,
-                    Err(_) => SnapshotTrust::Unvalidated,
-                },
-            )
+            .map_or(SnapshotTrust::Unvalidated, |validation| match validation {
+                Ok(true) => SnapshotTrust::Validated,
+                Ok(false) => SnapshotTrust::Stale,
+                Err(_) => SnapshotTrust::Unvalidated,
+            })
     }
 }

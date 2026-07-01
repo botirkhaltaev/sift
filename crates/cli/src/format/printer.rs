@@ -5,11 +5,11 @@ use std::time::Instant;
 
 use grep_printer::Stats as JsonStats;
 use rayon::prelude::*;
-use sift_core::grep::Query;
-use sift_core::grep::Stats;
 use sift_core::grep::CompiledQuery;
 use sift_core::grep::Inputs;
+use sift_core::grep::Query;
 use sift_core::grep::Report;
+use sift_core::grep::Stats;
 
 use crate::format::stats::StatsExt;
 

@@ -195,7 +195,9 @@ impl Index {
         Ok(())
     }
 
-    pub(crate) fn validate_file_paths(fingerprints: &[FileFingerprint]) -> Result<(), NGramIndexError> {
+    pub(crate) fn validate_file_paths(
+        fingerprints: &[FileFingerprint],
+    ) -> Result<(), NGramIndexError> {
         for fp in fingerprints {
             if fp.path.as_os_str().is_empty()
                 || fp.path.is_absolute()

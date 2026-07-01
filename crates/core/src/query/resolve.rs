@@ -3,15 +3,15 @@ use std::path::PathBuf;
 
 use rayon::prelude::*;
 
+use crate::IndexCoverage;
 use crate::corpus::Candidate;
 use crate::corpus::CandidateCoverage;
 use crate::corpus::CandidateOrder;
 use crate::corpus::walk::FileWalk;
-use crate::IndexCoverage;
 
+use super::QuerySpec;
 use super::plan::{ResolutionPlan, ResolutionStrategy};
 use super::planner::PlanContext;
-use super::QuerySpec;
 
 /// Per-run inputs for candidate resolution after planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,10 +43,7 @@ impl CandidateSet {
         Self { candidates }
     }
 
-    fn retain_matches(
-        mut self,
-        filter: &crate::corpus::filter::CandidateFilter,
-    ) -> Self {
+    fn retain_matches(mut self, filter: &crate::corpus::filter::CandidateFilter) -> Self {
         self.candidates = self
             .candidates
             .into_par_iter()
@@ -75,9 +72,7 @@ impl ResolutionPlan {
         let raw = match self.strategy {
             ResolutionStrategy::WalkAll => FileWalk::from_filter(ctx.filter).collect()?,
             ResolutionStrategy::AllIndexed => ctx.indexes.complete_candidates(),
-            ResolutionStrategy::UseIndex => {
-                Self::resolve_index_hits(spec, ctx, config.fallback)?
-            }
+            ResolutionStrategy::UseIndex => Self::resolve_index_hits(spec, ctx, config.fallback)?,
         };
         Ok(CandidateSet::new(raw)
             .retain_matches(ctx.filter)
@@ -165,8 +160,8 @@ mod tests {
     use crate::index::{
         CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, Indexes, WalkMeta,
     };
-    use crate::{IndexStore, StoreMeta};
     use crate::query::{PlanContext, QueryFlags, QueryPlanner, QuerySpec};
+    use crate::{IndexStore, StoreMeta};
 
     use super::{ResolutionConfig, ResolutionFallback};
 

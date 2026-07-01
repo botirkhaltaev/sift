@@ -20,7 +20,7 @@ use crate::grep::pattern::PatternDecl;
 use crate::grep::pattern::{
     BinaryDecl, GrepFlags, GrepScope, PatternArgs, RegexFlagsA, RegexFlagsB,
 };
-use crate::grep::run::{Run, RunMode, RunConfig, RunResult};
+use crate::grep::run::{Run, RunConfig, RunMode, RunResult};
 use crate::index::{IndexExecution, IndexJob, IndexOperation, IndexRequest};
 use crate::update;
 

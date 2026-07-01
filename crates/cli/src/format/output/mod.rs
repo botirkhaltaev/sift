@@ -4,7 +4,7 @@ pub mod mode;
 pub mod passthru;
 pub mod style;
 
-use mode::{PrintMode, OutputEmission, ZeroCountMode};
+use mode::{OutputEmission, PrintMode, ZeroCountMode};
 use passthru::PassthruMode;
 use sift_core::grep::CandidateScope;
 use style::{PrintLineStyle, PrintRecordStyle};

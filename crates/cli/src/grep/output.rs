@@ -1,8 +1,8 @@
 use crate::format::output::style::{ColorSpecs, HyperlinkFormat, OutputBuffering};
 use crate::format::{
-    ColorChoice, ColumnLimit, ColumnOverflow, FilenameMode, PrintLineStyle, PrintMode, PrintSpec,
-    PrintFormat, PrintRecordStyle, PrintSeparators, LineStyleFlags, OutputEmission,
-    PassthruMode, RecordTerminator, ZeroCountMode,
+    ColorChoice, ColumnLimit, ColumnOverflow, FilenameMode, LineStyleFlags, OutputEmission,
+    PassthruMode, PrintFormat, PrintLineStyle, PrintMode, PrintRecordStyle, PrintSeparators,
+    PrintSpec, RecordTerminator, ZeroCountMode,
 };
 use clap::{ArgAction, Args};
 use sift_core::grep::Stats;
@@ -541,7 +541,10 @@ impl OutputDecl {
     #[must_use]
     pub const fn format(output_argv: &OutputArgv, effective_mode: PrintMode) -> PrintFormat {
         if output_argv.mode.json
-            && matches!(effective_mode, PrintMode::Standard | PrintMode::OnlyMatching)
+            && matches!(
+                effective_mode,
+                PrintMode::Standard | PrintMode::OnlyMatching
+            )
         {
             PrintFormat::Json
         } else {
@@ -552,10 +555,7 @@ impl OutputDecl {
     #[must_use]
     pub const fn print_stats(output_argv: &OutputArgv, effective_mode: PrintMode) -> bool {
         output_argv.mode.stats
-            || matches!(
-                Self::format(output_argv, effective_mode),
-                PrintFormat::Json
-            )
+            || matches!(Self::format(output_argv, effective_mode), PrintFormat::Json)
     }
 
     pub fn write_stats(stats: &Stats) {
