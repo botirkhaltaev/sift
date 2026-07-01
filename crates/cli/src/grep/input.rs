@@ -137,10 +137,10 @@ impl InputSources {
             && indexes_empty
             && stdin_is_pipe();
         if implicit_stream {
-            self.stdin_implicit = true;
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes)?;
             if !bytes.is_empty() {
+                self.stdin_implicit = true;
                 self.stdin_bytes.push(bytes);
             }
         }
