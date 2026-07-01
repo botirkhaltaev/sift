@@ -22,7 +22,6 @@ fslock = "0.2"
 grep-cli = "0.1"
 grep-matcher = "0.1"
 grep-pcre2 = "0.1"
-grep-printer = "0.3"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
@@ -33,7 +32,6 @@ regex-automata = "0.4"
 regex-syntax = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-termcolor = "1"
 thiserror = "2"
 unsigned-varint = "0.8"
 
@@ -56,10 +54,6 @@ harness = false
 [[test]]
 name = "index"
 path = "tests/index/main.rs"
-
-[[test]]
-name = "query"
-path = "tests/query/main.rs"
 
 [[test]]
 name = "grep"

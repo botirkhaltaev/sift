@@ -1,37 +1,22 @@
 # query/
 
-Query description and candidate planning. Turns user patterns into an index-agnostic query specification that any index kind can consume.
+Query planning and candidate resolution.
 
 ## Design
 
-The query layer is deliberately independent of any index implementation. `QuerySpec` describes what the user is searching for (patterns + flags); each index kind decides how to use that specification to narrow candidates. The `QueryPlanner` orchestrates candidate resolution by consulting the `Indexes` registry and falling back to a filesystem walk when no index can narrow.
+`QuerySpec` is index-agnostic (patterns + flags). `QueryPlanner::plan` chooses a strategy (`UseIndex`, `WalkAll`, `AllIndexed`) from context and per-run policy. `QueryPlanner::resolve` plans and executes candidate resolution in `resolve.rs`.
 
-This separation means adding new index types requires no changes to the query layer. As the planner evolves to support richer query planning (choosing among index types, estimating costs, composing strategies), it will remain the single coordination point between the search pipeline and the index registry.
+## Key Types
 
-## Modules
+| Type | Role |
+|------|------|
+| `QuerySpec` | Neutral query description for index narrowing |
+| `QueryPlanner` | Strategy selection; `resolve` plans + executes |
+| `QueryPlan` | Planner output |
+| `PlanContext` | Persistent inputs: indexes, filter, store meta |
+| `ResolvePolicy` | Per-run inputs: coverage, walk_fallback, order |
 
-| File | Description |
-|------|-------------|
-| [`mod.rs`](mod.rs) | Module declarations and public re-exports |
-| [`spec.rs`](spec.rs) | `QuerySpec`: neutral query description (patterns + flags) |
-| [`planner.rs`](planner.rs) | `QueryPlanner`: candidate resolution via indexes or walk fallback |
+## Do NOT
 
-## API
-
-```rust
-use sift_core::{QuerySpec, QueryFlags, QueryPlanner, CandidateRequirement};
-
-// Describe a query
-let spec = QuerySpec {
-    patterns: &["pattern".to_string()],
-    flags: QueryFlags::empty(),
-};
-
-// Plan candidate resolution
-let planner = QueryPlanner::new(spec);
-let candidates = planner.candidates(
-    &indexes, requirement, &filter, store_meta, walk_unindexed, || base(),
-)?;
-```
-
-`QuerySpec` is index-agnostic. Each index implementation decides how to interpret the spec for candidate narrowing.
+- Put regex scanning in this module — that belongs in `grep/engine/`
+- Import from `grep/`

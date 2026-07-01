@@ -55,7 +55,7 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`IndexStore::open_or_create` → `IndexStore::build(configs, build_config)` → `Indexes::open` → `GrepQuery::new` → `Grep::run`. The `--indexes` flag on `sift index build` / `sift index update` selects which `IndexConfig` values to use (defaults to all). See `crates/core/README.md`.
+`IndexStore::open_or_create` → `IndexStore::build(configs, build_config)` → `Indexes::open` → `Query::new` → `Query::candidates` / `Query::search`. CLI: `RunConfig` → `Run::execute` → `SearchPrinter`. See `crates/core/README.md`.
 
 ## Architecture & Design
 
@@ -77,7 +77,7 @@ mechanism they use.
 When adding request/config structs, name them after the domain decision they
 represent, not the mechanical data they carry. Avoid vague bundles such as
 `Context`, `State`, `Read`, or `Options` unless those are the actual domain
-terms. Prefer names like `CandidateSource`, `SnapshotValidation`, and
+terms. Prefer names like `CandidateSource`, `ScanScope`, and
 `IndexCoverage` that tell callers how to reason about the API.
 
 Do not expose low-level planner knobs through higher-level APIs as loose fields.

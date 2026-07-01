@@ -35,6 +35,18 @@ fn piped_stdin_is_searched_when_no_paths_are_given() {
 }
 
 #[test]
+fn empty_piped_stdin_still_searches_walk_corpus() {
+    let p = TestProject::new("stdin-empty-pipe-walk");
+    p.write("hay.txt", "needle\n");
+    let mut cmd = p.sift();
+    cmd.arg("--sift-dir").arg(p.root().join(".sift-not-found"));
+    let out = output_with_stdin(cmd, ["needle"], b"");
+
+    assert_success(&out);
+    assert_eq!(normalize_stdout(&out), "hay.txt:needle\n");
+}
+
+#[test]
 fn piped_stdin_does_not_replace_indexed_default_corpus() {
     let p = TestProject::new("stdin-indexed-default-corpus");
     p.write("a.txt", "needle\n");

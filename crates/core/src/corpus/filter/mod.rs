@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use error::FilterError;
 
-use crate::grep::GrepError;
+use crate::grep::Error as GrepError;
 
 use ::ignore::gitignore::Gitignore;
 use ::ignore::overrides::{Override, OverrideBuilder};
@@ -165,7 +165,7 @@ impl CandidateFilter {
         if self.is_excluded(candidate.rel_path()) {
             return false;
         }
-        if self.visibility.hidden == crate::grep::filter::config::HiddenMode::Respect
+        if self.visibility.hidden == crate::corpus::filter::config::HiddenMode::Respect
             && Self::path_is_hidden(candidate.rel_path())
         {
             return false;
@@ -195,7 +195,7 @@ impl CandidateFilter {
     }
 
     fn matches_file(&self, rel_path: &Path) -> bool {
-        if self.visibility.hidden == crate::grep::filter::config::HiddenMode::Respect
+        if self.visibility.hidden == crate::corpus::filter::config::HiddenMode::Respect
             && Self::path_is_hidden(rel_path)
         {
             return false;
@@ -248,7 +248,7 @@ impl CandidateFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grep::filter::config::*;
+    use crate::corpus::filter::config::*;
 
     fn make_filter(config: &CandidateFilterConfig) -> CandidateFilter {
         CandidateFilter::new(config, Path::new("/root")).expect("create filter")

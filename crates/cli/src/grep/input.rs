@@ -1,30 +1,31 @@
 use std::borrow::Cow;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use grep_cli::DecompressionReaderBuilder;
 use sift_core::Candidate;
-use sift_core::grep::CandidateContent;
-use sift_core::grep::CandidateContentSource;
+use sift_core::grep::Inputs;
+
+const STDIN_DISPLAY_PATH: &str = "<stdin>";
 
 #[derive(Debug, Clone, Default)]
-pub struct ContentConfig {
+pub struct ContentTransformConfig {
     pub search_zip: bool,
     pub pre: Option<String>,
     pub pre_globs: Vec<String>,
 }
 
-impl ContentConfig {
+impl ContentTransformConfig {
     /// # Errors
     ///
     /// Returns an error when a `--pre-glob` pattern is not a valid glob.
-    pub fn source(&self) -> sift_core::Result<Option<TransformedContent>> {
+    pub fn transform(&self) -> sift_core::Result<Option<ContentTransform>> {
         if !self.enabled() {
             return Ok(None);
         }
-        Ok(Some(TransformedContent {
+        Ok(Some(ContentTransform {
             search_zip: self.search_zip,
             pre: if let Some(command) = &self.pre {
                 Some(Preprocessor {
@@ -43,29 +44,19 @@ impl ContentConfig {
     }
 }
 
-pub struct TransformedContent {
+pub struct ContentTransform {
     search_zip: bool,
     pre: Option<Preprocessor>,
     decompressor: DecompressionReaderBuilder,
 }
 
-impl CandidateContentSource for TransformedContent {
-    fn read(&self, candidates: &[Candidate]) -> sift_core::Result<Vec<CandidateContent>> {
-        candidates
-            .iter()
-            .map(|candidate| {
-                let bytes = self.read_candidate(candidate)?;
-                Ok(CandidateContent {
-                    candidate: candidate.clone(),
-                    bytes,
-                })
-            })
-            .collect()
-    }
-}
-
-impl TransformedContent {
-    fn read_candidate(&self, candidate: &Candidate) -> sift_core::Result<Vec<u8>> {
+impl ContentTransform {
+    /// Read transformed bytes for one candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if transformed content cannot be read.
+    pub fn read_candidate(&self, candidate: &Candidate) -> sift_core::Result<Vec<u8>> {
         if let Some(pre) = &self.pre
             && pre.matches(candidate)
         {
@@ -87,6 +78,140 @@ impl TransformedContent {
         reader.read_to_end(&mut bytes)?;
         Ok(bytes)
     }
+}
+
+/// Resolved argv paths and optional stdin byte streams.
+pub struct InputSources {
+    pub paths: Vec<PathBuf>,
+    pub stdin_bytes: Vec<Vec<u8>>,
+    /// `-` appeared on argv (stdin read even when empty).
+    stdin_explicit: bool,
+    /// Implicit piped stdin with no paths and no index.
+    stdin_implicit: bool,
+}
+
+impl InputSources {
+    #[must_use]
+    pub fn from_paths(search_paths: &[PathBuf]) -> Self {
+        let mut paths = Vec::with_capacity(search_paths.len());
+        let mut stdin_explicit = false;
+        for path in search_paths {
+            if path == Path::new("-") {
+                stdin_explicit = true;
+            } else {
+                paths.push(path.clone());
+            }
+        }
+
+        Self {
+            paths,
+            stdin_bytes: Vec::new(),
+            stdin_explicit,
+            stdin_implicit: false,
+        }
+    }
+
+    /// Read stdin when requested and resolve implicit piped input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if stdin cannot be read.
+    pub fn resolve(
+        mut self,
+        pattern_input: super::pattern::PatternInputUse,
+        indexes_empty: bool,
+    ) -> anyhow::Result<Self> {
+        if self.stdin_explicit && self.stdin_bytes.is_empty() {
+            let mut bytes = Vec::new();
+            std::io::stdin().read_to_end(&mut bytes)?;
+            if !bytes.is_empty() {
+                self.stdin_bytes.push(bytes);
+            }
+        }
+
+        let stream_available = pattern_input == super::pattern::PatternInputUse::None;
+        let implicit_stream = stream_available
+            && !self.stdin_explicit
+            && self.paths.is_empty()
+            && self.stdin_bytes.is_empty()
+            && indexes_empty
+            && stdin_is_pipe();
+        if implicit_stream {
+            let mut bytes = Vec::new();
+            std::io::stdin().read_to_end(&mut bytes)?;
+            if !bytes.is_empty() {
+                self.stdin_implicit = true;
+                self.stdin_bytes.push(bytes);
+            }
+        }
+        Ok(self)
+    }
+
+    #[must_use]
+    pub const fn has_paths(&self) -> bool {
+        !self.paths.is_empty()
+    }
+
+    #[must_use]
+    pub const fn has_streams(&self) -> bool {
+        !self.stdin_bytes.is_empty()
+    }
+
+    /// Whether corpus candidates should be resolved (index/walk).
+    ///
+    /// Returns `false` for stdin-only runs (explicit `-`, implicit pipe, or
+    /// empty explicit `-` with no paths). Mixed runs (paths plus stdin) return
+    /// `true`; callers resolve corpus candidates and [`Self::build_inputs`]
+    /// appends streams.
+    #[must_use]
+    pub const fn resolve_candidates(&self) -> bool {
+        if self.has_paths() {
+            return true;
+        }
+        !(self.stdin_explicit || self.stdin_implicit || self.has_streams())
+    }
+
+    /// Build search inputs from resolved candidates and optional content transforms.
+    ///
+    /// Corpus paths become [`Input::Path`] entries (or [`Input::Bytes`] when
+    /// transformed). Any stdin byte streams are appended after corpus inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if transformed content cannot be read for any candidate.
+    pub fn build_inputs<'a>(
+        &self,
+        candidates: &'a [Candidate],
+        transform: Option<&ContentTransform>,
+    ) -> sift_core::Result<Inputs<'a>> {
+        let mut inputs = Inputs::with_capacity(candidates.len() + self.stdin_bytes.len());
+        for candidate in candidates {
+            if let Some(transform) = transform {
+                let bytes = transform.read_candidate(candidate)?;
+                inputs.push_bytes(
+                    Cow::Owned(candidate.abs_path().display().to_string()),
+                    Cow::Owned(bytes),
+                    Some(candidate),
+                );
+            } else {
+                inputs.push_path(candidate);
+            }
+        }
+        for bytes in &self.stdin_bytes {
+            inputs.push_bytes(
+                Cow::Owned(STDIN_DISPLAY_PATH.to_string()),
+                Cow::Owned(bytes.clone()),
+                None,
+            );
+        }
+        Ok(inputs)
+    }
+}
+
+fn stdin_is_pipe() -> bool {
+    use std::io::IsTerminal;
+
+    !std::io::stdin().is_terminal()
 }
 
 struct Preprocessor {
@@ -135,7 +260,7 @@ fn external_tool_path(path: &Path) -> Cow<'_, Path> {
 }
 
 #[cfg(windows)]
-fn windows_external_tool_path(path: &Path) -> Option<std::path::PathBuf> {
+fn windows_external_tool_path(path: &Path) -> Option<PathBuf> {
     use std::path::{Component, PathBuf, Prefix};
 
     let mut components = path.components();
@@ -201,6 +326,72 @@ impl PreprocessorGlobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_paths_and_stdin_resolves_candidates() {
+        let sources = InputSources {
+            paths: vec![PathBuf::from("src")],
+            stdin_bytes: vec![b"stream\n".to_vec()],
+            stdin_explicit: true,
+            stdin_implicit: false,
+        };
+        assert!(sources.resolve_candidates());
+    }
+
+    #[test]
+    fn stdin_only_skips_candidate_resolution() {
+        let sources = InputSources {
+            paths: Vec::new(),
+            stdin_bytes: vec![b"stream\n".to_vec()],
+            stdin_explicit: true,
+            stdin_implicit: false,
+        };
+        assert!(!sources.resolve_candidates());
+    }
+
+    #[test]
+    fn explicit_dash_empty_stdin_skips_candidate_resolution() {
+        let sources = InputSources {
+            paths: Vec::new(),
+            stdin_bytes: Vec::new(),
+            stdin_explicit: true,
+            stdin_implicit: false,
+        };
+        assert!(!sources.resolve_candidates());
+    }
+
+    #[test]
+    fn implicit_stdin_skips_candidate_resolution() {
+        let sources = InputSources {
+            paths: Vec::new(),
+            stdin_bytes: vec![b"stream\n".to_vec()],
+            stdin_explicit: false,
+            stdin_implicit: true,
+        };
+        assert!(!sources.resolve_candidates());
+    }
+
+    #[test]
+    fn paths_without_stdin_resolves_candidates() {
+        let sources = InputSources {
+            paths: vec![PathBuf::from("src")],
+            stdin_bytes: Vec::new(),
+            stdin_explicit: false,
+            stdin_implicit: false,
+        };
+        assert!(sources.resolve_candidates());
+    }
+
+    #[test]
+    fn default_corpus_without_paths_or_stdin_resolves_candidates() {
+        let sources = InputSources {
+            paths: Vec::new(),
+            stdin_bytes: Vec::new(),
+            stdin_explicit: false,
+            stdin_implicit: false,
+        };
+        assert!(sources.resolve_candidates());
+    }
 
     #[test]
     fn pre_globs_match_forward_slash_paths() {

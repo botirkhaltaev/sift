@@ -1,48 +1,16 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ignore::{DirEntry, Error as IgnoreError, WalkBuilder, WalkState};
 
-use crate::Candidate;
-use crate::grep::filter::{
-    CandidateFilter, HiddenMode, IgnoreConfig, IgnoreSources, VisibilityConfig,
-};
+use crate::corpus::candidate::Candidate;
+use crate::corpus::filter::{CandidateFilter, HiddenMode, IgnoreSources, VisibilityConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkTraversal {
     #[default]
     DoNotFollow,
     Follow,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct WalkOptions {
-    pub links: LinkTraversal,
-    pub max_depth: Option<usize>,
-    pub max_filesize: Option<u64>,
-    pub one_file_system: bool,
-}
-
-/// Discovers files under `root` using explicit walk options.
-///
-/// # Errors
-///
-/// Returns an error if the root path cannot be canonicalized or the walk encounters an
-/// inaccessible directory.
-pub fn discover_files(root: &Path, options: &WalkOptions) -> crate::Result<HashSet<PathBuf>> {
-    Ok(FileWalk::new(root)
-        .visibility(VisibilityConfig {
-            hidden: HiddenMode::Include,
-            ignore: IgnoreConfig::disabled(),
-        })
-        .links(options.links)
-        .one_file_system(options.one_file_system)
-        .max_depth(options.max_depth)
-        .max_filesize(options.max_filesize)
-        .collect_paths()?
-        .into_iter()
-        .collect())
 }
 
 /// Reusable filesystem discovery over one corpus root.
@@ -347,7 +315,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::grep::filter::{HiddenMode, IgnoreConfig};
+    use crate::corpus::filter::{HiddenMode, IgnoreConfig};
 
     fn raw_visibility() -> VisibilityConfig {
         VisibilityConfig {

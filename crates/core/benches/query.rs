@@ -1,13 +1,13 @@
 //! Pattern-compilation and search-compilation benchmarks.
 //!
-//! Exercises public `PatternCompiler` and `GrepQuery` APIs.
+//! Exercises public `PatternCompiler` and `Query` APIs.
 //! All benches operate on small inputs and measure only the compilation cost.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::GrepQuery;
-use sift_core::grep::{CaseMode, GrepOptions, PatternCompiler};
+use sift_core::Query;
+use sift_core::grep::{CaseMode, MatchOptions, PatternCompiler};
 
 fn sift_criterion() -> Criterion {
     Criterion::default()
@@ -59,7 +59,7 @@ fn bench_pattern_compiler(c: &mut Criterion) {
     g.finish();
 }
 
-// ─── GrepQuery::new benches ───────────────────────────────────────────────
+// ─── Query::new benches ───────────────────────────────────────────────
 
 fn bench_compiled_search_new(c: &mut Criterion) {
     let mut g = c.benchmark_group("compiled_search_new");
@@ -68,9 +68,9 @@ fn bench_compiled_search_new(c: &mut Criterion) {
         let pats = vec!["hello".to_string()];
         b.iter(|| {
             black_box(
-                GrepQuery::new(pats.clone())
+                Query::new(pats.clone())
                     .unwrap()
-                    .options(GrepOptions::default()),
+                    .options(MatchOptions::default()),
             );
         });
     });
@@ -84,21 +84,21 @@ fn bench_compiled_search_new(c: &mut Criterion) {
         ];
         b.iter(|| {
             black_box(
-                GrepQuery::new(pats.clone())
+                Query::new(pats.clone())
                     .unwrap()
-                    .options(GrepOptions::default()),
+                    .options(MatchOptions::default()),
             );
         });
     });
 
     g.bench_function("case_insensitive", |b| {
         let pats = vec!["hello".to_string()];
-        let opts = GrepOptions {
+        let opts = MatchOptions {
             case_mode: CaseMode::Insensitive,
             ..Default::default()
         };
         b.iter(|| {
-            black_box(GrepQuery::new(pats.clone()).unwrap().options(opts.clone()));
+            black_box(Query::new(pats.clone()).unwrap().options(opts.clone()));
         });
     });
 

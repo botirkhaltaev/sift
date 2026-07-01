@@ -9,9 +9,9 @@ use super::gram::{Gram, GramWidth};
 use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
 
+use crate::corpus::walk::FileWalk;
+use crate::corpus::walk::LinkTraversal;
 use crate::index::{CorpusKind, IndexBuildConfig};
-use crate::walk::FileWalk;
-use crate::walk::LinkTraversal;
 
 /// Collected index data ready for persistence.
 pub struct IndexTables {
@@ -217,14 +217,14 @@ impl IndexTables {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grep::filter::IgnoreConfig;
+    use crate::corpus::filter::IgnoreConfig;
+    use crate::corpus::walk::FileWalk;
+    use crate::corpus::walk::LinkTraversal;
     use crate::grep::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
     use crate::index::config::IndexWalkConfig;
     use crate::index::ngram::gram::GramWidth;
     use crate::index::ngram::storage::postings::Postings;
     use crate::index::{CorpusKind, CorpusSpec, IndexBuildConfig};
-    use crate::walk::FileWalk;
-    use crate::walk::LinkTraversal;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;

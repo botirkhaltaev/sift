@@ -2,27 +2,28 @@
 
 ## Responsibility
 
-Query description and candidate planning. Turns user patterns into an index-agnostic query specification and orchestrates candidate resolution across the index registry.
+Query planning and candidate resolution. Turns `QuerySpec` into candidates via strategy selection and I/O.
 
 ## Key Types
 
-- `QuerySpec`: neutral query description (patterns, flags). Consumed by every index kind for candidate narrowing.
-- `QueryFlags`: bitflags for fixed strings, case insensitivity, word/line regexp, invert match.
-- `QueryPlanner`: orchestrates candidate resolution by consulting the `Indexes` registry and falling back to filesystem walk when no index can narrow.
-- `CandidateRequirement`: whether search needs all candidates or only potential matches.
+- `QuerySpec`: neutral query description (patterns, flags). Built by `Query::query_spec()` in `grep/pattern/`.
+- `QueryPlanner`: `plan(ctx, coverage, walk_on_stale) -> ResolutionPlan` — pure strategy selection.
+- `QueryPlanner::resolve`: plan + execute — primary entry for candidate resolution.
+- `ResolutionPlan` / `ResolutionStrategy`: planner output; executed by `resolve.rs`.
+- `PlanContext`: indexes, filter, store meta, index_capable flag.
+- `ResolutionConfig`: per-run coverage, fallback, and candidate order.
 
 ## Design
 
-The query layer is deliberately independent of any index implementation. `QuerySpec` describes what the user is searching for; each index kind decides how to use that specification. As Sift gains additional index types, the planner will evolve to choose among them and compose their results -- but it will never import index-specific logic.
+Planning (`planner.rs`, `plan.rs`) is pure — no filesystem or index calls. Execution (`resolve.rs`) performs walks, index lookups, filtering, and ordering. `Query::candidates` delegates here; `grep/` only runs byte scanning.
 
 ## Conventions
 
-- Query planning is independent of any index implementation.
-- Does not depend on `index/` or `grep/`.
-- `QuerySpec` is the sole interface between the query layer and the index layer.
+- `grep/` must not embed planning or candidate I/O logic.
+- `QuerySpec` is the interface to the index layer.
+- `resolve.rs` may use `corpus::walk` and `Indexes`; `planner.rs` and `plan.rs` may not.
 
 ## Do NOT
 
-- Add index-specific logic (storage, file tables, postings).
-- Depend on `grep/` types.
-- Import from `crate::index::trigram` or any concrete index module.
+- Put regex matching or hit collection in this module — that belongs in `grep/engine/`.
+- Import from `grep/` (except shared corpus/index types).

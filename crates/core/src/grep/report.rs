@@ -1,86 +1,25 @@
 use std::path::PathBuf;
 
-use crate::grep::stats::GrepStats;
+use crate::grep::pattern::Match;
+use crate::grep::stats::Stats;
 
-/// Optional artifacts gathered during grep beyond primary output.
-#[must_use]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GrepCollection {
-    pub stats: bool,
-    pub hits: bool,
-}
-
-impl Default for GrepCollection {
-    fn default() -> Self {
-        Self::none()
-    }
-}
-
-impl GrepCollection {
-    pub const fn none() -> Self {
-        Self {
-            stats: false,
-            hits: false,
-        }
-    }
-
-    pub const fn stats() -> Self {
-        Self {
-            stats: true,
-            hits: false,
-        }
-    }
-
-    pub const fn hits() -> Self {
-        Self {
-            stats: false,
-            hits: true,
-        }
-    }
-
-    pub const fn stats_and_hits() -> Self {
-        Self {
-            stats: true,
-            hits: true,
-        }
-    }
-
-    pub const fn with_stats(self, stats: bool) -> Self {
-        Self {
-            stats,
-            hits: self.hits,
-        }
-    }
-
-    pub const fn with_hits(self, hits: bool) -> Self {
-        Self {
-            stats: self.stats,
-            hits,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct GrepOutcome {
+/// Result of a search run.
+pub struct Report {
     pub matched: bool,
-    pub stats: Option<GrepStats>,
-}
-
-/// Final result of a grep execution.
-pub struct GrepReport {
-    pub outcome: GrepOutcome,
+    pub matches: Vec<Match>,
     /// Unique rel-paths with at least one pattern hit.
-    pub hits: Vec<PathBuf>,
+    pub hit_paths: Vec<PathBuf>,
+    pub stats: Option<Stats>,
 }
 
-impl GrepReport {
+impl Report {
     #[must_use]
     pub const fn matched(&self) -> bool {
-        self.outcome.matched
+        self.matched
     }
 
     #[must_use]
-    pub const fn stats(&self) -> Option<&GrepStats> {
-        self.outcome.stats.as_ref()
+    pub const fn stats(&self) -> Option<&Stats> {
+        self.stats.as_ref()
     }
 }

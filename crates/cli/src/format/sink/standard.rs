@@ -1,23 +1,21 @@
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use crate::grep::GrepCollection;
-use crate::grep::input::GrepInput;
-use crate::grep::output::GrepOutput;
-use crate::grep::output::format::ColumnAction;
-use crate::grep::output::mode::OutputEmission;
-use crate::grep::output::style::{
-    AnsiStyle, FilenameMode, GrepRecordStyle, GrepSeparators, HyperlinkValues, LineStyleFlags,
+use crate::format::collection::PrintExtras;
+use crate::format::output::PrintSpec;
+use crate::format::output::format::ColumnAction;
+use crate::format::output::mode::OutputEmission;
+use crate::format::output::style::{
+    AnsiStyle, FilenameMode, HyperlinkValues, LineStyleFlags, PrintRecordStyle, PrintSeparators,
 };
-use crate::grep::query::GrepQuery;
-use crate::grep::query::matcher::GrepMatcher;
-use crate::grep::sink::FileReporter;
-use crate::grep::sink::result::{ChunkOutput, FileResult};
-use crate::grep::sink::style::ANSI_RESET;
-use crate::grep::stats::TextStatsCounters;
-use grep_matcher::{Captures, Matcher};
+use crate::format::sink::InputPrinter;
+use crate::format::sink::result::{ChunkOutput, FileResult};
+use crate::format::sink::style::ANSI_RESET;
+use crate::format::stats::TextStatsCounters;
+use grep_matcher::{Captures, Matcher as GrepMatcherTrait};
 use grep_searcher::{Searcher, Sink, SinkContext, SinkMatch};
+use sift_core::grep::{CompiledQuery, Input, Matcher, Query, SearcherConfig};
 
 #[derive(Clone, Copy)]
 pub struct SinkConfig {
@@ -26,13 +24,13 @@ pub struct SinkConfig {
 }
 
 pub struct StandardSink<'a> {
-    matcher: &'a GrepMatcher,
-    output: GrepOutput,
+    matcher: &'a Matcher,
+    output: PrintSpec,
     show_line_numbers: bool,
     display_path: String,
     hyperlink_path: String,
     bytes: &'a mut Vec<u8>,
-    separators: &'a GrepSeparators,
+    separators: &'a PrintSeparators,
     matched: bool,
     match_count: usize,
     replace: Option<&'a str>,
@@ -47,11 +45,11 @@ struct SinkTarget {
 
 impl<'a> StandardSink<'a> {
     fn new(
-        matcher: &'a GrepMatcher,
-        output: &GrepOutput,
+        matcher: &'a Matcher,
+        output: &PrintSpec,
         target: SinkTarget,
         bytes: &'a mut Vec<u8>,
-        separators: &'a GrepSeparators,
+        separators: &'a PrintSeparators,
         replace: Option<&'a str>,
         config: SinkConfig,
     ) -> Self {
@@ -94,7 +92,7 @@ impl Sink for StandardSink<'_> {
 
         if matches!(
             self.output.mode,
-            crate::grep::output::mode::GrepMode::OnlyMatching
+            crate::format::output::mode::PrintMode::OnlyMatching
         ) {
             return self.handle_only_matching(mat);
         }
@@ -125,7 +123,7 @@ impl Sink for StandardSink<'_> {
         }
         if matches!(
             self.output.mode,
-            crate::grep::output::mode::GrepMode::OnlyMatching
+            crate::format::output::mode::PrintMode::OnlyMatching
         ) {
             return Ok(true);
         }
@@ -185,7 +183,7 @@ impl Sink for StandardSink<'_> {
         }
         if matches!(
             self.output.mode,
-            crate::grep::output::mode::GrepMode::OnlyMatching
+            crate::format::output::mode::PrintMode::OnlyMatching
         ) {
             return Ok(true);
         }
@@ -419,42 +417,41 @@ impl StandardSink<'_> {
     }
 }
 
-pub(in crate::grep) struct StandardReporter<'a> {
-    matcher: &'a GrepMatcher,
+pub(in crate::format) struct LinePrinter<'a> {
+    compiled: &'a CompiledQuery,
+    matcher: &'a Matcher,
     searcher: Searcher,
-    output: GrepOutput,
-    separators: &'a GrepSeparators,
+    output: PrintSpec,
+    separators: &'a PrintSeparators,
     bytes: Vec<u8>,
     match_counter: Option<&'a AtomicUsize>,
     files_with_matches: Option<&'a AtomicUsize>,
     replace: Option<String>,
     sink_config: SinkConfig,
-    records: GrepRecordStyle,
+    records: PrintRecordStyle,
     lines_flags: LineStyleFlags,
     filename_mode: FilenameMode,
-    path_display: crate::grep::output::style::PathDisplay,
+    path_display: crate::format::output::style::PathDisplay,
     path_separator: Option<u8>,
     emission: OutputEmission,
     collect_hits: bool,
     line_terminator: u8,
 }
 
-enum GrepTarget<'a> {
+enum GrepTarget {
     File {
         display: String,
         hyperlink: String,
-        abs_path: &'a Path,
         hit: Option<PathBuf>,
     },
     Bytes {
         display: String,
         hyperlink: String,
-        bytes: &'a [u8],
         hit: Option<PathBuf>,
     },
 }
 
-impl GrepTarget<'_> {
+impl GrepTarget {
     fn display(&self) -> &str {
         match self {
             Self::File { display, .. } | Self::Bytes { display, .. } => display,
@@ -476,22 +473,24 @@ impl GrepTarget<'_> {
     }
 }
 
-impl<'a> StandardReporter<'a> {
-    pub(in crate::grep) fn new(
-        search: &'a GrepQuery,
-        matcher: &'a GrepMatcher,
-        output: &GrepOutput,
-        separators: &'a GrepSeparators,
+impl<'a> LinePrinter<'a> {
+    pub(in crate::format) fn new(
+        search: &'a Query,
+        compiled: &'a CompiledQuery,
+        output: &PrintSpec,
+        separators: &'a PrintSeparators,
         counters: &'a TextStatsCounters,
-        collect: GrepCollection,
+        collect: PrintExtras,
     ) -> Self {
         Self {
-            searcher: search.build_searcher(
-                output.lines.line_number(),
-                search.opts().max_results,
-                true,
-            ),
-            matcher,
+            compiled,
+            searcher: SearcherConfig {
+                line_numbers: output.lines.line_number(),
+                max_matches: search.opts().max_results,
+                include_context: true,
+            }
+            .searcher(search),
+            matcher: compiled.matcher(),
             output: output.clone(),
             separators,
             bytes: Vec::new(),
@@ -508,12 +507,17 @@ impl<'a> StandardReporter<'a> {
             path_display: output.lines.path_display,
             path_separator: output.records.path_separator,
             emission: output.emission,
-            collect_hits: collect.hits,
+            collect_hits: collect.collect_hits(),
             line_terminator: search.opts().line_terminator(),
         }
     }
 
-    fn search_target(&mut self, target: GrepTarget<'_>, stop: &AtomicBool) -> FileResult {
+    fn search_target(
+        &mut self,
+        input: &Input<'_>,
+        target: GrepTarget,
+        stop: &AtomicBool,
+    ) -> FileResult {
         self.bytes.clear();
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -546,14 +550,8 @@ impl<'a> StandardReporter<'a> {
                 self.sink_config,
             )
             .with_line_terminator(self.line_terminator);
-            let _ = match &target {
-                GrepTarget::File { abs_path, .. } => {
-                    self.searcher.search_path(self.matcher, abs_path, &mut sink)
-                }
-                GrepTarget::Bytes { bytes, .. } => {
-                    self.searcher.search_slice(self.matcher, bytes, &mut sink)
-                }
-            };
+            self.compiled
+                .match_input(input, &mut self.searcher, &mut sink);
             let n = sink.match_count;
             if let Some(c) = self.match_counter {
                 c.fetch_add(n, Ordering::Relaxed);
@@ -603,36 +601,36 @@ impl<'a> StandardReporter<'a> {
     }
 }
 
-impl FileReporter for StandardReporter<'_> {
-    fn report(&mut self, input: &GrepInput<'_>, stop: &AtomicBool) -> FileResult {
+impl InputPrinter for LinePrinter<'_> {
+    fn report(&mut self, input: &Input<'_>, stop: &AtomicBool) -> FileResult {
         match input {
-            GrepInput::Path { candidate } => self.search_target(
+            Input::Path { candidate } => self.search_target(
+                input,
                 GrepTarget::File {
                     display: candidate.display_path(self.path_display, self.path_separator),
                     hyperlink: candidate.abs_path().display().to_string(),
-                    abs_path: candidate.abs_path(),
                     hit: (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
                 },
                 stop,
             ),
-            GrepInput::Bytes {
-                display_path,
-                bytes,
+            Input::Bytes {
+                path,
+                bytes: _,
                 candidate,
             } => {
                 let display = candidate.map_or_else(
-                    || display_path.to_string(),
+                    || path.to_string(),
                     |candidate| candidate.display_path(self.path_display, self.path_separator),
                 );
                 let hyperlink = candidate.map_or_else(
-                    || display_path.to_string(),
+                    || path.to_string(),
                     |candidate| candidate.abs_path().display().to_string(),
                 );
                 self.search_target(
+                    input,
                     GrepTarget::Bytes {
                         display,
                         hyperlink,
-                        bytes,
                         hit: candidate
                             .filter(|_| self.collect_hits)
                             .map(|candidate| candidate.rel_path().to_path_buf()),
@@ -644,7 +642,7 @@ impl FileReporter for StandardReporter<'_> {
     }
 }
 
-fn apply_replace(matcher: &GrepMatcher, line: &[u8], replacement: &str) -> String {
+fn apply_replace(matcher: &Matcher, line: &[u8], replacement: &str) -> String {
     let Ok(mut caps) = matcher.new_captures() else {
         return String::from_utf8_lossy(line).into_owned();
     };

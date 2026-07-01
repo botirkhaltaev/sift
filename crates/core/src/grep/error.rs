@@ -1,11 +1,10 @@
 use thiserror::Error;
 
-use crate::grep::filter::error::FilterError;
-use crate::grep::output::error::OutputError;
+use crate::corpus::filter::error::FilterError;
 use crate::grep::pattern::error::CompileError;
 
 #[derive(Debug, Error)]
-pub enum GrepError {
+pub enum Error {
     #[error("search patterns must not be empty")]
     EmptyPatterns,
 
@@ -28,7 +27,7 @@ pub enum GrepError {
     Ignore(#[from] ignore::Error),
 }
 
-impl From<CompileError> for GrepError {
+impl From<CompileError> for Error {
     fn from(e: CompileError) -> Self {
         match e {
             CompileError::RegexBuild(s) => Self::RegexBuild(s),
@@ -36,21 +35,11 @@ impl From<CompileError> for GrepError {
     }
 }
 
-impl From<FilterError> for GrepError {
+impl From<FilterError> for Error {
     fn from(e: FilterError) -> Self {
         match e {
             FilterError::RegexBuild(s) => Self::RegexBuild(s),
             FilterError::Ignore(e) => Self::Ignore(e),
-        }
-    }
-}
-
-impl From<OutputError> for GrepError {
-    fn from(e: OutputError) -> Self {
-        match e {
-            OutputError::JsonOutputIncompatibleMode => Self::JsonOutputIncompatibleMode,
-            OutputError::JsonSerialize(e) => Self::JsonSerialize(e),
-            OutputError::Io(e) => Self::Io(e),
         }
     }
 }

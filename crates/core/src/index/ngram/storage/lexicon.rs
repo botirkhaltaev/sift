@@ -40,6 +40,11 @@ impl Lexicon {
         width.get() + 12
     }
 
+    /// Encode lexicon entries into the on-disk file format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry count exceeds `u32::MAX`.
     pub fn encode(width: GramWidth, entries: &[LexiconEntry]) -> std::io::Result<Vec<u8>> {
         let mut data = Vec::with_capacity(
             LEXICON_MAGIC.len() + Self::HEADER_SIZE + entries.len() * Self::entry_size(width),
@@ -66,12 +71,22 @@ impl Lexicon {
         self.data.as_ref()
     }
 
+    /// Validate and wrap in-memory or mmap artifact bytes as a lexicon.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header or entries are invalid.
     pub fn from_artifact(data: ArtifactData, width: GramWidth) -> std::io::Result<Self> {
         let bytes = data.as_ref();
         let count = Self::validate(bytes, width)?;
         Ok(Self { width, data, count })
     }
 
+    /// Write a lexicon to a file and return a memory-mapped instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if encoding, writing, or reopening fails.
     pub fn create(
         path: &Path,
         width: GramWidth,
@@ -82,6 +97,11 @@ impl Lexicon {
         Self::open(path, width)
     }
 
+    /// Open a lexicon from a memory-mapped file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened or the format is invalid.
     pub fn open(path: &Path, width: GramWidth) -> std::io::Result<Self> {
         let mmap = mmap_open(path)?;
         Self::from_artifact(ArtifactData::Mmap(mmap), width)
@@ -153,6 +173,11 @@ impl Lexicon {
         self.count == 0
     }
 
+    /// Look up a lexicon entry for `gram` via binary search.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an entry key cannot be decoded; keys are validated when the lexicon is opened.
     #[must_use]
     pub fn get(&self, gram: Gram) -> Option<LexiconEntry> {
         if self.count == 0 {
@@ -216,6 +241,11 @@ impl Lexicon {
         } else {
             payload_len
         }
+    }
+
+    #[must_use]
+    pub fn iter(&self) -> LexiconIter<'_> {
+        self.into_iter()
     }
 }
 

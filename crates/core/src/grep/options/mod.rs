@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub struct GrepMatchFlags: u16 {
+    pub struct MatchFlags: u16 {
         const INVERT_MATCH     = 1 << 0;
         const FIXED_STRINGS    = 1 << 1;
         const WORD_REGEXP      = 1 << 2;
@@ -106,8 +106,8 @@ impl FromStr for InputEncoding {
 }
 
 #[derive(Debug, Clone)]
-pub struct GrepOptions {
-    pub flags: GrepMatchFlags,
+pub struct MatchOptions {
+    pub flags: MatchFlags,
     pub case_mode: CaseMode,
     pub max_results: Option<usize>,
     pub before_context: usize,
@@ -121,10 +121,10 @@ pub struct GrepOptions {
     pub regex_engine: RegexEngineRequest,
 }
 
-impl Default for GrepOptions {
+impl Default for MatchOptions {
     fn default() -> Self {
         Self {
-            flags: GrepMatchFlags::default(),
+            flags: MatchFlags::default(),
             case_mode: CaseMode::default(),
             max_results: None,
             before_context: 0,
@@ -140,7 +140,7 @@ impl Default for GrepOptions {
     }
 }
 
-impl GrepOptions {
+impl MatchOptions {
     #[must_use]
     pub const fn case_insensitive(&self) -> bool {
         self.case_mode.is_case_insensitive()
@@ -148,47 +148,47 @@ impl GrepOptions {
 
     #[must_use]
     pub const fn invert_match(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::INVERT_MATCH)
+        self.flags.contains(MatchFlags::INVERT_MATCH)
     }
 
     #[must_use]
     pub const fn fixed_strings(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::FIXED_STRINGS)
+        self.flags.contains(MatchFlags::FIXED_STRINGS)
     }
 
     #[must_use]
     pub const fn word_regexp(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::WORD_REGEXP)
+        self.flags.contains(MatchFlags::WORD_REGEXP)
     }
 
     #[must_use]
     pub const fn line_regexp(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::LINE_REGEXP)
+        self.flags.contains(MatchFlags::LINE_REGEXP)
     }
 
     #[must_use]
     pub const fn only_matching(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::ONLY_MATCHING)
+        self.flags.contains(MatchFlags::ONLY_MATCHING)
     }
 
     #[must_use]
     pub const fn multiline(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::MULTILINE)
+        self.flags.contains(MatchFlags::MULTILINE)
     }
 
     #[must_use]
     pub const fn multiline_dotall(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::MULTILINE_DOTALL)
+        self.flags.contains(MatchFlags::MULTILINE_DOTALL)
     }
 
     #[must_use]
     pub const fn crlf(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::CRLF)
+        self.flags.contains(MatchFlags::CRLF)
     }
 
     #[must_use]
     pub const fn null_data(&self) -> bool {
-        self.flags.contains(GrepMatchFlags::NULL_DATA)
+        self.flags.contains(MatchFlags::NULL_DATA)
     }
 
     #[must_use]

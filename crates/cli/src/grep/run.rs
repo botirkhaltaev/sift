@@ -1,146 +1,70 @@
-use std::io::Read;
 use std::path::PathBuf;
 
-use sift_core::grep::{CandidateFilter, GrepMode, GrepStream};
-use sift_core::grep::{
-    CandidateIndexState, CandidateOrder, Grep as CoreGrep, GrepCollection, GrepCorpus,
-};
-use sift_core::{
-    Candidate, CorpusKind, IndexCoverage, Indexes, SnapshotValidation, discover_files,
-};
+use sift_core::grep::{CandidatePolicyConfig, CorpusState, FileWalk, IndexFallback, Session};
+use sift_core::{CorpusKind, IndexCoverage, Indexes};
+
+use crate::format::{PrintExtras, PrintMode, SearchPrinter};
 
 use crate::index::daemon::Daemon;
 
 use super::argv::Argv;
 use super::filter::FilterConfig;
-use super::input::ContentConfig;
-use super::output::{FilenameContext, OutputArgv, OutputConfig};
+use super::input::{ContentTransformConfig, InputSources};
+use super::output::{FilenameContext, OutputArgv, OutputDecl};
 use super::paths::CorpusScope;
-use super::pattern::{PatternArgv, PatternConfig, PatternInputUse, ResolvedPatterns};
-
-const STDIN_DISPLAY_PATH: &str = "<stdin>";
+use super::pattern::{PatternArgv, PatternDecl, ResolvedPatterns};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GrepCommand {
+pub enum RunMode {
     Search,
     ListFiles,
 }
 
-/// Resolved configuration for a grep invocation.
+/// Resolved configuration for a search invocation.
 #[derive(Clone)]
-pub struct GrepConfig {
-    pub pattern: PatternConfig,
+pub struct RunConfig {
+    pub pattern: PatternDecl,
     pub filter: FilterConfig,
-    pub output: OutputConfig,
+    pub output: OutputDecl,
     pub sift_dir: PathBuf,
     pub search_paths: Vec<PathBuf>,
     pub threads: Option<usize>,
-    pub mode: GrepCommand,
-    pub content: ContentConfig,
-    pub candidate_order: CandidateOrder,
+    pub mode: RunMode,
+    pub content: ContentTransformConfig,
+    pub candidate_order: sift_core::grep::CandidateOrder,
 }
 
-/// Grep-mode search and file listing.
-pub struct Grep {
-    config: GrepConfig,
+impl RunConfig {
+    /// Build a resolved run configuration from parsed CLI state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sort/order flags are invalid.
+    pub fn from_cli(cli: &crate::Cli, argv: &Argv<'_>) -> Result<Self, anyhow::Error> {
+        cli.run_config(argv)
+    }
 }
 
-/// Result of a grep run; variant reflects `--files` vs pattern search.
+/// CLI search runner.
+pub struct Run {
+    config: RunConfig,
+}
+
+/// Result of a search run; variant reflects `--files` vs pattern search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GrepOutcome {
+pub enum RunResult {
     Files { found: bool },
     Search { matched: bool },
 }
 
-struct GrepSession {
+struct PreparedSession {
     indexes: Indexes,
     scope: CorpusScope,
-    search_filter: CandidateFilter,
+    search_filter: sift_core::grep::CandidateFilter,
     store_meta: Option<sift_core::StoreMeta>,
 }
 
-struct RunInputs {
-    paths: Vec<PathBuf>,
-    streams: Vec<Vec<u8>>,
-}
-
-struct InputDecl {
-    paths: Vec<PathBuf>,
-    stream: StreamRequest,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum StreamRequest {
-    Explicit,
-    Unspecified,
-}
-
-impl RunInputs {
-    const fn searches_corpus(&self) -> bool {
-        !self.paths.is_empty() || self.streams.is_empty()
-    }
-
-    fn stream_inputs(&self) -> Vec<GrepStream<'_>> {
-        self.streams
-            .iter()
-            .map(|bytes| GrepStream {
-                display_path: STDIN_DISPLAY_PATH,
-                bytes,
-            })
-            .collect()
-    }
-}
-
-impl InputDecl {
-    fn from_paths(search_paths: &[PathBuf]) -> Self {
-        let mut paths = Vec::with_capacity(search_paths.len());
-        let mut stream = StreamRequest::Unspecified;
-        for path in search_paths {
-            if path == std::path::Path::new("-") {
-                stream = StreamRequest::Explicit;
-            } else {
-                paths.push(path.clone());
-            }
-        }
-
-        Self { paths, stream }
-    }
-
-    fn resolve(
-        self,
-        pattern_input: PatternInputUse,
-        session: &GrepSession,
-    ) -> anyhow::Result<RunInputs> {
-        let stream_available = pattern_input == PatternInputUse::None;
-        let implicit_stream = stream_available
-            && self.paths.is_empty()
-            && self.stream == StreamRequest::Unspecified
-            && session.indexes.is_empty()
-            && stdin_is_pipe();
-        let streams = if self.stream == StreamRequest::Explicit {
-            let mut bytes = Vec::new();
-            std::io::stdin().read_to_end(&mut bytes)?;
-            vec![bytes]
-        } else if implicit_stream {
-            let mut bytes = Vec::new();
-            std::io::stdin().read_to_end(&mut bytes)?;
-            if bytes.is_empty() {
-                Vec::new()
-            } else {
-                vec![bytes]
-            }
-        } else {
-            Vec::new()
-        };
-
-        Ok(RunInputs {
-            paths: self.paths,
-            streams,
-        })
-    }
-}
-
-impl GrepOutcome {
+impl RunResult {
     #[must_use]
     pub const fn succeeded(self) -> bool {
         match self {
@@ -150,23 +74,28 @@ impl GrepOutcome {
     }
 }
 
-impl Grep {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotTrust {
+    Unvalidated,
+    Validated,
+    Stale,
+}
+
+impl Run {
     #[must_use]
-    pub const fn new(config: GrepConfig) -> Self {
+    pub const fn new(config: RunConfig) -> Self {
         Self { config }
     }
 
     /// # Errors
     ///
     /// Returns an error if I/O operations fail, paths are invalid, or filter config building fails.
-    pub fn run(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<GrepOutcome> {
+    pub fn execute(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<RunResult> {
         match self.config.mode {
-            GrepCommand::ListFiles => self
-                .run_files(argv)
-                .map(|found| GrepOutcome::Files { found }),
-            GrepCommand::Search => self
+            RunMode::ListFiles => self.run_files(argv).map(|found| RunResult::Files { found }),
+            RunMode::Search => self
                 .run_search(argv, daemon)
-                .map(|matched| GrepOutcome::Search { matched }),
+                .map(|matched| RunResult::Search { matched }),
         }
     }
 
@@ -183,7 +112,7 @@ impl Grep {
         &self,
         argv: &Argv<'_>,
         search_paths: &[PathBuf],
-    ) -> anyhow::Result<GrepSession> {
+    ) -> anyhow::Result<PreparedSession> {
         self.configure_threads();
         let cwd = std::env::current_dir()?;
         let indexes = Indexes::open(&self.config.sift_dir)?;
@@ -200,8 +129,9 @@ impl Grep {
             scope.prefixes.clone(),
             scope.exclude_paths.clone(),
         )?;
-        let search_filter = CandidateFilter::new(&filter_config, &scope.filter_root)?;
-        Ok(GrepSession {
+        let search_filter =
+            sift_core::grep::CandidateFilter::new(&filter_config, &scope.filter_root)?;
+        Ok(PreparedSession {
             indexes,
             scope,
             search_filter,
@@ -213,64 +143,10 @@ impl Grep {
         let output_argv = OutputArgv::resolve(argv);
         let session = self.prepare_session(argv, &self.config.search_paths)?;
 
-        let walk_opts = sift_core::grep::WalkOptions {
-            links: if session.search_filter.follow_links() {
-                sift_core::grep::LinkTraversal::Follow
-            } else {
-                sift_core::grep::LinkTraversal::DoNotFollow
-            },
-            max_depth: session.search_filter.max_depth(),
-            max_filesize: session.search_filter.max_filesize(),
-            one_file_system: session.search_filter.one_file_system(),
-        };
-
-        let effective_scopes = if session.scope.prefixes.is_empty() {
-            vec![PathBuf::from("")]
-        } else {
-            session.scope.prefixes.clone()
-        };
-
-        let mut all_paths: Vec<_> = Vec::new();
-        for prefix in &effective_scopes {
-            let scope_path = if prefix.as_os_str().is_empty() {
-                session.scope.filter_root.clone()
-            } else {
-                session.scope.filter_root.join(prefix)
-            };
-            if !scope_path.exists() {
-                continue;
-            }
-            let scope_path = scope_path.canonicalize().unwrap_or(scope_path);
-            if scope_path.is_file() {
-                let rel = scope_path
-                    .strip_prefix(&session.scope.filter_root)
-                    .unwrap_or(&scope_path)
-                    .to_path_buf();
-                if session.search_filter.matches_path(&rel) {
-                    all_paths.push(rel);
-                }
-            } else if scope_path.is_dir() {
-                let discovered = discover_files(&scope_path, &walk_opts)?;
-                for rel_in_scope in discovered {
-                    let full_rel = if prefix.as_os_str().is_empty() {
-                        rel_in_scope
-                    } else {
-                        prefix.join(rel_in_scope)
-                    };
-                    if session.search_filter.matches_path(&full_rel) {
-                        all_paths.push(full_rel);
-                    }
-                }
-            }
-        }
-        all_paths.sort();
-        all_paths.dedup();
-        let mut candidates = all_paths
-            .into_iter()
-            .map(|rel| Candidate::new(rel.clone(), session.scope.filter_root.join(&rel)))
-            .collect::<Vec<_>>();
+        let mut candidates = FileWalk::from_filter(&session.search_filter).collect()?;
+        candidates.retain(|candidate| session.search_filter.matches_path(candidate.rel_path()));
         self.config.candidate_order.order(&mut candidates)?;
-        all_paths = candidates
+        let all_paths: Vec<_> = candidates
             .into_iter()
             .map(|candidate| candidate.rel_path().to_path_buf())
             .collect();
@@ -290,12 +166,12 @@ impl Grep {
 
     fn run_search(&self, argv: &Argv<'_>, daemon: Option<&Daemon>) -> anyhow::Result<bool> {
         let patterns = ResolvedPatterns::resolve(&self.config.pattern)?;
-        let source_decl = InputDecl::from_paths(&self.config.search_paths);
+        let sources = InputSources::from_paths(&self.config.search_paths);
         let pattern_argv = PatternArgv::resolve(argv);
         let output_argv = OutputArgv::resolve(argv);
 
         let effective_mode = if pattern_argv.only_matching {
-            GrepMode::OnlyMatching
+            PrintMode::OnlyMatching
         } else {
             pattern_argv.mode
         };
@@ -307,9 +183,9 @@ impl Grep {
                 output_argv.line_number
             };
 
-        let session = self.prepare_session(argv, &source_decl.paths)?;
-        let sources = source_decl.resolve(patterns.input, &session)?;
-        let content_source = self.config.content.source()?;
+        let session = self.prepare_session(argv, &sources.paths)?;
+        let sources = sources.resolve(patterns.input, session.indexes.is_empty())?;
+        let transform = self.config.content.transform()?;
 
         let query = self
             .config
@@ -318,10 +194,10 @@ impl Grep {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let filename_ctx = Self::filename_context(effective_mode, &sources, &session);
-        let output = self
+        let print_spec = self
             .config
             .output
-            .grep_output(
+            .print_spec(
                 &output_argv,
                 effective_mode,
                 pattern_argv.quiet,
@@ -330,47 +206,65 @@ impl Grep {
             )
             .map_err(|e| anyhow::anyhow!(e))?;
         let separators = self.config.output.separators();
-        let print_stats = OutputConfig::print_stats(&output_argv, effective_mode);
         let snapshot = Self::snapshot_validation(&session, daemon);
+        let walk_fallback = matches!(snapshot, SnapshotTrust::Stale);
 
-        let mut grep = CoreGrep::new(query)
-            .output(output)
-            .separators(&separators)
-            .collect(GrepCollection::hits().with_stats(print_stats));
-        if sources.searches_corpus() {
-            let corpus = GrepCorpus::new(
-                &session.indexes,
-                &session.search_filter,
-                CandidateIndexState {
-                    store_meta: session.store_meta.as_ref(),
-                    snapshot,
-                },
-            )
-            .content_source(
-                content_source
-                    .as_ref()
-                    .map(|source| source as &dyn sift_core::grep::CandidateContentSource),
-            )
-            .order(self.config.candidate_order);
-            grep = grep.corpus(corpus);
+        let compiled = query.compile().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let corpus = if session.indexes.is_empty() {
+            CorpusState::Unindexed
+        } else if transform.is_some() {
+            CorpusState::TransformedBytes
+        } else {
+            CorpusState::Indexed
+        };
+        let fallback = if walk_fallback {
+            IndexFallback::WalkOnStaleSnapshot
+        } else {
+            IndexFallback::IndexHitsOnly
+        };
+        let policy = CandidatePolicyConfig {
+            output_scope: print_spec.candidate_scope(),
+            corpus,
+            fallback,
+            order: self.config.candidate_order,
         }
-        let stream_inputs = sources.stream_inputs();
-        if !stream_inputs.is_empty() {
-            grep = grep.streams(&stream_inputs);
-        }
+        .policy(compiled);
 
-        let grep_report = grep.run()?;
-        if let Some(s) = grep_report.stats() {
-            OutputConfig::write_stats(s);
+        let session_data = Session::new(
+            &session.indexes,
+            &session.search_filter,
+            session.store_meta.as_ref(),
+        );
+
+        let candidates = if sources.resolve_candidates() {
+            query
+                .candidates(&session_data, policy)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+        } else {
+            Vec::new()
+        };
+
+        let inputs = sources
+            .build_inputs(&candidates, transform.as_ref())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let print_stats = OutputDecl::print_stats(&output_argv, effective_mode);
+        let extras = PrintExtras::hits().with_stats(print_stats);
+        let report = SearchPrinter::new(&query, compiled, print_spec, &separators, extras)
+            .print(&inputs)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        if let Some(s) = report.stats.as_ref() {
+            OutputDecl::write_stats(s);
         }
-        let matched = grep_report.matched();
+        let matched = report.matched;
         if let Some(daemon) = daemon
             && session
                 .store_meta
                 .as_ref()
                 .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
         {
-            let paths = session.indexes.unindexed_hits(grep_report.hits);
+            let paths = session.indexes.unindexed_hits(report.hit_paths);
             if !paths.is_empty()
                 && let Err(e) = daemon.index(paths)
             {
@@ -381,13 +275,13 @@ impl Grep {
     }
 
     fn filename_context(
-        effective_mode: GrepMode,
-        sources: &RunInputs,
-        session: &GrepSession,
+        effective_mode: PrintMode,
+        sources: &InputSources,
+        session: &PreparedSession,
     ) -> FilenameContext {
-        if OutputConfig::is_path_mode(effective_mode) {
+        if OutputDecl::is_path_mode(effective_mode) {
             FilenameContext::PathMode
-        } else if !sources.streams.is_empty() && sources.paths.is_empty() {
+        } else if !sources.stdin_bytes.is_empty() && sources.paths.is_empty() {
             FilenameContext::SingleFileCorpus
         } else {
             match session.indexes.corpus_kind() {
@@ -397,7 +291,7 @@ impl Grep {
         }
     }
 
-    fn snapshot_validation(session: &GrepSession, daemon: Option<&Daemon>) -> SnapshotValidation {
+    fn snapshot_validation(session: &PreparedSession, daemon: Option<&Daemon>) -> SnapshotTrust {
         daemon
             .and_then(|daemon| {
                 session
@@ -405,19 +299,10 @@ impl Grep {
                     .snapshot_id()
                     .map(|id| daemon.validate_snapshot(id))
             })
-            .map_or(
-                SnapshotValidation::Unvalidated,
-                |validation| match validation {
-                    Ok(true) => SnapshotValidation::Validated,
-                    Ok(false) => SnapshotValidation::Stale,
-                    Err(_) => SnapshotValidation::Unvalidated,
-                },
-            )
+            .map_or(SnapshotTrust::Unvalidated, |validation| match validation {
+                Ok(true) => SnapshotTrust::Validated,
+                Ok(false) => SnapshotTrust::Stale,
+                Err(_) => SnapshotTrust::Unvalidated,
+            })
     }
-}
-
-fn stdin_is_pipe() -> bool {
-    use std::io::IsTerminal;
-
-    !std::io::stdin().is_terminal()
 }

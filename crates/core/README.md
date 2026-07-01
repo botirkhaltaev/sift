@@ -8,7 +8,6 @@ The engine is built around composable indexes. Each configured index independent
 
 ```
 IndexConfig::ngram(GramWidth::TRIGRAM)  ──IndexStore──>  Index::NGram(NGramIndex)
-IndexConfig::???                         ──IndexStore──>  Index::???(...)
                                                                   │
                                                            Indexes registry
                                                                   │
@@ -19,58 +18,47 @@ IndexConfig::???                         ──IndexStore──>  Index::???(...
 
 | Module | Description |
 |--------|-------------|
-| [`query/`](src/query/) | Query description (`QuerySpec`), planning -- index-agnostic |
-| [`walk/`](src/walk/) | Shared filesystem discovery for search candidates and index builds |
 | [`index/`](src/index/) | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
 | [`index/ngram/`](src/index/ngram/) | Runtime-width N-gram index: build, load, search, and on-disk storage |
-| [`grep/`](src/grep/) | Grep execution: query/options/filter/output, candidate resolution, scanning, rendering |
-| [`lib.rs`](src/lib.rs) | Public API re-exports, error types, constants |
+| [`grep/`](src/grep/) | Public search API: `Query`, `Session`, `Report`, `CandidatePolicy`, `Inputs` |
+| [`corpus/`](src/corpus/) | Internal: candidates, filters, filesystem walk |
+| [`query/`](src/query/) | Internal: pure query planning (`QuerySpec`, `QueryPlanner`) |
 
-## API
+## Search API
 
 ```rust
-use sift_core::{
-    CandidateIndexState, GramWidth, Grep, GrepCorpus, GrepQuery, IndexBuildConfig, IndexConfig,
-    IndexStore, Indexes, SnapshotValidation,
+use sift_core::grep::{
+    CandidatePolicy, CandidatePolicyConfig, CandidateScope, CorpusState, IndexFallback,
+    Inputs, MatchOptions, Query, Session, StatsMode,
 };
-use sift_core::grep::{GrepCollection, GrepOptions};
+use sift_core::{Indexes, StoreMeta};
 
-// Build indexes (currently trigram-specialized N-gram; extensible to multiple kinds)
-let mut store = IndexStore::open_or_create(&sift_dir, &meta)?;
-store.build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])?;
-
-// Open all indexes in the store
 let indexes = Indexes::open(&sift_dir)?;
+let session = Session::new(&indexes, &filter, store_meta.as_ref());
 
-// Search via the grep pipeline.
-let query = GrepQuery::new(patterns)?.options(GrepOptions::default());
-let corpus = GrepCorpus::new(
-    &indexes,
-    &filter,
-    CandidateIndexState {
-        store_meta: Some(&meta),
-        snapshot: SnapshotValidation::Unvalidated,
-    },
-);
-let report = Grep::new(query)
-    .corpus(corpus)
-    .output(output)
-    .separators(&separators)
-    .collect(GrepCollection::none())
-    .run()?;
+let query = Query::new(vec!["pattern".into()])?.options(MatchOptions::default());
+let compiled = query.compile()?;
+let policy = CandidatePolicyConfig {
+        output_scope: CandidateScope::Indexed,
+        corpus: CorpusState::Indexed,
+        fallback: IndexFallback::WalkOnStaleSnapshot,
+        order: Default::default(),
+    }
+    .policy(compiled);
+
+let candidates = query.candidates(&session, policy)?;
+let mut inputs = Inputs::with_capacity(candidates.len());
+for candidate in &candidates {
+    inputs.push_path(candidate);
+}
+
+let report = compiled.report(&query, &inputs, StatsMode::Off)?;
+// or `query.search(&inputs, StatsMode::Off)?` when compile is not cached yet
 ```
 
-`GrepQuery` compiles the regex lazily; `Grep::run` resolves candidates, materializes grep inputs, and runs the matcher through the grep runner.
-
-## Features
-
-| Feature | Effect |
-|---------|--------|
-| `profile` | Enables `sift-profile` binary and `tempfile` dependency |
+Formatting and stdout live in `sift-grep` (`SearchPrinter`).
 
 ## Testing
-
-Unit tests are co-located with implementation files in `#[cfg(test)] mod tests` blocks. Integration tests live in `tests/`.
 
 ```bash
 cargo test -p sift-core
@@ -78,5 +66,3 @@ cargo bench -p sift-core --bench query
 cargo bench -p sift-core --bench index
 cargo bench -p sift-core --bench grep
 ```
-
-See [`benches/README.md`](benches/README.md) for the full benchmark and profiling workflow.
