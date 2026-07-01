@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
-use sift_core::grep::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig};
+use ignore::types::TypesBuilder;
+use sift_core::grep::{
+    CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeFilterRule, VisibilityConfig,
+};
 use sift_core::grep::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
 
 use super::argv::Argv;
@@ -44,15 +47,8 @@ impl FilterConfig {
 
         let glob_ci = filter.glob_case_insensitive || !self.decl.iglob.is_empty();
 
-        let needs_type_defs = !self.decl.type_include.is_empty()
-            || !self.decl.type_exclude.is_empty()
-            || !self.decl.type_add.is_empty()
-            || !self.decl.type_clear.is_empty();
-        let type_definitions = if needs_type_defs {
-            TypeCatalog::from_decl(&self.decl).into_definitions()
-        } else {
-            Vec::new()
-        };
+        let type_catalog = TypeCatalog::from_argv(argv)?;
+        let type_filters = type_catalog.filters(argv)?;
 
         Ok(CandidateFilterConfig {
             scopes,
@@ -80,9 +76,7 @@ impl FilterConfig {
             follow_links: self.follow_links,
             max_depth: self.decl.max_depth,
             max_filesize,
-            type_definitions,
-            type_include: self.decl.type_include.clone(),
-            type_exclude: self.decl.type_exclude.clone(),
+            type_filters,
             one_file_system: self.one_file_system,
         })
     }
@@ -319,129 +313,146 @@ pub struct TypeCatalog {
     defs: Vec<TypeDef>,
 }
 
+#[derive(Clone)]
+pub struct TypeDef {
+    name: String,
+    globs: Vec<String>,
+}
+
 impl TypeCatalog {
-    #[must_use]
-    fn builtin() -> Vec<TypeDef> {
-        [
-            ("rust", &["*.rs"][..]),
-            ("py", &["*.py", "*.pyi"]),
-            ("js", &["*.js", "*.mjs", "*.cjs"]),
-            ("ts", &["*.ts", "*.tsx", "*.mts", "*.cts"]),
-            ("c", &["*.c", "*.h"]),
-            ("cpp", &["*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hxx", "*.h"]),
-            ("java", &["*.java"]),
-            ("go", &["*.go"]),
-            ("html", &["*.html", "*.htm", "*.xhtml"]),
-            ("css", &["*.css", "*.scss", "*.less"]),
-            ("json", &["*.json", "*.jsonl"]),
-            ("yaml", &["*.yaml", "*.yml"]),
-            ("toml", &["*.toml"]),
-            ("xml", &["*.xml", "*.xsl", "*.xslt", "*.svg"]),
-            ("md", &["*.md", "*.markdown", "*.mdown"]),
-            ("txt", &["*.txt"]),
-            ("sh", &["*.sh", "*.bash", "*.zsh", "*.fish"]),
-            ("ruby", &["*.rb", "*.erb", "*.gemspec", "Gemfile"]),
-            ("php", &["*.php"]),
-            ("swift", &["*.swift"]),
-            ("kotlin", &["*.kt", "*.kts"]),
-            ("scala", &["*.scala", "*.sbt"]),
-            ("lua", &["*.lua"]),
-            ("perl", &["*.pl", "*.pm"]),
-            ("r", &["*.r", "*.R", "*.Rmd"]),
-            ("sql", &["*.sql"]),
-            ("protobuf", &["*.proto"]),
-            ("make", &["Makefile", "*.mk"]),
-            ("cmake", &["CMakeLists.txt", "*.cmake"]),
-            ("docker", &["Dockerfile", "*.dockerfile"]),
-            ("tf", &["*.tf", "*.tfvars"]),
-            ("hcl", &["*.hcl"]),
-            ("nix", &["*.nix"]),
-            ("zig", &["*.zig"]),
-            ("elixir", &["*.ex", "*.exs"]),
-            ("erlang", &["*.erl", "*.hrl"]),
-            ("haskell", &["*.hs", "*.lhs"]),
-            ("ocaml", &["*.ml", "*.mli"]),
-            ("clojure", &["*.clj", "*.cljs", "*.cljc", "*.edn"]),
-            ("csv", &["*.csv", "*.tsv"]),
-            ("log", &["*.log"]),
-            ("config", &["*.cfg", "*.conf", "*.ini"]),
-            ("lock", &["*.lock"]),
-            ("graphql", &["*.graphql", "*.gql"]),
-            ("wasm", &["*.wasm", "*.wat"]),
-            ("csharp", &["*.cs"]),
-            ("fsharp", &["*.fs", "*.fsi", "*.fsx"]),
-            ("dart", &["*.dart"]),
-            ("vim", &["*.vim"]),
-            ("tex", &["*.tex", "*.sty", "*.cls"]),
-            ("rst", &["*.rst"]),
-            ("org", &["*.org"]),
-            ("asm", &["*.asm", "*.s", "*.S"]),
-            ("bazel", &["*.bzl", "BUILD", "WORKSPACE"]),
-            ("readme", &["README*"]),
-            ("license", &["LICENSE*", "LICENCE*"]),
-        ]
-        .into_iter()
-        .map(|(name, globs)| TypeDef {
-            name: name.to_string(),
-            globs: globs.iter().map(|s| (*s).to_string()).collect(),
-        })
-        .collect()
+    fn builder() -> TypesBuilder {
+        let mut builder = TypesBuilder::new();
+        builder.add_defaults();
+        builder
     }
 
-    #[must_use]
-    pub fn from_decl(decl: &FilterDecl) -> Self {
-        let mut defs = Self::builtin();
-
-        for spec in &decl.type_clear {
-            defs.retain(|d| d.name != *spec);
-        }
-
-        for spec in &decl.type_add {
-            if let Some((name, globs_str)) = spec.split_once(':') {
-                if let Some(rest) = globs_str.strip_prefix("include:") {
-                    let includes: Vec<&str> = rest.split(',').collect();
-                    let mut new_globs = Vec::new();
-                    for inc_name in &includes {
-                        for d in &defs {
-                            if d.name == *inc_name {
-                                new_globs.extend(d.globs.clone());
-                            }
-                        }
-                    }
-                    if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
-                        existing.globs.extend(new_globs);
-                    } else {
-                        defs.push(TypeDef {
-                            name: name.to_string(),
-                            globs: new_globs,
-                        });
-                    }
-                } else {
-                    let globs: Vec<String> =
-                        globs_str.split(',').map(|s| s.trim().to_string()).collect();
-                    if let Some(existing) = defs.iter_mut().find(|d| d.name == name) {
-                        existing.globs.extend(globs);
-                    } else {
-                        defs.push(TypeDef {
-                            name: name.to_string(),
-                            globs,
-                        });
-                    }
-                }
+    /// Resolve ripgrep-compatible built-in and custom type definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `--type-add` uses invalid syntax or references an
+    /// unknown type in an `include:` directive.
+    pub fn from_argv(argv: &Argv<'_>) -> anyhow::Result<Self> {
+        let mut builder = Self::builder();
+        let mut iter = argv.as_slice().iter().skip(1);
+        while let Some(arg) = iter.next() {
+            if arg == "--" {
+                break;
+            }
+            if let Some(spec) = arg.strip_prefix("--type-add=") {
+                Self::add_def(&mut builder, spec)?;
+                continue;
+            }
+            if arg == "--type-add" {
+                let Some(spec) = iter.next() else {
+                    anyhow::bail!("--type-add requires a type definition");
+                };
+                Self::add_def(&mut builder, spec)?;
+                continue;
+            }
+            if let Some(name) = arg.strip_prefix("--type-clear=") {
+                builder.clear(name);
+                continue;
+            }
+            if arg == "--type-clear" {
+                let Some(name) = iter.next() else {
+                    anyhow::bail!("--type-clear requires a type name");
+                };
+                builder.clear(name);
             }
         }
 
+        Ok(Self::from_builder(&builder))
+    }
+
+    fn add_def(builder: &mut TypesBuilder, spec: &str) -> anyhow::Result<()> {
+        builder
+            .add_def(spec)
+            .map_err(|e| anyhow::anyhow!("invalid type definition '{spec}': {e}"))
+    }
+
+    fn from_builder(builder: &TypesBuilder) -> Self {
+        let defs = builder
+            .definitions()
+            .into_iter()
+            .map(|def| TypeDef {
+                name: def.name().to_string(),
+                globs: def.globs().to_vec(),
+            })
+            .collect();
         Self { defs }
+    }
+
+    /// Resolve ordered `-t` / `-T` filters against this catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a type flag is missing a value or references an unknown type.
+    pub fn filters(&self, argv: &Argv<'_>) -> anyhow::Result<Vec<TypeFilterRule>> {
+        let mut filters = Vec::new();
+        let mut iter = argv.as_slice().iter().skip(1);
+        while let Some(arg) = iter.next() {
+            if arg == "--" {
+                break;
+            }
+            if let Some(name) = arg.strip_prefix("--type=") {
+                filters.push(self.filter(name, false)?);
+                continue;
+            }
+            if arg == "--type" || arg == "-t" {
+                let Some(name) = iter.next() else {
+                    anyhow::bail!("{arg} requires a file type");
+                };
+                filters.push(self.filter(name, false)?);
+                continue;
+            }
+            if let Some(name) = arg.strip_prefix("--type-not=") {
+                filters.push(self.filter(name, true)?);
+                continue;
+            }
+            if arg == "--type-not" || arg == "-T" {
+                let Some(name) = iter.next() else {
+                    anyhow::bail!("{arg} requires a file type");
+                };
+                filters.push(self.filter(name, true)?);
+            }
+        }
+        Ok(filters)
+    }
+
+    fn filter(&self, name: &str, exclude: bool) -> anyhow::Result<TypeFilterRule> {
+        let globs = self.globs(name)?;
+        if exclude {
+            Ok(TypeFilterRule::Exclude {
+                name: name.to_string(),
+                globs,
+            })
+        } else {
+            Ok(TypeFilterRule::Include {
+                name: name.to_string(),
+                globs,
+            })
+        }
+    }
+
+    fn globs(&self, name: &str) -> anyhow::Result<Vec<String>> {
+        if name == "all" {
+            return Ok(self
+                .defs
+                .iter()
+                .flat_map(|def| def.globs.iter().cloned())
+                .collect());
+        }
+        self.defs
+            .iter()
+            .find(|def| def.name == name)
+            .map(|def| def.globs.clone())
+            .ok_or_else(|| anyhow::anyhow!("unknown file type: '{name}'"))
     }
 
     #[must_use]
     pub fn definitions(&self) -> &[TypeDef] {
         &self.defs
-    }
-
-    #[must_use]
-    pub fn into_definitions(self) -> Vec<TypeDef> {
-        self.defs
     }
 
     /// Print sorted type definitions for `--type-list`.
@@ -457,6 +468,14 @@ impl TypeCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn catalog(args: &[&str]) -> TypeCatalog {
+        let raw_args = args
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect::<Vec<_>>();
+        TypeCatalog::from_argv(&Argv::new(&raw_args)).expect("type catalog")
+    }
 
     #[test]
     fn size_suffix_plain_number() {
@@ -500,29 +519,28 @@ mod tests {
 
     #[test]
     fn builtin_type_defs_contains_rust() {
-        let defs = TypeCatalog::from_decl(&FilterDecl::default()).into_definitions();
+        let catalog = catalog(&["sift"]);
+        let defs = catalog.definitions();
         assert!(defs.iter().any(|d| d.name == "rust"));
     }
 
     #[test]
     fn builtin_type_defs_contains_python() {
-        let defs = TypeCatalog::from_decl(&FilterDecl::default()).into_definitions();
+        let catalog = catalog(&["sift"]);
+        let defs = catalog.definitions();
         assert!(defs.iter().any(|d| d.name == "py"));
+        assert!(defs.iter().any(|d| d.name == "python"));
     }
 
     #[test]
     fn builtin_type_defs_non_empty() {
-        let defs = TypeCatalog::from_decl(&FilterDecl::default()).into_definitions();
-        assert!(!defs.is_empty());
+        let catalog = catalog(&["sift"]);
+        assert!(!catalog.definitions().is_empty());
     }
 
     #[test]
     fn resolve_type_defs_clear_removes_type() {
-        let decl = FilterDecl {
-            type_clear: vec!["rust".into(), "py".into()],
-            ..Default::default()
-        };
-        let catalog = TypeCatalog::from_decl(&decl);
+        let catalog = catalog(&["sift", "--type-clear", "rust", "--type-clear", "py"]);
         let defs = catalog.definitions();
         assert!(!defs.iter().any(|d| d.name == "rust"));
         assert!(!defs.iter().any(|d| d.name == "py"));
@@ -530,22 +548,14 @@ mod tests {
 
     #[test]
     fn resolve_type_defs_add_custom_type() {
-        let decl = FilterDecl {
-            type_add: vec!["mytype:*.my".into()],
-            ..Default::default()
-        };
-        let catalog = TypeCatalog::from_decl(&decl);
+        let catalog = catalog(&["sift", "--type-add", "mytype:*.my"]);
         let defs = catalog.definitions();
         assert!(defs.iter().any(|d| d.name == "mytype"));
     }
 
     #[test]
     fn resolve_type_defs_add_extends_existing() {
-        let decl = FilterDecl {
-            type_add: vec!["rust:*.rsx".into()],
-            ..Default::default()
-        };
-        let catalog = TypeCatalog::from_decl(&decl);
+        let catalog = catalog(&["sift", "--type-add", "rust:*.rsx"]);
         let defs = catalog.definitions();
         let rust = defs.iter().find(|d| d.name == "rust").unwrap();
         assert!(rust.globs.contains(&"*.rsx".to_string()));
@@ -554,15 +564,35 @@ mod tests {
 
     #[test]
     fn resolve_type_defs_add_include() {
-        let decl = FilterDecl {
-            type_add: vec!["combined:include:rust,py".into()],
-            ..Default::default()
-        };
-        let catalog = TypeCatalog::from_decl(&decl);
+        let catalog = catalog(&["sift", "--type-add", "combined:include:rust,py"]);
         let defs = catalog.definitions();
         let combined = defs.iter().find(|d| d.name == "combined").unwrap();
         assert!(combined.globs.contains(&"*.rs".to_string()));
         assert!(combined.globs.contains(&"*.py".to_string()));
+    }
+
+    #[test]
+    fn resolve_type_defs_clear_then_add_uses_argv_order() {
+        let catalog = catalog(&["sift", "--type-clear", "rust", "--type-add", "rust:*.rsx"]);
+        let rust = catalog
+            .definitions()
+            .iter()
+            .find(|d| d.name == "rust")
+            .cloned()
+            .unwrap();
+        assert_eq!(rust.globs, ["*.rsx"]);
+    }
+
+    #[test]
+    fn resolve_type_defs_add_then_clear_uses_argv_order() {
+        let catalog = catalog(&[
+            "sift",
+            "--type-add",
+            "custom:*.custom",
+            "--type-clear",
+            "custom",
+        ]);
+        assert!(!catalog.definitions().iter().any(|d| d.name == "custom"));
     }
 
     #[test]

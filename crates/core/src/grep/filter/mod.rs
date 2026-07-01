@@ -13,7 +13,7 @@ use ::ignore::gitignore::Gitignore;
 use ::ignore::overrides::{Override, OverrideBuilder};
 
 pub use config::{
-    CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, TypeDef,
+    CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, TypeFilterRule,
     VisibilityConfig,
 };
 
@@ -370,17 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn type_include_accepts_matching_type_globs() {
+    fn type_filter_include_accepts_matching_globs() {
         let config = CandidateFilterConfig {
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
                 ignore: IgnoreConfig::default(),
             },
-            type_definitions: vec![TypeDef {
+            type_filters: vec![TypeFilterRule::Include {
                 name: "rust".to_string(),
                 globs: vec!["*.rs".to_string()],
             }],
-            type_include: vec!["rust".to_string()],
             ..CandidateFilterConfig::default()
         };
         let filter = make_filter(&config);
@@ -389,17 +388,16 @@ mod tests {
     }
 
     #[test]
-    fn type_exclude_rejects_matching_type_globs() {
+    fn type_filter_exclude_rejects_matching_globs() {
         let config = CandidateFilterConfig {
             visibility: VisibilityConfig {
                 hidden: HiddenMode::Include,
                 ignore: IgnoreConfig::default(),
             },
-            type_definitions: vec![TypeDef {
+            type_filters: vec![TypeFilterRule::Exclude {
                 name: "rust".to_string(),
                 globs: vec!["*.rs".to_string()],
             }],
-            type_exclude: vec!["rust".to_string()],
             ..CandidateFilterConfig::default()
         };
         let filter = make_filter(&config);
@@ -408,10 +406,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_type_returns_error() {
+    fn invalid_type_glob_returns_error() {
         let config = CandidateFilterConfig {
-            type_definitions: vec![],
-            type_include: vec!["unknown".to_string()],
+            type_filters: vec![TypeFilterRule::Include {
+                name: "broken".to_string(),
+                globs: vec!["[invalid".to_string()],
+            }],
             ..CandidateFilterConfig::default()
         };
         let result = CandidateFilter::new(&config, Path::new("/root"));
