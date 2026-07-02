@@ -74,9 +74,12 @@ impl Index {
     #[must_use]
     pub fn candidates(&self, query: &CandidateSpec<'_>) -> Option<Vec<crate::Candidate>> {
         let arms = Config::new(self.width).extract_literal_arms(query)?;
+        let ids = self.candidate_file_ids(&arms);
+        if ids.len() == self.storage.fingerprints.len() {
+            return None;
+        }
         Some(
-            self.candidate_file_ids(&arms)
-                .into_iter()
+            ids.into_iter()
                 .filter_map(|id| {
                     let fid = FileId::new(usize::try_from(id).ok()?);
                     let fp = self.storage.fingerprints.get(fid.get())?;
