@@ -28,7 +28,7 @@ cd fuzz && cargo fuzz run search_usage -- -max_total_time=30
 
 | Target | Description |
 |--------|-------------|
-| `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `MatchOptions` via `Query::candidates` / `Query::search` |
+| `search_usage` | Tiny index per process (`OnceLock`); fuzzes patterns + `SearchOptions` via `Query::candidates` / `Query::search` |
 | `compile_only` | Fuzzes `Query::compile` only (no filesystem) |
 
 ## Layout

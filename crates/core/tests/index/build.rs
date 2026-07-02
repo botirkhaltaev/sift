@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes, QueryFlags, QuerySpec};
+use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes};
 use tempfile::TempDir;
 
 use super::common::{
@@ -18,9 +19,9 @@ fn gitignore_honored_without_git_repo() {
     let sift_dir = tmp.path().join(".sift");
     build_store(tmp.path(), &sift_dir);
 
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["hello".to_string(), "secret".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = open_indexes(&sift_dir)
         .candidates(&spec)
@@ -50,9 +51,9 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
         .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
         .expect("build");
 
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["beta".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = open_indexes(&sift_dir)
         .candidates(&spec)
@@ -74,9 +75,9 @@ fn defaults_exclude_gitignored_and_ignore_file_paths() {
     let sift_dir = tmp.path().join(".sift");
     build_store(tmp.path(), &sift_dir);
 
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["beta".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = open_indexes(&sift_dir)
         .candidates(&spec)
@@ -109,9 +110,9 @@ fn build_respects_hidden_files_by_default() {
         )
         .expect("build");
 
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["beta".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = Indexes::open(sift_dir.path())
         .expect("open")

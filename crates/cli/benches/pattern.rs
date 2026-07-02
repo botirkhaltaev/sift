@@ -1,6 +1,7 @@
 use criterion::{BatchSize, Criterion};
 use std::hint::black_box;
 
+use sift_core::Searcher;
 use sift_grep::Argv;
 use sift_grep::pattern::{PatternArgv, ResolvedPatterns};
 
@@ -63,12 +64,13 @@ pub fn bench(c: &mut Criterion) {
 
     let cli_default = parse_cli(&["pattern"]);
     let pattern_argv = PatternArgv::resolve(&Argv::new(&argv_none));
-    g.bench_function("Query/default", |b| {
+    g.bench_function("Searcher/default", |b| {
         b.iter(|| {
             black_box(
                 cli_default
                     .pattern_config()
-                    .query(vec!["pattern".to_string()], black_box(&pattern_argv))
+                    .search_query(vec!["pattern".to_string()], black_box(&pattern_argv))
+                    .and_then(Searcher::new)
                     .unwrap(),
             )
         });

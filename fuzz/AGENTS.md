@@ -6,7 +6,7 @@ Standalone package excluded from the root workspace (`Cargo.toml` `exclude = ["f
 
 ## Targets
 
-- **`search_usage`**: shared tiny index per process (`OnceLock`); fuzzes patterns + `MatchOptions` via `Query::candidates` / `Query::search`.
+- **`search_usage`**: shared tiny index per process (`OnceLock`); fuzzes patterns + `SearchOptions` via `Query::candidates` / `Query::search`.
 - **`compile_only`**: fuzzes `Query::compile` only (no filesystem).
 
 ## Scope

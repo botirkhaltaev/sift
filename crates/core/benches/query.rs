@@ -1,13 +1,22 @@
 //! Search query compilation benchmarks.
 //!
-//! Exercises the public `Query` compilation API.
+//! Exercises the public searcher compilation API.
 //! All benches operate on small inputs and measure only the compilation cost.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use sift_core::Query;
-use sift_core::grep::{CaseMode, MatchFlags, MatchOptions, RegexEngineRequest};
+use sift_core::search::{
+    CaseMode, RegexEngine, SearchFlags, SearchOptions, SearchQueryBuilder, Searcher,
+};
+
+fn searcher(patterns: Vec<String>, options: SearchOptions) -> Searcher {
+    let query = SearchQueryBuilder::new(patterns)
+        .options(options)
+        .build()
+        .unwrap();
+    Searcher::new(query).unwrap()
+}
 
 fn sift_criterion() -> Criterion {
     Criterion::default()
@@ -25,10 +34,8 @@ fn bench_query_compile(c: &mut Criterion) {
     g.bench_function("one_pattern", |b| {
         let pats = vec!["hello".to_string()];
         b.iter(|| {
-            let query = Query::new(pats.clone())
-                .unwrap()
-                .options(MatchOptions::default());
-            black_box(query.compile().unwrap());
+            let query = searcher(pats.clone(), SearchOptions::default());
+            black_box(query);
         });
     });
 
@@ -40,70 +47,68 @@ fn bench_query_compile(c: &mut Criterion) {
             "qux".to_string(),
         ];
         b.iter(|| {
-            let query = Query::new(pats.clone())
-                .unwrap()
-                .options(MatchOptions::default());
-            black_box(query.compile().unwrap());
+            let query = searcher(pats.clone(), SearchOptions::default());
+            black_box(query);
         });
     });
 
     g.bench_function("fixed_strings", |b| {
         let pats = vec!["a.c*+?".to_string()];
-        let opts = MatchOptions {
-            flags: MatchFlags::FIXED_STRINGS,
+        let opts = SearchOptions {
+            flags: SearchFlags::FIXED_STRINGS,
             ..Default::default()
         };
         b.iter(|| {
-            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
-            black_box(query.compile().unwrap());
+            let query = searcher(pats.clone(), opts.clone());
+            black_box(query);
         });
     });
 
     g.bench_function("word_regexp", |b| {
         let pats = vec!["hello".to_string()];
-        let opts = MatchOptions {
-            flags: MatchFlags::WORD_REGEXP,
+        let opts = SearchOptions {
+            flags: SearchFlags::WORD_REGEXP,
             ..Default::default()
         };
         b.iter(|| {
-            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
-            black_box(query.compile().unwrap());
+            let query = searcher(pats.clone(), opts.clone());
+            black_box(query);
         });
     });
 
     g.bench_function("line_regexp", |b| {
         let pats = vec!["hello".to_string()];
-        let opts = MatchOptions {
-            flags: MatchFlags::LINE_REGEXP,
+        let opts = SearchOptions {
+            flags: SearchFlags::LINE_REGEXP,
             ..Default::default()
         };
         b.iter(|| {
-            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
-            black_box(query.compile().unwrap());
+            let query = searcher(pats.clone(), opts.clone());
+            black_box(query);
         });
     });
 
     g.bench_function("case_insensitive", |b| {
         let pats = vec!["hello".to_string()];
-        let opts = MatchOptions {
+        let opts = SearchOptions {
             case_mode: CaseMode::Insensitive,
             ..Default::default()
         };
         b.iter(|| {
-            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
-            black_box(query.compile().unwrap());
+            let query = searcher(pats.clone(), opts.clone());
+            black_box(query);
         });
     });
 
     g.bench_function("pcre2_auto_fallback", |b| {
         let pats = vec!["(?<=hello) world".to_string()];
-        let opts = MatchOptions {
-            regex_engine: RegexEngineRequest::Auto,
+        let opts = SearchOptions {
+            regex_engine: RegexEngine::Auto,
             ..Default::default()
         };
         b.iter(|| {
-            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
-            black_box(query.compile().unwrap());
+            let query = searcher(pats.clone(), opts.clone());
+            black_box(query);
         });
     });
 

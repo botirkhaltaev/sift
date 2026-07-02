@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use sift_core::{QueryFlags, QuerySpec};
+use sift_core::candidates::{CandidateFlags, CandidateSpec};
 use tempfile::TempDir;
 
 use super::super::common::{
@@ -14,9 +14,9 @@ fn literal_query_returns_indexed_candidates() {
     make_parity_corpus(&corpus);
 
     let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["beta".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let candidates = index.candidates(&spec).expect("candidates");
     assert!(!candidates.is_empty());
@@ -34,9 +34,9 @@ fn literal_candidates_narrow_to_expected_file() {
     let sift_dir = tmp.path().join(".sift");
     build_store(tmp.path(), &sift_dir);
 
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["beta".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let candidates = open_indexes(&sift_dir)
         .candidates(&spec)

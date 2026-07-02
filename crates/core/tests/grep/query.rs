@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::{CorpusKind, FileId, Indexes, PlanMode, QueryFlags, QuerySpec};
+use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::{CorpusKind, FileId, Indexes, PlanMode};
 use tempfile::TempDir;
 
 use crate::common::build_trigram_in_dir;
@@ -39,9 +40,9 @@ fn explain_reports_indexed_for_literal() {
     fs::write(corpus.join("a.txt"), "alpha beta\n").expect("write");
 
     let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["foo.*".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let output = index.explain(&spec);
     assert_eq!(output.pattern, "foo.*");
@@ -56,9 +57,9 @@ fn explain_reports_full_scan_without_literal() {
     fs::write(corpus.join("a.txt"), "alpha beta\n").expect("write");
 
     let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &[r"\w{5}\s+\w{5}".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let output = index.explain(&spec);
     assert_eq!(output.mode, PlanMode::FullScan);

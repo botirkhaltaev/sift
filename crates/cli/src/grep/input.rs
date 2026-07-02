@@ -6,9 +6,6 @@ use std::process::Command;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use grep_cli::DecompressionReaderBuilder;
 use sift_core::Candidate;
-use sift_core::grep::Inputs;
-
-const STDIN_DISPLAY_PATH: &str = "<stdin>";
 
 #[derive(Debug, Clone, Default)]
 pub struct ContentTransformConfig {
@@ -77,6 +74,12 @@ impl ContentTransform {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
         Ok(bytes)
+    }
+}
+
+impl sift_core::grep::CandidateTransform for ContentTransform {
+    fn read_candidate(&self, candidate: &Candidate) -> sift_core::Result<Vec<u8>> {
+        Self::read_candidate(self, candidate)
     }
 }
 
@@ -169,50 +172,6 @@ impl InputSources {
             return true;
         }
         !(self.stdin_explicit || self.stdin_implicit || self.has_streams())
-    }
-
-    /// Build search inputs from resolved candidates and optional content transforms.
-    ///
-    /// Corpus paths become [`Input::Path`] entries (or [`Input::Bytes`] when
-    /// transformed). Any stdin byte streams are appended after corpus inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if transformed content cannot be read for any candidate.
-    pub fn build_inputs<'a>(
-        &self,
-        candidates: &'a [Candidate],
-        transform: Option<&ContentTransform>,
-        explicit_files: &[PathBuf],
-    ) -> sift_core::Result<Inputs<'a>> {
-        let mut inputs = Inputs::with_capacity(candidates.len() + self.stdin_bytes.len());
-        for candidate in candidates {
-            if let Some(transform) = transform {
-                let bytes = transform.read_candidate(candidate)?;
-                inputs.push_bytes(
-                    Cow::Owned(candidate.abs_path().display().to_string()),
-                    Cow::Owned(bytes),
-                    Some(candidate),
-                );
-            } else {
-                let explicit = explicit_files
-                    .iter()
-                    .any(|path| path == candidate.rel_path());
-                if explicit {
-                    inputs.push_explicit_path(candidate);
-                } else {
-                    inputs.push_path(candidate);
-                }
-            }
-        }
-        for bytes in &self.stdin_bytes {
-            inputs.push_explicit_bytes(
-                Cow::Owned(STDIN_DISPLAY_PATH.to_string()),
-                Cow::Owned(bytes.clone()),
-                None,
-            );
-        }
-        Ok(inputs)
     }
 }
 

@@ -1,5 +1,5 @@
 use clap::Args;
-use sift_core::grep::{InputEncoding, RegexEngineRequest};
+use sift_core::search::{InputEncoding, RegexEngine};
 
 /// Regex engine and configuration flags.
 #[derive(Args, Clone)]
@@ -42,7 +42,7 @@ pub struct ContentDecl {
 #[derive(Args, Clone)]
 pub struct RegexEngineDecl {
     #[arg(long = "engine", value_name = "ENGINE")]
-    pub engine: Option<RegexEngineRequest>,
+    pub engine: Option<RegexEngine>,
     #[command(flatten)]
     pub pcre2: Pcre2EngineDecl,
     #[arg(long = "pcre2-version")]
@@ -107,7 +107,7 @@ pub struct LineTerminatorDecl {
 mod tests {
     use crate::cli::Cli;
     use clap::Parser;
-    use sift_core::grep::{InputEncoding, RegexEngineRequest};
+    use sift_core::search::{InputEncoding, RegexEngine};
 
     #[test]
     fn engine_no_config_flag() {
@@ -180,10 +180,7 @@ mod tests {
     #[test]
     fn engine_selection_flag() {
         let cli = Cli::try_parse_from(["sift", "--engine", "pcre2", "pat"]).unwrap();
-        assert_eq!(
-            cli.engine_decl.regex.engine,
-            Some(RegexEngineRequest::Pcre2)
-        );
+        assert_eq!(cli.engine_decl.regex.engine, Some(RegexEngine::Pcre2));
     }
 
     #[test]

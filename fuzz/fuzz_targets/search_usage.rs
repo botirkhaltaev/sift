@@ -1,10 +1,12 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::grep::{
-    CandidateFilter, CandidateFilterConfig, CandidatePolicyConfig, CandidateScope, CorpusState,
-    IndexFallback, Inputs, MatchFlags, MatchOptions, Query, Session, StatsMode, VisibilityConfig,
+use sift_core::candidates::{
+    CandidatePlanner, CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, CorpusMode,
+    IndexFallback,
 };
+use sift_core::grep::{CandidateFilter, CandidateFilterConfig, InputRequest, VisibilityConfig};
+use sift_core::search::{SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode};
 use sift_core::{
     CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, NGramConfig,
 };
@@ -59,44 +61,51 @@ fn lossy_pattern(data: &[u8]) -> String {
         .collect()
 }
 
-fn opts_from_bytes(data: &[u8]) -> MatchOptions {
+fn opts_from_bytes(data: &[u8]) -> SearchOptions {
     let flags = data
         .first()
-        .map(|b| MatchFlags::from_bits_truncate(u16::from(*b)))
+        .map(|b| SearchFlags::from_bits_truncate(u16::from(*b)))
         .unwrap_or_default();
     let max_results = data.get(1).map(|b| (*b as usize).min(10_000));
-    MatchOptions {
+    SearchOptions {
         flags,
         max_results,
-        ..MatchOptions::default()
+        ..SearchOptions::default()
     }
 }
 
-fn run_search(indexes: &Indexes, patterns: &[String], opts: &MatchOptions) {
-    let Ok(query) = Query::new(patterns.to_vec()) else {
+fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
+    let Ok(query) = SearchQueryBuilder::new(patterns.to_vec())
+        .options(opts.clone())
+        .build()
+    else {
         return;
     };
-    let query = query.options(opts.clone());
+    let Ok(searcher) = Searcher::new(query.clone()) else {
+        return;
+    };
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), indexes.root()).unwrap();
-    let session = Session::new(indexes, &filter, None);
-    let Ok(compiled) = query.compile() else {
+    let source = CandidateSource {
+        indexes,
+        filter: &filter,
+        store_meta: None,
+    };
+    let request = CandidateRequest {
+        scope: CandidateScope::Indexed,
+        corpus: CorpusMode::Indexed,
+        fallback: IndexFallback::WalkOnStaleSnapshot,
+        order: Default::default(),
+    };
+    let Ok(candidates) =
+        CandidatePlanner::new(&source, CandidateSpec::from(&query), request).resolve()
+    else {
         return;
     };
-    let policy = CandidatePolicyConfig {
-            output_scope: CandidateScope::Indexed,
-            corpus: CorpusState::Indexed,
-            fallback: IndexFallback::WalkOnStaleSnapshot,
-            order: Default::default(),
-        }
-        .policy(compiled);
-    let Ok(candidates) = query.candidates(&session, policy) else {
+    let input_request = InputRequest::from_candidates();
+    let Ok(inputs) = input_request.resolve(&candidates) else {
         return;
     };
-    let mut inputs = Inputs::with_capacity(candidates.len());
-    for candidate in &candidates {
-        inputs.push_path(candidate);
-    }
-    let _ = query.search(&inputs, StatsMode::Off);
+    let _ = searcher.search(&inputs, StatsMode::Off);
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -127,9 +136,15 @@ fuzz_target!(|data: &[u8]| {
     }
 });
 
-fn compile_with_flags(patterns: &[&str], opts: &MatchOptions) -> Result<(), ()> {
-    let query = Query::new(patterns.iter().map(|pattern| (*pattern).to_string()).collect())
-        .map_err(|_| ())?
-        .options(opts.clone());
-    query.compile().map(|_| ()).map_err(|_| ())
+fn compile_with_flags(patterns: &[&str], opts: &SearchOptions) -> Result<(), ()> {
+    let query = SearchQueryBuilder::new(
+        patterns
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect(),
+    )
+    .options(opts.clone())
+    .build()
+    .map_err(|_| ())?;
+    Searcher::new(query).map(|_| ()).map_err(|_| ())
 }

@@ -87,7 +87,10 @@ impl Indexes {
     /// Returns `None` if no index could narrow. When at least one index
     /// narrows, all narrowed candidate sets are intersected.
     #[must_use]
-    pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+    pub fn candidates(
+        &self,
+        query: &crate::candidates::CandidateSpec<'_>,
+    ) -> Option<Vec<crate::Candidate>> {
         let indexes = self.snapshot.indexes();
         match indexes.len() {
             0 => None,
@@ -163,7 +166,7 @@ impl Indexes {
     /// Intersect candidates from multiple indexes.
     fn candidates_multi(
         indexes: &[Index],
-        query: &crate::query::QuerySpec<'_>,
+        query: &crate::candidates::CandidateSpec<'_>,
     ) -> Option<Vec<crate::Candidate>> {
         use rayon::prelude::*;
 

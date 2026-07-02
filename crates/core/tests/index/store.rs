@@ -1,6 +1,7 @@
 use std::fs;
 
-use sift_core::{GramWidth, IndexConfig, IndexStore, QueryFlags, QuerySpec};
+use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::{GramWidth, IndexConfig, IndexStore};
 use tempfile::TempDir;
 
 use super::common::{build_store, open_indexes, sample_store_meta, standard_build_config};
@@ -17,9 +18,9 @@ fn build_and_reopen_indexes() {
 
     let indexes = open_indexes(&sift_dir);
     assert!(!indexes.is_empty());
-    let spec = QuerySpec {
+    let spec = CandidateSpec {
         patterns: &["hello".to_string()],
-        flags: QueryFlags::empty(),
+        flags: CandidateFlags::empty(),
     };
     let files = indexes.candidates(&spec).expect("candidates");
     assert_eq!(files.len(), 1);

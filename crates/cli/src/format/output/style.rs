@@ -153,7 +153,9 @@ impl ColorSpecs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct HyperlinkFormat(grep_printer::HyperlinkFormat);
+pub struct HyperlinkFormat {
+    inner: grep_printer::HyperlinkFormat,
+}
 
 impl HyperlinkFormat {
     /// # Errors
@@ -165,7 +167,7 @@ impl HyperlinkFormat {
         };
         value
             .parse::<grep_printer::HyperlinkFormat>()
-            .map(Self)
+            .map(|inner| Self { inner })
             .map_err(|e| e.to_string())
     }
 
@@ -173,7 +175,12 @@ impl HyperlinkFormat {
     pub fn config(&self, host: Option<String>) -> HyperlinkConfig {
         let mut env = HyperlinkEnvironment::new();
         env.host(host);
-        self.0.clone().into_config(env)
+        self.inner.clone().into_config(env)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 }
 

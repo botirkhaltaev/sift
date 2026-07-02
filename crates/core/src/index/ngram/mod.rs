@@ -17,7 +17,7 @@ pub use index::{Index, NGramIndexError};
 mod candidate_tests {
     use std::path::Path;
 
-    use crate::query::{QueryFlags, QuerySpec};
+    use crate::candidates::{CandidateFlags, CandidateSpec};
 
     use super::*;
 
@@ -48,17 +48,17 @@ mod candidate_tests {
         word_regexp: bool,
         line_regexp: bool,
     ) -> bool {
-        let mut flags = QueryFlags::empty();
+        let mut flags = CandidateFlags::empty();
         if case_insensitive {
-            flags |= QueryFlags::CASE_INSENSITIVE;
+            flags |= CandidateFlags::CASE_INSENSITIVE;
         }
         if word_regexp {
-            flags |= QueryFlags::WORD_REGEXP;
+            flags |= CandidateFlags::WORD_REGEXP;
         }
         if line_regexp {
-            flags |= QueryFlags::LINE_REGEXP;
+            flags |= CandidateFlags::LINE_REGEXP;
         }
-        let spec = QuerySpec { patterns, flags };
+        let spec = CandidateSpec { patterns, flags };
         default_config().extract_literal_arms(&spec).is_some()
     }
 
@@ -68,17 +68,17 @@ mod candidate_tests {
         word_regexp: bool,
         line_regexp: bool,
     ) -> bool {
-        let mut flags = QueryFlags::empty();
+        let mut flags = CandidateFlags::empty();
         if case_insensitive {
-            flags |= QueryFlags::CASE_INSENSITIVE;
+            flags |= CandidateFlags::CASE_INSENSITIVE;
         }
         if word_regexp {
-            flags |= QueryFlags::WORD_REGEXP;
+            flags |= CandidateFlags::WORD_REGEXP;
         }
         if line_regexp {
-            flags |= QueryFlags::LINE_REGEXP;
+            flags |= CandidateFlags::LINE_REGEXP;
         }
-        let spec = QuerySpec { patterns, flags };
+        let spec = CandidateSpec { patterns, flags };
         default_config().extract_literal_arms(&spec).is_none()
     }
 
@@ -201,9 +201,9 @@ mod candidate_tests {
 
     #[test]
     fn generic_width_uses_spec_width_for_literal_extraction() {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &["ab".to_string()],
-            flags: QueryFlags::empty(),
+            flags: CandidateFlags::empty(),
         };
         assert!(
             Config::new(GramWidth::new(2))
@@ -214,9 +214,9 @@ mod candidate_tests {
 
     #[test]
     fn fixed_string_narrows() {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &["beta.gamma".to_string()],
-            flags: QueryFlags::FIXED_STRINGS,
+            flags: CandidateFlags::FIXED_STRINGS,
         };
         assert!(default_config().extract_literal_arms(&spec).is_some());
     }

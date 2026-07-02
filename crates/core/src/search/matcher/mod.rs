@@ -1,0 +1,51 @@
+mod pcre2;
+mod rust;
+
+use grep_pcre2::RegexMatcher as Pcre2Matcher;
+use grep_regex::RegexMatcher;
+
+use crate::GrepError;
+use crate::search::options::RegexEngine;
+use crate::search::query::SearchQuery;
+
+#[derive(Debug, Clone)]
+pub(super) enum Matcher {
+    Rust(RegexMatcher),
+    Pcre2(Pcre2Matcher),
+}
+
+pub(super) struct MatcherBuilder<'a> {
+    query: &'a SearchQuery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefilterCompatibility {
+    Compatible,
+    Incompatible,
+}
+
+impl<'a> MatcherBuilder<'a> {
+    pub(super) const fn new(query: &'a SearchQuery) -> Self {
+        Self { query }
+    }
+
+    pub(super) fn build(self) -> Result<Matcher, GrepError> {
+        match self.query.options.regex_engine {
+            RegexEngine::Rust => rust::build(self.query).map(Matcher::Rust),
+            RegexEngine::Pcre2 => pcre2::build(self.query).map(Matcher::Pcre2),
+            RegexEngine::Auto => rust::build(self.query).map_or_else(
+                |_| pcre2::build(self.query).map(Matcher::Pcre2),
+                |matcher| Ok(Matcher::Rust(matcher)),
+            ),
+        }
+    }
+}
+
+impl Matcher {
+    pub(super) const fn prefilter_compatibility(&self) -> PrefilterCompatibility {
+        match self {
+            Self::Rust(_) => PrefilterCompatibility::Compatible,
+            Self::Pcre2(_) => PrefilterCompatibility::Incompatible,
+        }
+    }
+}

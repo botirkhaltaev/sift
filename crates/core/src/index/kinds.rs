@@ -170,7 +170,10 @@ impl Index {
     }
 
     #[must_use]
-    pub fn candidates(&self, query: &crate::query::QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+    pub fn candidates(
+        &self,
+        query: &crate::candidates::CandidateSpec<'_>,
+    ) -> Option<Vec<crate::Candidate>> {
         match self {
             Self::NGram(index) => index.candidates(query),
         }

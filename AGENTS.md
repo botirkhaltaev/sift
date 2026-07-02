@@ -23,10 +23,10 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 | Path | Role |
 |------|------|
 | `crates/core/` | `sift-core`: composable index registry, query planning, candidate narrowing, search engine |
-| `crates/core/src/query/` | Index-agnostic query description and candidate planning |
+| `crates/core/src/candidates/` | Index-agnostic candidate description, planning, and resolution |
 | `crates/core/src/index/` | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
 | `crates/core/src/index/ngram/` | N-gram index: generic implementation plus trigram specialization (first shipped index type) |
-| `crates/core/src/grep/` | Grep pipeline orchestration: bridges query planner, index registry, and search engine |
+| `crates/core/src/grep/` | Grep search API and matcher execution |
 | `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
 | `benchsuite/` | Comparative `rg` vs `sift` benchmarks |

@@ -1,0 +1,60 @@
+use std::ops::Range;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchEvent {
+    Begin(FileEvent),
+    Match(MatchEvent),
+    Context(ContextEvent),
+    ContextBreak,
+    Binary(BinaryEvent),
+    End(FileEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEvent {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchEvent {
+    pub path: PathBuf,
+    pub line_number: Option<u64>,
+    pub absolute_byte_offset: Option<u64>,
+    pub bytes: Vec<u8>,
+    pub ranges: Vec<Range<usize>>,
+    pub replacement: Option<Vec<u8>>,
+    pub replacement_matches: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextEvent {
+    pub path: PathBuf,
+    pub kind: ContextKind,
+    pub line_number: Option<u64>,
+    pub absolute_byte_offset: u64,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextKind {
+    Before,
+    After,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryEvent {
+    pub path: PathBuf,
+    pub absolute_byte_offset: u64,
+    pub explicit: bool,
+}
+
+pub trait SearchSink {
+    /// Receive one semantic search event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sink cannot accept the event.
+    fn event(&mut self, event: SearchEvent) -> crate::Result<()>;
+}

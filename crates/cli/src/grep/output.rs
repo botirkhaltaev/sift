@@ -5,7 +5,7 @@ use crate::format::{
     PrintSpec, RecordTerminator, ZeroCountMode,
 };
 use clap::{ArgAction, Args};
-use sift_core::grep::Stats;
+use sift_core::search::Stats;
 use std::path::PathBuf;
 use std::process::Command;
 

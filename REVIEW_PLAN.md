@@ -16,7 +16,7 @@ Sift is a well-structured Rust project. Clippy pedantic+nursery+cargo passes cle
 - **`Snapshot` + `SnapshotLease`** RAII pattern prevents GC of snapshots during active reads.
 - **`Candidate`** with `OnceLock<String>` for lazy `rel_str` is a good zero-cost-until-needed pattern.
 - **`PatternCompiler`** is a clean builder with `#[must_use]` on every step.
-- **`bitflags!`** for `SearchMatchFlags`, `QueryFlags`, `IgnoreSources`, `LineStyleFlags` is idiomatic and zero-cost.
+- **`bitflags!`** for `SearchSearchFlags`, `QueryFlags`, `IgnoreSources`, `LineStyleFlags` is idiomatic and zero-cost.
 
 ### 1B. Issues
 
@@ -31,7 +31,7 @@ pub use search::{
     ColumnLimit, ColumnOverflow, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig,
     IgnoreSources, LineStyleFlags, LinkTraversal, Match, MatchEmissionMode,
     OutputEmission, PassthruMode, PathDisplay, PatternCompiler, RecordTerminator,
-    SearchCollection, SearchError, SearchMatchFlags, SearchMode, SearchOptions,
+    SearchCollection, SearchError, SearchSearchFlags, SearchMode, SearchOptions,
     SearchOutcome, SearchOutput, SearchOutputFormat, SearchQuery, SearchRecordStyle,
     SearchSeparators, SearchStats, TypeDef, VisibilityConfig, WalkOptions, ZeroCountMode,
 };
@@ -519,7 +519,7 @@ This eliminates ~25 repetitions of the pattern. These helpers describe what they
 ```rust
 pub fn fixed_strings(mut self, on: bool) -> Self {
     if on {
-        self.flags |= SearchMatchFlags::FIXED_STRINGS;
+        self.flags |= SearchSearchFlags::FIXED_STRINGS;
     }
     self
 }
@@ -531,7 +531,7 @@ pub fn fixed_strings(mut self, on: bool) -> Self {
 
 ```rust
 pub fn fixed_strings(mut self, on: bool) -> Self {
-    self.flags.set(SearchMatchFlags::FIXED_STRINGS, on);
+    self.flags.set(SearchSearchFlags::FIXED_STRINGS, on);
     self
 }
 ```

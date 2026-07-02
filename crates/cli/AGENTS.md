@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Thin CLI binary over `sift-core`. Parses flags with clap, maps them to `MatchOptions`/`MatchFlags`, and dispatches to core.
+Thin CLI binary over `sift-core`. Parses flags with clap, maps them to `SearchOptions`/`SearchFlags`, and dispatches to core.
 
 ## Architecture
 
@@ -34,7 +34,7 @@ Two-layer flag model:
 ```text
 RunConfig → Run::execute
 InputSources::from_paths → resolve → build_inputs → Inputs
-query.compile() → CandidatePolicyConfig::policy → query.candidates
+CandidateSource + CandidateRequest → query.candidates
 SearchPrinter::print(&inputs) → Report
 ```
 
@@ -49,7 +49,7 @@ SearchPrinter::print(&inputs) → Report
 
 - Global options (e.g. `--sift-dir`) must appear **before** `index` subcommands.
 - Search paths are resolved and must sit under the corpus root in the index metadata.
-- Extend flags by threading new `MatchFlags`/`MatchOptions` fields through to `Query` in core. Do not duplicate regex logic here.
+- Extend flags by threading new `SearchFlags`/`SearchOptions` fields through to `Query` in core. Do not duplicate regex logic here.
 - Mixed paths + stdin: resolve corpus candidates, append stdin in `InputSources::build_inputs`.
 
 ## Testing

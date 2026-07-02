@@ -1,6 +1,8 @@
 use criterion::Criterion;
 use std::hint::black_box;
 
+use sift_core::Searcher;
+
 use crate::support::{args, build_index, make_small_corpus, parse_cli, run_sift};
 
 fn bench_binary_mode(g: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
@@ -18,9 +20,10 @@ fn bench_binary_mode(g: &mut criterion::BenchmarkGroup<'_, criterion::measuremen
         b.iter(|| {
             black_box(
                 config
-                    .query(vec!["pattern".to_string()], black_box(&pat_default))
+                    .search_query(vec!["pattern".to_string()], black_box(&pat_default))
+                    .and_then(Searcher::new)
                     .unwrap()
-                    .opts()
+                    .options()
                     .binary_mode,
             )
         });
@@ -30,9 +33,10 @@ fn bench_binary_mode(g: &mut criterion::BenchmarkGroup<'_, criterion::measuremen
         b.iter(|| {
             black_box(
                 config
-                    .query(vec!["pattern".to_string()], black_box(&pat_text))
+                    .search_query(vec!["pattern".to_string()], black_box(&pat_text))
+                    .and_then(Searcher::new)
                     .unwrap()
-                    .opts()
+                    .options()
                     .binary_mode,
             )
         });
