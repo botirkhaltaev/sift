@@ -94,7 +94,6 @@ impl<'a> SearchTask<'a> {
                 .map(<[u8]>::to_vec),
             match_emission: MatchEmission::from(self.mode, self.options),
             event_collection: self.events,
-            invert_match: self.options.invert_match(),
             line_matches: 0,
             match_spans: 0,
             bytes_searched: 0,
@@ -195,7 +194,6 @@ struct MatchSink<M> {
     replacement: Option<Vec<u8>>,
     match_emission: MatchEmission,
     event_collection: EventCollection,
-    invert_match: bool,
     line_matches: usize,
     match_spans: usize,
     bytes_searched: u64,
@@ -229,7 +227,7 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
         });
         self.line_matches += 1;
         let mut ranges = Vec::new();
-        if !self.invert_match {
+        if !self.options.invert_match() {
             let _ = self
                 .matcher
                 .find_iter(line_bytes, |m: grep_matcher::Match| {
