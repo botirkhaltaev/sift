@@ -71,8 +71,6 @@ pub struct PostingTables {
 
 impl PostingTables {
     pub fn assemble(width: GramWidth, file_grams: &[GramSet]) -> crate::Result<Self> {
-        use rayon::prelude::*;
-
         let total: usize = file_grams.iter().map(|s| s.as_slice().len()).sum();
         if file_grams.len() > u32::MAX as usize {
             return Err(crate::Error::Io(std::io::Error::new(
@@ -88,11 +86,7 @@ impl PostingTables {
                 pairs.push((gram.ordinal(), fid32));
             }
         }
-        if pairs.len() >= 50_000 {
-            pairs.par_sort_unstable();
-        } else {
-            pairs.sort_unstable();
-        }
+        pairs.sort_unstable();
         Self::encode_pairs(width, &pairs)
     }
 
