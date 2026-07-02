@@ -97,8 +97,7 @@ impl SummarySink {
 impl Sink for SummarySink {
     type Error = io::Error;
 
-    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         self.matched = true;
         if self.mode == PrintMode::CountMatches {
             if let Some(ref matcher) = self.matcher {
@@ -121,10 +120,9 @@ impl Sink for SummarySink {
 
     fn binary_data(
         &mut self,
-        searcher: &Searcher,
+        _searcher: &Searcher,
         binary_byte_offset: u64,
     ) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
         self.binary_byte_offset.get_or_insert(binary_byte_offset);
         Ok(true)
     }

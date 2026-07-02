@@ -86,8 +86,7 @@ impl<'a> StandardSink<'a> {
 impl Sink for StandardSink<'_> {
     type Error = io::Error;
 
-    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         self.matched = true;
         self.match_count += 1;
 
@@ -127,8 +126,11 @@ impl Sink for StandardSink<'_> {
         self.write_line_content(mat.bytes())
     }
 
-    fn context(&mut self, searcher: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
+    fn context(
+        &mut self,
+        _searcher: &Searcher,
+        ctx: &SinkContext<'_>,
+    ) -> Result<bool, Self::Error> {
         if self.output.emission == OutputEmission::Quiet {
             return Ok(true);
         }
@@ -187,8 +189,7 @@ impl Sink for StandardSink<'_> {
         Ok(true)
     }
 
-    fn context_break(&mut self, searcher: &Searcher) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
+    fn context_break(&mut self, _searcher: &Searcher) -> Result<bool, Self::Error> {
         if self.output.emission == OutputEmission::Quiet {
             return Ok(true);
         }
@@ -207,10 +208,9 @@ impl Sink for StandardSink<'_> {
 
     fn binary_data(
         &mut self,
-        searcher: &Searcher,
+        _searcher: &Searcher,
         binary_byte_offset: u64,
     ) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
         self.binary_byte_offset.get_or_insert(binary_byte_offset);
         Ok(true)
     }
