@@ -6,19 +6,20 @@ use grep_matcher::{LineTerminator, Matcher as GrepMatcherTrait};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::compiled::CompiledQuery;
 use crate::grep::input::{Input, Inputs};
-use crate::grep::matched::Match;
 use crate::grep::options::{BinaryMode, MatchOptions};
-use crate::grep::query::Query;
 use crate::grep::report::Report;
 use crate::grep::stats::{Stats, StatsMode};
 
-pub struct ReportCollector<'query, 'input> {
-    pub query: &'query Query,
-    pub compiled: &'query CompiledQuery,
-    pub inputs: &'query Inputs<'input>,
-    pub stats: StatsMode,
+use super::compiled::CompiledQuery;
+use super::hit::Match;
+use super::query::Query;
+
+pub(super) struct SearchRun<'query, 'input> {
+    query: &'query Query,
+    compiled: &'query CompiledQuery,
+    inputs: &'query Inputs<'input>,
+    stats: StatsMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,9 +33,23 @@ struct SearchExecution<'a> {
     origin: InputOrigin,
 }
 
-impl ReportCollector<'_, '_> {
+impl<'query, 'input> SearchRun<'query, 'input> {
+    pub(super) const fn new(
+        query: &'query Query,
+        compiled: &'query CompiledQuery,
+        inputs: &'query Inputs<'input>,
+        stats: StatsMode,
+    ) -> Self {
+        Self {
+            query,
+            compiled,
+            inputs,
+            stats,
+        }
+    }
+
     #[must_use]
-    pub fn collect(&self) -> Report {
+    pub(super) fn run(&self) -> Report {
         if self.inputs.is_empty() {
             return Report {
                 matched: false,
@@ -56,7 +71,7 @@ impl ReportCollector<'_, '_> {
                     opts: self.query.opts(),
                     origin: InputOrigin::from(input),
                 };
-                self.collect_input(&mut execution.searcher(), input, only_matching)
+                self.run_input(&mut execution.searcher(), input, only_matching)
             })
             .collect();
 
@@ -95,7 +110,7 @@ impl ReportCollector<'_, '_> {
         }
     }
 
-    fn collect_input(
+    fn run_input(
         &self,
         searcher: &mut Searcher,
         input: &Input<'_>,
@@ -103,10 +118,10 @@ impl ReportCollector<'_, '_> {
     ) -> InputOutcome {
         match self.compiled {
             CompiledQuery::Rust { matcher, .. } => {
-                InputCollector::new(matcher, input, only_matching).collect(searcher)
+                InputRun::new(matcher, input, only_matching).run(searcher)
             }
             CompiledQuery::Pcre2 { matcher, .. } => {
-                InputCollector::new(matcher, input, only_matching).collect(searcher)
+                InputRun::new(matcher, input, only_matching).run(searcher)
             }
         }
     }
@@ -159,13 +174,13 @@ impl From<&Input<'_>> for InputOrigin {
     }
 }
 
-struct InputCollector<'a, M> {
+struct InputRun<'a, M> {
     matcher: &'a M,
     input: &'a Input<'a>,
     only_matching: bool,
 }
 
-impl<'a, M: GrepMatcherTrait + Clone> InputCollector<'a, M> {
+impl<'a, M: GrepMatcherTrait + Clone> InputRun<'a, M> {
     const fn new(matcher: &'a M, input: &'a Input<'a>, only_matching: bool) -> Self {
         Self {
             matcher,
@@ -174,9 +189,9 @@ impl<'a, M: GrepMatcherTrait + Clone> InputCollector<'a, M> {
         }
     }
 
-    fn collect(self, searcher: &mut Searcher) -> InputOutcome {
+    fn run(self, searcher: &mut Searcher) -> InputOutcome {
         let (display_path, hit_path) = self.input.paths();
-        let mut sink = MatchCollector {
+        let mut sink = MatchSink {
             path: display_path,
             matcher: self.only_matching.then(|| self.matcher.clone()),
             matches: Vec::new(),
@@ -208,13 +223,13 @@ struct InputOutcome {
     hit_path: Option<PathBuf>,
 }
 
-struct MatchCollector<M> {
+struct MatchSink<M> {
     path: PathBuf,
     matcher: Option<M>,
     matches: Vec<Match>,
 }
 
-impl<M: GrepMatcherTrait> Sink for MatchCollector<M> {
+impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
     type Error = io::Error;
 
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {

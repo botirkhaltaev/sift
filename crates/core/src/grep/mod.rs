@@ -1,14 +1,11 @@
 //! Grep pipeline orchestration.
 
-mod collection;
-mod compiled;
 pub mod error;
 pub mod input;
-mod matched;
 pub mod options;
 pub mod policy;
-mod query;
 pub mod report;
+mod search;
 mod session;
 mod stats;
 
@@ -21,17 +18,15 @@ pub use crate::corpus::filter::{
 pub use crate::corpus::order::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
 pub use crate::corpus::walk::FileWalk;
 pub use crate::index::Indexes;
-pub use compiled::{CompiledQuery, IndexUse};
 pub use error::Error;
 pub use input::{Input, Inputs};
-pub use matched::Match;
 pub use options::{
     BinaryMode, CaseMode, InputEncoding, MatchFlags, MatchOptions, RegexEngineRequest,
 };
 pub use policy::{
     CandidatePolicy, CandidatePolicyConfig, CandidateScope, CorpusState, IndexFallback,
 };
-pub use query::Query;
 pub use report::Report;
+pub use search::{CompiledQuery, Match, Query};
 pub use session::Session;
 pub use stats::{Stats, StatsMode};

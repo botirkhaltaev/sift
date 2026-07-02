@@ -1,7 +1,7 @@
 use crate::corpus::CandidateCoverage;
 use crate::corpus::CandidateOrder;
-use crate::grep::{CompiledQuery, IndexUse};
-use crate::query::ResolutionFallback;
+use crate::grep::CompiledQuery;
+use crate::query::{IndexNarrowing, ResolutionFallback};
 
 pub use crate::query::ResolutionFallback as IndexFallback;
 
@@ -25,12 +25,16 @@ impl CandidateScope {
     }
 
     #[must_use]
-    pub const fn resolve(output_scope: Self, index_use: IndexUse, corpus: CorpusState) -> Self {
+    const fn resolve(
+        output_scope: Self,
+        index_narrowing: IndexNarrowing,
+        corpus: CorpusState,
+    ) -> Self {
         match corpus {
             CorpusState::Unindexed | CorpusState::TransformedBytes => Self::All,
-            CorpusState::Indexed => match index_use {
-                IndexUse::CompleteScan => Self::All,
-                IndexUse::Narrow => output_scope,
+            CorpusState::Indexed => match index_narrowing {
+                IndexNarrowing::Disabled => Self::All,
+                IndexNarrowing::Enabled => output_scope,
             },
         }
     }
@@ -63,7 +67,8 @@ pub struct CandidatePolicy {
 impl CandidatePolicyConfig {
     #[must_use]
     pub const fn policy(self, compiled: &CompiledQuery) -> CandidatePolicy {
-        let scope = CandidateScope::resolve(self.output_scope, compiled.index_use(), self.corpus);
+        let scope =
+            CandidateScope::resolve(self.output_scope, compiled.index_narrowing(), self.corpus);
         CandidatePolicy {
             scope,
             corpus: self.corpus,

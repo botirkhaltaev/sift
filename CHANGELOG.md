@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - Delegate standard, summary, and JSON printing to `grep-printer`; remove Sift-owned matcher/searcher/output rendering wrappers.
-- Replace `grep/pattern` with entity-based query, compiled matcher, and report collection modules; remove `PatternCompiler`.
+- Replace `grep/pattern` with simple `grep/search` query, compiler, run, and hit modules; remove `PatternCompiler`.
 
 ## [0.7.0](https://github.com/botirk38/sift/releases/tag/v0.7.0) — 2026-07-01
 

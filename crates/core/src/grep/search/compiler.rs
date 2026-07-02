@@ -3,24 +3,9 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 
 use crate::grep::Error;
 use crate::grep::options::{CaseMode, MatchOptions, RegexEngineRequest};
+use crate::query::IndexNarrowing;
 
-#[derive(Debug, Clone)]
-pub enum CompiledQuery {
-    Rust {
-        matcher: RegexMatcher,
-        index_use: IndexUse,
-    },
-    Pcre2 {
-        matcher: Pcre2Matcher,
-        index_use: IndexUse,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexUse {
-    Narrow,
-    CompleteScan,
-}
+use super::CompiledQuery;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RegexEngine {
@@ -28,71 +13,47 @@ enum RegexEngine {
     Pcre2,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CompleteScanReason {
-    InvertedMatch,
-    DecodedInput,
-    RegexEngineUnsupportedByPlanner,
-}
-
-pub struct QueryCompiler<'a> {
+pub(super) struct QueryCompiler<'a> {
     patterns: &'a [String],
     opts: &'a MatchOptions,
 }
 
-impl CompiledQuery {
-    #[must_use]
-    pub const fn index_use(&self) -> IndexUse {
-        match self {
-            Self::Rust { index_use, .. } | Self::Pcre2 { index_use, .. } => *index_use,
-        }
-    }
-}
-
 impl<'a> QueryCompiler<'a> {
-    pub const fn new(patterns: &'a [String], opts: &'a MatchOptions) -> Self {
+    pub(super) const fn new(patterns: &'a [String], opts: &'a MatchOptions) -> Self {
         Self { patterns, opts }
     }
 
-    pub fn compile(&self) -> Result<CompiledQuery, Error> {
+    pub(super) fn compile(&self) -> Result<CompiledQuery, Error> {
         match self.opts.regex_engine {
             RegexEngineRequest::Rust => Ok(CompiledQuery::Rust {
                 matcher: self.rust()?,
-                index_use: self.index_use(RegexEngine::Rust),
+                index_narrowing: self.index_narrowing(RegexEngine::Rust),
             }),
             RegexEngineRequest::Pcre2 => Ok(CompiledQuery::Pcre2 {
                 matcher: self.pcre2()?,
-                index_use: self.index_use(RegexEngine::Pcre2),
+                index_narrowing: self.index_narrowing(RegexEngine::Pcre2),
             }),
             RegexEngineRequest::Auto => match self.rust() {
                 Ok(matcher) => Ok(CompiledQuery::Rust {
                     matcher,
-                    index_use: self.index_use(RegexEngine::Rust),
+                    index_narrowing: self.index_narrowing(RegexEngine::Rust),
                 }),
                 Err(_) => Ok(CompiledQuery::Pcre2 {
                     matcher: self.pcre2()?,
-                    index_use: self.index_use(RegexEngine::Pcre2),
+                    index_narrowing: self.index_narrowing(RegexEngine::Pcre2),
                 }),
             },
         }
     }
 
-    fn index_use(&self, engine: RegexEngine) -> IndexUse {
-        match self.complete_scan_reason(engine) {
-            Some(_) => IndexUse::CompleteScan,
-            None => IndexUse::Narrow,
-        }
-    }
-
-    fn complete_scan_reason(&self, engine: RegexEngine) -> Option<CompleteScanReason> {
-        if self.opts.invert_match() {
-            Some(CompleteScanReason::InvertedMatch)
-        } else if self.opts.input_encoding.uses_decoded_input() {
-            Some(CompleteScanReason::DecodedInput)
-        } else if engine != RegexEngine::Rust {
-            Some(CompleteScanReason::RegexEngineUnsupportedByPlanner)
+    fn index_narrowing(&self, engine: RegexEngine) -> IndexNarrowing {
+        if self.opts.invert_match()
+            || self.opts.input_encoding.uses_decoded_input()
+            || engine != RegexEngine::Rust
+        {
+            IndexNarrowing::Disabled
         } else {
-            None
+            IndexNarrowing::Enabled
         }
     }
 
@@ -191,7 +152,10 @@ mod tests {
 
         let query = make_query(&["needle"], opts);
 
-        assert_eq!(query.compile().unwrap().index_use(), IndexUse::Narrow);
+        assert_eq!(
+            query.compile().unwrap().index_narrowing(),
+            IndexNarrowing::Enabled
+        );
     }
 
     #[test]
@@ -204,7 +168,10 @@ mod tests {
 
         let query = make_query(&["needle"], opts);
 
-        assert_eq!(query.compile().unwrap().index_use(), IndexUse::CompleteScan);
+        assert_eq!(
+            query.compile().unwrap().index_narrowing(),
+            IndexNarrowing::Disabled
+        );
     }
 
     #[test]
@@ -216,7 +183,10 @@ mod tests {
 
         let query = make_query(&["needle"], opts);
 
-        assert_eq!(query.compile().unwrap().index_use(), IndexUse::CompleteScan);
+        assert_eq!(
+            query.compile().unwrap().index_narrowing(),
+            IndexNarrowing::Disabled
+        );
     }
 
     #[test]
@@ -229,6 +199,9 @@ mod tests {
 
         let query = make_query(&["needle"], opts);
 
-        assert_eq!(query.compile().unwrap().index_use(), IndexUse::CompleteScan);
+        assert_eq!(
+            query.compile().unwrap().index_narrowing(),
+            IndexNarrowing::Disabled
+        );
     }
 }

@@ -26,10 +26,11 @@ Internal modules (`pub(crate)`): `corpus/`, `query/`.
 | `grep/session.rs` | `Session` — indexes, filter, store meta (data only) |
 | `grep/policy.rs` | `CandidatePolicy`, `CandidatePolicyConfig`, `CandidateScope`, `CorpusState` |
 | `grep/input.rs` | `Input`, `Inputs` — push API for paths and byte streams |
-| `grep/query.rs` | `Query` lifecycle, candidate resolution entrypoint, library search entrypoint |
-| `grep/compiled.rs` | `CompiledQuery`, regex engine selection, concrete matcher construction |
-| `grep/collection.rs` | Private `ReportCollector` and search execution for library reports |
-| `grep/matched.rs` | `Match` result type |
+| `grep/search/query.rs` | `Query` lifecycle, candidate resolution entrypoint, library search entrypoint |
+| `grep/search/compiled.rs` | `CompiledQuery` artifact |
+| `grep/search/compiler.rs` | Regex engine selection and concrete matcher construction |
+| `grep/search/run.rs` | Private `SearchRun` execution for library reports |
+| `grep/search/hit.rs` | `Match` result type |
 | `corpus/coverage.rs` | `CandidateCoverage` — shared planning enum |
 | `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
 | `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |

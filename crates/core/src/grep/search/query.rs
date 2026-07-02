@@ -2,17 +2,17 @@ use std::sync::OnceLock;
 
 use crate::corpus::Candidate;
 use crate::grep::Error;
-use crate::grep::collection::ReportCollector;
-use crate::grep::compiled::{CompiledQuery, IndexUse, QueryCompiler};
 use crate::grep::input::Inputs;
 use crate::grep::options::MatchOptions;
 use crate::grep::policy::CandidatePolicy;
 use crate::grep::report::Report;
 use crate::grep::session::Session;
 use crate::grep::stats::StatsMode;
-use crate::query::{
-    IndexNarrowing, PlanContext, QueryFlags, QueryPlanner, QuerySpec, ResolutionConfig,
-};
+use crate::query::{PlanContext, QueryFlags, QueryPlanner, QuerySpec, ResolutionConfig};
+
+use super::compiled::CompiledQuery;
+use super::compiler::QueryCompiler;
+use super::run::SearchRun;
 
 #[derive(Debug)]
 pub struct Query {
@@ -132,10 +132,7 @@ impl Query {
                 session.indexes,
                 session.filter,
                 session.store_meta,
-                match compiled.index_use() {
-                    IndexUse::Narrow => IndexNarrowing::Enabled,
-                    IndexUse::CompleteScan => IndexNarrowing::Disabled,
-                },
+                compiled.index_narrowing(),
             ),
             ResolutionConfig {
                 coverage: policy.coverage(),
@@ -153,13 +150,7 @@ impl Query {
     pub fn search(&self, inputs: &Inputs, stats: StatsMode) -> crate::Result<Report> {
         self.validate_max_results()?;
         let compiled = self.compile()?;
-        Ok(ReportCollector {
-            query: self,
-            compiled,
-            inputs,
-            stats,
-        }
-        .collect())
+        Ok(SearchRun::new(self, compiled, inputs, stats).run())
     }
 }
 

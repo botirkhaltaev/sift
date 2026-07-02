@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::grep::matched::Match;
+use crate::grep::search::Match;
 use crate::grep::stats::Stats;
 
 /// Result of a search run.
