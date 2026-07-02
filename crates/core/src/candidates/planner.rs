@@ -198,21 +198,18 @@ const fn plan_indexed(input: PlanInput) -> CandidateStrategy {
         (IndexStatus::NoCandidateIndex, _, IndexFallback::IndexHitsOnly) => {
             CandidateStrategy::AllIndexed
         }
-        (IndexStatus::AllCandidates, _, _) => match input.snapshot_status {
-            SnapshotStatus::TrustedComplete => CandidateStrategy::AllIndexed,
-            SnapshotStatus::Missing
-            | SnapshotStatus::FilterMismatch
-            | SnapshotStatus::TrustedLazy
-            | SnapshotStatus::StaleComplete
-                if matches!(input.fallback, IndexFallback::WalkOnStaleSnapshot) =>
-            {
-                CandidateStrategy::Walk
+        (IndexStatus::AllCandidates, _, IndexFallback::IndexHitsOnly) => {
+            CandidateStrategy::AllIndexed
+        }
+        (IndexStatus::AllCandidates, _, IndexFallback::WalkOnStaleSnapshot) => {
+            match input.snapshot_status {
+                SnapshotStatus::TrustedComplete => CandidateStrategy::AllIndexed,
+                SnapshotStatus::Missing
+                | SnapshotStatus::FilterMismatch
+                | SnapshotStatus::TrustedLazy
+                | SnapshotStatus::StaleComplete => CandidateStrategy::Walk,
             }
-            SnapshotStatus::Missing
-            | SnapshotStatus::FilterMismatch
-            | SnapshotStatus::TrustedLazy
-            | SnapshotStatus::StaleComplete => CandidateStrategy::AllIndexed,
-        },
+        }
         (IndexStatus::CanNarrow, _, _) => match input.snapshot_status {
             SnapshotStatus::TrustedLazy => CandidateStrategy::MergeIndexAndWalk,
             _ => CandidateStrategy::UseIndex,
