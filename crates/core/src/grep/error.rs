@@ -1,7 +1,6 @@
 use thiserror::Error;
 
 use crate::corpus::filter::error::FilterError;
-use crate::grep::pattern::error::CompileError;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -14,6 +13,12 @@ pub enum Error {
     #[error("invalid max-count: 0 matches requested")]
     InvalidMaxCount,
 
+    #[error("grep request is missing a search query")]
+    MissingSearchQuery,
+
+    #[error("grep request is missing candidate selection")]
+    MissingCandidateSelection,
+
     #[error("JSON output is only supported for standard search (not count or file-list modes)")]
     JsonOutputIncompatibleMode,
 
@@ -25,14 +30,6 @@ pub enum Error {
 
     #[error("ignore walk error: {0}")]
     Ignore(#[from] ignore::Error),
-}
-
-impl From<CompileError> for Error {
-    fn from(e: CompileError) -> Self {
-        match e {
-            CompileError::RegexBuild(s) => Self::RegexBuild(s),
-        }
-    }
 }
 
 impl From<FilterError> for Error {

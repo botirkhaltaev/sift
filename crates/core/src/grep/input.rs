@@ -2,130 +2,126 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use crate::corpus::Candidate;
+use crate::corpus::candidate::PathDisplay;
+use crate::search::{InputIdentity, Inputs};
 
-pub enum Input<'a> {
-    Path {
-        candidate: &'a Candidate,
-        explicit: bool,
-    },
-    Bytes {
-        path: Cow<'a, str>,
-        bytes: Cow<'a, [u8]>,
-        candidate: Option<&'a Candidate>,
-        explicit: bool,
-    },
+pub trait CandidateTransform {
+    /// Read the transformed bytes that should be searched for one candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if transformed content cannot be read.
+    fn read_candidate(&self, candidate: &Candidate) -> crate::Result<Vec<u8>>;
 }
 
-impl Input<'_> {
-    /// Display path for matching and optional corpus rel-path for hit tracking.
+pub struct ByteInput<'a> {
+    pub path: Cow<'a, str>,
+    pub bytes: Cow<'a, [u8]>,
+    pub explicit: bool,
+}
+
+#[derive(Default)]
+pub struct InputRequest<'a> {
+    streams: Vec<ByteInput<'a>>,
+    explicit_paths: Vec<PathBuf>,
+    candidate_transform: Option<&'a dyn CandidateTransform>,
+    path_display: PathDisplay,
+}
+
+impl<'a> InputRequest<'a> {
     #[must_use]
-    pub fn paths(&self) -> (PathBuf, Option<PathBuf>) {
-        match self {
-            Self::Path { candidate, .. } => (
-                candidate.abs_path().to_path_buf(),
-                Some(candidate.rel_path().to_path_buf()),
-            ),
-            Self::Bytes {
-                path, candidate, ..
-            } => {
-                let display = candidate.map_or_else(
-                    || PathBuf::from(path.as_ref()),
-                    |c| c.abs_path().to_path_buf(),
+    pub const fn from_candidates() -> Self {
+        Self {
+            streams: Vec::new(),
+            explicit_paths: Vec::new(),
+            candidate_transform: None,
+            path_display: PathDisplay::Relative,
+        }
+    }
+
+    #[must_use]
+    pub fn with_stream(mut self, stream: ByteInput<'a>) -> Self {
+        self.streams.push(stream);
+        self
+    }
+
+    #[must_use]
+    pub fn with_explicit_path(mut self, path: PathBuf) -> Self {
+        self.explicit_paths.push(path);
+        self
+    }
+
+    #[must_use]
+    pub fn with_candidate_transform(mut self, transform: &'a dyn CandidateTransform) -> Self {
+        self.candidate_transform = Some(transform);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_path_display(mut self, path_display: PathDisplay) -> Self {
+        self.path_display = path_display;
+        self
+    }
+
+    /// Resolve candidate paths and byte streams into executable grep inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configured candidate transform cannot read input bytes.
+    pub fn resolve<'c>(&'a self, candidates: &'c [Candidate]) -> crate::Result<Inputs<'c>>
+    where
+        'a: 'c,
+    {
+        let mut inputs = Inputs::with_capacity(candidates.len() + self.streams.len());
+        for candidate in candidates {
+            let explicit = self
+                .explicit_paths
+                .iter()
+                .any(|path| path == candidate.rel_path() || path == candidate.abs_path());
+            if let Some(transform) = self.candidate_transform {
+                let bytes = transform.read_candidate(candidate)?;
+                let path = Cow::Owned(candidate.abs_path().display().to_string());
+                let identity = candidate_identity(candidate, self.path_display);
+                if explicit {
+                    inputs.push_explicit_bytes(path, Cow::Owned(bytes), identity);
+                } else {
+                    inputs.push_bytes(path, Cow::Owned(bytes), identity);
+                }
+            } else {
+                inputs.push_path(
+                    Cow::Borrowed(candidate.abs_path()),
+                    candidate_identity(candidate, self.path_display),
+                    explicit,
                 );
-                let hit = candidate.map(|c| c.rel_path().to_path_buf());
-                (display, hit)
             }
         }
-    }
-
-    #[must_use]
-    pub fn byte_len(&self) -> u64 {
-        match self {
-            Self::Path { candidate, .. } => candidate
-                .cached_size()
-                .unwrap_or_else(|| std::fs::metadata(candidate.abs_path()).map_or(0, |m| m.len())),
-            Self::Bytes { bytes, .. } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        for stream in &self.streams {
+            if stream.explicit {
+                inputs.push_explicit_bytes(
+                    stream.path.clone(),
+                    stream.bytes.clone(),
+                    InputIdentity::from_name(stream.path.as_ref()),
+                );
+            } else {
+                inputs.push_bytes(
+                    stream.path.clone(),
+                    stream.bytes.clone(),
+                    InputIdentity::from_name(stream.path.as_ref()),
+                );
+            }
         }
+        Ok(inputs)
     }
 }
 
-pub struct Inputs<'a> {
-    items: Vec<Input<'a>>,
-}
-
-impl<'a> Inputs<'a> {
-    #[must_use]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            items: Vec::with_capacity(capacity),
-        }
-    }
-
-    pub fn push_path(&mut self, candidate: &'a Candidate) {
-        self.push_candidate(candidate, false);
-    }
-
-    pub fn push_explicit_path(&mut self, candidate: &'a Candidate) {
-        self.push_candidate(candidate, true);
-    }
-
-    fn push_candidate(&mut self, candidate: &'a Candidate, explicit: bool) {
-        self.items.push(Input::Path {
-            candidate,
-            explicit,
-        });
-    }
-
-    pub fn push_bytes(
-        &mut self,
-        path: Cow<'a, str>,
-        bytes: Cow<'a, [u8]>,
-        candidate: Option<&'a Candidate>,
-    ) {
-        self.push_bytes_input(path, bytes, candidate, false);
-    }
-
-    pub fn push_explicit_bytes(
-        &mut self,
-        path: Cow<'a, str>,
-        bytes: Cow<'a, [u8]>,
-        candidate: Option<&'a Candidate>,
-    ) {
-        self.push_bytes_input(path, bytes, candidate, true);
-    }
-
-    fn push_bytes_input(
-        &mut self,
-        path: Cow<'a, str>,
-        bytes: Cow<'a, [u8]>,
-        candidate: Option<&'a Candidate>,
-        explicit: bool,
-    ) {
-        self.items.push(Input::Bytes {
-            path,
-            bytes,
-            candidate,
-            explicit,
-        });
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    #[must_use]
-    pub fn byte_count(&self) -> u64 {
-        self.items.iter().map(Input::byte_len).sum()
-    }
-
-    #[must_use]
-    pub fn as_slice(&self) -> &[Input<'_>] {
-        &self.items
+fn candidate_identity(candidate: &Candidate, path_display: PathDisplay) -> InputIdentity {
+    let display_path = match path_display {
+        PathDisplay::Relative => candidate.rel_path(),
+        PathDisplay::Absolute => candidate.abs_path(),
+    };
+    InputIdentity {
+        display_path: display_path.to_path_buf(),
+        hit_path: Some(candidate.rel_path().to_path_buf()),
+        byte_len: candidate.cached_size(),
     }
 }

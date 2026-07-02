@@ -2,14 +2,14 @@ use regex_syntax::ast::parse::Parser as AstParser;
 use regex_syntax::hir::literal::{ExtractKind, Extractor};
 use regex_syntax::hir::{self, Hir};
 
-use crate::query::QuerySpec;
+use crate::candidates::CandidateSpec;
 
 use super::config::Config;
 
 impl Config {
     /// Extract literal byte arms from a query spec.
     /// Returns `None` if no usable literals for this N-gram width can be extracted.
-    pub(crate) fn extract_literal_arms(self, query: &QuerySpec<'_>) -> Option<Vec<Vec<u8>>> {
+    pub(crate) fn extract_literal_arms(self, query: &CandidateSpec<'_>) -> Option<Vec<Vec<u8>>> {
         if query.invert_match() {
             return None;
         }

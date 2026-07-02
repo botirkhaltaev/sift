@@ -131,7 +131,7 @@ fn max_columns_preview_truncates_long_lines_walk() {
     let stdout = normalize_stdout(&out);
     assert!(stdout.contains("short"), "short line should appear");
     assert!(
-        stdout.contains("[... omitted end ...]"),
+        stdout.contains("[... omitted end of long line]"),
         "truncated preview should appear"
     );
 }
@@ -145,7 +145,7 @@ fn max_columns_consistent_index_and_walk() {
     );
     p.build_index();
     let args = ["-M", "10", "--max-columns-preview", "."];
-    let expected = "a.txt:short\na.txt:this line  [... omitted end ...]\n";
+    let expected = "a.txt:short\na.txt:this line  [... omitted end of long line]\n";
 
     let index = p.index_output(args);
     assert_success(&index);
@@ -170,12 +170,12 @@ fn max_columns_without_preview_omits_consistently() {
 
     let index = p.index_output(args);
     assert_success(&index);
-    assert_stdout_eq(&index, "a.txt:short\n");
+    assert_stdout_eq(&index, "a.txt:short\na.txt:[Omitted long matching line]\n");
     assert_stderr_empty(&index);
 
     let walk = p.walk_output(args);
     assert_success(&walk);
-    assert_stdout_eq(&walk, "a.txt:short\n");
+    assert_stdout_eq(&walk, "a.txt:short\na.txt:[Omitted long matching line]\n");
     assert_stderr_empty(&walk);
 }
 

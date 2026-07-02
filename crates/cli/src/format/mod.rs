@@ -1,8 +1,8 @@
 pub mod collection;
+mod event;
 pub mod output;
 pub mod printer;
 pub mod sink;
-mod stats;
 
 pub use collection::PrintExtras;
 pub use output::format::{ColumnLimit, ColumnOverflow};

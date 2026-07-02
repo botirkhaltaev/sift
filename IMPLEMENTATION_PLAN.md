@@ -67,7 +67,7 @@ pub use search::{
     ColumnOverflow, FilenameMode, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
     LineStyleFlags, LinkTraversal, Match, MatchEmissionMode, OutputEmission, PassthruMode,
     PathDisplay, PatternCompiler, RecordTerminator, SearchCollection, SearchError, SearchLineStyle,
-    SearchMatchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat,
+    SearchSearchFlags, SearchMode, SearchOptions, SearchOutcome, SearchOutput, SearchOutputFormat,
     SearchQuery, SearchRecordStyle, SearchSeparators, SearchStats, TypeDef, VisibilityConfig,
     WalkOptions, ZeroCountMode,
 };
@@ -86,7 +86,7 @@ types from `sift_core::` root must update to `sift_core::search::`.
 | File | Old import | New import |
 |------|-----------|------------|
 | `grep/run.rs:3` | `sift_core::{CandidateFilter, ..., SearchMode, SearchQuery}` | `sift_core::{SearchQuery, ...}` + `sift_core::search::{CandidateFilter, SearchMode}` |
-| `grep/pattern.rs:4` | `sift_core::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions}` | `sift_core::search::{BinaryMode, CaseMode, SearchMatchFlags, SearchMode, SearchOptions}` |
+| `grep/pattern.rs:4` | `sift_core::{BinaryMode, CaseMode, SearchSearchFlags, SearchMode, SearchOptions}` | `sift_core::search::{BinaryMode, CaseMode, SearchSearchFlags, SearchMode, SearchOptions}` |
 | `grep/filter.rs:5` | `sift_core::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig}` | `sift_core::search::{CandidateFilterConfig, GlobConfig, IgnoreConfig, TypeDef, VisibilityConfig}` |
 | `grep/output.rs:2-6` | `sift_core::{ColorChoice, FilenameMode, ...}` | `sift_core::search::{ColorChoice, FilenameMode, ...}` |
 | `grep/ignore.rs:2` | `sift_core::IgnoreSources` | `sift_core::search::IgnoreSources` |
@@ -476,13 +476,13 @@ fn resolve_matcher(&self) -> Result<&RegexMatcher, SearchError> {
 ```rust
 // OLD (each method):
 pub fn fixed_strings(mut self, on: bool) -> Self {
-    if on { self.flags |= SearchMatchFlags::FIXED_STRINGS; }
+    if on { self.flags |= SearchSearchFlags::FIXED_STRINGS; }
     self
 }
 
 // NEW:
 pub fn fixed_strings(mut self, on: bool) -> Self {
-    self.flags.set(SearchMatchFlags::FIXED_STRINGS, on);
+    self.flags.set(SearchSearchFlags::FIXED_STRINGS, on);
     self
 }
 ```

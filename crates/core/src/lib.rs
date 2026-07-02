@@ -3,18 +3,23 @@
 //! `sift-core` builds on-disk indexes over codebases and uses them to narrow
 //! candidate files before running the full regex engine.
 
+pub mod candidates;
 pub(crate) mod corpus;
 pub mod grep;
 pub mod index;
-pub(crate) mod query;
+pub mod search;
 
 pub use corpus::Candidate;
-pub use corpus::CandidateCoverage;
 pub use grep::{
-    CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidatePolicy, CandidateScope,
-    CompiledQuery, Error as GrepError, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, Input,
-    Inputs, Match, MatchOptions, Matcher, Query, Report, Session, Stats, StatsMode, TypeFilterRule,
-    VisibilityConfig,
+    ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateTransform,
+    Error as GrepError, GlobConfig, Grep, GrepBuilder, GrepRequest, HiddenMode, IgnoreConfig,
+    IgnoreSources, InputRequest, TypeFilterRule, VisibilityConfig,
+};
+pub use search::{
+    BinaryEvent, BinaryMode, CaseMode, ContextEvent, ContextKind, FileEvent, FileReport, Input,
+    InputEncoding, InputIdentity, Inputs, Match, MatchEvent, RegexEngine, Report, SearchEvent,
+    SearchFlags, SearchMode, SearchOptions, SearchQuery, SearchQueryBuilder, SearchSink, Searcher,
+    Stats, StatsMode, ZeroCounts,
 };
 
 pub use ignore::{Walk, WalkBuilder};
@@ -30,7 +35,6 @@ pub use index::{
     IndexError, IndexId, Indexes, PlanMode, QueryPlanOutput, ReconcileOutcome, SnapshotId,
     WalkMeta,
 };
-pub use query::{QueryFlags, QuerySpec};
 
 use thiserror::Error;
 
@@ -54,9 +58,6 @@ pub enum Error {
 
     #[error("ignore walk error: {0}")]
     Ignore(#[from] ignore::Error),
-
-    #[error("regex error: {0}")]
-    Regex(#[from] Box<regex_automata::meta::BuildError>),
 }
 
 impl From<crate::index::ngram::NGramIndexError> for Error {

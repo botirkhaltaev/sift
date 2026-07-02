@@ -8,10 +8,11 @@ use std::fs;
 use std::hint::black_box;
 use std::path::Path;
 
+use sift_core::candidates::{CandidateFlags, CandidateSpec};
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
-    IndexStore, IndexWalkConfig, Indexes, QueryFlags, QuerySpec, StoreMeta, WalkMeta,
+    IndexStore, IndexWalkConfig, Indexes, StoreMeta, WalkMeta,
 };
 
 mod common;
@@ -374,41 +375,41 @@ fn bench_candidates(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_candidates");
 
     g.bench_function("literal", |b| {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &["beta".to_string()],
-            flags: QueryFlags::empty(),
+            flags: CandidateFlags::empty(),
         };
         b.iter(|| black_box(index.candidates(&spec)));
     });
 
     g.bench_function("required_literal", |b| {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &["[A-Z]+_RESUME".to_string()],
-            flags: QueryFlags::empty(),
+            flags: CandidateFlags::empty(),
         };
         b.iter(|| black_box(index.candidates(&spec)));
     });
 
     g.bench_function("full_scan_fallback", |b| {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
-            flags: QueryFlags::empty(),
+            flags: CandidateFlags::empty(),
         };
         b.iter(|| black_box(index.candidates(&spec)));
     });
 
     g.bench_function("alternation", |b| {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
-            flags: QueryFlags::empty(),
+            flags: CandidateFlags::empty(),
         };
         b.iter(|| black_box(index.candidates(&spec)));
     });
 
     g.bench_function("case_insensitive", |b| {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &["beta".to_string()],
-            flags: QueryFlags::CASE_INSENSITIVE,
+            flags: CandidateFlags::CASE_INSENSITIVE,
         };
         b.iter(|| black_box(index.candidates(&spec)));
     });
@@ -425,17 +426,17 @@ fn bench_explain(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_explain");
 
     g.bench_function("indexed_mode", |b| {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &["beta".to_string()],
-            flags: QueryFlags::empty(),
+            flags: CandidateFlags::empty(),
         };
         b.iter(|| black_box(index.explain(&spec)));
     });
 
     g.bench_function("full_scan_mode", |b| {
-        let spec = QuerySpec {
+        let spec = CandidateSpec {
             patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
-            flags: QueryFlags::empty(),
+            flags: CandidateFlags::empty(),
         };
         b.iter(|| black_box(index.explain(&spec)));
     });

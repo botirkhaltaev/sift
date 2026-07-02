@@ -2,7 +2,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
-use sift_core::grep::{BinaryMode, CaseMode, MatchFlags, MatchOptions, Query, RegexEngineRequest};
+use sift_core::search::{
+    BinaryMode, CaseMode, RegexEngine, SearchFlags, SearchOptions, SearchQuery, SearchQueryBuilder,
+};
 
 use crate::format::PrintMode;
 
@@ -75,52 +77,54 @@ impl PatternDecl {
         }
     }
 
-    /// Build the core grep query for resolved pattern strings and argv-derived options.
+    /// Build inert search query data for the high-level grep API.
     ///
     /// # Errors
     ///
-    /// Returns an error if the resolved pattern list is empty.
-    pub fn query(
+    /// Returns an error if no patterns were provided.
+    pub fn search_query(
         &self,
         patterns: Vec<String>,
         pattern_argv: &PatternArgv,
-    ) -> Result<Query, sift_core::GrepError> {
-        Query::new(patterns).map(|query| query.options(self.options(pattern_argv)))
+    ) -> Result<SearchQuery, sift_core::GrepError> {
+        SearchQueryBuilder::new(patterns)
+            .options(self.options(pattern_argv))
+            .build()
     }
 
     #[must_use]
-    fn options(&self, pattern_argv: &PatternArgv) -> MatchOptions {
-        let mut opts = MatchOptions {
+    fn options(&self, pattern_argv: &PatternArgv) -> SearchOptions {
+        let mut opts = SearchOptions {
             case_mode: pattern_argv.case_mode,
             max_results: self.max_count,
-            ..MatchOptions::default()
+            ..SearchOptions::default()
         };
         if self.search_flags.fixed_strings {
-            opts.flags |= MatchFlags::FIXED_STRINGS;
+            opts.flags |= SearchFlags::FIXED_STRINGS;
         }
         if pattern_argv.invert_match {
-            opts.flags |= MatchFlags::INVERT_MATCH;
+            opts.flags |= SearchFlags::INVERT_MATCH;
         }
         if self.regex1.word_regexp {
-            opts.flags |= MatchFlags::WORD_REGEXP;
+            opts.flags |= SearchFlags::WORD_REGEXP;
         }
         if self.regex2.line_regexp {
-            opts.flags |= MatchFlags::LINE_REGEXP;
+            opts.flags |= SearchFlags::LINE_REGEXP;
         }
         if pattern_argv.only_matching {
-            opts.flags |= MatchFlags::ONLY_MATCHING;
+            opts.flags |= SearchFlags::ONLY_MATCHING;
         }
         if self.multiline.multiline {
-            opts.flags |= MatchFlags::MULTILINE;
+            opts.flags |= SearchFlags::MULTILINE;
         }
         if self.multiline.multiline_dotall {
-            opts.flags |= MatchFlags::MULTILINE_DOTALL;
+            opts.flags |= SearchFlags::MULTILINE_DOTALL;
         }
         if self.multiline.line_terminator.crlf {
-            opts.flags |= MatchFlags::CRLF;
+            opts.flags |= SearchFlags::CRLF;
         }
         if self.multiline.line_terminator.null_data {
-            opts.flags |= MatchFlags::NULL_DATA;
+            opts.flags |= SearchFlags::NULL_DATA;
         }
         if self.engine.no_unicode {
             opts.unicode = false;
@@ -263,7 +267,7 @@ pub struct PatternArgv {
     pub quiet: bool,
     pub before_context: usize,
     pub after_context: usize,
-    pub regex_engine: RegexEngineRequest,
+    pub regex_engine: RegexEngine,
 }
 
 impl PatternArgv {
@@ -284,9 +288,9 @@ impl PatternArgv {
         }
     }
 
-    fn regex_engine(argv: &Argv<'_>) -> RegexEngineRequest {
+    fn regex_engine(argv: &Argv<'_>) -> RegexEngine {
         let mut last_idx = 0usize;
-        let mut engine = RegexEngineRequest::Rust;
+        let mut engine = RegexEngine::Rust;
         let raw_args = argv.as_slice();
         let mut i = 0;
         while i < raw_args.len() {
@@ -296,19 +300,19 @@ impl PatternArgv {
             }
             let next = i + 1;
             let parsed = if arg == "--pcre2" {
-                Some((i, RegexEngineRequest::Pcre2, 0usize))
+                Some((i, RegexEngine::Pcre2, 0usize))
             } else if arg == "--no-pcre2" {
-                Some((i, RegexEngineRequest::Rust, 0))
+                Some((i, RegexEngine::Rust, 0))
             } else if arg == "--auto-hybrid-regex" {
-                Some((i, RegexEngineRequest::Auto, 0))
+                Some((i, RegexEngine::Auto, 0))
             } else if let Some(value) = arg.strip_prefix("--engine=") {
                 value
-                    .parse::<RegexEngineRequest>()
+                    .parse::<RegexEngine>()
                     .ok()
                     .map(|engine| (i, engine, 0))
             } else if arg == "--engine" && next < raw_args.len() {
                 raw_args[next]
-                    .parse::<RegexEngineRequest>()
+                    .parse::<RegexEngine>()
                     .ok()
                     .map(|engine| (i, engine, 1))
             } else {
@@ -882,7 +886,7 @@ mod tests {
     fn query_options_applies_fixed_strings() {
         let config = pattern_config(&["sift", "-F", "pat"]);
         let opts = config.options(&pat(&["sift", "pat"]));
-        assert!(opts.flags.contains(MatchFlags::FIXED_STRINGS));
+        assert!(opts.flags.contains(SearchFlags::FIXED_STRINGS));
     }
 
     // ── binary_mode ──

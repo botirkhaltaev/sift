@@ -1,15 +1,18 @@
 //! Grep-style search execution and filtering benchmarks.
 //!
-//! Exercises the public `Query::search` corpus pipeline.
+//! Exercises the public `Searcher::search` corpus pipeline.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::grep::{
-    CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidatePolicyConfig, CandidateScope,
-    CorpusState, IndexFallback, Inputs, MatchFlags, MatchOptions, Query, Session, StatsMode,
+use sift_core::candidates::{
+    CandidatePlanner, CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, CorpusMode,
+    IndexFallback,
 };
+use sift_core::grep::InputRequest;
+use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder};
+use sift_core::search::{SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode};
 use sift_core::{Index, Indexes, NGramIndex};
 
 mod common;
@@ -29,7 +32,7 @@ fn wrap_index(index: NGramIndex) -> Indexes {
     Indexes::from_single(Index::NGram(index), root)
 }
 
-fn make_search(patterns: &[&str], opts: MatchOptions) -> (Vec<String>, MatchOptions) {
+fn make_search(patterns: &[&str], opts: SearchOptions) -> (Vec<String>, SearchOptions) {
     let pats: Vec<String> = patterns.iter().map(ToString::to_string).collect();
     (pats, opts)
 }
@@ -41,26 +44,30 @@ fn make_filter(config: &CandidateFilterConfig, root: &Path) -> CandidateFilter {
 fn run_grep(
     indexes: &Indexes,
     filter: &CandidateFilter,
-    query: &(Vec<String>, MatchOptions),
+    query: &(Vec<String>, SearchOptions),
 ) -> bool {
-    let session = Session::new(indexes, filter, None);
-    let query = Query::new(query.0.clone())
-        .unwrap()
-        .options(query.1.clone());
-    let compiled = query.compile().unwrap();
-    let policy = CandidatePolicyConfig {
-        output_scope: CandidateScope::Indexed,
-        corpus: CorpusState::Indexed,
+    let source = CandidateSource {
+        indexes,
+        filter,
+        store_meta: None,
+    };
+    let query = SearchQueryBuilder::new(query.0.clone())
+        .options(query.1.clone())
+        .build()
+        .unwrap();
+    let searcher = Searcher::new(query.clone()).unwrap();
+    let request = CandidateRequest {
+        scope: CandidateScope::Indexed,
+        corpus: CorpusMode::Indexed,
         fallback: IndexFallback::WalkOnStaleSnapshot,
         order: CandidateOrder::default(),
-    }
-    .policy(compiled);
-    let candidates = query.candidates(&session, policy).unwrap();
-    let mut inputs = Inputs::with_capacity(candidates.len());
-    for candidate in &candidates {
-        inputs.push_path(candidate);
-    }
-    query.search(&inputs, StatsMode::Off).unwrap().matched()
+    };
+    let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
+        .resolve()
+        .unwrap();
+    let input_request = InputRequest::from_candidates();
+    let inputs = input_request.resolve(&candidates).unwrap();
+    searcher.search(&inputs, StatsMode::Off).unwrap().matched()
 }
 
 fn bench_indexed_search(c: &mut Criterion) {
@@ -72,19 +79,19 @@ fn bench_indexed_search(c: &mut Criterion) {
     let mut g = c.benchmark_group("grep_indexed");
 
     g.bench_function("literal", |b| {
-        let query = make_search(&["beta"], MatchOptions::default());
+        let query = make_search(&["beta"], SearchOptions::default());
         b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
     });
 
     g.bench_function("required_literal", |b| {
-        let query = make_search(&["[A-Z]+_RESUME"], MatchOptions::default());
+        let query = make_search(&["[A-Z]+_RESUME"], SearchOptions::default());
         b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
     });
 
     g.bench_function("alternation", |b| {
         let query = make_search(
             &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT"],
-            MatchOptions::default(),
+            SearchOptions::default(),
         );
         b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
     });
@@ -92,8 +99,8 @@ fn bench_indexed_search(c: &mut Criterion) {
     g.bench_function("case_insensitive", |b| {
         let query = make_search(
             &["beta"],
-            MatchOptions {
-                case_mode: sift_core::grep::CaseMode::Insensitive,
+            SearchOptions {
+                case_mode: sift_core::search::CaseMode::Insensitive,
                 ..Default::default()
             },
         );
@@ -103,7 +110,7 @@ fn bench_indexed_search(c: &mut Criterion) {
     g.bench_function("full_scan_fallback", |b| {
         let query = make_search(
             &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}"],
-            MatchOptions::default(),
+            SearchOptions::default(),
         );
         b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
     });
@@ -111,8 +118,8 @@ fn bench_indexed_search(c: &mut Criterion) {
     g.bench_function("invert_match", |b| {
         let query = make_search(
             &["beta"],
-            MatchOptions {
-                flags: MatchFlags::INVERT_MATCH,
+            SearchOptions {
+                flags: SearchFlags::INVERT_MATCH,
                 ..Default::default()
             },
         );
@@ -132,12 +139,12 @@ fn bench_walk_search(c: &mut Criterion) {
     let mut g = c.benchmark_group("grep_walk");
 
     g.bench_function("literal", |b| {
-        let query = make_search(&["beta"], MatchOptions::default());
+        let query = make_search(&["beta"], SearchOptions::default());
         b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
     });
 
     g.bench_function("full_scan", |b| {
-        let query = make_search(&[".*"], MatchOptions::default());
+        let query = make_search(&[".*"], SearchOptions::default());
         b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
     });
 

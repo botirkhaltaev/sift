@@ -1,30 +1,31 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::grep::{MatchFlags, MatchOptions, PatternCompiler};
+use sift_core::search::{SearchFlags, SearchOptions, SearchQueryBuilder, Searcher};
 
 /// Static branches combined with random bytes to stress alternation and flag shaping.
 const STATIC_BRANCHES: &[&str] = &[r"a.c", r"foo|bar", r"^line$", r"\bword\b", "(", r"[", ""];
 
-fn compile_with_flags(patterns: &[String], opts: &MatchOptions) {
-    let _ = PatternCompiler::new()
-        .fixed_strings(opts.fixed_strings())
-        .word_regexp(opts.word_regexp())
-        .line_regexp(opts.line_regexp())
-        .case_insensitive(opts.case_insensitive())
-        .compile(&patterns.iter().map(String::as_str).collect::<Vec<_>>());
+fn compile_with_flags(patterns: &[String], opts: &SearchOptions) {
+    let Ok(query) = SearchQueryBuilder::new(patterns.to_vec())
+        .options(opts.clone())
+        .build()
+    else {
+        return;
+    };
+    let _ = Searcher::new(query);
 }
 
 fuzz_target!(|data: &[u8]| {
     let flags = data
         .first()
-        .map(|b| MatchFlags::from_bits_truncate(u16::from(*b)))
+        .map(|b| SearchFlags::from_bits_truncate(u16::from(*b)))
         .unwrap_or_default();
     let max_results = data.get(1).map(|b| (*b as usize).min(5000));
-    let opts = MatchOptions {
+    let opts = SearchOptions {
         flags,
         max_results,
-        ..MatchOptions::default()
+        ..SearchOptions::default()
     };
 
     let rest = data.get(2..).unwrap_or_default();

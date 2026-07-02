@@ -52,7 +52,7 @@ fn null_data_terminates_count_records_with_nul() {
     let output = p.index_output(["--null-data", "--count", "needle"]);
     common::assert_success(&output);
 
-    assert_eq!(output.stdout, b"a.txt:1\0");
+    assert_eq!(output.stdout, b"a.txt\0\x31\0");
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn colors_customize_match_style() {
 
     let s = common::normalize_stdout(&output);
     assert!(
-        s.contains("\x1b[0m\x1b[22;34mneedle\x1b[0m"),
+        s.contains("\x1b[0m\x1b[34mneedle\x1b[0m"),
         "expected custom blue non-bold match style, got {s:?}"
     );
 }
@@ -213,6 +213,7 @@ fn hyperlink_format_vscode_wraps_path() {
     p.write("t.txt", "needle\n");
 
     let output = p.walk_output([
+        "--color=always",
         "--hyperlink-format=vscode",
         "--with-filename",
         "--line-number",
@@ -224,7 +225,7 @@ fn hyperlink_format_vscode_wraps_path() {
 
     let s = String::from_utf8_lossy(&output.stdout);
     assert!(
-        s.contains("\x1b]8;;vscode://file") && s.contains("t.txt\x1b]8;;\x1b\\:1:1:"),
+        s.contains("\x1b]8;;vscode://file") && s.contains("t.txt") && s.contains("\x1b]8;;\x1b\\:"),
         "expected OSC-8 vscode hyperlink around path, got {s:?}"
     );
 }

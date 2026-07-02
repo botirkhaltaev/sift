@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub struct MatchFlags: u16 {
+    pub struct SearchFlags: u16 {
         const INVERT_MATCH     = 1 << 0;
         const FIXED_STRINGS    = 1 << 1;
         const WORD_REGEXP      = 1 << 2;
@@ -16,14 +16,14 @@ bitflags::bitflags! {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RegexEngineRequest {
+pub enum RegexEngine {
     #[default]
     Rust,
     Pcre2,
     Auto,
 }
 
-impl FromStr for RegexEngineRequest {
+impl FromStr for RegexEngine {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -106,8 +106,8 @@ impl FromStr for InputEncoding {
 }
 
 #[derive(Debug, Clone)]
-pub struct MatchOptions {
-    pub flags: MatchFlags,
+pub struct SearchOptions {
+    pub flags: SearchFlags,
     pub case_mode: CaseMode,
     pub max_results: Option<usize>,
     pub before_context: usize,
@@ -118,13 +118,13 @@ pub struct MatchOptions {
     pub unicode: bool,
     pub regex_size_limit: usize,
     pub dfa_size_limit: usize,
-    pub regex_engine: RegexEngineRequest,
+    pub regex_engine: RegexEngine,
 }
 
-impl Default for MatchOptions {
+impl Default for SearchOptions {
     fn default() -> Self {
         Self {
-            flags: MatchFlags::default(),
+            flags: SearchFlags::default(),
             case_mode: CaseMode::default(),
             max_results: None,
             before_context: 0,
@@ -135,12 +135,12 @@ impl Default for MatchOptions {
             unicode: true,
             regex_size_limit: 0,
             dfa_size_limit: 0,
-            regex_engine: RegexEngineRequest::default(),
+            regex_engine: RegexEngine::default(),
         }
     }
 }
 
-impl MatchOptions {
+impl SearchOptions {
     #[must_use]
     pub const fn case_insensitive(&self) -> bool {
         self.case_mode.is_case_insensitive()
@@ -148,47 +148,47 @@ impl MatchOptions {
 
     #[must_use]
     pub const fn invert_match(&self) -> bool {
-        self.flags.contains(MatchFlags::INVERT_MATCH)
+        self.flags.contains(SearchFlags::INVERT_MATCH)
     }
 
     #[must_use]
     pub const fn fixed_strings(&self) -> bool {
-        self.flags.contains(MatchFlags::FIXED_STRINGS)
+        self.flags.contains(SearchFlags::FIXED_STRINGS)
     }
 
     #[must_use]
     pub const fn word_regexp(&self) -> bool {
-        self.flags.contains(MatchFlags::WORD_REGEXP)
+        self.flags.contains(SearchFlags::WORD_REGEXP)
     }
 
     #[must_use]
     pub const fn line_regexp(&self) -> bool {
-        self.flags.contains(MatchFlags::LINE_REGEXP)
+        self.flags.contains(SearchFlags::LINE_REGEXP)
     }
 
     #[must_use]
     pub const fn only_matching(&self) -> bool {
-        self.flags.contains(MatchFlags::ONLY_MATCHING)
+        self.flags.contains(SearchFlags::ONLY_MATCHING)
     }
 
     #[must_use]
     pub const fn multiline(&self) -> bool {
-        self.flags.contains(MatchFlags::MULTILINE)
+        self.flags.contains(SearchFlags::MULTILINE)
     }
 
     #[must_use]
     pub const fn multiline_dotall(&self) -> bool {
-        self.flags.contains(MatchFlags::MULTILINE_DOTALL)
+        self.flags.contains(SearchFlags::MULTILINE_DOTALL)
     }
 
     #[must_use]
     pub const fn crlf(&self) -> bool {
-        self.flags.contains(MatchFlags::CRLF)
+        self.flags.contains(SearchFlags::CRLF)
     }
 
     #[must_use]
     pub const fn null_data(&self) -> bool {
-        self.flags.contains(MatchFlags::NULL_DATA)
+        self.flags.contains(SearchFlags::NULL_DATA)
     }
 
     #[must_use]

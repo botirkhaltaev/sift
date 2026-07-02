@@ -10,11 +10,11 @@ The engine is designed around multiple coexisting configured indexes. `IndexConf
 
 Primary search entrypoint (re-exported from `lib.rs`):
 
-- `Session`, `Query`, `Report`, `Stats`, `MatchOptions`, `Inputs`, `Input`, `CandidatePolicy`
+- `Query`, `Report`, `Stats`, `SearchOptions`, `Inputs`, `Input`
 - Index types: `Indexes`, `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`
-- Supporting grep types: `MatchFlags`, `CandidateFilter`, `PatternCompiler`, `CandidateScope`, `FileWalk`, `CompiledQuery`, `Matcher`
+- Supporting grep/candidate types: `SearchFlags`, `CandidateFilter`, `CandidateSource`, `CandidateRequest`, `CandidateScope`, `FileWalk`
 
-Internal modules (`pub(crate)`): `corpus/`, `query/`, `grep/engine/`.
+Internal modules (`pub(crate)`): `corpus/`, `query/`.
 
 ## Source Map
 
@@ -23,31 +23,31 @@ Internal modules (`pub(crate)`): `corpus/`, `query/`, `grep/engine/`.
 | `index/` | `Indexes` registry, `IndexConfig`, `Index` enum, `IndexStore`, snapshot persistence |
 | `index/ngram/` | Runtime-width N-gram index: build, load, search, storage (split submodules) |
 | `grep/` | Public search API — `Query::candidates`, `Query::search` |
-| `grep/session.rs` | `Session` — indexes, filter, store meta (data only) |
-| `grep/policy.rs` | `CandidatePolicy`, `CandidatePolicyConfig`, `CandidateScope`, `CorpusState` |
+| `candidates/` | `CandidateSource`, `CandidateRequest`, pure planner, resolver |
 | `grep/input.rs` | `Input`, `Inputs` — push API for paths and byte streams |
-| `grep/engine/search.rs` | `CompiledQuery::match_input`, `CompiledQuery::report` |
-| `grep/pattern/` | `Query`, `PatternCompiler`, `Match` |
+| `grep/search/query.rs` | `Query` lifecycle, candidate resolution entrypoint, library search entrypoint |
+| `grep/search/compiled.rs` | Internal compiled matcher cache |
+| `grep/search/compiler.rs` | Regex engine selection and concrete matcher construction |
+| `grep/search/run.rs` | Private `SearchRun` execution for library reports |
+| `grep/search/hit.rs` | `Match` result type |
 | `corpus/coverage.rs` | `CandidateCoverage` — shared planning enum |
 | `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
 | `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |
-| `query/planner.rs` | Pure planning: `QueryPlanner::plan` → `ResolutionPlan` |
-| `query/resolve.rs` | Candidate resolution I/O: `QueryPlanner::resolve` |
+| `candidates/planner.rs` | Pure planning: `CandidatePlanner::plan` → `CandidatePlan` |
+| `candidates/resolve.rs` | Candidate resolution I/O: `CandidateResolver::resolve` |
 
 Output formatting lives in `sift-grep/src/format/` (not in core).
 
 ## Search Flow
 
 ```text
-query.compile() -> CompiledQuery
-CandidatePolicyConfig::policy(compiled) -> CandidatePolicy
-Query::candidates(&session, policy) -> Vec<Candidate>
+CandidateSource + CandidateRequest
+Query::candidates(&source, request) -> Vec<Candidate>
 InputSources::build_inputs(candidates, transform) -> Inputs
 Query::search(&inputs, stats_mode) -> Report   // library path
-CompiledQuery::report(&query, &inputs, stats_mode) -> Report  // when already compiled
 
 CLI format path:
-  SearchPrinter::print(&inputs) -> Report       // uses CompiledQuery::match_input per input
+  SearchPrinter::print(&inputs) -> Report       // uses Query printer scan methods
 ```
 
 ## Error Ownership

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use crate::candidates::CandidateSpec;
 use crate::index::{CorpusKind, FileId};
-use crate::query::QuerySpec;
 
 use super::config::Config;
 use super::files::FileFingerprint;
@@ -72,7 +72,7 @@ impl Index {
     /// Produce narrowed candidate files for the query.
     /// Returns `None` if the query can't be narrowed (full scan required).
     #[must_use]
-    pub fn candidates(&self, query: &QuerySpec<'_>) -> Option<Vec<crate::Candidate>> {
+    pub fn candidates(&self, query: &CandidateSpec<'_>) -> Option<Vec<crate::Candidate>> {
         let arms = Config::new(self.width).extract_literal_arms(query)?;
         Some(
             self.candidate_file_ids(&arms)
@@ -93,7 +93,7 @@ impl Index {
 
     /// Returns an explanation of how a query would be handled.
     #[must_use]
-    pub fn explain(&self, query: &QuerySpec<'_>) -> crate::index::QueryPlanOutput {
+    pub fn explain(&self, query: &CandidateSpec<'_>) -> crate::index::QueryPlanOutput {
         let mode = match Config::new(self.width).extract_literal_arms(query) {
             Some(_) => crate::index::PlanMode::IndexedCandidates,
             None => crate::index::PlanMode::FullScan,
