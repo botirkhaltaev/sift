@@ -75,7 +75,7 @@ impl Index {
     pub fn candidates(&self, query: &CandidateSpec<'_>) -> Option<Vec<crate::Candidate>> {
         let arms = Config::new(self.width).extract_literal_arms(query)?;
         let ids = self.candidate_file_ids(&arms);
-        if ids.len() == self.storage.fingerprints.len() {
+        if ids.len() == self.storage.fingerprints.len() && self.storage.fingerprints.len() > 1 {
             return None;
         }
         Some(
