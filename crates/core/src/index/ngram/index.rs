@@ -7,7 +7,7 @@ use super::config::Config;
 use super::files::FileFingerprint;
 use super::gram::GramWidth;
 use super::storage::grams::GramSets;
-use super::storage::lexicon::Lexicon;
+use super::storage::lexicon::{Lexicon, LexiconEntry};
 use super::storage::postings::Postings;
 
 /// Errors specific to opening or persisting an N-gram index.
@@ -158,42 +158,64 @@ impl Index {
         postings: &Postings,
     ) -> Result<(), NGramIndexError> {
         let payload_len = postings.payload_len();
+        let mut previous = None;
         for entry in lexicon {
-            let start = usize::try_from(entry.offset).map_err(|_| {
-                NGramIndexError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "lexicon entry {:?} offset {} exceeds usize",
-                        entry.gram, entry.offset
-                    ),
-                ))
-            })?;
-            let end = lexicon.posting_byte_end(entry.offset, payload_len);
-            if start > end || end > payload_len {
-                return Err(NGramIndexError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "lexicon entry {:?} posting range [{start},{end}) exceeds payload_len {payload_len}",
-                        entry.gram,
-                    ),
-                )));
+            let end_offset = entry.offset;
+            if let Some(prev) = previous.replace(entry) {
+                Self::validate_posting_range(&prev, end_offset, payload_len, postings)?;
             }
-            let slice = postings.slice(start, end.saturating_sub(start));
-            let decoded_count = Postings::validate_list(slice).map_err(|e| {
-                NGramIndexError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("posting list for gram {:?}: {e}", entry.gram),
-                ))
-            })?;
-            if decoded_count != entry.len as usize {
-                return Err(NGramIndexError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "lexicon entry {:?} claims len {} but posting list has {decoded_count} entries",
-                        entry.gram, entry.len,
-                    ),
-                )));
-            }
+        }
+        if let Some(entry) = previous {
+            Self::validate_posting_range(
+                &entry,
+                u64::try_from(payload_len).unwrap_or(u64::MAX),
+                payload_len,
+                postings,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn validate_posting_range(
+        entry: &LexiconEntry,
+        end_offset: u64,
+        payload_len: usize,
+        postings: &Postings,
+    ) -> Result<(), NGramIndexError> {
+        let start = usize::try_from(entry.offset).map_err(|_| {
+            NGramIndexError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "lexicon entry {:?} offset {} exceeds usize",
+                    entry.gram, entry.offset
+                ),
+            ))
+        })?;
+        let end = usize::try_from(end_offset).unwrap_or(payload_len);
+        if start > end || end > payload_len {
+            return Err(NGramIndexError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "lexicon entry {:?} posting range [{start},{end}) exceeds payload_len {payload_len}",
+                    entry.gram,
+                ),
+            )));
+        }
+        let slice = postings.slice(start, end.saturating_sub(start));
+        let decoded_count = Postings::validate_list(slice).map_err(|e| {
+            NGramIndexError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("posting list for gram {:?}: {e}", entry.gram),
+            ))
+        })?;
+        if decoded_count != entry.len as usize {
+            return Err(NGramIndexError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "lexicon entry {:?} claims len {} but posting list has {decoded_count} entries",
+                    entry.gram, entry.len,
+                ),
+            )));
         }
         Ok(())
     }
