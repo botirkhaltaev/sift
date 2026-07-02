@@ -107,6 +107,24 @@ impl Query {
         Ok(())
     }
 
+    /// Compiles patterns into a matcher and records planner-facing query capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if pattern compilation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the compiled query cache is empty immediately after initialization.
+    pub fn compile(&self) -> Result<&CompiledQuery, Error> {
+        if let Some(compiled) = self.compiled.get() {
+            return Ok(compiled);
+        }
+        let compiled = CompiledQuery::compile(self.patterns(), self.opts())?;
+        let _ = self.compiled.set(compiled);
+        Ok(self.compiled.get().expect("just initialised"))
+    }
+
     /// Resolve candidate files for this query under the given session and policy.
     ///
     /// # Errors

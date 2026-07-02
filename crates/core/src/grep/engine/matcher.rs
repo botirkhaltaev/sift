@@ -7,13 +7,117 @@ use grep_regex::{RegexCaptures, RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 
 use crate::grep::Error;
-use crate::grep::options::BinaryMode;
+use crate::grep::options::{BinaryMode, MatchOptions, RegexEngineRequest};
 use crate::grep::pattern::Query;
 
 #[derive(Clone, Debug)]
 pub enum Matcher {
     Rust(RegexMatcher),
     Pcre2(Pcre2Matcher),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RegexEngine {
+    Rust,
+    Pcre2,
+}
+
+pub(super) struct MatcherCompiler<'a> {
+    patterns: &'a [String],
+    opts: &'a MatchOptions,
+}
+
+impl<'a> MatcherCompiler<'a> {
+    pub(super) const fn new(patterns: &'a [String], opts: &'a MatchOptions) -> Self {
+        Self { patterns, opts }
+    }
+
+    pub(super) fn compile(&self) -> Result<(Matcher, RegexEngine), Error> {
+        match self.opts.regex_engine {
+            RegexEngineRequest::Rust => self.rust().map(|matcher| (matcher, RegexEngine::Rust)),
+            RegexEngineRequest::Pcre2 => self.pcre2().map(|matcher| (matcher, RegexEngine::Pcre2)),
+            RegexEngineRequest::Auto => self.rust().map_or_else(
+                |_| self.pcre2().map(|matcher| (matcher, RegexEngine::Pcre2)),
+                |matcher| Ok((matcher, RegexEngine::Rust)),
+            ),
+        }
+    }
+
+    fn rust(&self) -> Result<Matcher, Error> {
+        let mut builder = RegexMatcherBuilder::new();
+        builder.multi_line(true);
+        match self.opts.case_mode {
+            crate::grep::options::CaseMode::Sensitive => {}
+            crate::grep::options::CaseMode::Insensitive => {
+                builder.case_insensitive(true);
+            }
+            crate::grep::options::CaseMode::Smart => {
+                builder.case_smart(true);
+            }
+        }
+        builder.unicode(self.opts.unicode);
+        builder.fixed_strings(self.opts.fixed_strings());
+        if self.opts.word_regexp() {
+            builder.word(true);
+        }
+        if self.opts.line_regexp() {
+            builder.whole_line(true);
+        }
+        if self.opts.regex_size_limit > 0 {
+            builder.size_limit(self.opts.regex_size_limit);
+        }
+        if self.opts.dfa_size_limit > 0 {
+            builder.dfa_size_limit(self.opts.dfa_size_limit);
+        }
+        if self.opts.crlf() {
+            builder.crlf(true);
+        }
+        if self.opts.multiline() {
+            if self.opts.multiline_dotall() {
+                builder.dot_matches_new_line(true);
+            }
+        } else {
+            builder.line_terminator(Some(self.opts.line_terminator()));
+        }
+        builder.ban_byte(None);
+        builder
+            .build_many(self.patterns)
+            .map(Matcher::Rust)
+            .map_err(|e| Error::RegexBuild(e.to_string()))
+    }
+
+    fn pcre2(&self) -> Result<Matcher, Error> {
+        let mut builder = Pcre2MatcherBuilder::new();
+        builder.multi_line(true);
+        match self.opts.case_mode {
+            crate::grep::options::CaseMode::Sensitive => {}
+            crate::grep::options::CaseMode::Insensitive => {
+                builder.caseless(true);
+            }
+            crate::grep::options::CaseMode::Smart => {
+                builder.case_smart(true);
+            }
+        }
+        builder.utf(self.opts.unicode);
+        builder.ucp(self.opts.unicode);
+        builder.fixed_strings(self.opts.fixed_strings());
+        if self.opts.word_regexp() {
+            builder.word(true);
+        }
+        if self.opts.line_regexp() {
+            builder.whole_line(true);
+        }
+        if self.opts.crlf() {
+            builder.crlf(true);
+        }
+        if self.opts.multiline() && self.opts.multiline_dotall() {
+            builder.dotall(true);
+        }
+        builder
+            .build_many(self.patterns)
+            .map(Matcher::Pcre2)
+            .map_err(|e| Error::RegexBuild(e.to_string()))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -198,83 +302,5 @@ impl SearcherConfig {
             builder.multi_line(true);
         }
         builder.build()
-    }
-}
-
-impl Query {
-    pub(crate) fn build_rust_matcher(&self) -> Result<Matcher, Error> {
-        let mut builder = RegexMatcherBuilder::new();
-        builder.multi_line(true);
-        match self.opts.case_mode {
-            crate::grep::options::CaseMode::Sensitive => {}
-            crate::grep::options::CaseMode::Insensitive => {
-                builder.case_insensitive(true);
-            }
-            crate::grep::options::CaseMode::Smart => {
-                builder.case_smart(true);
-            }
-        }
-        builder.unicode(self.opts.unicode);
-        builder.fixed_strings(self.opts.fixed_strings());
-        if self.opts.word_regexp() {
-            builder.word(true);
-        }
-        if self.opts.line_regexp() {
-            builder.whole_line(true);
-        }
-        if self.opts.regex_size_limit > 0 {
-            builder.size_limit(self.opts.regex_size_limit);
-        }
-        if self.opts.dfa_size_limit > 0 {
-            builder.dfa_size_limit(self.opts.dfa_size_limit);
-        }
-        if self.opts.crlf() {
-            builder.crlf(true);
-        }
-        if self.opts.multiline() {
-            if self.opts.multiline_dotall() {
-                builder.dot_matches_new_line(true);
-            }
-        } else {
-            builder.line_terminator(Some(self.opts.line_terminator()));
-        }
-        builder.ban_byte(None);
-        builder
-            .build_many(&self.patterns)
-            .map(Matcher::Rust)
-            .map_err(|e| Error::RegexBuild(e.to_string()))
-    }
-
-    pub(crate) fn build_pcre2_matcher(&self) -> Result<Matcher, Error> {
-        let mut builder = Pcre2MatcherBuilder::new();
-        builder.multi_line(true);
-        match self.opts.case_mode {
-            crate::grep::options::CaseMode::Sensitive => {}
-            crate::grep::options::CaseMode::Insensitive => {
-                builder.caseless(true);
-            }
-            crate::grep::options::CaseMode::Smart => {
-                builder.case_smart(true);
-            }
-        }
-        builder.utf(self.opts.unicode);
-        builder.ucp(self.opts.unicode);
-        builder.fixed_strings(self.opts.fixed_strings());
-        if self.opts.word_regexp() {
-            builder.word(true);
-        }
-        if self.opts.line_regexp() {
-            builder.whole_line(true);
-        }
-        if self.opts.crlf() {
-            builder.crlf(true);
-        }
-        if self.opts.multiline() && self.opts.multiline_dotall() {
-            builder.dotall(true);
-        }
-        builder
-            .build_many(&self.patterns)
-            .map(Matcher::Pcre2)
-            .map_err(|e| Error::RegexBuild(e.to_string()))
     }
 }
