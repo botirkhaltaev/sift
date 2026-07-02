@@ -17,12 +17,21 @@ use crate::search::mode::SearchMode;
 use crate::search::options::{BinaryMode, SearchOptions};
 use crate::search::searcher::EventCollection;
 
-pub(in crate::search) struct SearchTask<'a> {
+pub(in crate::search) struct SearchWorker<'a> {
     matcher: &'a Matcher,
     options: &'a SearchOptions,
     mode: SearchMode,
     events: EventCollection,
-    input: &'a Input<'a>,
+    explicit_grep: RegexSearcher,
+    discovered_grep: RegexSearcher,
+}
+
+pub(in crate::search) struct SearchTask<'a, 'input> {
+    matcher: &'a Matcher,
+    options: &'a SearchOptions,
+    mode: SearchMode,
+    events: EventCollection,
+    input: &'input Input<'input>,
 }
 
 pub struct SearchOutcome {
@@ -49,13 +58,44 @@ enum InputOrigin {
     Discovered,
 }
 
-impl<'a> SearchTask<'a> {
-    pub(in crate::search) const fn new(
+impl<'a> SearchWorker<'a> {
+    pub(in crate::search) fn new(
         matcher: &'a Matcher,
         options: &'a SearchOptions,
         mode: SearchMode,
         events: EventCollection,
-        input: &'a Input<'a>,
+    ) -> Self {
+        Self {
+            matcher,
+            options,
+            mode,
+            events,
+            explicit_grep: SearchTask::grep_searcher_for(options, InputOrigin::Explicit),
+            discovered_grep: SearchTask::grep_searcher_for(options, InputOrigin::Discovered),
+        }
+    }
+
+    pub(in crate::search) fn execute<'input>(
+        &mut self,
+        input: &'input Input<'input>,
+    ) -> SearchOutcome {
+        let origin = InputOrigin::from(input);
+        let grep = match origin {
+            InputOrigin::Explicit => &mut self.explicit_grep,
+            InputOrigin::Discovered => &mut self.discovered_grep,
+        };
+        SearchTask::new(self.matcher, self.options, self.mode, self.events, input)
+            .execute_with(grep, origin)
+    }
+}
+
+impl<'a, 'input> SearchTask<'a, 'input> {
+    const fn new(
+        matcher: &'a Matcher,
+        options: &'a SearchOptions,
+        mode: SearchMode,
+        events: EventCollection,
+        input: &'input Input<'input>,
     ) -> Self {
         Self {
             matcher,
@@ -66,12 +106,10 @@ impl<'a> SearchTask<'a> {
         }
     }
 
-    pub(in crate::search) fn execute(self) -> SearchOutcome {
-        let origin = InputOrigin::from(self.input);
-        let mut grep = self.grep_searcher(origin);
+    fn execute_with(self, grep: &mut RegexSearcher, origin: InputOrigin) -> SearchOutcome {
         match self.matcher {
-            Matcher::Rust(matcher) => self.search_with_matcher(&mut grep, matcher, origin),
-            Matcher::Pcre2(matcher) => self.search_with_matcher(&mut grep, matcher, origin),
+            Matcher::Rust(matcher) => self.search_with_matcher(grep, matcher, origin),
+            Matcher::Pcre2(matcher) => self.search_with_matcher(grep, matcher, origin),
         }
     }
 
@@ -123,29 +161,29 @@ impl<'a> SearchTask<'a> {
         }
     }
 
-    fn grep_searcher(&self, origin: InputOrigin) -> RegexSearcher {
+    fn grep_searcher_for(options: &SearchOptions, origin: InputOrigin) -> RegexSearcher {
         let mut builder = RegexSearcherBuilder::new();
         builder
-            .encoding(self.options.input_encoding.explicit())
-            .bom_sniffing(self.options.input_encoding.bom_sniffing())
-            .binary_detection(self.binary_detection(origin))
-            .line_terminator(LineTerminator::byte(self.options.line_terminator()))
-            .invert_match(self.options.invert_match())
+            .encoding(options.input_encoding.explicit())
+            .bom_sniffing(options.input_encoding.bom_sniffing())
+            .binary_detection(Self::binary_detection_for(options, origin))
+            .line_terminator(LineTerminator::byte(options.line_terminator()))
+            .invert_match(options.invert_match())
             .line_number(true)
-            .max_matches(self.options.max_results.map(|n| n as u64));
-        builder.before_context(self.options.before_context);
-        builder.after_context(self.options.after_context);
-        if self.options.multiline() {
+            .max_matches(options.max_results.map(|n| n as u64));
+        builder.before_context(options.before_context);
+        builder.after_context(options.after_context);
+        if options.multiline() {
             builder.multi_line(true);
         }
         builder.build()
     }
 
-    fn binary_detection(&self, origin: InputOrigin) -> BinaryDetection {
-        if self.options.null_data() {
+    fn binary_detection_for(options: &SearchOptions, origin: InputOrigin) -> BinaryDetection {
+        if options.null_data() {
             return BinaryDetection::none();
         }
-        match (self.options.binary_mode, origin) {
+        match (options.binary_mode, origin) {
             (BinaryMode::Quit, InputOrigin::Explicit) | (BinaryMode::Binary, _) => {
                 BinaryDetection::convert(b'\x00')
             }

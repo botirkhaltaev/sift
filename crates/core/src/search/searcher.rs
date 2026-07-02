@@ -13,7 +13,7 @@ use crate::search::options::SearchOptions;
 use crate::search::query::SearchQuery;
 use crate::search::report::{Report, SearchSummary};
 use crate::search::stats::StatsMode;
-use crate::search::task::{SearchOutcome, SearchTask};
+use crate::search::task::{SearchOutcome, SearchWorker};
 
 #[derive(Debug, Clone)]
 pub struct Searcher {
@@ -98,10 +98,10 @@ impl Searcher {
         let mut outcomes: Vec<_> = inputs
             .as_slice()
             .par_iter()
-            .map(|input| {
-                SearchTask::new(&self.matcher, self.options(), mode, event_collection, input)
-                    .execute()
-            })
+            .map_init(
+                || SearchWorker::new(&self.matcher, self.options(), mode, event_collection),
+                |worker, input| worker.execute(input),
+            )
             .collect();
         let summary = SearchSummary {
             mode,
