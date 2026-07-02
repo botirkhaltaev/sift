@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::config::CorpusKind;
 use super::error::IndexError;
-use super::kinds::Index;
+use super::kinds::{Index, IndexCandidateResult};
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
 
@@ -87,13 +87,10 @@ impl Indexes {
     /// Returns `None` if no index could narrow. When at least one index
     /// narrows, all narrowed candidate sets are intersected.
     #[must_use]
-    pub fn candidates(
-        &self,
-        query: &crate::candidates::CandidateSpec<'_>,
-    ) -> Option<Vec<crate::Candidate>> {
+    pub fn candidates(&self, query: &crate::candidates::CandidateSpec<'_>) -> IndexCandidateResult {
         let indexes = self.snapshot.indexes();
         match indexes.len() {
-            0 => None,
+            0 => IndexCandidateResult::Unavailable,
             1 => indexes[0].candidates(query),
             _ => Self::candidates_multi(indexes, query),
         }
@@ -167,20 +164,26 @@ impl Indexes {
     fn candidates_multi(
         indexes: &[Index],
         query: &crate::candidates::CandidateSpec<'_>,
-    ) -> Option<Vec<crate::Candidate>> {
+    ) -> IndexCandidateResult {
         use rayon::prelude::*;
 
-        let sets: Vec<Vec<crate::Candidate>> = indexes
+        let sets: Vec<IndexCandidateResult> = indexes
             .par_iter()
-            .filter_map(|idx| idx.candidates(query))
+            .map(|idx| idx.candidates(query))
+            .filter(|result| !result.is_unavailable())
             .collect();
 
         if sets.is_empty() {
-            return None;
+            return IndexCandidateResult::Unavailable;
         }
 
-        let mut result = sets.into_iter();
-        let mut current = result.next()?;
+        let mut result = sets.into_iter().filter_map(|result| match result {
+            IndexCandidateResult::Candidates(candidates) => Some(candidates),
+            IndexCandidateResult::All | IndexCandidateResult::Unavailable => None,
+        });
+        let Some(mut current) = result.next() else {
+            return IndexCandidateResult::All;
+        };
 
         for next in result {
             let lookup: HashSet<&Path> = next.iter().map(crate::Candidate::rel_path).collect();
@@ -190,7 +193,7 @@ impl Indexes {
             }
         }
 
-        Some(current)
+        IndexCandidateResult::Candidates(current)
     }
 
     #[must_use]
