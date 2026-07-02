@@ -206,12 +206,11 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
     type Error = io::Error;
 
     fn begin(&mut self, _searcher: &RegexSearcher) -> Result<bool, Self::Error> {
-        self.event_collection.push(
-            &mut self.events,
-            SearchEvent::Begin(FileEvent {
+        if self.event_collection.collects() {
+            self.events.push(SearchEvent::Begin(FileEvent {
                 path: self.path.clone(),
-            }),
-        );
+            }));
+        }
         Ok(true)
     }
 
@@ -222,25 +221,43 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
     ) -> Result<bool, Self::Error> {
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
-        let replacement = self.replacement.as_deref().and_then(|replacement| {
-            Replacement::expand(&self.matcher, line_bytes, replacement).ok()
-        });
         self.line_matches += 1;
-        let mut ranges = Vec::new();
-        let _ = self
-            .matcher
-            .find_iter(line_bytes, |m: grep_matcher::Match| {
-                ranges.push(m.start()..m.end());
-                self.match_spans += 1;
-                if matches!(self.match_emission, MatchEmission::Spans) {
-                    self.matches.push(Match {
-                        file: self.path.clone(),
-                        line,
-                        text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()]).into_owned(),
-                    });
-                }
-                true
-            });
+        let collect_events = self.event_collection.collects();
+        let ranges = if collect_events {
+            let mut ranges = Vec::new();
+            let _ = self
+                .matcher
+                .find_iter(line_bytes, |m: grep_matcher::Match| {
+                    ranges.push(m.start()..m.end());
+                    self.match_spans += 1;
+                    if matches!(self.match_emission, MatchEmission::Spans) {
+                        self.matches.push(Match {
+                            file: self.path.clone(),
+                            line,
+                            text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()])
+                                .into_owned(),
+                        });
+                    }
+                    true
+                });
+            ranges
+        } else {
+            let _ = self
+                .matcher
+                .find_iter(line_bytes, |m: grep_matcher::Match| {
+                    self.match_spans += 1;
+                    if matches!(self.match_emission, MatchEmission::Spans) {
+                        self.matches.push(Match {
+                            file: self.path.clone(),
+                            line,
+                            text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()])
+                                .into_owned(),
+                        });
+                    }
+                    true
+                });
+            Vec::new()
+        };
         if matches!(self.match_emission, MatchEmission::Lines) {
             self.matches.push(Match {
                 file: self.path.clone(),
@@ -248,9 +265,11 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
                 text: String::from_utf8_lossy(line_bytes).into_owned(),
             });
         }
-        self.event_collection.push(
-            &mut self.events,
-            SearchEvent::Match(MatchEvent {
+        if collect_events {
+            let replacement = self.replacement.as_deref().and_then(|replacement| {
+                Replacement::expand(&self.matcher, line_bytes, replacement).ok()
+            });
+            self.events.push(SearchEvent::Match(MatchEvent {
                 path: self.path.clone(),
                 line_number: mat.line_number(),
                 absolute_byte_offset: Some(mat.absolute_byte_offset()),
@@ -261,8 +280,8 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
                     .map(|replacement| replacement.line.clone()),
                 replacement_matches: replacement
                     .map_or_else(Vec::new, |replacement| replacement.matches),
-            }),
-        );
+            }));
+        }
         Ok(true)
     }
 
@@ -271,22 +290,22 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
         _searcher: &RegexSearcher,
         context: &SinkContext<'_>,
     ) -> Result<bool, Self::Error> {
-        self.event_collection.push(
-            &mut self.events,
-            SearchEvent::Context(ContextEvent {
+        if self.event_collection.collects() {
+            self.events.push(SearchEvent::Context(ContextEvent {
                 path: self.path.clone(),
                 kind: ContextKind::from(context.kind()),
                 line_number: context.line_number(),
                 absolute_byte_offset: context.absolute_byte_offset(),
                 bytes: context.bytes().to_vec(),
-            }),
-        );
+            }));
+        }
         Ok(true)
     }
 
     fn context_break(&mut self, _searcher: &RegexSearcher) -> Result<bool, Self::Error> {
-        self.event_collection
-            .push(&mut self.events, SearchEvent::ContextBreak);
+        if self.event_collection.collects() {
+            self.events.push(SearchEvent::ContextBreak);
+        }
         Ok(true)
     }
 
@@ -296,14 +315,13 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
         binary_byte_offset: u64,
     ) -> Result<bool, Self::Error> {
         self.binary_byte_offset.get_or_insert(binary_byte_offset);
-        self.event_collection.push(
-            &mut self.events,
-            SearchEvent::Binary(BinaryEvent {
+        if self.event_collection.collects() {
+            self.events.push(SearchEvent::Binary(BinaryEvent {
                 path: self.path.clone(),
                 absolute_byte_offset: binary_byte_offset,
                 explicit: matches!(self.origin, InputOrigin::Explicit),
-            }),
-        );
+            }));
+        }
         Ok(true)
     }
 
@@ -316,12 +334,11 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
         if self.binary_byte_offset.is_none() {
             self.binary_byte_offset = finish.binary_byte_offset();
         }
-        self.event_collection.push(
-            &mut self.events,
-            SearchEvent::End(FileEvent {
+        if self.event_collection.collects() {
+            self.events.push(SearchEvent::End(FileEvent {
                 path: self.path.clone(),
-            }),
-        );
+            }));
+        }
         Ok(())
     }
 }
