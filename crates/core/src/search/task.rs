@@ -227,20 +227,23 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
         });
         self.line_matches += 1;
         let mut ranges = Vec::new();
-        let _ = self
-            .matcher
-            .find_iter(line_bytes, |m: grep_matcher::Match| {
-                ranges.push(m.start()..m.end());
-                self.match_spans += 1;
-                if matches!(self.match_emission, MatchEmission::Spans) {
-                    self.matches.push(Match {
-                        file: self.path.clone(),
-                        line,
-                        text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()]).into_owned(),
-                    });
-                }
-                true
-            });
+        if !self.options.invert_match() {
+            let _ = self
+                .matcher
+                .find_iter(line_bytes, |m: grep_matcher::Match| {
+                    ranges.push(m.start()..m.end());
+                    self.match_spans += 1;
+                    if matches!(self.match_emission, MatchEmission::Spans) {
+                        self.matches.push(Match {
+                            file: self.path.clone(),
+                            line,
+                            text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()])
+                                .into_owned(),
+                        });
+                    }
+                    true
+                });
+        }
         if matches!(self.match_emission, MatchEmission::Lines) {
             self.matches.push(Match {
                 file: self.path.clone(),
