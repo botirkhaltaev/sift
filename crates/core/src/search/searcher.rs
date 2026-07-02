@@ -139,10 +139,6 @@ impl EventEmission<'_> {
 }
 
 impl EventCollection {
-    pub(in crate::search) const fn collects(self) -> bool {
-        matches!(self, Self::Collect)
-    }
-
     pub(in crate::search) fn push(self, events: &mut Vec<SearchEvent>, event: SearchEvent) {
         match self {
             Self::Discard => {}
