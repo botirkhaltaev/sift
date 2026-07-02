@@ -1,5 +1,6 @@
 use std::{fs, path::Path};
 
+use sift_core::IndexCandidateResult;
 use sift_core::candidates::{CandidateFlags, CandidateSpec};
 use tempfile::TempDir;
 
@@ -18,7 +19,10 @@ fn literal_query_returns_indexed_candidates() {
         patterns: &["beta".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let candidates = index.candidates(&spec).expect("candidates");
+    let candidates = index
+        .candidates(&spec)
+        .into_candidates()
+        .expect("candidates");
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -41,7 +45,7 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
         flags: CandidateFlags::empty(),
     };
 
-    assert!(index.candidates(&spec).is_none());
+    assert!(matches!(index.candidates(&spec), IndexCandidateResult::All));
 }
 
 #[test]
@@ -57,6 +61,7 @@ fn literal_candidates_narrow_to_expected_file() {
     };
     let candidates = open_indexes(&sift_dir)
         .candidates(&spec)
+        .into_candidates()
         .expect("candidates");
     assert!(!candidates.is_empty());
     assert!(

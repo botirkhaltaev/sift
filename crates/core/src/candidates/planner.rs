@@ -9,6 +9,7 @@ use crate::candidates::{
 };
 use crate::corpus::Candidate;
 use crate::corpus::walk::FileWalk;
+use crate::index::IndexCandidateResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexNarrowing {
@@ -20,6 +21,7 @@ pub(crate) enum IndexNarrowing {
 enum IndexStatus {
     Empty,
     NoCandidateIndex,
+    AllCandidates,
     CanNarrow,
 }
 
@@ -82,29 +84,37 @@ impl<'a> CandidatePlanner<'a> {
     pub fn resolve(self) -> crate::Result<Vec<Candidate>> {
         let index_narrowing = self.spec.index_narrowing();
         let resolved = self.request.resolve(index_narrowing);
-        let index_hits = self.source.indexes.candidates(&self.spec);
+        let index_candidates = self.source.indexes.candidates(&self.spec);
         let strategy = plan(PlanInput {
             scope: resolved.scope,
             index_narrowing,
-            index_status: self.index_status(index_hits.as_ref()),
+            index_status: self.index_status(&index_candidates),
             snapshot_status: self.snapshot_status(),
             fallback: resolved.fallback,
         });
-        self.execute(strategy, index_hits.unwrap_or_default(), resolved.order)
+        self.execute(strategy, index_candidates, resolved.order)
     }
 
     fn execute(
         self,
         strategy: CandidateStrategy,
-        index_hits: Vec<Candidate>,
+        index_candidates: IndexCandidateResult,
         order: crate::corpus::CandidateOrder,
     ) -> crate::Result<Vec<Candidate>> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
             CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).collect()?,
             CandidateStrategy::AllIndexed => self.source.indexes.complete_candidates(),
-            CandidateStrategy::UseIndex => index_hits,
-            CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_hits)?,
+            CandidateStrategy::UseIndex => match index_candidates {
+                IndexCandidateResult::Candidates(candidates) => candidates,
+                IndexCandidateResult::All | IndexCandidateResult::Unavailable => Vec::new(),
+            },
+            CandidateStrategy::MergeIndexAndWalk => match index_candidates {
+                IndexCandidateResult::Candidates(candidates) => self.merge_unindexed(candidates)?,
+                IndexCandidateResult::All | IndexCandidateResult::Unavailable => {
+                    FileWalk::from_filter(self.source.filter).collect()?
+                }
+            },
         };
         Ok(CandidateSet::new(raw)
             .retain_matches(self.source.filter)
@@ -112,13 +122,15 @@ impl<'a> CandidatePlanner<'a> {
             .into_vec())
     }
 
-    const fn index_status(&self, index_hits: Option<&Vec<Candidate>>) -> IndexStatus {
+    const fn index_status(&self, index_candidates: &IndexCandidateResult) -> IndexStatus {
         if self.source.indexes.is_empty() {
             IndexStatus::Empty
-        } else if index_hits.is_none() {
-            IndexStatus::NoCandidateIndex
         } else {
-            IndexStatus::CanNarrow
+            match index_candidates {
+                IndexCandidateResult::Unavailable => IndexStatus::NoCandidateIndex,
+                IndexCandidateResult::All => IndexStatus::AllCandidates,
+                IndexCandidateResult::Candidates(_) => IndexStatus::CanNarrow,
+            }
         }
     }
 
@@ -186,6 +198,14 @@ const fn plan_indexed(input: PlanInput) -> CandidateStrategy {
         (IndexStatus::NoCandidateIndex, _, IndexFallback::IndexHitsOnly) => {
             CandidateStrategy::AllIndexed
         }
+        (IndexStatus::AllCandidates, _, _) => match input.snapshot_status {
+            SnapshotStatus::TrustedLazy
+            | SnapshotStatus::FilterMismatch
+            | SnapshotStatus::StaleComplete => CandidateStrategy::Walk,
+            SnapshotStatus::Missing | SnapshotStatus::TrustedComplete => {
+                CandidateStrategy::AllIndexed
+            }
+        },
         (IndexStatus::CanNarrow, _, _) => match input.snapshot_status {
             SnapshotStatus::TrustedLazy => CandidateStrategy::MergeIndexAndWalk,
             _ => CandidateStrategy::UseIndex,
