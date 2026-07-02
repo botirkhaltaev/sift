@@ -199,12 +199,19 @@ const fn plan_indexed(input: PlanInput) -> CandidateStrategy {
             CandidateStrategy::AllIndexed
         }
         (IndexStatus::AllCandidates, _, _) => match input.snapshot_status {
-            SnapshotStatus::TrustedLazy
+            SnapshotStatus::TrustedComplete => CandidateStrategy::AllIndexed,
+            SnapshotStatus::Missing
             | SnapshotStatus::FilterMismatch
-            | SnapshotStatus::StaleComplete => CandidateStrategy::Walk,
-            SnapshotStatus::Missing | SnapshotStatus::TrustedComplete => {
-                CandidateStrategy::AllIndexed
+            | SnapshotStatus::TrustedLazy
+            | SnapshotStatus::StaleComplete
+                if matches!(input.fallback, IndexFallback::WalkOnStaleSnapshot) =>
+            {
+                CandidateStrategy::Walk
             }
+            SnapshotStatus::Missing
+            | SnapshotStatus::FilterMismatch
+            | SnapshotStatus::TrustedLazy
+            | SnapshotStatus::StaleComplete => CandidateStrategy::AllIndexed,
         },
         (IndexStatus::CanNarrow, _, _) => match input.snapshot_status {
             SnapshotStatus::TrustedLazy => CandidateStrategy::MergeIndexAndWalk,
