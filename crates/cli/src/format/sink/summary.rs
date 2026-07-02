@@ -1,202 +1,24 @@
-use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::format::collection::PrintExtras;
 use crate::format::output::PrintSpec;
 use crate::format::output::mode::{OutputEmission, PrintMode, ZeroCountMode};
-use crate::format::output::style::FilenameMode;
+use crate::format::output::style::{FilenameMode, RecordTerminator};
 use crate::format::sink::InputPrinter;
 use crate::format::sink::result::{ChunkOutput, FileResult};
-use crate::format::sink::style::ANSI_RESET;
 use crate::format::stats::TextStatsCounters;
+use grep_matcher::LineTerminator;
 use grep_matcher::Matcher as GrepMatcherTrait;
-use grep_searcher::{Searcher, Sink, SinkMatch};
-use sift_core::grep::{CompiledQuery, Input, Matcher, Query, SearcherConfig};
-
-#[derive(Clone, Copy)]
-pub struct FileSummary {
-    pub matched: bool,
-    pub count: usize,
-    pub binary_byte_offset: Option<u64>,
-}
-
-impl FileSummary {
-    #[must_use]
-    pub fn tally(&self, mode: PrintMode) -> usize {
-        match mode {
-            PrintMode::Count | PrintMode::CountMatches => self.count,
-            PrintMode::FilesWithMatches => usize::from(self.matched),
-            PrintMode::FilesWithoutMatch => usize::from(!self.matched),
-            PrintMode::Standard | PrintMode::OnlyMatching => 0,
-        }
-    }
-
-    #[must_use]
-    pub const fn is_success(&self, mode: PrintMode) -> bool {
-        match mode {
-            PrintMode::Count | PrintMode::CountMatches => self.count > 0,
-            PrintMode::FilesWithMatches | PrintMode::Standard | PrintMode::OnlyMatching => {
-                self.matched
-            }
-            PrintMode::FilesWithoutMatch => !self.matched,
-        }
-    }
-
-    #[must_use]
-    pub const fn had_positive_hit(&self, mode: PrintMode) -> bool {
-        match mode {
-            PrintMode::Count | PrintMode::CountMatches => self.count > 0,
-            PrintMode::FilesWithMatches => self.matched,
-            PrintMode::FilesWithoutMatch | PrintMode::Standard | PrintMode::OnlyMatching => false,
-        }
-    }
-
-    #[must_use]
-    pub const fn explicit_binary(mut self, explicit: bool) -> Self {
-        if explicit && self.binary_byte_offset.is_some() {
-            self.matched = true;
-            if self.count == 0 {
-                self.count = 1;
-            }
-        }
-        self
-    }
-}
-
-pub struct SummarySink {
-    mode: PrintMode,
-    matcher: Option<Matcher>,
-    matched: bool,
-    count: usize,
-    binary_byte_offset: Option<u64>,
-}
-
-impl SummarySink {
-    #[must_use]
-    pub const fn new(mode: PrintMode, matcher: Option<Matcher>) -> Self {
-        Self {
-            mode,
-            matcher,
-            matched: false,
-            count: 0,
-            binary_byte_offset: None,
-        }
-    }
-
-    #[must_use]
-    pub fn finish(self) -> FileSummary {
-        FileSummary {
-            matched: self.matched,
-            count: self.count,
-            binary_byte_offset: self.binary_byte_offset,
-        }
-    }
-}
-
-impl Sink for SummarySink {
-    type Error = io::Error;
-
-    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
-        self.matched = true;
-        if self.mode == PrintMode::CountMatches {
-            if let Some(ref matcher) = self.matcher {
-                let line = mat.bytes();
-                let mut n = 0;
-                let _ = matcher.find_iter(line, |_| {
-                    n += 1;
-                    true
-                });
-                self.count += n;
-            }
-        } else {
-            self.count += 1;
-        }
-        Ok(matches!(
-            self.mode,
-            PrintMode::Count | PrintMode::CountMatches
-        ))
-    }
-
-    fn binary_data(
-        &mut self,
-        searcher: &Searcher,
-        binary_byte_offset: u64,
-    ) -> Result<bool, Self::Error> {
-        std::hint::black_box(searcher);
-        self.binary_byte_offset.get_or_insert(binary_byte_offset);
-        Ok(true)
-    }
-}
-
-fn write_summary_record(
-    out: &mut Vec<u8>,
-    output: PrintSpec,
-    display_path: &str,
-    result: FileSummary,
-) -> io::Result<()> {
-    if output.emission == OutputEmission::Quiet {
-        return Ok(());
-    }
-    let records = output.records;
-    match output.mode {
-        PrintMode::Count | PrintMode::CountMatches => {
-            if result.count == 0 && matches!(output.include_zero, ZeroCountMode::Omit) {
-                return Ok(());
-            }
-            let print_filename = output.lines.filename_mode != FilenameMode::Never;
-            if print_filename {
-                if records.should_color() {
-                    records.colors.path.write_start(out);
-                }
-                write!(out, "{display_path}")?;
-                if records.should_color() {
-                    out.extend_from_slice(ANSI_RESET);
-                }
-                write!(out, ":{}", result.count)?;
-            } else {
-                write!(out, "{}", result.count)?;
-            }
-            records.terminator.write_to(out);
-            Ok(())
-        }
-        PrintMode::FilesWithMatches => {
-            if result.matched {
-                if records.should_color() {
-                    records.colors.path.write_start(out);
-                }
-                write!(out, "{display_path}")?;
-                if records.should_color() {
-                    out.extend_from_slice(ANSI_RESET);
-                }
-                records.terminator.write_to(out);
-            }
-            Ok(())
-        }
-        PrintMode::FilesWithoutMatch => {
-            if result.matched {
-                return Ok(());
-            }
-            if records.should_color() {
-                records.colors.path.write_start(out);
-            }
-            write!(out, "{display_path}")?;
-            if records.should_color() {
-                out.extend_from_slice(ANSI_RESET);
-            }
-            records.terminator.write_to(out);
-            Ok(())
-        }
-        PrintMode::Standard | PrintMode::OnlyMatching => unreachable!(),
-    }
-}
+use grep_printer::{Stats as PrinterStats, SummaryBuilder, SummaryKind};
+use grep_searcher::{BinaryDetection, SearcherBuilder};
+use sift_core::grep::{BinaryMode, CompiledQuery, Input, Query};
 
 pub(in crate::format) struct AggregatePrinter<'a> {
     compiled: &'a CompiledQuery,
-    matcher: &'a Matcher,
-    searcher: Searcher,
+    search: &'a Query,
     output: PrintSpec,
+    builder: SummaryBuilder,
     summary_counter: Option<&'a AtomicUsize>,
     files_with_matches: Option<&'a AtomicUsize>,
     collect_hits: bool,
@@ -212,13 +34,8 @@ impl<'a> AggregatePrinter<'a> {
     ) -> Self {
         Self {
             compiled,
-            searcher: SearcherConfig {
-                line_numbers: false,
-                max_matches: search.opts().max_results,
-                include_context: false,
-            }
-            .searcher(search),
-            matcher: compiled.matcher(),
+            search,
+            builder: summary_builder(&output),
             output,
             summary_counter: counters.primary(),
             files_with_matches: counters.files_with_matches(),
@@ -226,48 +43,129 @@ impl<'a> AggregatePrinter<'a> {
         }
     }
 
-    fn search_summary(&mut self, input: &Input<'_>) -> FileSummary {
-        let sink_matcher = if self.output.mode == PrintMode::CountMatches {
-            Some(self.matcher.clone())
+    fn search_summary(&self, input: &Input<'_>, display: &str) -> SummaryResult {
+        let printer = self
+            .builder
+            .build(self.output.records.color_output().buffer());
+        let binary_detection = if self.search.opts().null_data() {
+            BinaryDetection::none()
         } else {
-            None
+            match self.search.opts().binary_mode {
+                BinaryMode::Quit
+                    if matches!(
+                        input,
+                        Input::Path { explicit: true, .. } | Input::Bytes { explicit: true, .. }
+                    ) =>
+                {
+                    BinaryDetection::convert(b'\x00')
+                }
+                BinaryMode::Quit => BinaryDetection::quit(b'\x00'),
+                BinaryMode::Binary => BinaryDetection::convert(b'\x00'),
+                BinaryMode::AsText => BinaryDetection::none(),
+            }
         };
-        let mut sink = SummarySink::new(self.output.mode, sink_matcher);
-        self.compiled
-            .match_input(input, &mut self.searcher, &mut sink);
-        sink.finish()
+        let mut builder = SearcherBuilder::new();
+        builder
+            .encoding(self.search.opts().input_encoding.explicit())
+            .bom_sniffing(self.search.opts().input_encoding.bom_sniffing())
+            .binary_detection(binary_detection)
+            .line_terminator(LineTerminator::byte(self.search.opts().line_terminator()))
+            .invert_match(self.search.opts().invert_match())
+            .line_number(false)
+            .max_matches(self.search.opts().max_results.map(|n| n as u64));
+        if self.search.opts().multiline() {
+            builder.multi_line(true);
+        }
+        let mut searcher = builder.build();
+        match self.compiled {
+            CompiledQuery::Rust { matcher, .. } => {
+                self.search_with_matcher(matcher, input, display, printer, &mut searcher)
+            }
+            CompiledQuery::Pcre2 { matcher, .. } => {
+                self.search_with_matcher(matcher, input, display, printer, &mut searcher)
+            }
+        }
     }
 
-    fn record(
+    fn search_with_matcher<M: GrepMatcherTrait>(
         &self,
+        matcher: &M,
+        input: &Input<'_>,
         display: &str,
-        result: FileSummary,
-        stop: &AtomicBool,
-        hit: Option<PathBuf>,
-    ) -> FileResult {
+        mut printer: grep_printer::Summary<termcolor::Buffer>,
+        searcher: &mut grep_searcher::Searcher,
+    ) -> SummaryResult {
+        let (success, stats) = {
+            let mut sink = printer.sink_with_path(matcher, Path::new(display));
+            match input {
+                Input::Path { candidate, .. } => {
+                    let _ = searcher.search_path(matcher, candidate.abs_path(), &mut sink);
+                }
+                Input::Bytes { bytes, .. } => {
+                    let _ = searcher.search_slice(matcher, bytes, &mut sink);
+                }
+            }
+            (sink.has_match(), sink.stats().cloned().unwrap_or_default())
+        };
+        SummaryResult::new(
+            printer.into_inner().into_inner(),
+            success,
+            &stats,
+            self.output.mode,
+        )
+    }
+
+    fn record(&self, result: SummaryResult, stop: &AtomicBool, hit: Option<PathBuf>) -> FileResult {
         if let Some(c) = self.summary_counter {
-            c.fetch_add(result.tally(self.output.mode), Ordering::Relaxed);
+            c.fetch_add(result.tally, Ordering::Relaxed);
         }
         if let Some(c) = self.files_with_matches
-            && result.had_positive_hit(self.output.mode)
+            && result.actual_matched
         {
             c.fetch_add(1, Ordering::Relaxed);
         }
-        let matched = result.is_success(self.output.mode);
-        let mut bytes = Vec::new();
-        let _ = write_summary_record(&mut bytes, self.output.clone(), display, result);
-        if self.output.emission == OutputEmission::Quiet && result.is_success(self.output.mode) {
+        if self.output.emission == OutputEmission::Quiet && result.success {
             stop.store(true, Ordering::SeqCst);
         }
 
         FileResult {
             output: ChunkOutput {
-                bytes,
-                matched,
+                bytes: if self.output.emission == OutputEmission::Quiet {
+                    Vec::new()
+                } else {
+                    result.bytes
+                },
+                matched: result.success,
                 heading: false,
             },
             json_stats: None,
-            hit: result.matched.then_some(hit).flatten(),
+            hit: result.actual_matched.then_some(hit).flatten(),
+        }
+    }
+}
+
+struct SummaryResult {
+    bytes: Vec<u8>,
+    success: bool,
+    actual_matched: bool,
+    tally: usize,
+}
+
+impl SummaryResult {
+    fn new(bytes: Vec<u8>, success: bool, stats: &PrinterStats, mode: PrintMode) -> Self {
+        let actual_matched = stats.searches_with_match() > 0;
+        let tally = match mode {
+            PrintMode::Count => usize::try_from(stats.matched_lines()).unwrap_or(usize::MAX),
+            PrintMode::CountMatches => usize::try_from(stats.matches()).unwrap_or(usize::MAX),
+            PrintMode::FilesWithMatches => usize::from(actual_matched),
+            PrintMode::FilesWithoutMatch => usize::from(!actual_matched),
+            PrintMode::Standard | PrintMode::OnlyMatching => 0,
+        };
+        Self {
+            bytes,
+            success,
+            actual_matched,
+            tally,
         }
     }
 }
@@ -284,14 +182,14 @@ impl InputPrinter for AggregatePrinter<'_> {
         match input {
             Input::Path {
                 candidate,
-                explicit,
+                explicit: _,
             } => {
-                let result = self.search_summary(input).explicit_binary(*explicit);
+                let display = candidate.display_path(
+                    self.output.lines.path_display,
+                    self.output.records.path_separator,
+                );
+                let result = self.search_summary(input, &display);
                 self.record(
-                    &candidate.display_path(
-                        self.output.lines.path_display,
-                        self.output.records.path_separator,
-                    ),
                     result,
                     stop,
                     (self.collect_hits).then(|| candidate.rel_path().to_path_buf()),
@@ -301,9 +199,8 @@ impl InputPrinter for AggregatePrinter<'_> {
                 path,
                 bytes: _,
                 candidate,
-                explicit,
+                explicit: _,
             } => {
-                let result = self.search_summary(input).explicit_binary(*explicit);
                 let display = candidate.map_or_else(
                     || path.to_string(),
                     |candidate| {
@@ -313,8 +210,8 @@ impl InputPrinter for AggregatePrinter<'_> {
                         )
                     },
                 );
+                let result = self.search_summary(input, &display);
                 self.record(
-                    &display,
                     result,
                     stop,
                     candidate
@@ -323,5 +220,36 @@ impl InputPrinter for AggregatePrinter<'_> {
                 )
             }
         }
+    }
+}
+
+fn summary_builder(output: &PrintSpec) -> SummaryBuilder {
+    let mut builder = SummaryBuilder::new();
+    builder
+        .kind(summary_kind(output.mode))
+        .stats(true)
+        .path(output.lines.filename_mode != FilenameMode::Never)
+        .exclude_zero(matches!(output.include_zero, ZeroCountMode::Omit))
+        .separator_path(output.records.path_separator)
+        .color_specs(output.records.colors.as_grep())
+        .hyperlink(
+            output
+                .records
+                .hyperlink
+                .config(output.records.hyperlink_host.clone()),
+        );
+    if matches!(output.records.terminator, RecordTerminator::Nul) {
+        builder.path_terminator(Some(b'\0'));
+    }
+    builder
+}
+
+const fn summary_kind(mode: PrintMode) -> SummaryKind {
+    match mode {
+        PrintMode::Count => SummaryKind::Count,
+        PrintMode::CountMatches => SummaryKind::CountMatches,
+        PrintMode::FilesWithMatches => SummaryKind::PathWithMatch,
+        PrintMode::FilesWithoutMatch => SummaryKind::PathWithoutMatch,
+        PrintMode::Standard | PrintMode::OnlyMatching => unreachable!(),
     }
 }

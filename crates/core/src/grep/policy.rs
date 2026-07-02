@@ -1,6 +1,6 @@
 use crate::corpus::CandidateCoverage;
 use crate::corpus::CandidateOrder;
-use crate::grep::engine::{CompiledQuery, Indexability};
+use crate::grep::{CompiledQuery, Indexability};
 use crate::query::ResolutionFallback;
 
 pub use crate::query::ResolutionFallback as IndexFallback;

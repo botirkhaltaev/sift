@@ -25,5 +25,5 @@ Planning (`planner.rs`, `plan.rs`) is pure — no filesystem or index calls. Exe
 
 ## Do NOT
 
-- Put regex matching or hit collection in this module — that belongs in `grep/engine/`.
+- Put regex matching or hit collection in this module — that belongs in `grep/pattern/`.
 - Import from `grep/` (except shared corpus/index types).

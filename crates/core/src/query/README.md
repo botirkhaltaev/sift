@@ -18,5 +18,5 @@ Query planning and candidate resolution.
 
 ## Do NOT
 
-- Put regex scanning in this module — that belongs in `grep/engine/`
+- Put regex scanning in this module — that belongs in `grep/pattern/`
 - Import from `grep/`

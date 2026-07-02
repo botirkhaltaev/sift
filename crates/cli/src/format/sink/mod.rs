@@ -1,7 +1,6 @@
 pub(super) mod json;
 pub(super) mod result;
 pub(super) mod standard;
-pub(super) mod style;
 pub(super) mod summary;
 
 use std::sync::atomic::AtomicBool;

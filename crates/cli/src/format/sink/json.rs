@@ -1,13 +1,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use grep_matcher::LineTerminator;
+use grep_matcher::Matcher as GrepMatcherTrait;
 use grep_printer::{JSON, Stats as JsonStats};
-use grep_searcher::Searcher;
+use grep_searcher::{BinaryDetection, SearcherBuilder};
 
 use crate::format::output::PrintSpec;
 use crate::format::output::mode::OutputEmission;
 use crate::format::sink::InputPrinter;
 use crate::format::sink::result::{ChunkOutput, FileResult};
-use sift_core::grep::{CompiledQuery, Input, Matcher, Query, SearcherConfig};
+use sift_core::grep::{BinaryMode, CompiledQuery, Input, Query};
 
 struct NullWriter;
 
@@ -23,31 +25,24 @@ impl std::io::Write for NullWriter {
 
 pub(in crate::format) struct JsonPrinter<'a> {
     compiled: &'a CompiledQuery,
-    searcher: Searcher,
-    matcher: &'a Matcher,
+    search: &'a Query,
     output: PrintSpec,
 }
 
 impl<'a> JsonPrinter<'a> {
-    pub(in crate::format) fn new(
+    pub(in crate::format) const fn new(
         search: &'a Query,
         compiled: &'a CompiledQuery,
         output: PrintSpec,
     ) -> Self {
         Self {
             compiled,
-            searcher: SearcherConfig {
-                line_numbers: true,
-                max_matches: search.opts().max_results,
-                include_context: true,
-            }
-            .searcher(search),
-            matcher: compiled.matcher(),
+            search,
             output,
         }
     }
 
-    fn search_input(&mut self, input: &Input<'_>, stop: &AtomicBool) -> FileResult {
+    fn search_input(&self, input: &Input<'_>, stop: &AtomicBool) -> FileResult {
         let quiet = self.output.emission == OutputEmission::Quiet;
         if stop.load(Ordering::SeqCst) {
             return FileResult {
@@ -61,19 +56,83 @@ impl<'a> JsonPrinter<'a> {
             Input::Path { candidate, .. } => candidate.abs_path(),
             Input::Bytes { path, .. } => std::path::Path::new(path.as_ref()),
         };
+        let before_context = self.search.opts().before_context;
+        let after_context = self.search.opts().after_context;
+        let binary_detection = if self.search.opts().null_data() {
+            BinaryDetection::none()
+        } else {
+            match self.search.opts().binary_mode {
+                BinaryMode::Quit
+                    if matches!(
+                        input,
+                        Input::Path { explicit: true, .. } | Input::Bytes { explicit: true, .. }
+                    ) =>
+                {
+                    BinaryDetection::convert(b'\x00')
+                }
+                BinaryMode::Quit => BinaryDetection::quit(b'\x00'),
+                BinaryMode::Binary => BinaryDetection::convert(b'\x00'),
+                BinaryMode::AsText => BinaryDetection::none(),
+            }
+        };
+        let mut builder = SearcherBuilder::new();
+        builder
+            .encoding(self.search.opts().input_encoding.explicit())
+            .bom_sniffing(self.search.opts().input_encoding.bom_sniffing())
+            .binary_detection(binary_detection)
+            .line_terminator(LineTerminator::byte(self.search.opts().line_terminator()))
+            .invert_match(self.search.opts().invert_match())
+            .line_number(true)
+            .before_context(before_context)
+            .after_context(after_context)
+            .max_matches(self.search.opts().max_results.map(|n| n as u64));
+        if self.search.opts().multiline() {
+            builder.multi_line(true);
+        }
+        let searcher = builder.build();
 
+        match self.compiled {
+            CompiledQuery::Rust { matcher, .. } => {
+                Self::search_with_matcher(matcher, input, quiet, path, searcher, stop)
+            }
+            CompiledQuery::Pcre2 { matcher, .. } => {
+                Self::search_with_matcher(matcher, input, quiet, path, searcher, stop)
+            }
+        }
+    }
+
+    fn search_with_matcher<M: GrepMatcherTrait>(
+        matcher: &M,
+        input: &Input<'_>,
+        quiet: bool,
+        path: &std::path::Path,
+        mut searcher: grep_searcher::Searcher,
+        stop: &AtomicBool,
+    ) -> FileResult {
         let (bytes, file_stats) = if quiet {
             let mut json = JSON::new(NullWriter);
-            let mut sink = json.sink_with_path(self.matcher, path);
-            self.compiled
-                .match_input(input, &mut self.searcher, &mut sink);
+            let mut sink = json.sink_with_path(matcher, path);
+            match input {
+                Input::Path { candidate, .. } => {
+                    let _ = searcher.search_path(matcher, candidate.abs_path(), &mut sink);
+                }
+                Input::Bytes { bytes, .. } => {
+                    let _ = searcher.search_slice(matcher, bytes, &mut sink);
+                }
+            }
             (Vec::new(), sink.stats().clone())
         } else {
             let mut json = JSON::new(Vec::new());
             let file_stats = {
-                let mut sink = json.sink_with_path(self.matcher, path);
-                self.compiled
-                    .match_input(input, &mut self.searcher, &mut sink);
+                let mut sink = json.sink_with_path(matcher, path);
+                match input {
+                    Input::Path { candidate, .. } => {
+                        let _ = searcher.search_path(matcher, candidate.abs_path(), &mut sink);
+                    }
+                    Input::Bytes { bytes, .. } => {
+                        let _ = searcher.search_slice(matcher, bytes, &mut sink);
+                    }
+                }
                 sink.stats().clone()
             };
             (json.into_inner(), file_stats)

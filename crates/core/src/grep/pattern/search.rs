@@ -2,12 +2,12 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use grep_matcher::Matcher as GrepMatcherTrait;
-use grep_searcher::{Searcher, Sink, SinkMatch};
+use grep_matcher::{LineTerminator, Matcher as GrepMatcherTrait};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
 
-use crate::grep::engine::matcher::{Matcher, SearcherConfig};
 use crate::grep::input::{Input, Inputs};
+use crate::grep::options::BinaryMode;
 use crate::grep::pattern::{Match, Query};
 use crate::grep::report::Report;
 use crate::grep::stats::{Stats, StatsMode};
@@ -25,14 +25,9 @@ impl CompiledQuery {
         searcher: &mut Searcher,
         sink: &mut impl Sink<Error = io::Error>,
     ) {
-        let matcher = self.matcher();
-        match input {
-            Input::Path { candidate, .. } => {
-                let _ = searcher.search_path(matcher, candidate.abs_path(), sink);
-            }
-            Input::Bytes { bytes, .. } => {
-                let _ = searcher.search_slice(matcher, bytes, sink);
-            }
+        match self {
+            Self::Rust { matcher, .. } => match_input(matcher, input, searcher, sink),
+            Self::Pcre2 { matcher, .. } => match_input(matcher, input, searcher, sink),
         }
     }
 
@@ -52,15 +47,43 @@ impl CompiledQuery {
 
         let search_start = Instant::now();
         let only_matching = query.opts().only_matching();
-        let searcher_config = SearcherConfig::match_collection(query.opts().max_results);
 
         let mut outcomes: Vec<FileOutcome> = inputs
             .as_slice()
             .par_iter()
-            .map_init(
-                || searcher_config.searcher(query),
-                |searcher, input| self.collect_input(searcher, input, only_matching),
-            )
+            .map(|input| {
+                let binary_detection = if query.opts.null_data() {
+                    BinaryDetection::none()
+                } else {
+                    match query.opts.binary_mode {
+                        BinaryMode::Quit
+                            if matches!(
+                                input,
+                                Input::Path { explicit: true, .. }
+                                    | Input::Bytes { explicit: true, .. }
+                            ) =>
+                        {
+                            BinaryDetection::convert(b'\x00')
+                        }
+                        BinaryMode::Quit => BinaryDetection::quit(b'\x00'),
+                        BinaryMode::Binary => BinaryDetection::convert(b'\x00'),
+                        BinaryMode::AsText => BinaryDetection::none(),
+                    }
+                };
+                let mut builder = SearcherBuilder::new();
+                builder
+                    .encoding(query.opts.input_encoding.explicit())
+                    .bom_sniffing(query.opts.input_encoding.bom_sniffing())
+                    .binary_detection(binary_detection)
+                    .line_terminator(LineTerminator::byte(query.opts.line_terminator()))
+                    .invert_match(query.opts.invert_match())
+                    .line_number(true)
+                    .max_matches(query.opts.max_results.map(|n| n as u64));
+                if query.opts.multiline() {
+                    builder.multi_line(true);
+                }
+                self.collect_input(&mut builder.build(), input, only_matching)
+            })
             .collect();
 
         let mut line_matches = Vec::new();
@@ -104,19 +127,47 @@ impl CompiledQuery {
         input: &Input<'_>,
         only_matching: bool,
     ) -> FileOutcome {
-        let (display_path, hit_path) = input.paths();
-        let mut sink = MatchCollector {
-            path: display_path,
-            matcher: only_matching.then(|| self.matcher().clone()),
-            matches: Vec::new(),
-        };
-        self.match_input(input, searcher, &mut sink);
-        let matched = !sink.matches.is_empty();
-        FileOutcome {
-            matched,
-            matches: sink.matches,
-            hit_path: matched.then_some(hit_path).flatten(),
+        match self {
+            Self::Rust { matcher, .. } => collect_input(matcher, searcher, input, only_matching),
+            Self::Pcre2 { matcher, .. } => collect_input(matcher, searcher, input, only_matching),
         }
+    }
+}
+
+fn match_input<M: GrepMatcherTrait>(
+    matcher: &M,
+    input: &Input<'_>,
+    searcher: &mut Searcher,
+    sink: &mut impl Sink<Error = io::Error>,
+) {
+    match input {
+        Input::Path { candidate, .. } => {
+            let _ = searcher.search_path(matcher, candidate.abs_path(), sink);
+        }
+        Input::Bytes { bytes, .. } => {
+            let _ = searcher.search_slice(matcher, bytes, sink);
+        }
+    }
+}
+
+fn collect_input<M: GrepMatcherTrait + Clone>(
+    matcher: &M,
+    searcher: &mut Searcher,
+    input: &Input<'_>,
+    only_matching: bool,
+) -> FileOutcome {
+    let (display_path, hit_path) = input.paths();
+    let mut sink = MatchCollector {
+        path: display_path,
+        matcher: only_matching.then(|| matcher.clone()),
+        matches: Vec::new(),
+    };
+    match_input(matcher, input, searcher, &mut sink);
+    let has_matches = !sink.matches.is_empty();
+    FileOutcome {
+        matched: has_matches,
+        matches: sink.matches,
+        hit_path: has_matches.then_some(hit_path).flatten(),
     }
 }
 
@@ -126,13 +177,13 @@ struct FileOutcome {
     hit_path: Option<PathBuf>,
 }
 
-struct MatchCollector {
+struct MatchCollector<M> {
     path: PathBuf,
-    matcher: Option<Matcher>,
+    matcher: Option<M>,
     matches: Vec<Match>,
 }
 
-impl Sink for MatchCollector {
+impl<M: GrepMatcherTrait> Sink for MatchCollector<M> {
     type Error = io::Error;
 
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {

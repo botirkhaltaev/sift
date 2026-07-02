@@ -2,7 +2,6 @@ use std::sync::OnceLock;
 
 use crate::corpus::Candidate;
 use crate::grep::Error;
-use crate::grep::engine::CompiledQuery;
 use crate::grep::input::Inputs;
 use crate::grep::options::MatchOptions;
 use crate::grep::policy::CandidatePolicy;
@@ -11,7 +10,11 @@ use crate::grep::session::Session;
 use crate::grep::stats::StatsMode;
 use crate::query::{PlanContext, QueryFlags, QueryPlanner, QuerySpec, ResolutionConfig};
 
+mod compile;
 pub mod error;
+mod search;
+
+pub use compile::{CompiledQuery, Indexability, IndexabilityReason};
 
 use regex_automata::meta::Regex;
 use regex_syntax::escape;
@@ -243,8 +246,8 @@ impl PatternCompiler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grep::engine::{Indexability, IndexabilityReason};
     use crate::grep::options::{MatchFlags, MatchOptions, RegexEngineRequest};
+    use crate::grep::{Indexability, IndexabilityReason};
 
     fn make_search(patterns: &[&str], opts: MatchOptions) -> Query {
         let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();

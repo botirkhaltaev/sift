@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Refactor
+
+- Delegate standard, summary, and JSON printing to `grep-printer`; remove Sift-owned matcher/searcher/output rendering wrappers.
+
 ## [0.7.0](https://github.com/botirk38/sift/releases/tag/v0.7.0) — 2026-07-01
 
 ### Breaking

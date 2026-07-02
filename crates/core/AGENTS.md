@@ -12,9 +12,9 @@ Primary search entrypoint (re-exported from `lib.rs`):
 
 - `Session`, `Query`, `Report`, `Stats`, `MatchOptions`, `Inputs`, `Input`, `CandidatePolicy`
 - Index types: `Indexes`, `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`
-- Supporting grep types: `MatchFlags`, `CandidateFilter`, `PatternCompiler`, `CandidateScope`, `FileWalk`, `CompiledQuery`, `Matcher`
+- Supporting grep types: `MatchFlags`, `CandidateFilter`, `PatternCompiler`, `CandidateScope`, `FileWalk`, `CompiledQuery`
 
-Internal modules (`pub(crate)`): `corpus/`, `query/`, `grep/engine/`.
+Internal modules (`pub(crate)`): `corpus/`, `query/`.
 
 ## Source Map
 
@@ -26,8 +26,7 @@ Internal modules (`pub(crate)`): `corpus/`, `query/`, `grep/engine/`.
 | `grep/session.rs` | `Session` — indexes, filter, store meta (data only) |
 | `grep/policy.rs` | `CandidatePolicy`, `CandidatePolicyConfig`, `CandidateScope`, `CorpusState` |
 | `grep/input.rs` | `Input`, `Inputs` — push API for paths and byte streams |
-| `grep/engine/search.rs` | `CompiledQuery::match_input`, `CompiledQuery::report` |
-| `grep/pattern/` | `Query`, `PatternCompiler`, `Match` |
+| `grep/pattern/` | `Query`, `PatternCompiler`, `CompiledQuery`, `Match`, search execution |
 | `corpus/coverage.rs` | `CandidateCoverage` — shared planning enum |
 | `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
 | `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |

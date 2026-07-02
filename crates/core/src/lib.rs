@@ -13,7 +13,7 @@ pub use corpus::CandidateCoverage;
 pub use grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidatePolicy, CandidateScope,
     CompiledQuery, Error as GrepError, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, Input,
-    Inputs, Match, MatchOptions, Matcher, Query, Report, Session, Stats, StatsMode, TypeFilterRule,
+    Inputs, Match, MatchOptions, Query, Report, Session, Stats, StatsMode, TypeFilterRule,
     VisibilityConfig,
 };
 
