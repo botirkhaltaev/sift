@@ -22,6 +22,32 @@ pub struct QueryPlanOutput {
     pub mode: PlanMode,
 }
 
+/// Candidate information produced by an index.
+#[derive(Debug)]
+pub enum IndexCandidateResult {
+    /// The query has no usable index terms.
+    Unavailable,
+    /// Every indexed file is a possible match, so the index cannot narrow further.
+    All,
+    /// A narrowed set of possible matching files.
+    Candidates(Vec<crate::Candidate>),
+}
+
+impl IndexCandidateResult {
+    #[must_use]
+    pub const fn is_unavailable(&self) -> bool {
+        matches!(self, Self::Unavailable)
+    }
+
+    #[must_use]
+    pub fn into_candidates(self) -> Option<Vec<crate::Candidate>> {
+        match self {
+            Self::Candidates(candidates) => Some(candidates),
+            Self::Unavailable | Self::All => None,
+        }
+    }
+}
+
 /// Configured index identity persisted in metadata and snapshot manifests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IndexConfig {
@@ -170,10 +196,7 @@ impl Index {
     }
 
     #[must_use]
-    pub fn candidates(
-        &self,
-        query: &crate::candidates::CandidateSpec<'_>,
-    ) -> Option<Vec<crate::Candidate>> {
+    pub fn candidates(&self, query: &crate::candidates::CandidateSpec<'_>) -> IndexCandidateResult {
         match self {
             Self::NGram(index) => index.candidates(query),
         }
