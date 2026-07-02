@@ -202,9 +202,10 @@ const fn plan_indexed(input: PlanInput) -> CandidateStrategy {
         ) => CandidateStrategy::AllIndexed,
         (IndexStatus::AllCandidates, _, IndexFallback::WalkOnStaleSnapshot) => {
             match input.snapshot_status {
-                SnapshotStatus::TrustedComplete => CandidateStrategy::AllIndexed,
-                SnapshotStatus::Missing
-                | SnapshotStatus::FilterMismatch
+                SnapshotStatus::Missing | SnapshotStatus::TrustedComplete => {
+                    CandidateStrategy::AllIndexed
+                }
+                SnapshotStatus::FilterMismatch
                 | SnapshotStatus::TrustedLazy
                 | SnapshotStatus::StaleComplete => CandidateStrategy::Walk,
             }
