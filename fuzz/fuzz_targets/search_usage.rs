@@ -3,8 +3,7 @@
 use libfuzzer_sys::fuzz_target;
 use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, CandidatePolicyConfig, CandidateScope, CorpusState,
-    IndexFallback, Inputs, MatchFlags, MatchOptions, PatternCompiler, Query, Session, StatsMode,
-    VisibilityConfig,
+    IndexFallback, Inputs, MatchFlags, MatchOptions, Query, Session, StatsMode, VisibilityConfig,
 };
 use sift_core::{
     CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, NGramConfig,
@@ -129,12 +128,8 @@ fuzz_target!(|data: &[u8]| {
 });
 
 fn compile_with_flags(patterns: &[&str], opts: &MatchOptions) -> Result<(), ()> {
-    PatternCompiler::new()
-        .fixed_strings(opts.fixed_strings())
-        .word_regexp(opts.word_regexp())
-        .line_regexp(opts.line_regexp())
-        .case_insensitive(opts.case_insensitive())
-        .compile(patterns)
-        .map(|_| ())
-        .map_err(|_| ())
+    let query = Query::new(patterns.iter().map(|pattern| (*pattern).to_string()).collect())
+        .map_err(|_| ())?
+        .options(opts.clone());
+    query.compile().map(|_| ()).map_err(|_| ())
 }

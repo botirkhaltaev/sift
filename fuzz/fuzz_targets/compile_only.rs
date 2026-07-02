@@ -1,18 +1,17 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::grep::{MatchFlags, MatchOptions, PatternCompiler};
+use sift_core::grep::{MatchFlags, MatchOptions, Query};
 
 /// Static branches combined with random bytes to stress alternation and flag shaping.
 const STATIC_BRANCHES: &[&str] = &[r"a.c", r"foo|bar", r"^line$", r"\bword\b", "(", r"[", ""];
 
 fn compile_with_flags(patterns: &[String], opts: &MatchOptions) {
-    let _ = PatternCompiler::new()
-        .fixed_strings(opts.fixed_strings())
-        .word_regexp(opts.word_regexp())
-        .line_regexp(opts.line_regexp())
-        .case_insensitive(opts.case_insensitive())
-        .compile(&patterns.iter().map(String::as_str).collect::<Vec<_>>());
+    let Ok(query) = Query::new(patterns.to_vec()) else {
+        return;
+    };
+    let query = query.options(opts.clone());
+    let _ = query.compile();
 }
 
 fuzz_target!(|data: &[u8]| {

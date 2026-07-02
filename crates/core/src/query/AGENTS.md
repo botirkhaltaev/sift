@@ -6,11 +6,11 @@ Query planning and candidate resolution. Turns `QuerySpec` into candidates via s
 
 ## Key Types
 
-- `QuerySpec`: neutral query description (patterns, flags). Built by `Query::query_spec()` in `grep/pattern/`.
+- `QuerySpec`: neutral query description (patterns, flags). Built by `Query::query_spec()` in `grep/query.rs`.
 - `QueryPlanner`: `plan(ctx, coverage, walk_on_stale) -> ResolutionPlan` — pure strategy selection.
 - `QueryPlanner::resolve`: plan + execute — primary entry for candidate resolution.
 - `ResolutionPlan` / `ResolutionStrategy`: planner output; executed by `resolve.rs`.
-- `PlanContext`: indexes, filter, store meta, index_capable flag.
+- `PlanContext`: indexes, filter, store meta, `IndexNarrowing`.
 - `ResolutionConfig`: per-run coverage, fallback, and candidate order.
 
 ## Design
@@ -25,5 +25,5 @@ Planning (`planner.rs`, `plan.rs`) is pure — no filesystem or index calls. Exe
 
 ## Do NOT
 
-- Put regex matching or hit collection in this module — that belongs in `grep/pattern/`.
+- Put regex matching or hit collection in this module — that belongs in `grep/collection.rs`.
 - Import from `grep/` (except shared corpus/index types).

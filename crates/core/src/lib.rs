@@ -12,9 +12,9 @@ pub use corpus::Candidate;
 pub use corpus::CandidateCoverage;
 pub use grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidatePolicy, CandidateScope,
-    CompiledQuery, Error as GrepError, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources, Input,
-    Inputs, Match, MatchOptions, Query, Report, Session, Stats, StatsMode, TypeFilterRule,
-    VisibilityConfig,
+    CompiledQuery, Error as GrepError, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
+    IndexUse, Input, Inputs, Match, MatchOptions, Query, Report, Session, Stats, StatsMode,
+    TypeFilterRule, VisibilityConfig,
 };
 
 pub use ignore::{Walk, WalkBuilder};
@@ -54,9 +54,6 @@ pub enum Error {
 
     #[error("ignore walk error: {0}")]
     Ignore(#[from] ignore::Error),
-
-    #[error("regex error: {0}")]
-    Regex(#[from] Box<regex_automata::meta::BuildError>),
 }
 
 impl From<crate::index::ngram::NGramIndexError> for Error {

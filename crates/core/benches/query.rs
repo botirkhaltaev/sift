@@ -1,13 +1,13 @@
-//! Pattern-compilation and search-compilation benchmarks.
+//! Search query compilation benchmarks.
 //!
-//! Exercises public `PatternCompiler` and `Query` APIs.
+//! Exercises the public `Query` compilation API.
 //! All benches operate on small inputs and measure only the compilation cost.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use sift_core::Query;
-use sift_core::grep::{CaseMode, MatchOptions, PatternCompiler};
+use sift_core::grep::{CaseMode, MatchFlags, MatchOptions, RegexEngineRequest};
 
 fn sift_criterion() -> Criterion {
     Criterion::default()
@@ -19,59 +19,16 @@ fn sift_criterion() -> Criterion {
         .configure_from_args()
 }
 
-// ─── PatternCompiler benches ─────────────────────────────────────────────────
-
-fn bench_pattern_compiler(c: &mut Criterion) {
-    let mut g = c.benchmark_group("pattern_compiler");
-
-    g.bench_function("shape_fixed_string", |b| {
-        let compiler = PatternCompiler::new().fixed_strings(true);
-        b.iter(|| black_box(compiler.shape("a.c*+?")));
-    });
-
-    g.bench_function("shape_word_regexp", |b| {
-        let compiler = PatternCompiler::new().word_regexp(true);
-        b.iter(|| black_box(compiler.shape("hello")));
-    });
-
-    g.bench_function("shape_line_regexp", |b| {
-        let compiler = PatternCompiler::new().line_regexp(true);
-        b.iter(|| black_box(compiler.shape("hello")));
-    });
-
-    g.bench_function("compile_one", |b| {
-        let compiler = PatternCompiler::new();
-        b.iter(|| black_box(compiler.compile_one("hello\\s+world").unwrap()));
-    });
-
-    g.bench_function("compile_many", |b| {
-        let compiler = PatternCompiler::new();
-        let patterns = &["foo", "bar", "baz", "qux", "quux"];
-        b.iter(|| black_box(compiler.compile(patterns).unwrap()));
-    });
-
-    g.bench_function("compile_case_insensitive", |b| {
-        let compiler = PatternCompiler::new().case_insensitive(true);
-        let patterns = &["Hello", "World"];
-        b.iter(|| black_box(compiler.compile(patterns).unwrap()));
-    });
-
-    g.finish();
-}
-
-// ─── Query::new benches ───────────────────────────────────────────────
-
-fn bench_compiled_search_new(c: &mut Criterion) {
-    let mut g = c.benchmark_group("compiled_search_new");
+fn bench_query_compile(c: &mut Criterion) {
+    let mut g = c.benchmark_group("query_compile");
 
     g.bench_function("one_pattern", |b| {
         let pats = vec!["hello".to_string()];
         b.iter(|| {
-            black_box(
-                Query::new(pats.clone())
-                    .unwrap()
-                    .options(MatchOptions::default()),
-            );
+            let query = Query::new(pats.clone())
+                .unwrap()
+                .options(MatchOptions::default());
+            black_box(query.compile().unwrap());
         });
     });
 
@@ -83,11 +40,46 @@ fn bench_compiled_search_new(c: &mut Criterion) {
             "qux".to_string(),
         ];
         b.iter(|| {
-            black_box(
-                Query::new(pats.clone())
-                    .unwrap()
-                    .options(MatchOptions::default()),
-            );
+            let query = Query::new(pats.clone())
+                .unwrap()
+                .options(MatchOptions::default());
+            black_box(query.compile().unwrap());
+        });
+    });
+
+    g.bench_function("fixed_strings", |b| {
+        let pats = vec!["a.c*+?".to_string()];
+        let opts = MatchOptions {
+            flags: MatchFlags::FIXED_STRINGS,
+            ..Default::default()
+        };
+        b.iter(|| {
+            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
+            black_box(query.compile().unwrap());
+        });
+    });
+
+    g.bench_function("word_regexp", |b| {
+        let pats = vec!["hello".to_string()];
+        let opts = MatchOptions {
+            flags: MatchFlags::WORD_REGEXP,
+            ..Default::default()
+        };
+        b.iter(|| {
+            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
+            black_box(query.compile().unwrap());
+        });
+    });
+
+    g.bench_function("line_regexp", |b| {
+        let pats = vec!["hello".to_string()];
+        let opts = MatchOptions {
+            flags: MatchFlags::LINE_REGEXP,
+            ..Default::default()
+        };
+        b.iter(|| {
+            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
+            black_box(query.compile().unwrap());
         });
     });
 
@@ -98,7 +90,20 @@ fn bench_compiled_search_new(c: &mut Criterion) {
             ..Default::default()
         };
         b.iter(|| {
-            black_box(Query::new(pats.clone()).unwrap().options(opts.clone()));
+            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
+            black_box(query.compile().unwrap());
+        });
+    });
+
+    g.bench_function("pcre2_auto_fallback", |b| {
+        let pats = vec!["(?<=hello) world".to_string()];
+        let opts = MatchOptions {
+            regex_engine: RegexEngineRequest::Auto,
+            ..Default::default()
+        };
+        b.iter(|| {
+            let query = Query::new(pats.clone()).unwrap().options(opts.clone());
+            black_box(query.compile().unwrap());
         });
     });
 
@@ -108,6 +113,6 @@ fn bench_compiled_search_new(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_pattern_compiler, bench_compiled_search_new,
+    targets = bench_query_compile,
 }
 criterion_main!(benches);

@@ -10,8 +10,13 @@ pub struct PlanContext<'a> {
     pub indexes: &'a Indexes,
     pub filter: &'a CandidateFilter,
     pub store_meta: Option<&'a StoreMeta>,
-    /// Whether the query can be narrowed by the index layer.
-    pub index_capable: bool,
+    pub index_narrowing: IndexNarrowing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexNarrowing {
+    Enabled,
+    Disabled,
 }
 
 /// Plans candidate selection without performing I/O.
@@ -25,13 +30,13 @@ impl<'a> PlanContext<'a> {
         indexes: &'a Indexes,
         filter: &'a CandidateFilter,
         store_meta: Option<&'a StoreMeta>,
-        index_capable: bool,
+        index_narrowing: IndexNarrowing,
     ) -> Self {
         Self {
             indexes,
             filter,
             store_meta,
-            index_capable,
+            index_narrowing,
         }
     }
 }
@@ -86,7 +91,7 @@ impl<'a> QueryPlanner<'a> {
         walk_on_stale: bool,
     ) -> super::plan::ResolutionStrategy {
         use super::plan::ResolutionStrategy;
-        if ctx.indexes.is_empty() || !ctx.index_capable {
+        if ctx.indexes.is_empty() || matches!(ctx.index_narrowing, IndexNarrowing::Disabled) {
             return ResolutionStrategy::WalkAll;
         }
         if ctx.indexes.candidates(&self.spec).is_none() {

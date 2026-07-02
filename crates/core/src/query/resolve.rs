@@ -160,7 +160,7 @@ mod tests {
     use crate::index::{
         CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, Indexes, WalkMeta,
     };
-    use crate::query::{PlanContext, QueryFlags, QueryPlanner, QuerySpec};
+    use crate::query::{IndexNarrowing, PlanContext, QueryFlags, QueryPlanner, QuerySpec};
     use crate::{IndexStore, StoreMeta};
 
     use super::{ResolutionConfig, ResolutionFallback};
@@ -262,7 +262,7 @@ mod tests {
         store_meta: Option<&StoreMeta>,
         fallback: ResolutionFallback,
     ) -> Vec<Candidate> {
-        let plan_ctx = PlanContext::new(indexes, filter, store_meta, true);
+        let plan_ctx = PlanContext::new(indexes, filter, store_meta, IndexNarrowing::Enabled);
         QueryPlanner::new(spec)
             .resolve(
                 plan_ctx,

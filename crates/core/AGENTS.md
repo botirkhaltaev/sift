@@ -12,7 +12,7 @@ Primary search entrypoint (re-exported from `lib.rs`):
 
 - `Session`, `Query`, `Report`, `Stats`, `MatchOptions`, `Inputs`, `Input`, `CandidatePolicy`
 - Index types: `Indexes`, `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`
-- Supporting grep types: `MatchFlags`, `CandidateFilter`, `PatternCompiler`, `CandidateScope`, `FileWalk`, `CompiledQuery`
+- Supporting grep types: `MatchFlags`, `CandidateFilter`, `CandidateScope`, `FileWalk`, `CompiledQuery`
 
 Internal modules (`pub(crate)`): `corpus/`, `query/`.
 
@@ -26,7 +26,10 @@ Internal modules (`pub(crate)`): `corpus/`, `query/`.
 | `grep/session.rs` | `Session` — indexes, filter, store meta (data only) |
 | `grep/policy.rs` | `CandidatePolicy`, `CandidatePolicyConfig`, `CandidateScope`, `CorpusState` |
 | `grep/input.rs` | `Input`, `Inputs` — push API for paths and byte streams |
-| `grep/pattern/` | `Query`, `PatternCompiler`, `CompiledQuery`, `Match`, search execution |
+| `grep/query.rs` | `Query` lifecycle, candidate resolution entrypoint, library search entrypoint |
+| `grep/compiled.rs` | `CompiledQuery`, regex engine selection, concrete matcher construction |
+| `grep/collection.rs` | Private `ReportCollector` and search execution for library reports |
+| `grep/matched.rs` | `Match` result type |
 | `corpus/coverage.rs` | `CandidateCoverage` — shared planning enum |
 | `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
 | `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |
@@ -43,10 +46,9 @@ CandidatePolicyConfig::policy(compiled) -> CandidatePolicy
 Query::candidates(&session, policy) -> Vec<Candidate>
 InputSources::build_inputs(candidates, transform) -> Inputs
 Query::search(&inputs, stats_mode) -> Report   // library path
-CompiledQuery::report(&query, &inputs, stats_mode) -> Report  // when already compiled
 
 CLI format path:
-  SearchPrinter::print(&inputs) -> Report       // uses CompiledQuery::match_input per input
+  SearchPrinter::print(&inputs) -> Report       // uses grep-printer with concrete CompiledQuery matchers
 ```
 
 ## Error Ownership

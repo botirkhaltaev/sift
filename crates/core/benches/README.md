@@ -8,7 +8,7 @@ Benchmarks mirror the `src/` module layout and exercise only public APIs.
 
 | File | What it measures |
 |------|------------------|
-| `query.rs` | `QueryPlanner` decisions, `PatternCompiler` shaping/compilation, `GrepQuery::new` |
+| `query.rs` | `QueryPlanner` decisions and `Query::compile` matcher construction |
 | `index.rs` | Runtime-width `NGramIndex` build/open, `Indexes::open`, `Index` enum methods, `candidates`, `explain`, save/reopen |
 | `grep.rs` | `Grep::run` (indexed search / walk search), `CandidateFilter` paths, output modes |
 

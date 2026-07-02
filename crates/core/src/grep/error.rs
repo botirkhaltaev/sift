@@ -1,7 +1,6 @@
 use thiserror::Error;
 
 use crate::corpus::filter::error::FilterError;
-use crate::grep::pattern::error::CompileError;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -25,14 +24,6 @@ pub enum Error {
 
     #[error("ignore walk error: {0}")]
     Ignore(#[from] ignore::Error),
-}
-
-impl From<CompileError> for Error {
-    fn from(e: CompileError) -> Self {
-        match e {
-            CompileError::RegexBuild(s) => Self::RegexBuild(s),
-        }
-    }
 }
 
 impl From<FilterError> for Error {
