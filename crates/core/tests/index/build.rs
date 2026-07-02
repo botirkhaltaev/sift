@@ -25,6 +25,7 @@ fn gitignore_honored_without_git_repo() {
     };
     let paths: Vec<_> = open_indexes(&sift_dir)
         .candidates(&spec)
+        .into_candidates()
         .expect("candidates")
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
@@ -57,6 +58,7 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
     };
     let paths: Vec<_> = open_indexes(&sift_dir)
         .candidates(&spec)
+        .into_candidates()
         .expect("candidates")
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
@@ -81,6 +83,7 @@ fn defaults_exclude_gitignored_and_ignore_file_paths() {
     };
     let paths: Vec<_> = open_indexes(&sift_dir)
         .candidates(&spec)
+        .into_candidates()
         .expect("candidates")
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
@@ -117,6 +120,7 @@ fn build_respects_hidden_files_by_default() {
     let paths: Vec<_> = Indexes::open(sift_dir.path())
         .expect("open")
         .candidates(&spec)
+        .into_candidates()
         .expect("candidates")
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
