@@ -104,18 +104,26 @@ impl<'a> FileWalk<'a> {
     /// # Errors
     ///
     /// Returns an error if the root cannot be canonicalized or a walk fails.
-    pub fn collect_records<T: WalkRecord>(self) -> crate::Result<Vec<T>> {
+    pub fn collect<P: WalkProjection>(self, projection: &P) -> crate::Result<Vec<P::Record>> {
+        let records = self.discover(projection)?;
+        Ok(records.into_iter().map(WalkOutput::into_record).collect())
+    }
+
+    fn discover<P: WalkProjection>(
+        self,
+        projection: &P,
+    ) -> crate::Result<Vec<WalkOutput<P::Record>>> {
         let filter_root = self.root.canonicalize()?;
-        let mut out: Vec<T> = Vec::new();
+        let mut out: Vec<WalkOutput<P::Record>> = Vec::new();
         if self.scopes.is_empty() {
-            self.collect_scope(&filter_root, Path::new(""), &mut out)?;
+            self.collect_scope(&filter_root, Path::new(""), projection, &mut out)?;
         } else {
             for scope in self.scopes {
-                self.collect_scope(&filter_root, scope, &mut out)?;
+                self.collect_scope(&filter_root, scope, projection, &mut out)?;
             }
         }
-        out.sort_by(|a, b| a.rel_path().cmp(b.rel_path()));
-        out.dedup_by(|a, b| a.rel_path() == b.rel_path());
+        out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+        out.dedup_by(|a, b| a.rel_path == b.rel_path);
         Ok(out)
     }
 
@@ -125,11 +133,12 @@ impl<'a> FileWalk<'a> {
             .any(|excluded| !excluded.as_os_str().is_empty() && rel.starts_with(excluded))
     }
 
-    fn collect_scope<T: WalkRecord>(
+    fn collect_scope<P: WalkProjection>(
         &self,
         filter_root: &Path,
         scope: &Path,
-        out: &mut Vec<T>,
+        projection: &P,
+        out: &mut Vec<WalkOutput<P::Record>>,
     ) -> crate::Result<()> {
         let path = if scope.as_os_str().is_empty() {
             filter_root.to_path_buf()
@@ -146,32 +155,32 @@ impl<'a> FileWalk<'a> {
                 .unwrap_or(&path)
                 .to_path_buf();
             if !self.is_excluded(&rel_path)
-                && let Some(entry) = WalkEntry::from_scope_file(rel_path, &path, self.max_filesize)
+                && let Some(file) = WalkFile::from_scope_file(rel_path, path, self.max_filesize)
             {
-                out.push(T::from_walk_entry(entry));
+                out.push(WalkOutput::new(&file, projection.project(&file)));
             }
         } else if path.is_dir() {
-            let mut walk = FileWalkRun::<T>::new(&path, filter_root, self);
+            let mut walk = FileWalkRun::new(&path, filter_root, self, projection.clone());
             out.extend(walk.run()?);
         }
         Ok(())
     }
 }
 
-pub struct WalkEntry<'a> {
+pub struct WalkFile {
     rel_path: PathBuf,
-    abs_path: &'a Path,
+    abs_path: PathBuf,
     depth: usize,
     metadata: Option<Metadata>,
 }
 
-impl<'a> WalkEntry<'a> {
+impl WalkFile {
     fn from_scope_file(
         rel_path: PathBuf,
-        abs_path: &'a Path,
+        abs_path: PathBuf,
         max_filesize: Option<u64>,
     ) -> Option<Self> {
-        let metadata = std::fs::metadata(abs_path).ok();
+        let metadata = std::fs::metadata(&abs_path).ok();
         if let Some(limit) = max_filesize
             && metadata.as_ref().is_some_and(|m| m.len() > limit)
         {
@@ -192,8 +201,8 @@ impl<'a> WalkEntry<'a> {
     }
 
     #[must_use]
-    pub const fn abs_path(&self) -> &Path {
-        self.abs_path
+    pub fn abs_path(&self) -> &Path {
+        self.abs_path.as_path()
     }
 
     #[must_use]
@@ -210,60 +219,79 @@ impl<'a> WalkEntry<'a> {
     pub fn size(&self) -> Option<u64> {
         self.metadata.as_ref().map(Metadata::len)
     }
-
-    #[must_use]
-    pub fn into_rel_path(self) -> PathBuf {
-        self.rel_path
-    }
 }
 
-pub trait WalkRecord: Send + 'static {
+pub trait WalkProjection: Clone + Send + Sync + 'static {
+    type Record: Send + 'static;
+
     const NEEDS_METADATA: bool = false;
 
-    fn rel_path(&self) -> &Path;
-
-    fn from_walk_entry(entry: WalkEntry<'_>) -> Self;
+    fn project(&self, file: &WalkFile) -> Self::Record;
 }
 
-impl WalkRecord for Candidate {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CandidateRecords;
+
+impl WalkProjection for CandidateRecords {
+    type Record = Candidate;
+
     const NEEDS_METADATA: bool = true;
 
-    fn rel_path(&self) -> &Path {
-        self.rel_path()
-    }
-
-    fn from_walk_entry(entry: WalkEntry<'_>) -> Self {
-        let size = entry.size();
-        let depth = Some(entry.depth());
-        let abs_path = entry.abs_path().to_path_buf();
-        Self::with_metadata(entry.into_rel_path(), abs_path, size, depth)
+    fn project(&self, file: &WalkFile) -> Self::Record {
+        Candidate::with_metadata(
+            file.rel_path().clone(),
+            file.abs_path().to_path_buf(),
+            file.size(),
+            Some(file.depth()),
+        )
     }
 }
 
-impl WalkRecord for PathBuf {
-    fn rel_path(&self) -> &Path {
-        self
-    }
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RelativePaths;
 
-    fn from_walk_entry(entry: WalkEntry<'_>) -> Self {
-        entry.into_rel_path()
+impl WalkProjection for RelativePaths {
+    type Record = PathBuf;
+
+    fn project(&self, file: &WalkFile) -> Self::Record {
+        file.rel_path().clone()
     }
 }
 
-struct FileWalkRun<'a, T> {
+struct WalkOutput<T> {
+    rel_path: PathBuf,
+    record: T,
+}
+
+impl<T> WalkOutput<T> {
+    fn new(file: &WalkFile, record: T) -> Self {
+        Self {
+            rel_path: file.rel_path().clone(),
+            record,
+        }
+    }
+
+    fn into_record(self) -> T {
+        self.record
+    }
+}
+
+struct FileWalkRun<'a, P: WalkProjection> {
     root: PathBuf,
     filter_root: &'a Path,
     config: &'a FileWalk<'a>,
+    projection: P,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated: Arc<Mutex<Vec<T>>>,
+    consolidated: Arc<Mutex<Vec<WalkOutput<P::Record>>>>,
 }
 
-impl<'a, T: WalkRecord> FileWalkRun<'a, T> {
-    fn new(root: &Path, filter_root: &'a Path, config: &'a FileWalk<'a>) -> Self {
+impl<'a, P: WalkProjection> FileWalkRun<'a, P> {
+    fn new(root: &Path, filter_root: &'a Path, config: &'a FileWalk<'a>, projection: P) -> Self {
         Self {
             root: root.to_path_buf(),
             filter_root,
             config,
+            projection,
             walk_error: Arc::new(Mutex::new(None)),
             consolidated: Arc::new(Mutex::new(Vec::new())),
         }
@@ -288,7 +316,7 @@ impl<'a, T: WalkRecord> FileWalkRun<'a, T> {
         builder
     }
 
-    fn run(&mut self) -> crate::Result<Vec<T>> {
+    fn run(&mut self) -> crate::Result<Vec<WalkOutput<P::Record>>> {
         self.walk_builder().build_parallel().visit(self);
 
         {
@@ -304,12 +332,13 @@ impl<'a, T: WalkRecord> FileWalkRun<'a, T> {
     }
 }
 
-impl<'a, T: WalkRecord> ignore::ParallelVisitorBuilder<'a> for FileWalkRun<'_, T> {
+impl<'a, P: WalkProjection> ignore::ParallelVisitorBuilder<'a> for FileWalkRun<'_, P> {
     fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
-        Box::new(FileCollector::<T> {
+        Box::new(FileCollector::<P> {
             filter_root: self.filter_root.to_path_buf(),
             excludes: self.config.excludes.to_vec(),
             max_filesize: self.config.max_filesize,
+            projection: self.projection.clone(),
             thread_items: Vec::new(),
             walk_error: Arc::clone(&self.walk_error),
             consolidated: Arc::clone(&self.consolidated),
@@ -317,16 +346,17 @@ impl<'a, T: WalkRecord> ignore::ParallelVisitorBuilder<'a> for FileWalkRun<'_, T
     }
 }
 
-struct FileCollector<T> {
+struct FileCollector<P: WalkProjection> {
     filter_root: PathBuf,
     excludes: Vec<PathBuf>,
     max_filesize: Option<u64>,
-    thread_items: Vec<T>,
+    projection: P,
+    thread_items: Vec<WalkOutput<P::Record>>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated: Arc<Mutex<Vec<T>>>,
+    consolidated: Arc<Mutex<Vec<WalkOutput<P::Record>>>>,
 }
 
-impl<T> Drop for FileCollector<T> {
+impl<P: WalkProjection> Drop for FileCollector<P> {
     fn drop(&mut self) {
         if self.thread_items.is_empty() {
             return;
@@ -336,7 +366,7 @@ impl<T> Drop for FileCollector<T> {
     }
 }
 
-impl<T: WalkRecord> ignore::ParallelVisitor for FileCollector<T> {
+impl<P: WalkProjection> ignore::ParallelVisitor for FileCollector<P> {
     fn visit(&mut self, entry: Result<DirEntry, IgnoreError>) -> WalkState {
         let entry = match entry {
             Ok(entry) => entry,
@@ -366,7 +396,7 @@ impl<T: WalkRecord> ignore::ParallelVisitor for FileCollector<T> {
             return WalkState::Continue;
         }
 
-        let metadata = if self.max_filesize.is_some() || T::NEEDS_METADATA {
+        let metadata = if self.max_filesize.is_some() || P::NEEDS_METADATA {
             entry.metadata().ok()
         } else {
             None
@@ -376,17 +406,19 @@ impl<T: WalkRecord> ignore::ParallelVisitor for FileCollector<T> {
         {
             return WalkState::Continue;
         }
-        self.thread_items.push(T::from_walk_entry(WalkEntry {
+        let file = WalkFile {
             rel_path,
-            abs_path,
+            abs_path: abs_path.to_path_buf(),
             depth: entry.depth().saturating_sub(1),
             metadata,
-        }));
+        };
+        self.thread_items
+            .push(WalkOutput::new(&file, self.projection.project(&file)));
         WalkState::Continue
     }
 }
 
-impl<T> FileCollector<T> {
+impl<P: WalkProjection> FileCollector<P> {
     fn is_excluded(&self, rel_path: &Path) -> bool {
         self.excludes
             .iter()
@@ -396,7 +428,7 @@ impl<T> FileCollector<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use tempfile::TempDir;
 
@@ -415,18 +447,18 @@ mod tests {
         size: Option<u64>,
     }
 
-    impl WalkRecord for WalkSummary {
+    #[derive(Clone, Copy)]
+    struct WalkSummaries;
+
+    impl WalkProjection for WalkSummaries {
+        type Record = WalkSummary;
+
         const NEEDS_METADATA: bool = true;
 
-        fn rel_path(&self) -> &Path {
-            &self.path
-        }
-
-        fn from_walk_entry(entry: WalkEntry<'_>) -> Self {
-            let size = entry.size();
-            Self {
-                path: entry.into_rel_path(),
-                size,
+        fn project(&self, file: &WalkFile) -> Self::Record {
+            WalkSummary {
+                path: file.rel_path().clone(),
+                size: file.size(),
             }
         }
     }
@@ -438,7 +470,7 @@ mod tests {
 
         let paths = FileWalk::new(tmp.path())
             .visibility(raw_visibility())
-            .collect_records::<PathBuf>()
+            .collect(&RelativePaths)
             .expect("walk");
 
         assert_eq!(paths, vec![PathBuf::from("a.txt")]);
@@ -455,7 +487,7 @@ mod tests {
         let paths = FileWalk::new(tmp.path())
             .scopes(&scopes)
             .visibility(raw_visibility())
-            .collect_records::<PathBuf>()
+            .collect(&RelativePaths)
             .expect("walk");
 
         assert_eq!(paths, vec![PathBuf::from("src/lib.rs")]);
@@ -472,7 +504,7 @@ mod tests {
         let paths = FileWalk::new(tmp.path())
             .excludes(&excludes)
             .visibility(raw_visibility())
-            .collect_records::<PathBuf>()
+            .collect(&RelativePaths)
             .expect("walk");
 
         assert_eq!(paths, vec![PathBuf::from("src.rs")]);
@@ -483,9 +515,9 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         std::fs::write(tmp.path().join("a.txt"), "alpha").expect("write file");
 
-        let records: Vec<WalkSummary> = FileWalk::new(tmp.path())
+        let records = FileWalk::new(tmp.path())
             .visibility(raw_visibility())
-            .collect_records()
+            .collect(&WalkSummaries)
             .expect("walk");
 
         assert_eq!(records.len(), 1);

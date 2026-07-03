@@ -8,7 +8,7 @@ use crate::candidates::{
     CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, IndexFallback,
 };
 use crate::corpus::Candidate;
-use crate::corpus::walk::FileWalk;
+use crate::corpus::walk::{CandidateRecords, FileWalk, RelativePaths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexNarrowing {
@@ -102,7 +102,7 @@ impl<'a> CandidatePlanner<'a> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
             CandidateStrategy::Walk => {
-                FileWalk::from_filter(self.source.filter).collect_records::<Candidate>()?
+                FileWalk::from_filter(self.source.filter).collect(&CandidateRecords)?
             }
             CandidateStrategy::AllIndexed => self.source.indexes.complete_candidates(),
             CandidateStrategy::UseIndex => index_hits,
@@ -141,7 +141,7 @@ impl<'a> CandidatePlanner<'a> {
     }
 
     fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
-        let walked = FileWalk::from_filter(self.source.filter).collect_records::<PathBuf>()?;
+        let walked = FileWalk::from_filter(self.source.filter).collect(&RelativePaths)?;
         let mut seen: HashSet<PathBuf> = index_hits
             .iter()
             .map(|candidate| candidate.rel_path().to_path_buf())

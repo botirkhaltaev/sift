@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::corpus::walk::FileWalk;
 use crate::corpus::walk::LinkTraversal;
+use crate::corpus::walk::{FileWalk, RelativePaths};
 use crate::index::snapshot::ArtifactData;
 use crate::index::{CorpusKind, IndexBuildConfig, IndexDestination, IndexSource};
 
@@ -312,7 +312,7 @@ impl Index {
                 .one_file_system(config.walk.one_file_system)
                 .max_depth(config.walk.max_depth)
                 .max_filesize(config.walk.max_filesize)
-                .collect_records::<std::path::PathBuf>()?;
+                .collect(&RelativePaths)?;
             FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
         } else {
             Self::merge_partial_fingerprints(&self.storage.fingerprints, config.corpus.root, paths)?

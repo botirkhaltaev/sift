@@ -148,7 +148,7 @@ impl Run {
         let session = self.prepare_session(argv, &self.config.search_paths)?;
 
         let mut candidates = FileWalk::from_filter(&session.search_filter)
-            .collect_records::<sift_core::Candidate>()?;
+            .collect(&sift_core::grep::CandidateRecords)?;
         candidates.retain(|candidate| session.search_filter.matches_path(candidate.rel_path()));
         self.config.candidate_order.order(&mut candidates)?;
         let all_paths: Vec<_> = candidates
