@@ -39,7 +39,6 @@ impl Index {
             }
             slices.push(s);
         }
-        slices.sort_unstable_by_key(|slice| slice.len());
         let ids = Self::intersect_sorted_slices(&slices);
         if ids.is_empty() { None } else { Some(ids) }
     }
@@ -66,8 +65,23 @@ impl Index {
         if slices.len() == 1 {
             return Postings::decode_sorted(slices[0]).expect("postings validated at open");
         }
+        if slices.len() == 2 {
+            let (first, second) = if slices[0].len() <= slices[1].len() {
+                (slices[0], slices[1])
+            } else {
+                (slices[1], slices[0])
+            };
+            if first == second {
+                return Postings::decode_sorted(first).expect("postings validated at open");
+            }
+            let ids = Postings::decode_sorted(first).expect("postings validated at open");
+            return Postings::intersect_sorted(&ids, second).expect("postings validated at open");
+        }
         let mut ordered: Vec<&[u8]> = slices.to_vec();
         ordered.sort_unstable_by_key(|slice| slice.len());
+        if ordered[1..].iter().all(|slice| *slice == ordered[0]) {
+            return Postings::decode_sorted(ordered[0]).expect("postings validated at open");
+        }
         let mut cur = Postings::decode_sorted(ordered[0]).expect("postings validated at open");
         for s in &ordered[1..] {
             cur = Postings::intersect_sorted(&cur, s).expect("postings validated at open");
