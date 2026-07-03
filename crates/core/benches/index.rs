@@ -6,13 +6,13 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::fs;
 use std::hint::black_box;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sift_core::candidates::{CandidateFlags, CandidateSpec};
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
-    IndexStore, IndexWalkConfig, Indexes, StoreMeta, WalkMeta,
+    IndexStore, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
 };
 
 mod common;
@@ -190,6 +190,111 @@ fn bench_index_build(c: &mut Criterion) {
             materialize_monorepo_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
             build_index_via_store(&corpus, &idx);
+        });
+    });
+
+    g.finish();
+}
+
+// ─── Update benchmarks ───────────────────────────────────────────────────────
+
+/// Base corpus + opened index reused across incremental-update iterations.
+///
+/// The corpus is materialized once and the index built once (outside `b.iter`),
+/// so each iteration measures only the incremental update: fingerprint diff,
+/// re-reading changed files, cached-gram reuse, posting reassembly, and persist.
+struct UpdateFixture {
+    _temp: tempfile::TempDir,
+    corpus: PathBuf,
+    out_dir: PathBuf,
+    index: NGramIndex,
+}
+
+/// Relative path of a file materialized by `common::materialize_large_corpus`.
+fn corpus_rel_path(i: usize, fanout: usize) -> PathBuf {
+    let c = i % fanout;
+    Path::new("crates")
+        .join(format!("c{c:04}"))
+        .join("src")
+        .join(format!("module_{i}.rs"))
+}
+
+/// Distinct, fixed-size body used to mutate a file so its fingerprint differs
+/// from the built index (size change forces a re-read; content is stable across
+/// iterations so update work is constant).
+fn changed_file_body(i: usize) -> String {
+    format!("// changed {i} beta RESUME ERR_SYS\nfn changed_{i}() {{ let v = {i}; }}\n")
+}
+
+fn build_update_fixture(files: usize, lines_per_file: usize, dir_fanout: usize) -> UpdateFixture {
+    let temp = tempfile::tempdir().unwrap();
+    let corpus = temp.path().join("corpus");
+    common::materialize_large_corpus(&corpus, files, lines_per_file, dir_fanout);
+    let idx = temp.path().join(".sift");
+    let index = common::build_index(&corpus, &idx);
+    let out_dir = temp.path().join(".sift-update");
+    UpdateFixture {
+        _temp: temp,
+        corpus,
+        out_dir,
+        index,
+    }
+}
+
+fn bench_index_update(c: &mut Criterion) {
+    const FILES: usize = 2_000;
+    const LINES: usize = 60;
+    const FANOUT: usize = 64;
+
+    let mut g = c.benchmark_group("index_update");
+
+    g.bench_function("changed_file", |b| {
+        let fx = build_update_fixture(FILES, LINES, FANOUT);
+        let rel = corpus_rel_path(0, FANOUT);
+        fs::write(fx.corpus.join(&rel), changed_file_body(0)).unwrap();
+        let paths = [rel];
+        let config = standard_build_config(&fx.corpus, &[]);
+        b.iter(|| {
+            black_box(fx.index.update(&config, &fx.out_dir, &paths).unwrap());
+        });
+    });
+
+    g.bench_function("added_file", |b| {
+        let fx = build_update_fixture(FILES, LINES, FANOUT);
+        let rel = Path::new("crates")
+            .join("c0000")
+            .join("src")
+            .join("added.rs");
+        fs::write(fx.corpus.join(&rel), changed_file_body(99_999)).unwrap();
+        let paths = [rel];
+        let config = standard_build_config(&fx.corpus, &[]);
+        b.iter(|| {
+            black_box(fx.index.update(&config, &fx.out_dir, &paths).unwrap());
+        });
+    });
+
+    g.bench_function("deleted_file", |b| {
+        let fx = build_update_fixture(FILES, LINES, FANOUT);
+        fs::remove_file(fx.corpus.join(corpus_rel_path(1, FANOUT))).unwrap();
+        // Deletion is detected only by a full rescan (empty `paths`).
+        let config = standard_build_config(&fx.corpus, &[]);
+        b.iter(|| {
+            black_box(fx.index.update(&config, &fx.out_dir, &[]).unwrap());
+        });
+    });
+
+    g.bench_function("many_small_changes", |b| {
+        let fx = build_update_fixture(FILES, LINES, FANOUT);
+        let paths: Vec<PathBuf> = (0..50)
+            .map(|i| {
+                let rel = corpus_rel_path(i, FANOUT);
+                fs::write(fx.corpus.join(&rel), changed_file_body(i)).unwrap();
+                rel
+            })
+            .collect();
+        let config = standard_build_config(&fx.corpus, &[]);
+        b.iter(|| {
+            black_box(fx.index.update(&config, &fx.out_dir, &paths).unwrap());
         });
     });
 
@@ -447,6 +552,6 @@ fn bench_explain(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_index_build, bench_index_open, bench_indexes_open, bench_index_save_reopen, bench_trigram_index_methods, bench_candidates, bench_explain,
+    targets = bench_index_build, bench_index_update, bench_index_open, bench_indexes_open, bench_index_save_reopen, bench_trigram_index_methods, bench_candidates, bench_explain,
 }
 criterion_main!(benches);
