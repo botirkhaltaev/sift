@@ -107,7 +107,7 @@ impl Indexes {
     }
 
     #[must_use]
-    pub(crate) fn indexed_paths(&self) -> IndexedPaths {
+    fn indexed_paths(&self) -> IndexedPaths {
         IndexedPaths::from_indexes(self.snapshot.indexes())
     }
 

@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 
 use super::kinds::Index;
 
-pub(crate) struct IndexedPaths {
+pub(super) struct IndexedPaths {
     paths: HashSet<PathBuf>,
 }
 
 impl IndexedPaths {
-    pub(crate) fn from_indexes(indexes: &[Index]) -> Self {
+    pub(super) fn from_indexes(indexes: &[Index]) -> Self {
         let mut iter = indexes.iter();
         let Some(first) = iter.next() else {
             return Self {
@@ -28,11 +28,11 @@ impl IndexedPaths {
         Self { paths }
     }
 
-    pub(crate) fn contains(&self, path: &Path) -> bool {
+    pub(super) fn contains(&self, path: &Path) -> bool {
         self.paths.contains(path)
     }
 
-    pub(crate) fn into_set(self) -> HashSet<PathBuf> {
+    pub(super) fn into_set(self) -> HashSet<PathBuf> {
         self.paths
     }
 }

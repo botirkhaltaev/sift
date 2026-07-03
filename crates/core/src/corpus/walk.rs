@@ -145,11 +145,10 @@ impl<'a> FileWalk<'a> {
                 .strip_prefix(filter_root)
                 .unwrap_or(&path)
                 .to_path_buf();
-            if !self.is_excluded(&rel_path) {
-                if let Some(entry) = WalkEntry::from_scope_file(rel_path, &path, self.max_filesize)
-                {
-                    out.push(T::from_walk_entry(entry));
-                }
+            if !self.is_excluded(&rel_path)
+                && let Some(entry) = WalkEntry::from_scope_file(rel_path, &path, self.max_filesize)
+            {
+                out.push(T::from_walk_entry(entry));
             }
         } else if path.is_dir() {
             let mut walk = FileWalkRun::<T>::new(&path, filter_root, self);
@@ -424,9 +423,10 @@ mod tests {
         }
 
         fn from_walk_entry(entry: WalkEntry<'_>) -> Self {
+            let size = entry.size();
             Self {
                 path: entry.into_rel_path(),
-                size: entry.size(),
+                size,
             }
         }
     }
