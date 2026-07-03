@@ -101,7 +101,9 @@ impl<'a> CandidatePlanner<'a> {
     ) -> crate::Result<Vec<Candidate>> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
-            CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).collect()?,
+            CandidateStrategy::Walk => {
+                FileWalk::from_filter(self.source.filter).collect_records::<Candidate>()?
+            }
             CandidateStrategy::AllIndexed => self.source.indexes.complete_candidates(),
             CandidateStrategy::UseIndex => index_hits,
             CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_hits)?,
@@ -140,7 +142,7 @@ impl<'a> CandidatePlanner<'a> {
 
     fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
         let indexed_paths = self.source.indexes.indexed_paths();
-        let walked = FileWalk::from_filter(self.source.filter).collect_paths()?;
+        let walked = FileWalk::from_filter(self.source.filter).collect_records::<PathBuf>()?;
         let mut seen: HashSet<PathBuf> = index_hits
             .iter()
             .map(|candidate| candidate.rel_path().to_path_buf())

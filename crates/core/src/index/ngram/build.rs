@@ -180,7 +180,7 @@ impl IndexTables {
                         .one_file_system(config.walk.one_file_system)
                         .max_depth(config.walk.max_depth)
                         .max_filesize(config.walk.max_filesize)
-                        .collect_paths()?
+                        .collect_records::<PathBuf>()?
                 } else {
                     paths.to_vec()
                 };
@@ -414,7 +414,7 @@ mod tests {
         let paths = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect_paths()
+            .collect_records::<PathBuf>()
             .expect("walk corpus");
         assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
         assert!(!paths.iter().any(|p| p.starts_with("skip")));
@@ -443,7 +443,7 @@ mod tests {
         let paths = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect_paths()
+            .collect_records::<PathBuf>()
             .expect("walk corpus");
         assert!(paths.iter().any(|p| p.starts_with("skip")));
         assert!(paths.iter().any(|p| p.starts_with("also_skip")));
@@ -468,7 +468,7 @@ mod tests {
         let indexed = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect_paths()
+            .collect_records::<PathBuf>()
             .expect("walk corpus");
         let filter = CandidateFilter::new(&FilterParity::filter_config(&config), tmp.path())
             .expect("filter");

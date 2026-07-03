@@ -312,7 +312,7 @@ impl Index {
                 .one_file_system(config.walk.one_file_system)
                 .max_depth(config.walk.max_depth)
                 .max_filesize(config.walk.max_filesize)
-                .collect_paths()?;
+                .collect_records::<std::path::PathBuf>()?;
             FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
         } else {
             Self::merge_partial_fingerprints(&self.storage.fingerprints, config.corpus.root, paths)?

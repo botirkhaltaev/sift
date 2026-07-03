@@ -1,3 +1,4 @@
+use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -98,16 +99,12 @@ impl<'a> FileWalk<'a> {
         self
     }
 
-    /// Collect matching files as candidates with cached metadata.
+    /// Collect matching files as caller-selected records.
     ///
     /// # Errors
     ///
     /// Returns an error if the root cannot be canonicalized or a walk fails.
-    pub fn collect(self) -> crate::Result<Vec<Candidate>> {
-        self.collect_items()
-    }
-
-    fn collect_items<T: WalkItem>(self) -> crate::Result<Vec<T>> {
+    pub fn collect_records<T: WalkRecord>(self) -> crate::Result<Vec<T>> {
         let filter_root = self.root.canonicalize()?;
         let mut out: Vec<T> = Vec::new();
         if self.scopes.is_empty() {
@@ -122,22 +119,13 @@ impl<'a> FileWalk<'a> {
         Ok(out)
     }
 
-    /// Collect matching file paths relative to the walk root.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if filesystem discovery fails.
-    pub fn collect_paths(self) -> crate::Result<Vec<PathBuf>> {
-        self.collect_items()
-    }
-
     fn is_excluded(&self, rel: &Path) -> bool {
         self.excludes
             .iter()
             .any(|excluded| !excluded.as_os_str().is_empty() && rel.starts_with(excluded))
     }
 
-    fn collect_scope<T: WalkItem>(
+    fn collect_scope<T: WalkRecord>(
         &self,
         filter_root: &Path,
         scope: &Path,
@@ -158,82 +146,108 @@ impl<'a> FileWalk<'a> {
                 .unwrap_or(&path)
                 .to_path_buf();
             if !self.is_excluded(&rel_path) {
-                out.push(T::from_scope_file(rel_path, path));
+                if let Some(entry) = WalkEntry::from_scope_file(rel_path, &path, self.max_filesize)
+                {
+                    out.push(T::from_walk_entry(entry));
+                }
             }
         } else if path.is_dir() {
             let mut walk = FileWalkRun::<T>::new(&path, filter_root, self);
-            out.extend(walk.collect()?);
+            out.extend(walk.run()?);
         }
         Ok(())
     }
 }
 
-trait WalkItem: Send + 'static {
-    fn rel_path(&self) -> &Path;
-
-    fn from_scope_file(rel_path: PathBuf, abs_path: PathBuf) -> Self;
-
-    fn from_entry(
-        rel_path: PathBuf,
-        abs_path: &Path,
-        entry: &DirEntry,
-        max_filesize: Option<u64>,
-    ) -> Option<Self>
-    where
-        Self: Sized;
+pub struct WalkEntry<'a> {
+    rel_path: PathBuf,
+    abs_path: &'a Path,
+    depth: usize,
+    metadata: Option<Metadata>,
 }
 
-impl WalkItem for Candidate {
-    fn rel_path(&self) -> &Path {
-        self.rel_path()
-    }
-
-    fn from_scope_file(rel_path: PathBuf, abs_path: PathBuf) -> Self {
-        Self::new(rel_path, abs_path)
-    }
-
-    fn from_entry(
+impl<'a> WalkEntry<'a> {
+    fn from_scope_file(
         rel_path: PathBuf,
-        abs_path: &Path,
-        entry: &DirEntry,
+        abs_path: &'a Path,
         max_filesize: Option<u64>,
     ) -> Option<Self> {
-        let metadata = entry.metadata().ok();
+        let metadata = std::fs::metadata(abs_path).ok();
         if let Some(limit) = max_filesize
             && metadata.as_ref().is_some_and(|m| m.len() > limit)
         {
             return None;
         }
-        Some(Self::with_metadata(
+        let depth = rel_path.components().count().saturating_sub(1);
+        Some(Self {
             rel_path,
-            abs_path.to_path_buf(),
-            metadata.map(|m| m.len()),
-            Some(entry.depth().saturating_sub(1)),
-        ))
+            abs_path,
+            depth,
+            metadata,
+        })
+    }
+
+    #[must_use]
+    pub const fn rel_path(&self) -> &PathBuf {
+        &self.rel_path
+    }
+
+    #[must_use]
+    pub const fn abs_path(&self) -> &Path {
+        self.abs_path
+    }
+
+    #[must_use]
+    pub const fn metadata(&self) -> Option<&Metadata> {
+        self.metadata.as_ref()
+    }
+
+    #[must_use]
+    pub const fn depth(&self) -> usize {
+        self.depth
+    }
+
+    #[must_use]
+    pub fn size(&self) -> Option<u64> {
+        self.metadata.as_ref().map(Metadata::len)
+    }
+
+    #[must_use]
+    pub fn into_rel_path(self) -> PathBuf {
+        self.rel_path
     }
 }
 
-impl WalkItem for PathBuf {
+pub trait WalkRecord: Send + 'static {
+    const NEEDS_METADATA: bool = false;
+
+    fn rel_path(&self) -> &Path;
+
+    fn from_walk_entry(entry: WalkEntry<'_>) -> Self;
+}
+
+impl WalkRecord for Candidate {
+    const NEEDS_METADATA: bool = true;
+
+    fn rel_path(&self) -> &Path {
+        self.rel_path()
+    }
+
+    fn from_walk_entry(entry: WalkEntry<'_>) -> Self {
+        let size = entry.size();
+        let depth = Some(entry.depth());
+        let abs_path = entry.abs_path().to_path_buf();
+        Self::with_metadata(entry.into_rel_path(), abs_path, size, depth)
+    }
+}
+
+impl WalkRecord for PathBuf {
     fn rel_path(&self) -> &Path {
         self
     }
 
-    fn from_scope_file(rel_path: PathBuf, _abs_path: PathBuf) -> Self {
-        rel_path
-    }
-
-    fn from_entry(
-        rel_path: PathBuf,
-        _abs_path: &Path,
-        entry: &DirEntry,
-        max_filesize: Option<u64>,
-    ) -> Option<Self> {
-        if let Some(limit) = max_filesize
-            && entry.metadata().ok().is_some_and(|m| m.len() > limit)
-        {
-            return None;
-        }
-        Some(rel_path)
+    fn from_walk_entry(entry: WalkEntry<'_>) -> Self {
+        entry.into_rel_path()
     }
 }
 
@@ -245,7 +259,7 @@ struct FileWalkRun<'a, T> {
     consolidated: Arc<Mutex<Vec<T>>>,
 }
 
-impl<'a, T: WalkItem> FileWalkRun<'a, T> {
+impl<'a, T: WalkRecord> FileWalkRun<'a, T> {
     fn new(root: &Path, filter_root: &'a Path, config: &'a FileWalk<'a>) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -275,7 +289,7 @@ impl<'a, T: WalkItem> FileWalkRun<'a, T> {
         builder
     }
 
-    fn collect(&mut self) -> crate::Result<Vec<T>> {
+    fn run(&mut self) -> crate::Result<Vec<T>> {
         self.walk_builder().build_parallel().visit(self);
 
         {
@@ -291,7 +305,7 @@ impl<'a, T: WalkItem> FileWalkRun<'a, T> {
     }
 }
 
-impl<'a, T: WalkItem> ignore::ParallelVisitorBuilder<'a> for FileWalkRun<'_, T> {
+impl<'a, T: WalkRecord> ignore::ParallelVisitorBuilder<'a> for FileWalkRun<'_, T> {
     fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
         Box::new(FileCollector::<T> {
             filter_root: self.filter_root.to_path_buf(),
@@ -323,7 +337,7 @@ impl<T> Drop for FileCollector<T> {
     }
 }
 
-impl<T: WalkItem> ignore::ParallelVisitor for FileCollector<T> {
+impl<T: WalkRecord> ignore::ParallelVisitor for FileCollector<T> {
     fn visit(&mut self, entry: Result<DirEntry, IgnoreError>) -> WalkState {
         let entry = match entry {
             Ok(entry) => entry,
@@ -353,9 +367,22 @@ impl<T: WalkItem> ignore::ParallelVisitor for FileCollector<T> {
             return WalkState::Continue;
         }
 
-        if let Some(item) = T::from_entry(rel_path, abs_path, &entry, self.max_filesize) {
-            self.thread_items.push(item);
+        let metadata = if self.max_filesize.is_some() || T::NEEDS_METADATA {
+            entry.metadata().ok()
+        } else {
+            None
+        };
+        if let Some(limit) = self.max_filesize
+            && metadata.as_ref().is_some_and(|m| m.len() > limit)
+        {
+            return WalkState::Continue;
         }
+        self.thread_items.push(T::from_walk_entry(WalkEntry {
+            rel_path,
+            abs_path,
+            depth: entry.depth().saturating_sub(1),
+            metadata,
+        }));
         WalkState::Continue
     }
 }
@@ -370,7 +397,7 @@ impl<T> FileCollector<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use tempfile::TempDir;
 
@@ -384,6 +411,26 @@ mod tests {
         }
     }
 
+    struct WalkSummary {
+        path: PathBuf,
+        size: Option<u64>,
+    }
+
+    impl WalkRecord for WalkSummary {
+        const NEEDS_METADATA: bool = true;
+
+        fn rel_path(&self) -> &Path {
+            &self.path
+        }
+
+        fn from_walk_entry(entry: WalkEntry<'_>) -> Self {
+            Self {
+                path: entry.into_rel_path(),
+                size: entry.size(),
+            }
+        }
+    }
+
     #[test]
     fn empty_scopes_walk_root() {
         let tmp = TempDir::new().expect("tempdir");
@@ -391,7 +438,7 @@ mod tests {
 
         let paths = FileWalk::new(tmp.path())
             .visibility(raw_visibility())
-            .collect_paths()
+            .collect_records::<PathBuf>()
             .expect("walk");
 
         assert_eq!(paths, vec![PathBuf::from("a.txt")]);
@@ -408,7 +455,7 @@ mod tests {
         let paths = FileWalk::new(tmp.path())
             .scopes(&scopes)
             .visibility(raw_visibility())
-            .collect_paths()
+            .collect_records::<PathBuf>()
             .expect("walk");
 
         assert_eq!(paths, vec![PathBuf::from("src/lib.rs")]);
@@ -425,9 +472,24 @@ mod tests {
         let paths = FileWalk::new(tmp.path())
             .excludes(&excludes)
             .visibility(raw_visibility())
-            .collect_paths()
+            .collect_records::<PathBuf>()
             .expect("walk");
 
         assert_eq!(paths, vec![PathBuf::from("src.rs")]);
+    }
+
+    #[test]
+    fn collects_custom_walk_records() {
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join("a.txt"), "alpha").expect("write file");
+
+        let records: Vec<WalkSummary> = FileWalk::new(tmp.path())
+            .visibility(raw_visibility())
+            .collect_records()
+            .expect("walk");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].path, PathBuf::from("a.txt"));
+        assert_eq!(records[0].size, Some(5));
     }
 }
