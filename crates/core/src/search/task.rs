@@ -75,7 +75,7 @@ impl<'a> SearchTask<'a> {
         }
     }
 
-    fn search_with_matcher<M: GrepMatcherTrait + Clone>(
+    fn search_with_matcher<M: GrepMatcherTrait>(
         &self,
         grep: &mut RegexSearcher,
         grep_matcher: &M,
@@ -85,7 +85,7 @@ impl<'a> SearchTask<'a> {
         let mut sink = MatchSink {
             path: display_path.clone(),
             origin,
-            matcher: grep_matcher.clone(),
+            matcher: grep_matcher,
             replacement: self
                 .options
                 .replace
@@ -187,10 +187,10 @@ impl From<&Input<'_>> for InputOrigin {
     }
 }
 
-struct MatchSink<M> {
+struct MatchSink<'a, M> {
     path: PathBuf,
     origin: InputOrigin,
-    matcher: M,
+    matcher: &'a M,
     replacement: Option<Vec<u8>>,
     match_emission: MatchEmission,
     event_collection: EventCollection,
@@ -202,7 +202,7 @@ struct MatchSink<M> {
     events: Vec<SearchEvent>,
 }
 
-impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
+impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
     type Error = io::Error;
 
     fn begin(&mut self, _searcher: &RegexSearcher) -> Result<bool, Self::Error> {
@@ -223,7 +223,7 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<M> {
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
         let replacement = self.replacement.as_deref().and_then(|replacement| {
-            Replacement::expand(&self.matcher, line_bytes, replacement).ok()
+            Replacement::expand(self.matcher, line_bytes, replacement).ok()
         });
         self.line_matches += 1;
         let mut ranges = Vec::new();
