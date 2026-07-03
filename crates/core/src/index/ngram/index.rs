@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::candidates::CandidateSpec;
-use crate::index::{CorpusKind, FileId};
+use crate::index::{CorpusKind, FileId, IndexCandidateResult};
 
 use super::config::Config;
 use super::files::FileFingerprint;
@@ -69,14 +69,18 @@ impl Index {
         self.storage.corpus_kind
     }
 
-    /// Produce narrowed candidate files for the query.
-    /// Returns `None` if the query can't be narrowed (full scan required).
+    /// Produce candidate information for the query.
     #[must_use]
-    pub fn candidates(&self, query: &CandidateSpec<'_>) -> Option<Vec<crate::Candidate>> {
-        let arms = Config::new(self.width).extract_literal_arms(query)?;
-        Some(
-            self.candidate_file_ids(&arms)
-                .into_iter()
+    pub fn candidates(&self, query: &CandidateSpec<'_>) -> IndexCandidateResult {
+        let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
+            return IndexCandidateResult::Unavailable;
+        };
+        let ids = self.candidate_file_ids(&arms);
+        if ids.len() == self.storage.fingerprints.len() && self.storage.fingerprints.len() > 1 {
+            return IndexCandidateResult::All;
+        }
+        IndexCandidateResult::Candidates(
+            ids.into_iter()
                 .filter_map(|id| {
                     let fid = FileId::new(usize::try_from(id).ok()?);
                     let fp = self.storage.fingerprints.get(fid.get())?;
