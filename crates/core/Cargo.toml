@@ -50,6 +50,10 @@ harness = false
 name = "grep"
 harness = false
 
+[[bench]]
+name = "candidates"
+harness = false
+
 [[test]]
 name = "index"
 path = "tests/index/main.rs"
