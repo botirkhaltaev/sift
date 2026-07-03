@@ -140,16 +140,22 @@ impl<'a> CandidatePlanner<'a> {
 
     fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
         let indexed_paths = self.source.indexes.indexed_paths();
-        let walked = FileWalk::from_filter(self.source.filter).collect()?;
+        let walked = FileWalk::from_filter(self.source.filter).collect_paths()?;
         let mut seen: HashSet<PathBuf> = index_hits
             .iter()
             .map(|candidate| candidate.rel_path().to_path_buf())
             .collect();
-        for candidate in walked {
-            if indexed_paths.contains(candidate.rel_path()) {
+        for rel_path in walked {
+            if indexed_paths.contains(&rel_path) {
                 continue;
             }
-            if seen.insert(candidate.rel_path().to_path_buf()) {
+            if seen.insert(rel_path.clone()) {
+                let abs_path = self.source.filter.root().join(&rel_path);
+                let size = std::fs::metadata(&abs_path)
+                    .ok()
+                    .map(|metadata| metadata.len());
+                let depth = Some(rel_path.components().count().saturating_sub(1));
+                let candidate = Candidate::with_metadata(rel_path, abs_path, size, depth);
                 index_hits.push(candidate);
             }
         }
