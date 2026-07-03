@@ -176,3 +176,22 @@ Clap parses `*Decl` flag groups; **`Argv` resolves effective runtime values**
 - Add dependencies without justification.
 - Commit secrets, `.env` files, or editor-specific directories.
 - Use `#[allow]` attributes.
+
+## Cursor Cloud specific instructions
+
+- **Toolchain:** the workspace is `edition = "2024"`, so it needs Rust ≥ 1.85. The
+  cloud VM's default was pinned to an older `1.83.0`; the environment now defaults
+  to `stable` (`rustup default stable`). If a build fails with
+  `feature edition2024 is required`, run `rustup default stable`.
+- **Build / lint / test:** use the commands in `README.md` / the "Build & Test"
+  section above (`cargo build --workspace`, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-features`). No services or external deps needed.
+- **Running the CLI:** the dev binary is `target/debug/sift` (bin name `sift`,
+  crate `sift-grep`). You must build an index before searching, and search paths
+  must sit under the indexed corpus root.
+  - `index build` is async via a background daemon by default; pass `--wait` to
+    build synchronously, or set `SIFT_NO_DAEMON=1` to disable the daemon.
+  - Point `--sift-dir` at a writable index dir, e.g.:
+    `target/debug/sift --sift-dir /tmp/demo/.sift index build --wait /tmp/demo`
+    then `target/debug/sift --sift-dir /tmp/demo/.sift "pattern" /tmp/demo`.
