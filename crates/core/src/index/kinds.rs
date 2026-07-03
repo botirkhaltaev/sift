@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::config::{CorpusKind, IndexBuildConfig};
 use super::ngram;
-use super::{IndexDestination, IndexSource};
+use super::{IndexDestination, IndexSource, IndexedCorpus};
 
 /// How an index query plan resolves candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -21,6 +21,41 @@ pub enum PlanMode {
 pub struct QueryPlanOutput {
     pub pattern: String,
     pub mode: PlanMode,
+}
+
+#[derive(Debug)]
+pub enum CandidatePlan {
+    Unavailable,
+    AllIndexed {
+        coverage: IndexedCorpus,
+    },
+    Narrowed {
+        candidates: Vec<crate::Candidate>,
+        coverage: IndexedCorpus,
+    },
+}
+
+impl CandidatePlan {
+    #[must_use]
+    pub const fn is_unavailable(&self) -> bool {
+        matches!(self, Self::Unavailable)
+    }
+
+    #[must_use]
+    pub const fn coverage(&self) -> Option<&IndexedCorpus> {
+        match self {
+            Self::Unavailable => None,
+            Self::AllIndexed { coverage } | Self::Narrowed { coverage, .. } => Some(coverage),
+        }
+    }
+
+    #[must_use]
+    pub fn into_candidates(self) -> Option<Vec<crate::Candidate>> {
+        match self {
+            Self::Narrowed { candidates, .. } => Some(candidates),
+            Self::Unavailable | Self::AllIndexed { .. } => None,
+        }
+    }
 }
 
 /// Configured index identity persisted in metadata and snapshot manifests.
@@ -171,12 +206,9 @@ impl Index {
     }
 
     #[must_use]
-    pub fn candidates(
-        &self,
-        query: &crate::candidates::CandidateSpec<'_>,
-    ) -> Option<Vec<crate::Candidate>> {
+    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
         match self {
-            Self::NGram(index) => index.candidates(query),
+            Self::NGram(index) => index.plan(query),
         }
     }
 

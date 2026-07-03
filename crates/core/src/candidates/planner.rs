@@ -8,7 +8,8 @@ use crate::candidates::{
     CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, IndexFallback,
 };
 use crate::corpus::Candidate;
-use crate::corpus::walk::{CandidateRecords, FileWalk, RelativePaths};
+use crate::corpus::walk::{FileWalk, WalkMetadata};
+use crate::index::CandidatePlan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexNarrowing {
@@ -82,31 +83,37 @@ impl<'a> CandidatePlanner<'a> {
     pub fn resolve(self) -> crate::Result<Vec<Candidate>> {
         let index_narrowing = self.spec.index_narrowing();
         let resolved = self.request.resolve(index_narrowing);
-        let index_hits = self.source.indexes.candidates(&self.spec);
+        let index_plan = self.source.indexes.plan(&self.spec);
         let strategy = plan(PlanInput {
             scope: resolved.scope,
             index_narrowing,
-            index_status: self.index_status(index_hits.as_ref()),
+            index_status: self.index_status(&index_plan),
             snapshot_status: self.snapshot_status(),
             fallback: resolved.fallback,
         });
-        self.execute(strategy, index_hits.unwrap_or_default(), resolved.order)
+        self.execute(strategy, index_plan, resolved.order)
     }
 
     fn execute(
         self,
         strategy: CandidateStrategy,
-        index_hits: Vec<Candidate>,
+        index_plan: CandidatePlan,
         order: crate::corpus::CandidateOrder,
     ) -> crate::Result<Vec<Candidate>> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
-            CandidateStrategy::Walk => {
-                FileWalk::from_filter(self.source.filter).collect(&CandidateRecords)?
-            }
+            CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter)
+                .metadata(WalkMetadata::Read)
+                .files()?
+                .into_iter()
+                .map(crate::corpus::walk::WalkFile::into_candidate)
+                .collect(),
             CandidateStrategy::AllIndexed => self.source.indexes.complete_candidates(),
-            CandidateStrategy::UseIndex => index_hits,
-            CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_hits)?,
+            CandidateStrategy::UseIndex => match index_plan {
+                CandidatePlan::Narrowed { candidates, .. } => candidates,
+                CandidatePlan::AllIndexed { .. } | CandidatePlan::Unavailable => Vec::new(),
+            },
+            CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_plan)?,
         };
         Ok(CandidateSet::new(raw)
             .retain_matches(self.source.filter)
@@ -114,13 +121,16 @@ impl<'a> CandidatePlanner<'a> {
             .into_vec())
     }
 
-    const fn index_status(&self, index_hits: Option<&Vec<Candidate>>) -> IndexStatus {
+    const fn index_status(&self, index_plan: &CandidatePlan) -> IndexStatus {
         if self.source.indexes.is_empty() {
             IndexStatus::Empty
-        } else if index_hits.is_none() {
-            IndexStatus::NoCandidateIndex
         } else {
-            IndexStatus::CanNarrow
+            match index_plan {
+                CandidatePlan::Unavailable => IndexStatus::NoCandidateIndex,
+                CandidatePlan::AllIndexed { .. } | CandidatePlan::Narrowed { .. } => {
+                    IndexStatus::CanNarrow
+                }
+            }
         }
     }
 
@@ -140,13 +150,25 @@ impl<'a> CandidatePlanner<'a> {
         }
     }
 
-    fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
-        let walked = FileWalk::from_filter(self.source.filter).collect(&RelativePaths)?;
-        let mut seen: HashSet<PathBuf> = index_hits
+    fn merge_unindexed(&self, index_plan: CandidatePlan) -> crate::Result<Vec<Candidate>> {
+        let CandidatePlan::Narrowed { mut candidates, .. } = index_plan else {
+            return Ok(FileWalk::from_filter(self.source.filter)
+                .metadata(WalkMetadata::Read)
+                .files()?
+                .into_iter()
+                .map(crate::corpus::walk::WalkFile::into_candidate)
+                .collect());
+        };
+
+        let walked = self
+            .source
+            .indexes
+            .unindexed_walk_paths(self.source.filter)?;
+        let mut seen: HashSet<PathBuf> = candidates
             .iter()
             .map(|candidate| candidate.rel_path().to_path_buf())
             .collect();
-        for rel_path in self.source.indexes.unindexed_hits(walked) {
+        for rel_path in walked {
             if seen.insert(rel_path.clone()) {
                 let abs_path = self.source.filter.root().join(&rel_path);
                 let size = std::fs::metadata(&abs_path)
@@ -154,10 +176,10 @@ impl<'a> CandidatePlanner<'a> {
                     .map(|metadata| metadata.len());
                 let depth = Some(rel_path.components().count().saturating_sub(1));
                 let candidate = Candidate::with_metadata(rel_path, abs_path, size, depth);
-                index_hits.push(candidate);
+                candidates.push(candidate);
             }
         }
-        Ok(index_hits)
+        Ok(candidates)
     }
 }
 

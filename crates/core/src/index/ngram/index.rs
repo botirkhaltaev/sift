@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::candidates::CandidateSpec;
-use crate::index::{CorpusKind, FileId};
+use crate::index::{CandidatePlan, CorpusKind, FileId, IndexedCorpus};
 
 use super::config::Config;
 use super::files::FileFingerprint;
@@ -31,10 +31,34 @@ pub struct Index {
 pub struct Storage {
     pub(crate) root: PathBuf,
     pub(crate) fingerprints: Vec<FileFingerprint>,
+    pub(crate) indexed_corpus: IndexedCorpus,
     pub(crate) gram_sets: GramSets,
     pub(crate) lexicon: Lexicon,
     pub(crate) postings: Postings,
     pub(crate) corpus_kind: CorpusKind,
+}
+
+impl Storage {
+    pub(crate) fn new(
+        root: PathBuf,
+        fingerprints: Vec<FileFingerprint>,
+        gram_sets: GramSets,
+        lexicon: Lexicon,
+        postings: Postings,
+        corpus_kind: CorpusKind,
+    ) -> Self {
+        let indexed_corpus =
+            IndexedCorpus::from_paths(fingerprints.iter().map(|fp| fp.path.clone()));
+        Self {
+            root,
+            fingerprints,
+            indexed_corpus,
+            gram_sets,
+            lexicon,
+            postings,
+            corpus_kind,
+        }
+    }
 }
 
 impl Index {
@@ -69,26 +93,21 @@ impl Index {
         self.storage.corpus_kind
     }
 
-    /// Produce narrowed candidate files for the query.
-    /// Returns `None` if the query can't be narrowed (full scan required).
+    /// Plan candidate coverage for the query.
     #[must_use]
-    pub fn candidates(&self, query: &CandidateSpec<'_>) -> Option<Vec<crate::Candidate>> {
-        let arms = Config::new(self.width).extract_literal_arms(query)?;
-        Some(
-            self.candidate_file_ids(&arms)
-                .into_iter()
-                .filter_map(|id| {
-                    let fid = FileId::new(usize::try_from(id).ok()?);
-                    let fp = self.storage.fingerprints.get(fid.get())?;
-                    Some(crate::Candidate::with_metadata(
-                        fp.path.clone(),
-                        self.storage.root.join(&fp.path),
-                        Some(fp.size),
-                        None,
-                    ))
-                })
-                .collect(),
-        )
+    pub fn plan(&self, query: &CandidateSpec<'_>) -> CandidatePlan {
+        let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
+            return CandidatePlan::Unavailable;
+        };
+        let ids = self.candidate_file_ids(&arms);
+        let coverage = self.indexed_corpus();
+        if ids.len() == self.storage.fingerprints.len() && self.storage.fingerprints.len() > 1 {
+            return CandidatePlan::AllIndexed { coverage };
+        }
+        CandidatePlan::Narrowed {
+            candidates: self.materialize_file_ids(ids),
+            coverage,
+        }
     }
 
     /// Returns an explanation of how a query would be handled.
@@ -122,10 +141,26 @@ impl Index {
 
     #[must_use]
     pub(crate) fn indexed_rel_paths(&self) -> std::collections::HashSet<PathBuf> {
-        self.storage
-            .fingerprints
-            .iter()
-            .map(|fp| fp.path.clone())
+        self.storage.indexed_corpus.clone().into_set()
+    }
+
+    #[must_use]
+    pub(crate) fn indexed_corpus(&self) -> IndexedCorpus {
+        self.storage.indexed_corpus.clone()
+    }
+
+    fn materialize_file_ids(&self, ids: Vec<u32>) -> Vec<crate::Candidate> {
+        ids.into_iter()
+            .filter_map(|id| {
+                let fid = FileId::new(usize::try_from(id).ok()?);
+                let fp = self.storage.fingerprints.get(fid.get())?;
+                Some(crate::Candidate::with_metadata(
+                    fp.path.clone(),
+                    self.storage.root.join(&fp.path),
+                    Some(fp.size),
+                    None,
+                ))
+            })
             .collect()
     }
 

@@ -10,7 +10,7 @@ use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
 
 use crate::corpus::walk::LinkTraversal;
-use crate::corpus::walk::{FileWalk, RelativePaths};
+use crate::corpus::walk::{FileWalk, WalkFile};
 use crate::index::{CorpusKind, IndexBuildConfig};
 
 /// Collected index data ready for persistence.
@@ -180,7 +180,10 @@ impl IndexTables {
                         .one_file_system(config.walk.one_file_system)
                         .max_depth(config.walk.max_depth)
                         .max_filesize(config.walk.max_filesize)
-                        .collect(&RelativePaths)?
+                        .files()?
+                        .into_iter()
+                        .map(WalkFile::into_rel_path)
+                        .collect()
                 } else {
                     paths.to_vec()
                 };
@@ -414,8 +417,9 @@ mod tests {
         let paths = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect(&RelativePaths)
+            .files()
             .expect("walk corpus");
+        let paths: Vec<_> = paths.into_iter().map(WalkFile::into_rel_path).collect();
         assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
         assert!(!paths.iter().any(|p| p.starts_with("skip")));
         assert!(!paths.iter().any(|p| p.starts_with("also_skip")));
@@ -443,8 +447,9 @@ mod tests {
         let paths = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect(&RelativePaths)
+            .files()
             .expect("walk corpus");
+        let paths: Vec<_> = paths.into_iter().map(WalkFile::into_rel_path).collect();
         assert!(paths.iter().any(|p| p.starts_with("skip")));
         assert!(paths.iter().any(|p| p.starts_with("also_skip")));
     }
@@ -468,8 +473,9 @@ mod tests {
         let indexed = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect(&RelativePaths)
+            .files()
             .expect("walk corpus");
+        let indexed: Vec<_> = indexed.into_iter().map(WalkFile::into_rel_path).collect();
         let filter = CandidateFilter::new(&FilterParity::filter_config(&config), tmp.path())
             .expect("filter");
 

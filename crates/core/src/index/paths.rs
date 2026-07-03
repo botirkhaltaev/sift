@@ -1,18 +1,29 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::corpus::walk::WalkSelector;
 
 use super::kinds::Index;
 
-pub(super) struct IndexedPaths {
-    paths: HashSet<PathBuf>,
+#[derive(Debug, Clone)]
+pub struct IndexedCorpus {
+    paths: Arc<HashSet<PathBuf>>,
 }
 
-impl IndexedPaths {
+impl IndexedCorpus {
+    #[must_use]
+    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            paths: Arc::new(paths.into_iter().collect()),
+        }
+    }
+
     pub(super) fn from_indexes(indexes: &[Index]) -> Self {
         let mut iter = indexes.iter();
         let Some(first) = iter.next() else {
             return Self {
-                paths: HashSet::new(),
+                paths: Arc::new(HashSet::new()),
             };
         };
 
@@ -25,14 +36,37 @@ impl IndexedPaths {
             }
         }
 
-        Self { paths }
+        Self {
+            paths: Arc::new(paths),
+        }
     }
 
-    pub(super) fn contains(&self, path: &Path) -> bool {
+    #[must_use]
+    pub fn contains(&self, path: &Path) -> bool {
         self.paths.contains(path)
     }
 
-    pub(super) fn into_set(self) -> HashSet<PathBuf> {
-        self.paths
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.paths.iter().map(PathBuf::as_path)
+    }
+
+    #[must_use]
+    pub fn into_set(self) -> HashSet<PathBuf> {
+        Arc::try_unwrap(self.paths).unwrap_or_else(|paths| (*paths).clone())
+    }
+
+    pub(super) const fn unindexed_files(&self) -> UnindexedFiles<'_> {
+        UnindexedFiles { indexed: self }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct UnindexedFiles<'a> {
+    indexed: &'a IndexedCorpus,
+}
+
+impl WalkSelector for UnindexedFiles<'_> {
+    fn includes(&self, rel_path: &Path) -> bool {
+        !self.indexed.contains(rel_path)
     }
 }
