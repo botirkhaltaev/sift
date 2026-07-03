@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 
 use super::config::CorpusKind;
 use super::error::IndexError;
-use super::kinds::Index;
-use super::paths::IndexedPaths;
+use super::kinds::{CandidatePlan, Index};
+use super::paths::IndexedCorpus;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
+use crate::corpus::filter::CandidateFilter;
+use crate::corpus::walk::{FileWalk, WalkFile};
 
 /// Registry of opened indexes read from a snapshot store.
 ///
@@ -83,20 +85,14 @@ impl Indexes {
         self.snapshot.id()
     }
 
-    /// Produce narrowed candidates from all indexes that can narrow the query.
-    ///
-    /// Returns `None` if no index could narrow. When at least one index
-    /// narrows, all narrowed candidate sets are intersected.
+    /// Plan candidates from all indexes that can participate in the query.
     #[must_use]
-    pub fn candidates(
-        &self,
-        query: &crate::candidates::CandidateSpec<'_>,
-    ) -> Option<Vec<crate::Candidate>> {
+    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
         let indexes = self.snapshot.indexes();
         match indexes.len() {
-            0 => None,
-            1 => indexes[0].candidates(query),
-            _ => Self::candidates_multi(indexes, query),
+            0 => CandidatePlan::Unavailable,
+            1 => indexes[0].plan(query),
+            _ => Self::plan_multi(indexes, query),
         }
     }
 
@@ -107,8 +103,8 @@ impl Indexes {
     }
 
     #[must_use]
-    fn indexed_paths(&self) -> IndexedPaths {
-        IndexedPaths::from_indexes(self.snapshot.indexes())
+    fn indexed_paths(&self) -> IndexedCorpus {
+        IndexedCorpus::from_indexes(self.snapshot.indexes())
     }
 
     /// Corpus-relative search hits not yet present in the current snapshot.
@@ -118,6 +114,19 @@ impl Indexes {
         hits.into_iter()
             .filter(|path| !indexed.contains(path))
             .collect()
+    }
+
+    /// Corpus-relative paths from `filter` that are not present in the current snapshot.
+    pub(crate) fn unindexed_walk_paths(
+        &self,
+        filter: &CandidateFilter,
+    ) -> crate::Result<Vec<PathBuf>> {
+        let indexed = self.indexed_paths();
+        Ok(FileWalk::from_filter(filter)
+            .files_matching(&indexed.unindexed_files())?
+            .into_iter()
+            .map(WalkFile::into_rel_path)
+            .collect())
     }
 
     /// Return all indexed candidates across all registered indexes.
@@ -147,25 +156,32 @@ impl Indexes {
     }
 
     /// Intersect candidates from multiple indexes.
-    fn candidates_multi(
+    fn plan_multi(
         indexes: &[Index],
         query: &crate::candidates::CandidateSpec<'_>,
-    ) -> Option<Vec<crate::Candidate>> {
+    ) -> CandidatePlan {
         use rayon::prelude::*;
 
-        let sets: Vec<Vec<crate::Candidate>> = indexes
+        let plans: Vec<CandidatePlan> = indexes
             .par_iter()
-            .filter_map(|idx| idx.candidates(query))
+            .map(|idx| idx.plan(query))
+            .filter(|plan| !plan.is_unavailable())
             .collect();
 
-        if sets.is_empty() {
-            return None;
+        if plans.is_empty() {
+            return CandidatePlan::Unavailable;
         }
 
-        let mut result = sets.into_iter();
-        let mut current = result.next()?;
+        let coverage = IndexedCorpus::from_indexes(indexes);
+        let mut narrowed = plans.into_iter().filter_map(|plan| match plan {
+            CandidatePlan::Narrowed { candidates, .. } => Some(candidates),
+            CandidatePlan::AllIndexed { .. } | CandidatePlan::Unavailable => None,
+        });
+        let Some(mut current) = narrowed.next() else {
+            return CandidatePlan::AllIndexed { coverage };
+        };
 
-        for next in result {
+        for next in narrowed {
             let lookup: HashSet<&Path> = next.iter().map(crate::Candidate::rel_path).collect();
             current.retain(|c| lookup.contains(c.rel_path()));
             if current.is_empty() {
@@ -173,7 +189,10 @@ impl Indexes {
             }
         }
 
-        Some(current)
+        CandidatePlan::Narrowed {
+            candidates: current,
+            coverage,
+        }
     }
 
     #[must_use]

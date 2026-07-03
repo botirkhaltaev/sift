@@ -18,7 +18,7 @@ fn literal_query_returns_indexed_candidates() {
         patterns: &["beta".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let candidates = index.candidates(&spec).expect("candidates");
+    let candidates = index.plan(&spec).into_candidates().expect("candidates");
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -39,7 +39,8 @@ fn literal_candidates_narrow_to_expected_file() {
         flags: CandidateFlags::empty(),
     };
     let candidates = open_indexes(&sift_dir)
-        .candidates(&spec)
+        .plan(&spec)
+        .into_candidates()
         .expect("candidates");
     assert!(!candidates.is_empty());
     assert!(

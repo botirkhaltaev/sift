@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::corpus::walk::LinkTraversal;
-use crate::corpus::walk::{FileWalk, RelativePaths};
+use crate::corpus::walk::{FileWalk, WalkFile};
 use crate::index::snapshot::ArtifactData;
 use crate::index::{CorpusKind, IndexBuildConfig, IndexDestination, IndexSource};
 
@@ -10,7 +10,7 @@ use super::config::Config;
 use super::files::FileFingerprint;
 use super::files::FileTable;
 use super::gram::GramWidth;
-use super::index::{Index, NGramIndexError, Storage};
+use super::index::{Index, IndexedFiles, NGramIndexError, Storage};
 use super::storage::grams::{GramSet, GramSets};
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
@@ -99,14 +99,14 @@ impl Config {
 
                 Ok(Index {
                     width,
-                    storage: Storage {
-                        root: root.to_path_buf(),
-                        fingerprints,
+                    storage: Storage::from_parts(
+                        root.to_path_buf(),
+                        IndexedFiles::new(fingerprints),
                         gram_sets,
                         lexicon,
                         postings,
                         corpus_kind,
-                    },
+                    ),
                 })
             }
         }
@@ -165,14 +165,14 @@ impl Config {
 
                 Ok(Index {
                     width,
-                    storage: Storage {
-                        root: root.to_path_buf(),
-                        fingerprints,
+                    storage: Storage::from_parts(
+                        root.to_path_buf(),
+                        IndexedFiles::new(fingerprints),
                         gram_sets,
                         lexicon,
                         postings,
                         corpus_kind,
-                    },
+                    ),
                 })
             }
             IndexSource::Snapshot { reader, namespace } => {
@@ -195,14 +195,14 @@ impl Config {
 
                 Ok(Index {
                     width,
-                    storage: Storage {
-                        root: root.to_path_buf(),
-                        fingerprints,
+                    storage: Storage::from_parts(
+                        root.to_path_buf(),
+                        IndexedFiles::new(fingerprints),
                         gram_sets,
                         lexicon,
                         postings,
                         corpus_kind,
-                    },
+                    ),
                 })
             }
         }
@@ -249,14 +249,14 @@ impl Config {
 
         Ok(Index {
             width,
-            storage: Storage {
-                root: root.to_path_buf(),
-                fingerprints,
+            storage: Storage::from_parts(
+                root.to_path_buf(),
+                IndexedFiles::new(fingerprints),
                 gram_sets,
                 lexicon,
                 postings,
                 corpus_kind,
-            },
+            ),
         })
     }
 
@@ -300,7 +300,7 @@ impl Index {
         use std::collections::HashMap;
 
         let fingerprints = if paths.is_empty() {
-            let corpus_paths = FileWalk::new(config.corpus.root)
+            let corpus_paths: Vec<PathBuf> = FileWalk::new(config.corpus.root)
                 .scopes(config.corpus.include_paths)
                 .excludes(config.corpus.exclude_paths)
                 .visibility(config.visibility.clone())
@@ -312,19 +312,27 @@ impl Index {
                 .one_file_system(config.walk.one_file_system)
                 .max_depth(config.walk.max_depth)
                 .max_filesize(config.walk.max_filesize)
-                .collect(&RelativePaths)?;
+                .files()?
+                .into_iter()
+                .map(WalkFile::into_rel_path)
+                .collect();
             FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
         } else {
-            Self::merge_partial_fingerprints(&self.storage.fingerprints, config.corpus.root, paths)?
+            Self::merge_partial_fingerprints(
+                self.storage.files.as_slice(),
+                config.corpus.root,
+                paths,
+            )?
         };
 
-        if fingerprints == self.storage.fingerprints {
+        if fingerprints == self.storage.files.as_slice() {
             return Ok(None);
         }
 
         let prev_id_by_fp: HashMap<(&Path, i64, u64), usize> = self
             .storage
-            .fingerprints
+            .files
+            .as_slice()
             .iter()
             .enumerate()
             .map(|(id, fp)| ((fp.path.as_path(), fp.mtime_secs, fp.size), id))

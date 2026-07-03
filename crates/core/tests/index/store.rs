@@ -22,7 +22,7 @@ fn build_and_reopen_indexes() {
         patterns: &["hello".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let files = indexes.candidates(&spec).expect("candidates");
+    let files = indexes.plan(&spec).into_candidates().expect("candidates");
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].rel_path().as_os_str(), "a.txt");
 }

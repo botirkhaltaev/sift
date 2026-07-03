@@ -31,7 +31,7 @@ Today the default configured index is `IndexConfig::ngram(GramWidth::TRIGRAM)` /
 
 - Each index family lives in its own submodule (for example, `ngram/`).
 - `grep/` only talks to `Index` enum, never to concrete index internals.
-- `Index::candidates` may over-return but must not under-return (conservative).
+- `Index::plan` may over-return candidates but must not under-return (conservative).
 - Each configured index narrows independently; the registry combines results.
 - Keep index-family internals behind the family module; do not leak storage or extraction mechanics into callers.
 
