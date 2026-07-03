@@ -139,7 +139,7 @@ impl<'a> CandidatePlanner<'a> {
     }
 
     fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
-        let indexed_paths = self.source.indexes.indexed_rel_paths();
+        let indexed_paths = self.source.indexes.indexed_paths();
         let walked = FileWalk::from_filter(self.source.filter).collect()?;
         let mut seen: HashSet<PathBuf> = index_hits
             .iter()
