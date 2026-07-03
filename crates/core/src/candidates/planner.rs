@@ -8,7 +8,7 @@ use crate::candidates::{
     CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, IndexFallback,
 };
 use crate::corpus::Candidate;
-use crate::corpus::walk::FileWalk;
+use crate::corpus::walk::{CandidateRecords, FileWalk, RelativePaths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexNarrowing {
@@ -101,7 +101,9 @@ impl<'a> CandidatePlanner<'a> {
     ) -> crate::Result<Vec<Candidate>> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
-            CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).collect()?,
+            CandidateStrategy::Walk => {
+                FileWalk::from_filter(self.source.filter).collect(&CandidateRecords)?
+            }
             CandidateStrategy::AllIndexed => self.source.indexes.complete_candidates(),
             CandidateStrategy::UseIndex => index_hits,
             CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_hits)?,
@@ -139,17 +141,19 @@ impl<'a> CandidatePlanner<'a> {
     }
 
     fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
-        let indexed_paths = self.source.indexes.indexed_rel_paths();
-        let walked = FileWalk::from_filter(self.source.filter).collect()?;
+        let walked = FileWalk::from_filter(self.source.filter).collect(&RelativePaths)?;
         let mut seen: HashSet<PathBuf> = index_hits
             .iter()
             .map(|candidate| candidate.rel_path().to_path_buf())
             .collect();
-        for candidate in walked {
-            if indexed_paths.contains(candidate.rel_path()) {
-                continue;
-            }
-            if seen.insert(candidate.rel_path().to_path_buf()) {
+        for rel_path in self.source.indexes.unindexed_hits(walked) {
+            if seen.insert(rel_path.clone()) {
+                let abs_path = self.source.filter.root().join(&rel_path);
+                let size = std::fs::metadata(&abs_path)
+                    .ok()
+                    .map(|metadata| metadata.len());
+                let depth = Some(rel_path.components().count().saturating_sub(1));
+                let candidate = Candidate::with_metadata(rel_path, abs_path, size, depth);
                 index_hits.push(candidate);
             }
         }

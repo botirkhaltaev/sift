@@ -119,6 +119,16 @@ impl Index {
             })
             .collect()
     }
+
+    #[must_use]
+    pub(crate) fn indexed_rel_paths(&self) -> std::collections::HashSet<PathBuf> {
+        self.storage
+            .fingerprints
+            .iter()
+            .map(|fp| fp.path.clone())
+            .collect()
+    }
+
     pub(crate) fn merge_partial_fingerprints(
         existing: &[FileFingerprint],
         root: &Path,

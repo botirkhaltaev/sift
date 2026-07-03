@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use super::config::CorpusKind;
 use super::error::IndexError;
 use super::kinds::Index;
+use super::paths::IndexedPaths;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
 
@@ -102,36 +103,18 @@ impl Indexes {
     /// Corpus-relative paths present in the current snapshot.
     #[must_use]
     pub fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
-        let indexes = self.snapshot.indexes();
-        let Some(first) = indexes.first() else {
-            return HashSet::new();
-        };
+        self.indexed_paths().into_set()
+    }
 
-        let mut paths: HashSet<PathBuf> = first
-            .all_files()
-            .into_iter()
-            .map(|c| c.rel_path().to_path_buf())
-            .collect();
-
-        for index in indexes.iter().skip(1) {
-            let next: HashSet<PathBuf> = index
-                .all_files()
-                .into_iter()
-                .map(|c| c.rel_path().to_path_buf())
-                .collect();
-            paths.retain(|p| next.contains(p));
-            if paths.is_empty() {
-                break;
-            }
-        }
-
-        paths
+    #[must_use]
+    fn indexed_paths(&self) -> IndexedPaths {
+        IndexedPaths::from_indexes(self.snapshot.indexes())
     }
 
     /// Corpus-relative search hits not yet present in the current snapshot.
     #[must_use]
     pub fn unindexed_hits(&self, hits: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-        let indexed = self.indexed_rel_paths();
+        let indexed = self.indexed_paths();
         hits.into_iter()
             .filter(|path| !indexed.contains(path))
             .collect()
