@@ -107,18 +107,10 @@ impl Indexes {
             return HashSet::new();
         };
 
-        let mut paths: HashSet<PathBuf> = first
-            .all_files()
-            .into_iter()
-            .map(|c| c.rel_path().to_path_buf())
-            .collect();
+        let mut paths = first.indexed_rel_paths();
 
         for index in indexes.iter().skip(1) {
-            let next: HashSet<PathBuf> = index
-                .all_files()
-                .into_iter()
-                .map(|c| c.rel_path().to_path_buf())
-                .collect();
+            let next = index.indexed_rel_paths();
             paths.retain(|p| next.contains(p));
             if paths.is_empty() {
                 break;
