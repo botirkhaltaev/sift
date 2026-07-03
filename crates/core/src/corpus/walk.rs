@@ -104,8 +104,12 @@ impl<'a> FileWalk<'a> {
     ///
     /// Returns an error if the root cannot be canonicalized or a walk fails.
     pub fn collect(self) -> crate::Result<Vec<Candidate>> {
+        self.collect_items()
+    }
+
+    fn collect_items<T: WalkItem>(self) -> crate::Result<Vec<T>> {
         let filter_root = self.root.canonicalize()?;
-        let mut out = Vec::new();
+        let mut out: Vec<T> = Vec::new();
         if self.scopes.is_empty() {
             self.collect_scope(&filter_root, Path::new(""), &mut out)?;
         } else {
@@ -114,7 +118,7 @@ impl<'a> FileWalk<'a> {
             }
         }
         out.sort_by(|a, b| a.rel_path().cmp(b.rel_path()));
-        out.dedup();
+        out.dedup_by(|a, b| a.rel_path() == b.rel_path());
         Ok(out)
     }
 
@@ -124,11 +128,7 @@ impl<'a> FileWalk<'a> {
     ///
     /// Returns an error if filesystem discovery fails.
     pub fn collect_paths(self) -> crate::Result<Vec<PathBuf>> {
-        Ok(self
-            .collect()?
-            .into_iter()
-            .map(|candidate| candidate.rel_path().to_path_buf())
-            .collect())
+        self.collect_items()
     }
 
     fn is_excluded(&self, rel: &Path) -> bool {
@@ -137,11 +137,11 @@ impl<'a> FileWalk<'a> {
             .any(|excluded| !excluded.as_os_str().is_empty() && rel.starts_with(excluded))
     }
 
-    fn collect_scope(
+    fn collect_scope<T: WalkItem>(
         &self,
         filter_root: &Path,
         scope: &Path,
-        out: &mut Vec<Candidate>,
+        out: &mut Vec<T>,
     ) -> crate::Result<()> {
         let path = if scope.as_os_str().is_empty() {
             filter_root.to_path_buf()
@@ -158,25 +158,94 @@ impl<'a> FileWalk<'a> {
                 .unwrap_or(&path)
                 .to_path_buf();
             if !self.is_excluded(&rel_path) {
-                out.push(Candidate::new(rel_path, path));
+                out.push(T::from_scope_file(rel_path, path));
             }
         } else if path.is_dir() {
-            let mut walk = FileWalkRun::new(&path, filter_root, self);
+            let mut walk = FileWalkRun::<T>::new(&path, filter_root, self);
             out.extend(walk.collect()?);
         }
         Ok(())
     }
 }
 
-struct FileWalkRun<'a> {
+trait WalkItem: Send + 'static {
+    fn rel_path(&self) -> &Path;
+
+    fn from_scope_file(rel_path: PathBuf, abs_path: PathBuf) -> Self;
+
+    fn from_entry(
+        rel_path: PathBuf,
+        abs_path: &Path,
+        entry: &DirEntry,
+        max_filesize: Option<u64>,
+    ) -> Option<Self>
+    where
+        Self: Sized;
+}
+
+impl WalkItem for Candidate {
+    fn rel_path(&self) -> &Path {
+        self.rel_path()
+    }
+
+    fn from_scope_file(rel_path: PathBuf, abs_path: PathBuf) -> Self {
+        Self::new(rel_path, abs_path)
+    }
+
+    fn from_entry(
+        rel_path: PathBuf,
+        abs_path: &Path,
+        entry: &DirEntry,
+        max_filesize: Option<u64>,
+    ) -> Option<Self> {
+        let metadata = entry.metadata().ok();
+        if let Some(limit) = max_filesize
+            && metadata.as_ref().is_some_and(|m| m.len() > limit)
+        {
+            return None;
+        }
+        Some(Self::with_metadata(
+            rel_path,
+            abs_path.to_path_buf(),
+            metadata.map(|m| m.len()),
+            Some(entry.depth().saturating_sub(1)),
+        ))
+    }
+}
+
+impl WalkItem for PathBuf {
+    fn rel_path(&self) -> &Path {
+        self
+    }
+
+    fn from_scope_file(rel_path: PathBuf, _abs_path: PathBuf) -> Self {
+        rel_path
+    }
+
+    fn from_entry(
+        rel_path: PathBuf,
+        _abs_path: &Path,
+        entry: &DirEntry,
+        max_filesize: Option<u64>,
+    ) -> Option<Self> {
+        if let Some(limit) = max_filesize
+            && entry.metadata().ok().is_some_and(|m| m.len() > limit)
+        {
+            return None;
+        }
+        Some(rel_path)
+    }
+}
+
+struct FileWalkRun<'a, T> {
     root: PathBuf,
     filter_root: &'a Path,
     config: &'a FileWalk<'a>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated: Arc<Mutex<Vec<Candidate>>>,
+    consolidated: Arc<Mutex<Vec<T>>>,
 }
 
-impl<'a> FileWalkRun<'a> {
+impl<'a, T: WalkItem> FileWalkRun<'a, T> {
     fn new(root: &Path, filter_root: &'a Path, config: &'a FileWalk<'a>) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -206,7 +275,7 @@ impl<'a> FileWalkRun<'a> {
         builder
     }
 
-    fn collect(&mut self) -> crate::Result<Vec<Candidate>> {
+    fn collect(&mut self) -> crate::Result<Vec<T>> {
         self.walk_builder().build_parallel().visit(self);
 
         {
@@ -222,39 +291,39 @@ impl<'a> FileWalkRun<'a> {
     }
 }
 
-impl<'a> ignore::ParallelVisitorBuilder<'a> for FileWalkRun<'_> {
+impl<'a, T: WalkItem> ignore::ParallelVisitorBuilder<'a> for FileWalkRun<'_, T> {
     fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
-        Box::new(FileCollector {
+        Box::new(FileCollector::<T> {
             filter_root: self.filter_root.to_path_buf(),
             excludes: self.config.excludes.to_vec(),
             max_filesize: self.config.max_filesize,
-            thread_candidates: Vec::new(),
+            thread_items: Vec::new(),
             walk_error: Arc::clone(&self.walk_error),
             consolidated: Arc::clone(&self.consolidated),
         })
     }
 }
 
-struct FileCollector {
+struct FileCollector<T> {
     filter_root: PathBuf,
     excludes: Vec<PathBuf>,
     max_filesize: Option<u64>,
-    thread_candidates: Vec<Candidate>,
+    thread_items: Vec<T>,
     walk_error: Arc<Mutex<Option<crate::Error>>>,
-    consolidated: Arc<Mutex<Vec<Candidate>>>,
+    consolidated: Arc<Mutex<Vec<T>>>,
 }
 
-impl Drop for FileCollector {
+impl<T> Drop for FileCollector<T> {
     fn drop(&mut self) {
-        if self.thread_candidates.is_empty() {
+        if self.thread_items.is_empty() {
             return;
         }
         let mut guard = self.consolidated.lock().expect("candidate lock");
-        guard.append(&mut self.thread_candidates);
+        guard.append(&mut self.thread_items);
     }
 }
 
-impl ignore::ParallelVisitor for FileCollector {
+impl<T: WalkItem> ignore::ParallelVisitor for FileCollector<T> {
     fn visit(&mut self, entry: Result<DirEntry, IgnoreError>) -> WalkState {
         let entry = match entry {
             Ok(entry) => entry,
@@ -284,23 +353,14 @@ impl ignore::ParallelVisitor for FileCollector {
             return WalkState::Continue;
         }
 
-        let metadata = entry.metadata().ok();
-        if let Some(limit) = self.max_filesize
-            && metadata.as_ref().is_some_and(|m| m.len() > limit)
-        {
-            return WalkState::Continue;
+        if let Some(item) = T::from_entry(rel_path, abs_path, &entry, self.max_filesize) {
+            self.thread_items.push(item);
         }
-        self.thread_candidates.push(Candidate::with_metadata(
-            rel_path,
-            abs_path.to_path_buf(),
-            metadata.map(|m| m.len()),
-            Some(entry.depth().saturating_sub(1)),
-        ));
         WalkState::Continue
     }
 }
 
-impl FileCollector {
+impl<T> FileCollector<T> {
     fn is_excluded(&self, rel_path: &Path) -> bool {
         self.excludes
             .iter()
