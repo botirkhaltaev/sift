@@ -10,7 +10,7 @@ use super::config::Config;
 use super::files::FileFingerprint;
 use super::files::FileTable;
 use super::gram::GramWidth;
-use super::index::{Index, NGramIndexError, Storage};
+use super::index::{Index, IndexedFiles, NGramIndexError, Storage};
 use super::storage::grams::{GramSet, GramSets};
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
@@ -99,9 +99,9 @@ impl Config {
 
                 Ok(Index {
                     width,
-                    storage: Storage::new(
+                    storage: Storage::from_parts(
                         root.to_path_buf(),
-                        fingerprints,
+                        IndexedFiles::new(fingerprints),
                         gram_sets,
                         lexicon,
                         postings,
@@ -165,9 +165,9 @@ impl Config {
 
                 Ok(Index {
                     width,
-                    storage: Storage::new(
+                    storage: Storage::from_parts(
                         root.to_path_buf(),
-                        fingerprints,
+                        IndexedFiles::new(fingerprints),
                         gram_sets,
                         lexicon,
                         postings,
@@ -195,9 +195,9 @@ impl Config {
 
                 Ok(Index {
                     width,
-                    storage: Storage::new(
+                    storage: Storage::from_parts(
                         root.to_path_buf(),
-                        fingerprints,
+                        IndexedFiles::new(fingerprints),
                         gram_sets,
                         lexicon,
                         postings,
@@ -249,9 +249,9 @@ impl Config {
 
         Ok(Index {
             width,
-            storage: Storage::new(
+            storage: Storage::from_parts(
                 root.to_path_buf(),
-                fingerprints,
+                IndexedFiles::new(fingerprints),
                 gram_sets,
                 lexicon,
                 postings,
@@ -318,16 +318,21 @@ impl Index {
                 .collect();
             FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
         } else {
-            Self::merge_partial_fingerprints(&self.storage.fingerprints, config.corpus.root, paths)?
+            Self::merge_partial_fingerprints(
+                self.storage.files.as_slice(),
+                config.corpus.root,
+                paths,
+            )?
         };
 
-        if fingerprints == self.storage.fingerprints {
+        if fingerprints == self.storage.files.as_slice() {
             return Ok(None);
         }
 
         let prev_id_by_fp: HashMap<(&Path, i64, u64), usize> = self
             .storage
-            .fingerprints
+            .files
+            .as_slice()
             .iter()
             .enumerate()
             .map(|(id, fp)| ((fp.path.as_path(), fp.mtime_secs, fp.size), id))

@@ -30,29 +30,57 @@ pub struct Index {
 #[derive(Debug)]
 pub struct Storage {
     pub(crate) root: PathBuf,
-    pub(crate) fingerprints: Vec<FileFingerprint>,
-    pub(crate) indexed_corpus: IndexedCorpus,
+    pub(crate) files: IndexedFiles,
     pub(crate) gram_sets: GramSets,
     pub(crate) lexicon: Lexicon,
     pub(crate) postings: Postings,
     pub(crate) corpus_kind: CorpusKind,
 }
 
+#[derive(Debug)]
+pub struct IndexedFiles {
+    fingerprints: Vec<FileFingerprint>,
+    coverage: IndexedCorpus,
+}
+
+impl IndexedFiles {
+    pub(crate) fn new(fingerprints: Vec<FileFingerprint>) -> Self {
+        let coverage = IndexedCorpus::from_paths(fingerprints.iter().map(|fp| fp.path.clone()));
+        Self {
+            fingerprints,
+            coverage,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[FileFingerprint] {
+        &self.fingerprints
+    }
+
+    pub(crate) fn get(&self, id: FileId) -> Option<&FileFingerprint> {
+        self.fingerprints.get(id.get())
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.fingerprints.len()
+    }
+
+    pub(crate) fn coverage(&self) -> IndexedCorpus {
+        self.coverage.clone()
+    }
+}
+
 impl Storage {
-    pub(crate) fn new(
+    pub(crate) const fn from_parts(
         root: PathBuf,
-        fingerprints: Vec<FileFingerprint>,
+        files: IndexedFiles,
         gram_sets: GramSets,
         lexicon: Lexicon,
         postings: Postings,
         corpus_kind: CorpusKind,
     ) -> Self {
-        let indexed_corpus =
-            IndexedCorpus::from_paths(fingerprints.iter().map(|fp| fp.path.clone()));
         Self {
             root,
-            fingerprints,
-            indexed_corpus,
+            files,
             gram_sets,
             lexicon,
             postings,
@@ -69,17 +97,14 @@ impl Index {
 
     #[must_use]
     pub fn file_path(&self, id: FileId) -> Option<&Path> {
-        self.storage
-            .fingerprints
-            .get(id.get())
-            .map(|fp| fp.path.as_path())
+        self.storage.files.get(id).map(|fp| fp.path.as_path())
     }
 
     #[must_use]
     pub fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
         self.storage
-            .fingerprints
-            .get(id.get())
+            .files
+            .get(id)
             .map(|fp| self.storage.root.join(&fp.path))
     }
 
@@ -101,7 +126,7 @@ impl Index {
         };
         let ids = self.candidate_file_ids(&arms);
         let coverage = self.indexed_corpus();
-        if ids.len() == self.storage.fingerprints.len() && self.storage.fingerprints.len() > 1 {
+        if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
             return CandidatePlan::AllIndexed { coverage };
         }
         CandidatePlan::Narrowed {
@@ -126,7 +151,8 @@ impl Index {
     #[must_use]
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
         self.storage
-            .fingerprints
+            .files
+            .as_slice()
             .iter()
             .map(|fp| {
                 crate::Candidate::with_metadata(
@@ -141,19 +167,19 @@ impl Index {
 
     #[must_use]
     pub(crate) fn indexed_rel_paths(&self) -> std::collections::HashSet<PathBuf> {
-        self.storage.indexed_corpus.clone().into_set()
+        self.storage.files.coverage().into_set()
     }
 
     #[must_use]
     pub(crate) fn indexed_corpus(&self) -> IndexedCorpus {
-        self.storage.indexed_corpus.clone()
+        self.storage.files.coverage()
     }
 
     fn materialize_file_ids(&self, ids: Vec<u32>) -> Vec<crate::Candidate> {
         ids.into_iter()
             .filter_map(|id| {
                 let fid = FileId::new(usize::try_from(id).ok()?);
-                let fp = self.storage.fingerprints.get(fid.get())?;
+                let fp = self.storage.files.get(fid)?;
                 Some(crate::Candidate::with_metadata(
                     fp.path.clone(),
                     self.storage.root.join(&fp.path),

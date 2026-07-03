@@ -21,6 +21,7 @@ pub(crate) enum IndexNarrowing {
 enum IndexStatus {
     Empty,
     NoCandidateIndex,
+    AllCandidates,
     CanNarrow,
 }
 
@@ -127,9 +128,8 @@ impl<'a> CandidatePlanner<'a> {
         } else {
             match index_plan {
                 CandidatePlan::Unavailable => IndexStatus::NoCandidateIndex,
-                CandidatePlan::AllIndexed { .. } | CandidatePlan::Narrowed { .. } => {
-                    IndexStatus::CanNarrow
-                }
+                CandidatePlan::AllIndexed { .. } => IndexStatus::AllCandidates,
+                CandidatePlan::Narrowed { .. } => IndexStatus::CanNarrow,
             }
         }
     }
@@ -209,8 +209,20 @@ const fn plan_indexed(input: PlanInput) -> CandidateStrategy {
         | (IndexStatus::NoCandidateIndex, _, IndexFallback::WalkOnStaleSnapshot) => {
             CandidateStrategy::Walk
         }
-        (IndexStatus::NoCandidateIndex, _, IndexFallback::IndexHitsOnly) => {
-            CandidateStrategy::AllIndexed
+        (
+            IndexStatus::NoCandidateIndex | IndexStatus::AllCandidates,
+            _,
+            IndexFallback::IndexHitsOnly,
+        ) => CandidateStrategy::AllIndexed,
+        (IndexStatus::AllCandidates, _, IndexFallback::WalkOnStaleSnapshot) => {
+            match input.snapshot_status {
+                SnapshotStatus::Missing | SnapshotStatus::TrustedComplete => {
+                    CandidateStrategy::AllIndexed
+                }
+                SnapshotStatus::FilterMismatch
+                | SnapshotStatus::TrustedLazy
+                | SnapshotStatus::StaleComplete => CandidateStrategy::Walk,
+            }
         }
         (IndexStatus::CanNarrow, _, _) => match input.snapshot_status {
             SnapshotStatus::TrustedLazy => CandidateStrategy::MergeIndexAndWalk,
