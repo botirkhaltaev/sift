@@ -193,6 +193,18 @@ fn bench_index_build(c: &mut Criterion) {
         });
     });
 
+    // Corpus materialized once, so each iteration measures only index build
+    // (walk, gram extraction, posting assembly) without filesystem write cost.
+    g.bench_function("prebuilt_monorepo", |b| {
+        let tmp = tempfile::tempdir().unwrap();
+        let corpus = tmp.path().join("corpus");
+        materialize_monorepo_corpus(&corpus, 8_000, 100, 256);
+        b.iter(|| {
+            let idx = tempfile::tempdir().unwrap();
+            build_index_via_store(&corpus, idx.path());
+        });
+    });
+
     g.finish();
 }
 
