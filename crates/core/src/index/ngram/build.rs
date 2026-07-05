@@ -8,6 +8,7 @@ use super::files::FileFingerprint;
 use super::gram::{Gram, GramWidth};
 use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
+use super::storage::postings::Postings;
 
 use crate::corpus::walk::FileWalk;
 use crate::corpus::walk::LinkTraversal;
@@ -98,8 +99,9 @@ impl PostingTables {
     }
 
     fn encode_pairs(width: GramWidth, pairs: &[u128]) -> crate::Result<Self> {
-        let mut posting_bytes = Vec::with_capacity(pairs.len() * 3);
+        let mut posting_bytes = Vec::with_capacity(pairs.len());
         let mut lexicon = Vec::new();
+        let mut ids: Vec<u32> = Vec::new();
         let mut i = 0;
         while i < pairs.len() {
             let gram_key = pairs[i] >> 32;
@@ -128,25 +130,11 @@ impl PostingTables {
                     "posting list too long",
                 ))
             })?;
-            let mut prev = 0u64;
-            for (j, &packed) in pairs[start..i].iter().enumerate() {
-                let fid = u64::try_from(packed & u128::from(u32::MAX))
-                    .expect("masked file id fits in u64");
-                let raw = if j == 0 {
-                    fid
-                } else {
-                    fid.checked_sub(prev).ok_or_else(|| {
-                        crate::Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "non-monotonic posting list",
-                        ))
-                    })?
-                };
-                let mut buf = unsigned_varint::encode::u64_buffer();
-                let encoded = unsigned_varint::encode::u64(raw, &mut buf);
-                posting_bytes.extend_from_slice(encoded);
-                prev = fid;
-            }
+            ids.clear();
+            ids.extend(pairs[start..i].iter().map(|&packed| {
+                u32::try_from(packed & u128::from(u32::MAX)).expect("masked file id fits in u32")
+            }));
+            posting_bytes.extend_from_slice(&Postings::encode_list(&ids));
             lexicon.push(LexiconEntry { gram, offset, len });
         }
         Ok(Self {

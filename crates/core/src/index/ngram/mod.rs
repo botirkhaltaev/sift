@@ -18,28 +18,12 @@ mod candidate_tests {
     use std::path::Path;
 
     use crate::candidates::{CandidateFlags, CandidateSpec};
+    use crate::index::ngram::storage::postings::Postings;
 
     use super::*;
 
     fn default_config() -> Config {
         Config::new(GramWidth::TRIGRAM)
-    }
-
-    fn encode(ids: &[u32]) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut prev = 0u64;
-        for (i, &value) in ids.iter().enumerate() {
-            let raw = if i == 0 {
-                u64::from(value)
-            } else {
-                u64::from(value) - prev
-            };
-            let mut varint_buf = unsigned_varint::encode::u64_buffer();
-            let encoded = unsigned_varint::encode::u64(raw, &mut varint_buf);
-            buf.extend_from_slice(encoded);
-            prev = u64::from(value);
-        }
-        buf
     }
 
     fn narrow(
@@ -90,9 +74,9 @@ mod candidate_tests {
 
     #[test]
     fn intersect_sorted_posting_byte_slices_handles_smallest_first_order() {
-        let a = encode(&[1, 3, 5, 7, 9]);
-        let b = encode(&[3, 7]);
-        let c = encode(&[0, 3, 4, 7, 8]);
+        let a = Postings::encode_list(&[1, 3, 5, 7, 9]);
+        let b = Postings::encode_list(&[3, 7]);
+        let c = Postings::encode_list(&[0, 3, 4, 7, 8]);
         let slices = vec![a.as_slice(), b.as_slice(), c.as_slice()];
         let ids = Index::intersect_sorted_slices(&slices);
         assert_eq!(ids, vec![3, 7]);
@@ -124,7 +108,7 @@ mod candidate_tests {
 
     #[test]
     fn intersect_sorted_slices_single_returns_decoded_ids() {
-        let a = encode(&[1, 3, 5]);
+        let a = Postings::encode_list(&[1, 3, 5]);
         let ids = Index::intersect_sorted_slices(&[a.as_slice()]);
         assert_eq!(ids, vec![1, 3, 5]);
     }
@@ -138,8 +122,8 @@ mod candidate_tests {
 
     #[test]
     fn intersect_sorted_slices_no_overlap_returns_empty() {
-        let a = encode(&[1, 2, 3]);
-        let b = encode(&[4, 5, 6]);
+        let a = Postings::encode_list(&[1, 2, 3]);
+        let b = Postings::encode_list(&[4, 5, 6]);
         let ids = Index::intersect_sorted_slices(&[a.as_slice(), b.as_slice()]);
         assert!(ids.is_empty());
     }
@@ -245,11 +229,7 @@ mod candidate_tests {
         lex.extend_from_slice(&3u32.to_le_bytes());
         std::fs::write(dir.join("lexicon.bin"), &lex).expect("write lexicon");
 
-        let mut posting_payload = Vec::new();
-        let mut buf = unsigned_varint::encode::u64_buffer();
-        posting_payload.extend_from_slice(unsigned_varint::encode::u64(0, &mut buf));
-        let mut buf2 = unsigned_varint::encode::u64_buffer();
-        posting_payload.extend_from_slice(unsigned_varint::encode::u64(1, &mut buf2));
+        let posting_payload = Postings::encode_list(&[0, 1]);
         let mut pb = POSTINGS_MAGIC.to_vec();
         pb.extend_from_slice(&u32::try_from(posting_payload.len()).unwrap().to_le_bytes());
         pb.extend_from_slice(&posting_payload);

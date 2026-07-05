@@ -1,12 +1,23 @@
-//! Contiguous delta-varint encoded file-id payloads referenced by the lexicon.
+//! File-id payloads referenced by the lexicon.
+//!
+//! Each posting list is a self-describing blob: a varint element count, then
+//! whole 128-value blocks SIMD delta-bitpacked via [`BitPacker4x`], then a
+//! delta-varint tail for the remaining `< 128` values.
 
+use std::cmp::Ordering;
 use std::path::Path;
+
+use bitpacking::{BitPacker, BitPacker4x};
+use integer_encoding::VarInt;
 
 use crate::index::ngram::storage::format::POSTINGS_MAGIC;
 use crate::index::snapshot::ArtifactData;
 
 use super::read_u32_le;
 use crate::index::mmap::mmap_open;
+
+/// Values per SIMD-bitpacked block.
+const BLOCK_LEN: usize = BitPacker4x::BLOCK_LEN;
 
 #[derive(Debug)]
 pub struct Postings {
@@ -17,6 +28,10 @@ pub struct Postings {
 impl Postings {
     fn bytes(&self) -> &[u8] {
         self.data.as_ref()
+    }
+
+    fn malformed(msg: &'static str) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, msg)
     }
 
     /// Validate and wrap in-memory or mmap artifact bytes as postings.
@@ -100,70 +115,52 @@ impl Postings {
         Ok(plen)
     }
 
-    /// Decode one LEB128 varint starting at `bytes[pos]`, returning the value
-    /// and the offset just past it.
+    /// Encode a strictly increasing file-id list into a self-describing blob.
     ///
-    /// Reads by index instead of building a fresh slice iterator per value,
-    /// which the profiler showed dominating candidate narrowing. Rejects
-    /// truncated encodings and any encoding wider than the 10 bytes a `u64`
-    /// can hold.
-    fn decode_varint(bytes: &[u8], pos: usize) -> std::io::Result<(u64, usize)> {
-        let mut value = 0u64;
-        let mut shift = 0u32;
-        let mut idx = pos;
-        loop {
-            let byte = *bytes.get(idx).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "malformed varint in posting list",
-                )
-            })?;
-            idx += 1;
-            value |= u64::from(byte & 0x7f) << shift;
-            if byte & 0x80 == 0 {
-                return Ok((value, idx));
-            }
-            shift += 7;
-            if shift >= 64 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "malformed varint in posting list",
-                ));
-            }
+    /// Full 128-value blocks are delta-bitpacked; the remainder is delta-varint
+    /// encoded. Callers guarantee `ids` is sorted and unique (posting lists are
+    /// assembled from the sorted `(gram, file id)` pairs).
+    pub(crate) fn encode_list(ids: &[u32]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(ids.len() + 8);
+        let mut buf = [0u8; 10];
+        let count = u64::try_from(ids.len()).expect("list length fits u64");
+        let n = count.encode_var(&mut buf);
+        out.extend_from_slice(&buf[..n]);
+        if ids.is_empty() {
+            return out;
         }
+
+        let bitpacker = BitPacker4x::new();
+        let full = ids.len() / BLOCK_LEN;
+        let mut initial = 0u32;
+        let mut block_buf = [0u8; BLOCK_LEN * 4];
+        for b in 0..full {
+            let block = &ids[b * BLOCK_LEN..(b + 1) * BLOCK_LEN];
+            let num_bits = bitpacker.num_bits_sorted(initial, block);
+            out.push(num_bits);
+            let written = bitpacker.compress_sorted(initial, block, &mut block_buf, num_bits);
+            out.extend_from_slice(&block_buf[..written]);
+            initial = block[BLOCK_LEN - 1];
+        }
+
+        let mut prev = u64::from(initial);
+        for &value in &ids[full * BLOCK_LEN..] {
+            let raw = u64::from(value)
+                .checked_sub(prev)
+                .expect("posting ids strictly increasing");
+            let n = raw.encode_var(&mut buf);
+            out.extend_from_slice(&buf[..n]);
+            prev = u64::from(value);
+        }
+        out
     }
 
-    /// Walk an individual delta-encoded posting list without allocating.
+    /// Decode a posting list and return its element count.
     ///
-    /// Returns the count of decoded values.  Rejects malformed varints, non-monotonic
-    /// deltas, overflow, and values exceeding `u32::MAX`.
+    /// Rejects truncated blocks, oversized `num_bits`, malformed tail varints,
+    /// delta overflow, values exceeding `u32::MAX`, and trailing bytes.
     pub(crate) fn validate_list(bytes: &[u8]) -> std::io::Result<usize> {
-        let mut pos = 0usize;
-        let mut prev = 0u64;
-        let mut count = 0usize;
-        while pos < bytes.len() {
-            let (raw, next) = Self::decode_varint(bytes, pos)?;
-            let value = if count == 0 {
-                raw
-            } else {
-                prev.checked_add(raw).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "delta overflow in posting list",
-                    )
-                })?
-            };
-            if value > u64::from(u32::MAX) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "posting value exceeds u32::MAX",
-                ));
-            }
-            prev = value;
-            pos = next;
-            count += 1;
-        }
-        Ok(count)
+        Ok(Self::decode_sorted(bytes)?.len())
     }
 
     #[must_use]
@@ -179,77 +176,82 @@ impl Postings {
     }
 
     pub(crate) fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
-        // Every value occupies at least one byte, so the byte length is a tight
-        // upper bound on the count; reserving it up front avoids repeated
-        // reallocation as the list grows.
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut pos = 0usize;
-        let mut prev = 0u64;
-        while pos < bytes.len() {
-            let (raw, next) = Self::decode_varint(bytes, pos)?;
-            pos = next;
-            let value = if out.is_empty() {
-                raw
-            } else {
-                prev.checked_add(raw).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "delta overflow in posting list",
-                    )
-                })?
-            };
+        let (count, mut pos) =
+            u64::decode_var(bytes).ok_or_else(|| Self::malformed("malformed varint"))?;
+        let count =
+            usize::try_from(count).map_err(|_| Self::malformed("posting count exceeds usize"))?;
+        if count == 0 {
+            if pos != bytes.len() {
+                return Err(Self::malformed("trailing bytes after empty posting list"));
+            }
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::with_capacity(count);
+        let bitpacker = BitPacker4x::new();
+        let full = count / BLOCK_LEN;
+        let mut initial = 0u32;
+        let mut block_buf = [0u32; BLOCK_LEN];
+        for _ in 0..full {
+            let num_bits = *bytes
+                .get(pos)
+                .ok_or_else(|| Self::malformed("truncated posting block header"))?;
+            pos += 1;
+            if num_bits > 32 {
+                return Err(Self::malformed("posting block num_bits exceeds 32"));
+            }
+            let block_bytes = num_bits as usize * BLOCK_LEN / 8;
+            let compressed = bytes
+                .get(pos..pos + block_bytes)
+                .ok_or_else(|| Self::malformed("truncated posting block"))?;
+            pos += block_bytes;
+            bitpacker.decompress_sorted(initial, compressed, &mut block_buf, num_bits);
+            out.extend_from_slice(&block_buf);
+            initial = block_buf[BLOCK_LEN - 1];
+        }
+
+        let mut prev = u64::from(initial);
+        for _ in 0..count - full * BLOCK_LEN {
+            let (raw, consumed) = u64::decode_var(&bytes[pos..])
+                .ok_or_else(|| Self::malformed("malformed varint"))?;
+            pos += consumed;
+            let value = prev
+                .checked_add(raw)
+                .ok_or_else(|| Self::malformed("delta overflow in posting list"))?;
             if value > u64::from(u32::MAX) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "posting value exceeds u32::MAX",
-                ));
+                return Err(Self::malformed("posting value exceeds u32::MAX"));
             }
             out.push(u32::try_from(value).expect("value bounded above"));
             prev = value;
+        }
+
+        if pos != bytes.len() {
+            return Err(Self::malformed("trailing bytes after posting list"));
         }
         Ok(out)
     }
 
     pub(crate) fn intersect_sorted(ids: &[u32], encoded: &[u8]) -> std::io::Result<Vec<u32>> {
-        let mut i = 0usize;
-        let mut pos = 0usize;
-        let mut prev = 0u64;
-        let mut first = true;
-        let mut out = Vec::new();
+        let other = Self::decode_sorted(encoded)?;
+        Ok(Self::intersect_slices(ids, &other))
+    }
 
-        while i < ids.len() && pos < encoded.len() {
-            let (raw, next) = Self::decode_varint(encoded, pos)?;
-            pos = next;
-            let value = if first {
-                first = false;
-                raw
-            } else {
-                prev.checked_add(raw).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "delta overflow in posting list",
-                    )
-                })?
-            };
-            if value > u64::from(u32::MAX) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "posting value exceeds u32::MAX",
-                ));
-            }
-            let v = u32::try_from(value).expect("value bounded above");
-            prev = value;
-
-            while i < ids.len() && u64::from(ids[i]) < value {
-                i += 1;
-            }
-            if i < ids.len() && ids[i] == v {
-                out.push(v);
-                i += 1;
+    /// Intersect two ascending, unique id slices via a linear merge.
+    fn intersect_slices(a: &[u32], b: &[u32]) -> Vec<u32> {
+        let mut out = Vec::with_capacity(a.len().min(b.len()));
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < a.len() && j < b.len() {
+            match a[i].cmp(&b[j]) {
+                Ordering::Less => i += 1,
+                Ordering::Greater => j += 1,
+                Ordering::Equal => {
+                    out.push(a[i]);
+                    i += 1;
+                    j += 1;
+                }
             }
         }
-
-        Ok(out)
+        out
     }
 }
 
@@ -257,23 +259,6 @@ impl Postings {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    fn encode_sorted(values: &[u32]) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut prev = 0u64;
-        for (i, &value) in values.iter().enumerate() {
-            let raw = if i == 0 {
-                u64::from(value)
-            } else {
-                u64::from(value) - prev
-            };
-            let mut buf = unsigned_varint::encode::u64_buffer();
-            let encoded = unsigned_varint::encode::u64(raw, &mut buf);
-            out.extend_from_slice(encoded);
-            prev = u64::from(value);
-        }
-        out
-    }
 
     #[test]
     fn create_and_open_roundtrips() {
@@ -320,17 +305,55 @@ mod tests {
     #[test]
     fn encode_decode_roundtrips() {
         let ids = vec![0u32, 1, 5, 100, 10_000];
-        let encoded = encode_sorted(&ids);
+        let encoded = Postings::encode_list(&ids);
         let decoded = Postings::decode_sorted(&encoded).expect("decode");
         assert_eq!(decoded, ids);
     }
 
     #[test]
+    fn encode_decode_roundtrips_across_blocks() {
+        // Exercises full bitpacked blocks plus a varint tail (300 = 2*128 + 44).
+        let ids: Vec<u32> = (0..300u32).map(|i| i * 3 + 7).collect();
+        let encoded = Postings::encode_list(&ids);
+        let decoded = Postings::decode_sorted(&encoded).expect("decode");
+        assert_eq!(decoded, ids);
+        assert_eq!(Postings::validate_list(&encoded).expect("validate"), 300);
+    }
+
+    #[test]
+    fn encode_decode_roundtrips_exact_block_multiple() {
+        let ids: Vec<u32> = (0..256u32).map(|i| i * 5).collect();
+        let encoded = Postings::encode_list(&ids);
+        assert_eq!(Postings::decode_sorted(&encoded).expect("decode"), ids);
+    }
+
+    #[test]
+    fn encode_decode_empty() {
+        let encoded = Postings::encode_list(&[]);
+        assert!(
+            Postings::decode_sorted(&encoded)
+                .expect("decode")
+                .is_empty()
+        );
+        assert_eq!(Postings::validate_list(&encoded).expect("validate"), 0);
+    }
+
+    #[test]
     fn intersect_works() {
         let left = vec![1u32, 3, 5, 7];
-        let encoded = encode_sorted(&[2u32, 3, 6, 7]);
+        let encoded = Postings::encode_list(&[2u32, 3, 6, 7]);
         let result = Postings::intersect_sorted(&left, &encoded).expect("intersect");
         assert_eq!(result, vec![3, 7]);
+    }
+
+    #[test]
+    fn intersect_works_across_blocks() {
+        let left: Vec<u32> = (0..400u32).filter(|i| i % 2 == 0).collect();
+        let encoded =
+            Postings::encode_list(&(0..400u32).filter(|i| i % 3 == 0).collect::<Vec<_>>());
+        let result = Postings::intersect_sorted(&left, &encoded).expect("intersect");
+        let expected: Vec<u32> = (0..400u32).filter(|i| i % 6 == 0).collect();
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -360,18 +383,17 @@ mod tests {
 
     #[test]
     fn validate_list_returns_count() {
-        let buf = encode_sorted(&[0u32, 2, 5]);
+        let buf = Postings::encode_list(&[0u32, 2, 5]);
         let count = Postings::validate_list(&buf).expect("validate");
         assert_eq!(count, 3);
     }
 
     #[test]
     fn validate_list_rejects_value_exceeding_u32_max() {
-        // First value 0, then a delta that would produce value > u32::MAX.
-        let mut buf = vec![0u8]; // single-byte varint for 0
-        let mut buffer = unsigned_varint::encode::u64_buffer();
-        let encoded = unsigned_varint::encode::u64(u64::from(u32::MAX) + 1, &mut buffer);
-        buf.extend_from_slice(encoded);
+        // count = 1 (all tail), then a tail delta producing value > u32::MAX.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1u64.encode_var_vec());
+        buf.extend_from_slice(&(u64::from(u32::MAX) + 1).encode_var_vec());
         let result = Postings::validate_list(&buf);
         assert!(result.is_err());
     }
