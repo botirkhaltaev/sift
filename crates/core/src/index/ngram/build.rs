@@ -70,8 +70,57 @@ pub struct PostingTables {
     pub postings: Vec<u8>,
 }
 
+/// Packed `(gram ordinal, file id)` sort key. Sorting the packed integer in
+/// ascending order is identical to sorting `(ordinal, file_id)`
+/// lexicographically, so one integer comparison replaces a chained tuple
+/// comparison. Narrow grams (width <= 4) pack losslessly into `u64`; wider gram
+/// ordinals exceed 32 bits and need the `u128` key.
+trait PostingKey: Copy + Ord + Send {
+    fn pack(ordinal: u64, file_id: u32) -> Self;
+    fn ordinal(self) -> u64;
+    fn file_id(self) -> u32;
+}
+
+impl PostingKey for u64 {
+    fn pack(ordinal: u64, file_id: u32) -> Self {
+        (ordinal << 32) | Self::from(file_id)
+    }
+    fn ordinal(self) -> u64 {
+        self >> 32
+    }
+    fn file_id(self) -> u32 {
+        u32::try_from(self & Self::from(u32::MAX)).expect("masked file id fits in u32")
+    }
+}
+
+impl PostingKey for u128 {
+    fn pack(ordinal: u64, file_id: u32) -> Self {
+        (Self::from(ordinal) << 32) | Self::from(file_id)
+    }
+    fn ordinal(self) -> u64 {
+        u64::try_from(self >> 32).expect("gram ordinal fits u64")
+    }
+    fn file_id(self) -> u32 {
+        u32::try_from(self & Self::from(u32::MAX)).expect("masked file id fits in u32")
+    }
+}
+
 impl PostingTables {
     pub fn assemble(width: GramWidth, file_grams: &[GramSet]) -> crate::Result<Self> {
+        // width <= 4 means the gram ordinal fits in 32 bits, so the packed
+        // (ordinal, file_id) key fits a u64 and halves sort-key size and
+        // comparison cost versus the u128 key wider grams require.
+        if width.get() <= 4 {
+            Self::assemble_packed::<u64>(width, file_grams)
+        } else {
+            Self::assemble_packed::<u128>(width, file_grams)
+        }
+    }
+
+    fn assemble_packed<K: PostingKey>(
+        width: GramWidth,
+        file_grams: &[GramSet],
+    ) -> crate::Result<Self> {
         let total: usize = file_grams.iter().map(|s| s.as_slice().len()).sum();
         if file_grams.len() > u32::MAX as usize {
             return Err(crate::Error::Io(std::io::Error::new(
@@ -80,44 +129,31 @@ impl PostingTables {
             )));
         }
 
-        // Pack each (gram ordinal, file id) into a single u128 sort key
-        // (`ordinal << 32 | file_id`) so sorting uses one integer comparison
-        // instead of a chained tuple comparison. Ascending order is identical
-        // to sorting `(ordinal, file_id)` lexicographically. The sort is
-        // parallelized because it otherwise dominates build/update time while
-        // the Rayon pool sits idle.
+        // The sort is parallelized because it otherwise dominates build/update
+        // time while the Rayon pool sits idle.
         let mut pairs = Vec::with_capacity(total);
         for (fid, set) in file_grams.iter().enumerate() {
             let fid32 = u32::try_from(fid).expect("file count checked above");
-            let fid_bits = u128::from(fid32);
             for gram in set.as_slice() {
-                pairs.push((u128::from(gram.ordinal()) << 32) | fid_bits);
+                pairs.push(K::pack(gram.ordinal(), fid32));
             }
         }
         rayon::slice::ParallelSliceMut::par_sort_unstable(&mut pairs[..]);
         Self::encode_pairs(width, &pairs)
     }
 
-    fn encode_pairs(width: GramWidth, pairs: &[u128]) -> crate::Result<Self> {
+    fn encode_pairs<K: PostingKey>(width: GramWidth, pairs: &[K]) -> crate::Result<Self> {
         let mut posting_bytes = Vec::with_capacity(pairs.len());
         let mut lexicon = Vec::new();
         let mut ids: Vec<u32> = Vec::new();
         let mut i = 0;
         while i < pairs.len() {
-            let gram_key = pairs[i] >> 32;
+            let gram_key = pairs[i].ordinal();
             let start = i;
-            while i < pairs.len() && pairs[i] >> 32 == gram_key {
+            while i < pairs.len() && pairs[i].ordinal() == gram_key {
                 i += 1;
             }
-            let gram = Gram::from_ordinal(
-                width,
-                u64::try_from(gram_key).map_err(|_| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "gram ordinal overflow",
-                    ))
-                })?,
-            )?;
+            let gram = Gram::from_ordinal(width, gram_key)?;
             let offset: u64 = posting_bytes.len().try_into().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -131,9 +167,7 @@ impl PostingTables {
                 ))
             })?;
             ids.clear();
-            ids.extend(pairs[start..i].iter().map(|&packed| {
-                u32::try_from(packed & u128::from(u32::MAX)).expect("masked file id fits in u32")
-            }));
+            ids.extend(pairs[start..i].iter().map(|p| p.file_id()));
             posting_bytes.extend_from_slice(&Postings::encode_list(&ids));
             lexicon.push(LexiconEntry { gram, offset, len });
         }
