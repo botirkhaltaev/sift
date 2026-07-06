@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use integer_encoding::VarInt;
+
 use super::format::GRAMS_MAGIC;
 use super::{read_u32_le, read_u64_le};
 use crate::index::mmap::mmap_open;
@@ -53,6 +55,7 @@ impl GramSet {
     }
 
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) -> std::io::Result<()> {
+        let mut buf = [0u8; 10];
         let mut prev = 0u64;
         for (i, gram) in self.grams.iter().enumerate() {
             let val = gram.ordinal();
@@ -63,9 +66,8 @@ impl GramSet {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "non-monotonic gram set")
                 })?
             };
-            let mut buf = unsigned_varint::encode::u64_buffer();
-            let encoded = unsigned_varint::encode::u64(raw, &mut buf);
-            out.extend_from_slice(encoded);
+            let n = raw.encode_var(&mut buf);
+            out.extend_from_slice(&buf[..n]);
             prev = val;
         }
         Ok(())
@@ -81,13 +83,9 @@ impl GramSet {
         let mut pos = 0usize;
         let mut prev = 0u64;
         while pos < bytes.len() {
-            let (raw, remaining) = unsigned_varint::decode::u64(&bytes[pos..]).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "malformed varint in gram set",
-                )
+            let (raw, consumed) = u64::decode_var(&bytes[pos..]).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed varint")
             })?;
-            let consumed = bytes[pos..].len().saturating_sub(remaining.len());
             pos += consumed;
             let value = if out.is_empty() {
                 raw

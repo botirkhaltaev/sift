@@ -180,12 +180,14 @@ impl Index {
                 )));
             }
             let slice = postings.slice(start, end.saturating_sub(start));
-            let decoded_count = Postings::validate_list(slice).map_err(|e| {
-                NGramIndexError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("posting list for gram {:?}: {e}", entry.gram),
-                ))
-            })?;
+            let decoded_count = Postings::decode_sorted(slice)
+                .map_err(|e| {
+                    NGramIndexError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("posting list for gram {:?}: {e}", entry.gram),
+                    ))
+                })?
+                .len();
             if decoded_count != entry.len as usize {
                 return Err(NGramIndexError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,

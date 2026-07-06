@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 bitflags = { version = "2", features = ["serde"] }
+bitpacking = "0.9"
 bstr = "1"
 fslock = "0.2"
 grep-cli = "0.1"
@@ -25,6 +26,7 @@ grep-pcre2 = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
+integer-encoding = "4"
 memchr = "2"
 memmap2 = "0.9"
 rayon = "1"
@@ -32,7 +34,6 @@ regex-syntax = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-unsigned-varint = "0.8"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

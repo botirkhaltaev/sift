@@ -98,6 +98,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitpacking"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96a7139abd3d9cebf8cd6f920a389cf3dc9576172e32f4563f188cae3c3eb019"
+dependencies = [
+ "crunchy",
+]
+
+[[package]]
 name = "bstr"
 version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -553,6 +562,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "integer-encoding"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14c00403deb17c3221a1fe4fb571b9ed0370b3dcd116553c77fa294a3d918699"
+
+[[package]]
 name = "interprocess"
 version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1001,6 +1016,7 @@ name = "sift-core"
 version = "0.7.0"
 dependencies = [
  "bitflags",
+ "bitpacking",
  "bstr",
  "criterion",
  "fslock",
@@ -1010,6 +1026,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "integer-encoding",
  "memchr",
  "memmap2",
  "rayon",
@@ -1018,7 +1035,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
- "unsigned-varint",
 ]
 
 [[package]]
@@ -1128,12 +1144,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unsigned-varint"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb066959b24b5196ae73cb057f45598450d2c5f71460e98c49b738086eff9c06"
 
 [[package]]
 name = "utf8parse"
