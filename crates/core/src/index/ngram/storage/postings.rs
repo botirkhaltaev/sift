@@ -183,9 +183,18 @@ impl Postings {
             return Ok(Vec::new());
         }
 
+        // Reject implausible counts before reserving so a corrupt blob cannot
+        // trigger a huge allocation: each full block needs at least its 1-byte
+        // header and each tail value at least a 1-byte varint, so `count` values
+        // require at least `full + tail` bytes of payload.
+        let full = count / BLOCK_LEN;
+        let tail = count % BLOCK_LEN;
+        if full + tail > bytes.len() - pos {
+            return Err(Self::malformed("posting count exceeds payload size"));
+        }
+
         let mut out = Vec::with_capacity(count);
         let bitpacker = BitPacker4x::new();
-        let full = count / BLOCK_LEN;
         let mut initial = 0u32;
         let mut block_buf = [0u32; BLOCK_LEN];
         for _ in 0..full {
@@ -207,7 +216,7 @@ impl Postings {
         }
 
         let mut prev = u64::from(initial);
-        for _ in 0..count - full * BLOCK_LEN {
+        for _ in 0..tail {
             let (raw, consumed) = u64::decode_var(&bytes[pos..])
                 .ok_or_else(|| Self::malformed("malformed varint"))?;
             pos += consumed;
@@ -372,6 +381,15 @@ mod tests {
     #[test]
     fn decode_rejects_truncated_varint() {
         let result = Postings::decode_sorted(&[0x80, 0x80, 0x80]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_rejects_count_larger_than_payload() {
+        // A corrupt blob declaring a huge count with no payload must be rejected
+        // cheaply rather than reserving for that many values.
+        let buf = u64::MAX.encode_var_vec();
+        let result = Postings::decode_sorted(&buf);
         assert!(result.is_err());
     }
 

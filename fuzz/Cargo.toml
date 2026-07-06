@@ -25,3 +25,10 @@ path = "fuzz_targets/compile_only.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "decode_postings"
+path = "fuzz_targets/decode_postings.rs"
+test = false
+doc = false
+bench = false
