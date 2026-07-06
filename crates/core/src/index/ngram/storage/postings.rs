@@ -100,6 +100,39 @@ impl Postings {
         Ok(plen)
     }
 
+    /// Decode one LEB128 varint starting at `bytes[pos]`, returning the value
+    /// and the offset just past it.
+    ///
+    /// Reads by index instead of building a fresh slice iterator per value,
+    /// which the profiler showed dominating candidate narrowing. Rejects
+    /// truncated encodings and any encoding wider than the 10 bytes a `u64`
+    /// can hold.
+    fn decode_varint(bytes: &[u8], pos: usize) -> std::io::Result<(u64, usize)> {
+        let mut value = 0u64;
+        let mut shift = 0u32;
+        let mut idx = pos;
+        loop {
+            let byte = *bytes.get(idx).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "malformed varint in posting list",
+                )
+            })?;
+            idx += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Ok((value, idx));
+            }
+            shift += 7;
+            if shift >= 64 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "malformed varint in posting list",
+                ));
+            }
+        }
+    }
+
     /// Walk an individual delta-encoded posting list without allocating.
     ///
     /// Returns the count of decoded values.  Rejects malformed varints, non-monotonic
@@ -109,13 +142,7 @@ impl Postings {
         let mut prev = 0u64;
         let mut count = 0usize;
         while pos < bytes.len() {
-            let (raw, remaining) = unsigned_varint::decode::u64(&bytes[pos..]).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "malformed varint in posting list",
-                )
-            })?;
-            let consumed = bytes[pos..].len().saturating_sub(remaining.len());
+            let (raw, next) = Self::decode_varint(bytes, pos)?;
             let value = if count == 0 {
                 raw
             } else {
@@ -133,7 +160,7 @@ impl Postings {
                 ));
             }
             prev = value;
-            pos += consumed;
+            pos = next;
             count += 1;
         }
         Ok(count)
@@ -152,18 +179,15 @@ impl Postings {
     }
 
     pub(crate) fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
-        let mut out = Vec::new();
+        // Every value occupies at least one byte, so the byte length is a tight
+        // upper bound on the count; reserving it up front avoids repeated
+        // reallocation as the list grows.
+        let mut out = Vec::with_capacity(bytes.len());
         let mut pos = 0usize;
         let mut prev = 0u64;
         while pos < bytes.len() {
-            let (raw, remaining) = unsigned_varint::decode::u64(&bytes[pos..]).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "malformed varint in posting list",
-                )
-            })?;
-            let consumed = bytes[pos..].len().saturating_sub(remaining.len());
-            pos += consumed;
+            let (raw, next) = Self::decode_varint(bytes, pos)?;
+            pos = next;
             let value = if out.is_empty() {
                 raw
             } else {
@@ -194,13 +218,8 @@ impl Postings {
         let mut out = Vec::new();
 
         while i < ids.len() && pos < encoded.len() {
-            let (raw, remaining) = unsigned_varint::decode::u64(&encoded[pos..]).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "malformed varint in posting list",
-                )
-            })?;
-            pos += encoded[pos..].len().saturating_sub(remaining.len());
+            let (raw, next) = Self::decode_varint(encoded, pos)?;
+            pos = next;
             let value = if first {
                 first = false;
                 raw
