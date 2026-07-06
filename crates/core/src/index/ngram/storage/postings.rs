@@ -155,14 +155,6 @@ impl Postings {
         out
     }
 
-    /// Decode a posting list and return its element count.
-    ///
-    /// Rejects truncated blocks, oversized `num_bits`, malformed tail varints,
-    /// delta overflow, values exceeding `u32::MAX`, and trailing bytes.
-    pub(crate) fn validate_list(bytes: &[u8]) -> std::io::Result<usize> {
-        Ok(Self::decode_sorted(bytes)?.len())
-    }
-
     #[must_use]
     pub const fn payload_len(&self) -> usize {
         self.payload_len
@@ -175,6 +167,10 @@ impl Postings {
         self.bytes().get(start..start + len).unwrap_or(&[])
     }
 
+    /// Decode a posting list into its sorted values.
+    ///
+    /// Rejects truncated blocks, oversized `num_bits`, malformed tail varints,
+    /// delta overflow, values exceeding `u32::MAX`, and trailing bytes.
     pub(crate) fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
         let (count, mut pos) =
             u64::decode_var(bytes).ok_or_else(|| Self::malformed("malformed varint"))?;
@@ -317,7 +313,6 @@ mod tests {
         let encoded = Postings::encode_list(&ids);
         let decoded = Postings::decode_sorted(&encoded).expect("decode");
         assert_eq!(decoded, ids);
-        assert_eq!(Postings::validate_list(&encoded).expect("validate"), 300);
     }
 
     #[test]
@@ -335,7 +330,6 @@ mod tests {
                 .expect("decode")
                 .is_empty()
         );
-        assert_eq!(Postings::validate_list(&encoded).expect("validate"), 0);
     }
 
     #[test]
@@ -376,25 +370,18 @@ mod tests {
     }
 
     #[test]
-    fn validate_list_rejects_truncated_varint() {
-        let result = Postings::validate_list(&[0x80, 0x80, 0x80]);
+    fn decode_rejects_truncated_varint() {
+        let result = Postings::decode_sorted(&[0x80, 0x80, 0x80]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn validate_list_returns_count() {
-        let buf = Postings::encode_list(&[0u32, 2, 5]);
-        let count = Postings::validate_list(&buf).expect("validate");
-        assert_eq!(count, 3);
-    }
-
-    #[test]
-    fn validate_list_rejects_value_exceeding_u32_max() {
+    fn decode_rejects_value_exceeding_u32_max() {
         // count = 1 (all tail), then a tail delta producing value > u32::MAX.
         let mut buf = Vec::new();
         buf.extend_from_slice(&1u64.encode_var_vec());
         buf.extend_from_slice(&(u64::from(u32::MAX) + 1).encode_var_vec());
-        let result = Postings::validate_list(&buf);
+        let result = Postings::decode_sorted(&buf);
         assert!(result.is_err());
     }
 }
