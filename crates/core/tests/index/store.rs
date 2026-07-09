@@ -23,7 +23,7 @@ fn build_and_reopen_indexes() {
         flags: CandidateFlags::empty(),
     };
     let files = match indexes.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
     assert_eq!(files.len(), 1);

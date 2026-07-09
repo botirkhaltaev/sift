@@ -106,15 +106,10 @@ impl<'a> CandidatePlanner<'a> {
             CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).candidates()?,
             CandidateStrategy::AllIndexed => self.source.indexes.all_indexed_candidates(),
             CandidateStrategy::UseIndex => match index_plan {
-                CandidatePlan::Narrowed(candidates) => candidates,
-                CandidatePlan::AllIndexed | CandidatePlan::Unavailable => Vec::new(),
+                CandidatePlan::Narrowed { candidates, .. } => candidates,
+                CandidatePlan::AllIndexed { .. } | CandidatePlan::Unavailable => Vec::new(),
             },
-            CandidateStrategy::MergeIndexAndWalk => match index_plan {
-                CandidatePlan::Narrowed(candidates) => self.merge_unindexed(candidates)?,
-                CandidatePlan::AllIndexed | CandidatePlan::Unavailable => {
-                    FileWalk::from_filter(self.source.filter).candidates()?
-                }
-            },
+            CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_plan)?,
         };
         Ok(CandidateSet::new(raw)
             .retain_matches(self.source.filter)
@@ -128,8 +123,8 @@ impl<'a> CandidatePlanner<'a> {
         } else {
             match index_plan {
                 CandidatePlan::Unavailable => IndexStatus::NoCandidateIndex,
-                CandidatePlan::AllIndexed => IndexStatus::AllCandidates,
-                CandidatePlan::Narrowed(_) => IndexStatus::CanNarrow,
+                CandidatePlan::AllIndexed { .. } => IndexStatus::AllCandidates,
+                CandidatePlan::Narrowed { .. } => IndexStatus::CanNarrow,
             }
         }
     }
@@ -150,21 +145,25 @@ impl<'a> CandidatePlanner<'a> {
         }
     }
 
-    fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
+    fn merge_unindexed(&self, index_plan: CandidatePlan) -> crate::Result<Vec<Candidate>> {
+        let CandidatePlan::Narrowed { mut candidates, .. } = index_plan else {
+            return FileWalk::from_filter(self.source.filter).candidates();
+        };
+
         let walked = self
             .source
             .indexes
             .unindexed_candidates(self.source.filter)?;
-        let mut seen: HashSet<PathBuf> = index_hits
+        let mut seen: HashSet<PathBuf> = candidates
             .iter()
             .map(|candidate| candidate.rel_path().to_path_buf())
             .collect();
         for candidate in walked {
             if seen.insert(candidate.rel_path().to_path_buf()) {
-                index_hits.push(candidate);
+                candidates.push(candidate);
             }
         }
-        Ok(index_hits)
+        Ok(candidates)
     }
 }
 

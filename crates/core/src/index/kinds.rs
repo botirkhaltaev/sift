@@ -1,11 +1,10 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::config::{CorpusKind, IndexBuildConfig};
 use super::ngram;
-use super::{IndexDestination, IndexSource};
+use super::{IndexDestination, IndexSource, IndexedCorpus};
 
 /// How an index query plan resolves candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -29,15 +28,26 @@ pub enum CandidatePlan {
     /// The query has no usable index terms.
     Unavailable,
     /// Every indexed file is a possible match, so the index cannot narrow further.
-    AllIndexed,
+    AllIndexed { coverage: IndexedCorpus },
     /// A narrowed set of possible matching files.
-    Narrowed(Vec<crate::Candidate>),
+    Narrowed {
+        candidates: Vec<crate::Candidate>,
+        coverage: IndexedCorpus,
+    },
 }
 
 impl CandidatePlan {
     #[must_use]
     pub const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
+    }
+
+    #[must_use]
+    pub const fn coverage(&self) -> Option<&IndexedCorpus> {
+        match self {
+            Self::Unavailable => None,
+            Self::AllIndexed { coverage } | Self::Narrowed { coverage, .. } => Some(coverage),
+        }
     }
 }
 
@@ -203,9 +213,9 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
+    pub(crate) fn coverage(&self) -> IndexedCorpus {
         match self {
-            Self::NGram(index) => index.indexed_rel_paths(),
+            Self::NGram(index) => index.coverage(),
         }
     }
 }
