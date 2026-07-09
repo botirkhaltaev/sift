@@ -4,8 +4,11 @@ use std::path::{Path, PathBuf};
 use super::config::CorpusKind;
 use super::error::IndexError;
 use super::kinds::{Index, IndexCandidateResult};
+use super::paths::IndexedPaths;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
+use crate::corpus::filter::CandidateFilter;
+use crate::corpus::walk::{FileWalk, WalkFile};
 
 /// Registry of opened indexes read from a snapshot store.
 ///
@@ -99,39 +102,33 @@ impl Indexes {
     /// Corpus-relative paths present in the current snapshot.
     #[must_use]
     pub fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
-        let indexes = self.snapshot.indexes();
-        let Some(first) = indexes.first() else {
-            return HashSet::new();
-        };
+        self.indexed_paths().into_set()
+    }
 
-        let mut paths: HashSet<PathBuf> = first
-            .all_files()
-            .into_iter()
-            .map(|c| c.rel_path().to_path_buf())
-            .collect();
-
-        for index in indexes.iter().skip(1) {
-            let next: HashSet<PathBuf> = index
-                .all_files()
-                .into_iter()
-                .map(|c| c.rel_path().to_path_buf())
-                .collect();
-            paths.retain(|p| next.contains(p));
-            if paths.is_empty() {
-                break;
-            }
-        }
-
-        paths
+    fn indexed_paths(&self) -> IndexedPaths {
+        IndexedPaths::from_indexes(self.snapshot.indexes())
     }
 
     /// Corpus-relative search hits not yet present in the current snapshot.
     #[must_use]
     pub fn unindexed_hits(&self, hits: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-        let indexed = self.indexed_rel_paths();
+        let indexed = self.indexed_paths();
         hits.into_iter()
             .filter(|path| !indexed.contains(path))
             .collect()
+    }
+
+    /// Corpus-relative paths from `filter` that are not present in the current snapshot.
+    pub(crate) fn unindexed_walk_paths(
+        &self,
+        filter: &CandidateFilter,
+    ) -> crate::Result<Vec<PathBuf>> {
+        let indexed = self.indexed_paths();
+        Ok(FileWalk::from_filter(filter)
+            .files_matching(&indexed.unindexed_files())?
+            .into_iter()
+            .map(WalkFile::into_rel_path)
+            .collect())
     }
 
     /// Return all indexed candidates across all registered indexes.
