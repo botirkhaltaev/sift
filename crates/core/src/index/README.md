@@ -46,7 +46,7 @@ let plan = indexes.plan(&query_spec);
 
 1. Add a variant to `IndexConfig` and `Index` in `kinds.rs`.
 2. Implement configured lifecycle routing through `IndexConfig` and query dispatch through `Index`.
-3. Implement `root`, `corpus_kind`, `plan`, `all_files` in the `Index` match arms.
+3. Implement `root`, `corpus_kind`, `plan`, `all_files`, and `coverage` in the `Index` match arms.
 4. Create a sibling module to `ngram/` with the index implementation.
 
 The `Indexes` registry, `IndexStore`, snapshot layer, query planner, and CLI require no changes.

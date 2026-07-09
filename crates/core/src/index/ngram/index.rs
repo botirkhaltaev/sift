@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::candidates::CandidateSpec;
-use crate::index::{CandidatePlan, CorpusKind, FileId};
+use crate::index::{CandidatePlan, CorpusKind, FileId, IndexedCorpus};
 
 use super::config::Config;
 use super::files::FileFingerprint;
@@ -30,11 +30,63 @@ pub struct Index {
 #[derive(Debug)]
 pub struct Storage {
     pub(crate) root: PathBuf,
-    pub(crate) fingerprints: Vec<FileFingerprint>,
+    pub(crate) files: IndexedFiles,
     pub(crate) gram_sets: GramSets,
     pub(crate) lexicon: Lexicon,
     pub(crate) postings: Postings,
     pub(crate) corpus_kind: CorpusKind,
+}
+
+#[derive(Debug)]
+pub struct IndexedFiles {
+    fingerprints: Vec<FileFingerprint>,
+    coverage: IndexedCorpus,
+}
+
+impl IndexedFiles {
+    pub(crate) fn new(fingerprints: Vec<FileFingerprint>) -> Self {
+        let coverage = IndexedCorpus::from_paths(fingerprints.iter().map(|fp| fp.path.clone()));
+        Self {
+            fingerprints,
+            coverage,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[FileFingerprint] {
+        &self.fingerprints
+    }
+
+    pub(crate) fn get(&self, id: FileId) -> Option<&FileFingerprint> {
+        self.fingerprints.get(id.get())
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.fingerprints.len()
+    }
+
+    pub(crate) fn coverage(&self) -> IndexedCorpus {
+        self.coverage.clone()
+    }
+}
+
+impl Storage {
+    pub(crate) const fn new(
+        root: PathBuf,
+        files: IndexedFiles,
+        gram_sets: GramSets,
+        lexicon: Lexicon,
+        postings: Postings,
+        corpus_kind: CorpusKind,
+    ) -> Self {
+        Self {
+            root,
+            files,
+            gram_sets,
+            lexicon,
+            postings,
+            corpus_kind,
+        }
+    }
 }
 
 impl Index {
@@ -45,17 +97,14 @@ impl Index {
 
     #[must_use]
     pub fn file_path(&self, id: FileId) -> Option<&Path> {
-        self.storage
-            .fingerprints
-            .get(id.get())
-            .map(|fp| fp.path.as_path())
+        self.storage.files.get(id).map(|fp| fp.path.as_path())
     }
 
     #[must_use]
     pub fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
         self.storage
-            .fingerprints
-            .get(id.get())
+            .files
+            .get(id)
             .map(|fp| self.storage.root.join(&fp.path))
     }
 
@@ -76,23 +125,14 @@ impl Index {
             return CandidatePlan::Unavailable;
         };
         let ids = self.candidate_file_ids(&arms);
-        if ids.len() == self.storage.fingerprints.len() && self.storage.fingerprints.len() > 1 {
-            return CandidatePlan::AllIndexed;
+        let coverage = self.coverage();
+        if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
+            return CandidatePlan::AllIndexed { coverage };
         }
-        CandidatePlan::Narrowed(
-            ids.into_iter()
-                .filter_map(|id| {
-                    let fid = FileId::new(usize::try_from(id).ok()?);
-                    let fp = self.storage.fingerprints.get(fid.get())?;
-                    Some(crate::Candidate::with_metadata(
-                        fp.path.clone(),
-                        self.storage.root.join(&fp.path),
-                        Some(fp.size),
-                        None,
-                    ))
-                })
-                .collect(),
-        )
+        CandidatePlan::Narrowed {
+            candidates: self.materialize_file_ids(ids),
+            coverage,
+        }
     }
 
     /// Returns an explanation of how a query would be handled.
@@ -111,7 +151,8 @@ impl Index {
     #[must_use]
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
         self.storage
-            .fingerprints
+            .files
+            .as_slice()
             .iter()
             .map(|fp| {
                 crate::Candidate::with_metadata(
@@ -125,11 +166,22 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn indexed_rel_paths(&self) -> std::collections::HashSet<PathBuf> {
-        self.storage
-            .fingerprints
-            .iter()
-            .map(|fp| fp.path.clone())
+    pub(crate) fn coverage(&self) -> IndexedCorpus {
+        self.storage.files.coverage()
+    }
+
+    fn materialize_file_ids(&self, ids: Vec<u32>) -> Vec<crate::Candidate> {
+        ids.into_iter()
+            .filter_map(|id| {
+                let fid = FileId::new(usize::try_from(id).ok()?);
+                let fp = self.storage.files.get(fid)?;
+                Some(crate::Candidate::with_metadata(
+                    fp.path.clone(),
+                    self.storage.root.join(&fp.path),
+                    Some(fp.size),
+                    None,
+                ))
+            })
             .collect()
     }
     pub(crate) fn merge_partial_fingerprints(
