@@ -13,9 +13,7 @@ pub mod store;
 pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexBuildConfig};
 pub use error::IndexError;
-pub use kinds::{
-    FileId, Index, IndexCandidateResult, IndexConfig, IndexId, PlanMode, QueryPlanOutput,
-};
+pub use kinds::{CandidatePlan, FileId, Index, IndexConfig, IndexId, PlanMode, QueryPlanOutput};
 pub use meta::{CorpusMeta, FilterMeta, IndexCoverage, WalkMeta};
 pub use registry::Indexes;
 pub use snapshot::SnapshotId;
