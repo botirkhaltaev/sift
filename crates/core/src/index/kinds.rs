@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -206,6 +207,13 @@ impl Index {
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
         match self {
             Self::NGram(index) => index.all_files(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
+        match self {
+            Self::NGram(index) => index.indexed_rel_paths(),
         }
     }
 }
