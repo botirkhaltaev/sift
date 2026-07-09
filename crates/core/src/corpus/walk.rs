@@ -139,9 +139,21 @@ impl<'a> FileWalk<'a> {
     ///
     /// Returns an error if the root cannot be canonicalized or a walk fails.
     pub fn candidates(self) -> crate::Result<Vec<Candidate>> {
+        self.candidates_matching(AllFiles)
+    }
+
+    /// Discover selected files and convert them into search candidates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the root cannot be canonicalized or a walk fails.
+    pub fn candidates_matching<S: WalkSelector>(
+        self,
+        selector: S,
+    ) -> crate::Result<Vec<Candidate>> {
         Ok(self
             .metadata(WalkMetadata::Read)
-            .files()?
+            .files_matching(selector)?
             .into_iter()
             .map(Candidate::from)
             .collect())
