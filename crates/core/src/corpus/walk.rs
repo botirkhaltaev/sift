@@ -128,7 +128,23 @@ impl<'a> FileWalk<'a> {
     ///
     /// Returns an error if the root cannot be canonicalized or a walk fails.
     pub fn files(self) -> crate::Result<Vec<WalkFile>> {
-        self.files_matching(&AllFiles)
+        self.files_matching(AllFiles)
+    }
+
+    /// Discover matching files and convert them into search candidates.
+    ///
+    /// Reads filesystem metadata so each [`Candidate`] carries size and depth.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the root cannot be canonicalized or a walk fails.
+    pub fn candidates(self) -> crate::Result<Vec<Candidate>> {
+        Ok(self
+            .metadata(WalkMetadata::Read)
+            .files()?
+            .into_iter()
+            .map(Candidate::from)
+            .collect())
     }
 
     /// Discover matching files whose relative path is accepted by `selector`.
@@ -136,7 +152,7 @@ impl<'a> FileWalk<'a> {
     /// # Errors
     ///
     /// Returns an error if the root cannot be canonicalized or a walk fails.
-    pub fn files_matching<S: WalkSelector>(self, selector: &S) -> crate::Result<Vec<WalkFile>> {
+    pub fn files_matching<S: WalkSelector>(self, selector: S) -> crate::Result<Vec<WalkFile>> {
         let filter_root = self.root.canonicalize()?;
         let filter_root = Arc::new(filter_root);
         let mut files = Vec::new();
@@ -144,7 +160,7 @@ impl<'a> FileWalk<'a> {
             self.collect_scope(&filter_root, Path::new(""), selector, &mut files)?;
         } else {
             for scope in self.scopes {
-                self.collect_scope(&filter_root, scope, selector, &mut files)?;
+                self.collect_scope(&filter_root, scope, selector.clone(), &mut files)?;
             }
         }
         files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
@@ -162,7 +178,7 @@ impl<'a> FileWalk<'a> {
         &self,
         filter_root: &Arc<PathBuf>,
         scope: &Path,
-        selector: &S,
+        selector: S,
         files: &mut Vec<WalkFile>,
     ) -> crate::Result<()> {
         let path = if scope.as_os_str().is_empty() {
@@ -192,7 +208,7 @@ impl<'a> FileWalk<'a> {
                 files.push(file);
             }
         } else if path.is_dir() {
-            let mut walk = FileWalkRun::new(&path, filter_root, self, selector.clone());
+            let mut walk = FileWalkRun::new(&path, filter_root, self, selector);
             files.extend(walk.run()?);
         }
         Ok(())
@@ -288,15 +304,17 @@ impl WalkFile {
     pub fn into_rel_path(self) -> PathBuf {
         self.rel_path
     }
+}
 
-    #[must_use]
-    pub fn into_candidate(self) -> Candidate {
-        let size = self.size();
-        let abs_path = self.root.join(&self.rel_path);
-        Candidate::with_metadata(self.rel_path, abs_path, size, Some(self.depth))
+impl From<WalkFile> for Candidate {
+    fn from(file: WalkFile) -> Self {
+        let size = file.size();
+        let abs_path = file.root.join(&file.rel_path);
+        Self::with_metadata(file.rel_path, abs_path, size, Some(file.depth))
     }
 }
 
+/// Selects which discovered relative paths a [`FileWalk`] should keep.
 pub trait WalkSelector: Clone + Send + Sync {
     fn includes(&self, rel_path: &Path) -> bool;
 }
