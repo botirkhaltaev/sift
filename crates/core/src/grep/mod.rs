@@ -18,7 +18,7 @@ pub use crate::corpus::filter::{
     TypeFilterRule, VisibilityConfig,
 };
 pub use crate::corpus::order::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
-pub use crate::corpus::walk::FileWalk;
+pub use crate::corpus::walk::{FileWalk, WalkFile, WalkMetadata};
 pub use crate::index::Indexes;
 pub use error::Error;
 pub use input::{ByteInput, CandidateTransform, InputRequest};

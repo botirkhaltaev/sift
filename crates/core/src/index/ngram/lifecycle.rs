@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::corpus::walk::FileWalk;
 use crate::corpus::walk::LinkTraversal;
+use crate::corpus::walk::{FileWalk, WalkFile};
 use crate::index::snapshot::ArtifactData;
 use crate::index::{CorpusKind, IndexBuildConfig, IndexDestination, IndexSource};
 
@@ -300,7 +300,7 @@ impl Index {
         use std::collections::HashMap;
 
         let fingerprints = if paths.is_empty() {
-            let corpus_paths = FileWalk::new(config.corpus.root)
+            let corpus_paths: Vec<PathBuf> = FileWalk::new(config.corpus.root)
                 .scopes(config.corpus.include_paths)
                 .excludes(config.corpus.exclude_paths)
                 .visibility(config.visibility.clone())
@@ -312,7 +312,10 @@ impl Index {
                 .one_file_system(config.walk.one_file_system)
                 .max_depth(config.walk.max_depth)
                 .max_filesize(config.walk.max_filesize)
-                .collect_paths()?;
+                .files()?
+                .into_iter()
+                .map(WalkFile::into_rel_path)
+                .collect();
             FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
         } else {
             Self::merge_partial_fingerprints(&self.storage.fingerprints, config.corpus.root, paths)?

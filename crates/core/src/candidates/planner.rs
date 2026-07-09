@@ -8,7 +8,7 @@ use crate::candidates::{
     CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, IndexFallback,
 };
 use crate::corpus::Candidate;
-use crate::corpus::walk::FileWalk;
+use crate::corpus::walk::{FileWalk, WalkMetadata};
 use crate::index::IndexCandidateResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,7 +103,12 @@ impl<'a> CandidatePlanner<'a> {
     ) -> crate::Result<Vec<Candidate>> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
-            CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).collect()?,
+            CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter)
+                .metadata(WalkMetadata::Read)
+                .files()?
+                .into_iter()
+                .map(crate::corpus::walk::WalkFile::into_candidate)
+                .collect(),
             CandidateStrategy::AllIndexed => self.source.indexes.complete_candidates(),
             CandidateStrategy::UseIndex => match index_candidates {
                 IndexCandidateResult::Candidates(candidates) => candidates,
@@ -112,7 +117,12 @@ impl<'a> CandidatePlanner<'a> {
             CandidateStrategy::MergeIndexAndWalk => match index_candidates {
                 IndexCandidateResult::Candidates(candidates) => self.merge_unindexed(candidates)?,
                 IndexCandidateResult::All | IndexCandidateResult::Unavailable => {
-                    FileWalk::from_filter(self.source.filter).collect()?
+                    FileWalk::from_filter(self.source.filter)
+                        .metadata(WalkMetadata::Read)
+                        .files()?
+                        .into_iter()
+                        .map(crate::corpus::walk::WalkFile::into_candidate)
+                        .collect()
                 }
             },
         };
@@ -152,7 +162,12 @@ impl<'a> CandidatePlanner<'a> {
 
     fn merge_unindexed(&self, mut index_hits: Vec<Candidate>) -> crate::Result<Vec<Candidate>> {
         let indexed_paths = self.source.indexes.indexed_rel_paths();
-        let walked = FileWalk::from_filter(self.source.filter).collect()?;
+        let walked = FileWalk::from_filter(self.source.filter)
+            .metadata(WalkMetadata::Read)
+            .files()?
+            .into_iter()
+            .map(crate::corpus::walk::WalkFile::into_candidate)
+            .collect::<Vec<_>>();
         let mut seen: HashSet<PathBuf> = index_hits
             .iter()
             .map(|candidate| candidate.rel_path().to_path_buf())
