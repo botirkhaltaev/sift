@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::config::{CorpusKind, IndexBuildConfig};
 use super::ngram;
-use super::{IndexDestination, IndexSource};
+use super::{IndexDestination, IndexSource, IndexedCorpus};
 
 /// How an index query plan resolves candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -23,28 +23,31 @@ pub struct QueryPlanOutput {
     pub mode: PlanMode,
 }
 
-/// Candidate information produced by an index.
+/// How an opened index covers a query.
 #[derive(Debug)]
-pub enum IndexCandidateResult {
+pub enum CandidatePlan {
     /// The query has no usable index terms.
     Unavailable,
     /// Every indexed file is a possible match, so the index cannot narrow further.
-    All,
+    AllIndexed { coverage: IndexedCorpus },
     /// A narrowed set of possible matching files.
-    Candidates(Vec<crate::Candidate>),
+    Narrowed {
+        candidates: Vec<crate::Candidate>,
+        coverage: IndexedCorpus,
+    },
 }
 
-impl IndexCandidateResult {
+impl CandidatePlan {
     #[must_use]
     pub const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
     }
 
     #[must_use]
-    pub fn into_candidates(self) -> Option<Vec<crate::Candidate>> {
+    pub const fn coverage(&self) -> Option<&IndexedCorpus> {
         match self {
-            Self::Candidates(candidates) => Some(candidates),
-            Self::Unavailable | Self::All => None,
+            Self::Unavailable => None,
+            Self::AllIndexed { coverage } | Self::Narrowed { coverage, .. } => Some(coverage),
         }
     }
 }
@@ -197,9 +200,9 @@ impl Index {
     }
 
     #[must_use]
-    pub fn candidates(&self, query: &crate::candidates::CandidateSpec<'_>) -> IndexCandidateResult {
+    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
         match self {
-            Self::NGram(index) => index.candidates(query),
+            Self::NGram(index) => index.plan(query),
         }
     }
 
