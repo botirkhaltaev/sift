@@ -9,7 +9,7 @@ use crate::candidates::{
 };
 use crate::corpus::Candidate;
 use crate::corpus::walk::FileWalk;
-use crate::index::IndexCandidateResult;
+use crate::index::CandidatePlan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexNarrowing {
@@ -84,34 +84,34 @@ impl<'a> CandidatePlanner<'a> {
     pub fn resolve(self) -> crate::Result<Vec<Candidate>> {
         let index_narrowing = self.spec.index_narrowing();
         let resolved = self.request.resolve(index_narrowing);
-        let index_candidates = self.source.indexes.candidates(&self.spec);
+        let index_plan = self.source.indexes.plan(&self.spec);
         let strategy = plan(PlanInput {
             scope: resolved.scope,
             index_narrowing,
-            index_status: self.index_status(&index_candidates),
+            index_status: self.index_status(&index_plan),
             snapshot_status: self.snapshot_status(),
             fallback: resolved.fallback,
         });
-        self.execute(strategy, index_candidates, resolved.order)
+        self.execute(strategy, index_plan, resolved.order)
     }
 
     fn execute(
         self,
         strategy: CandidateStrategy,
-        index_candidates: IndexCandidateResult,
+        index_plan: CandidatePlan,
         order: crate::corpus::CandidateOrder,
     ) -> crate::Result<Vec<Candidate>> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
             CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).candidates()?,
-            CandidateStrategy::AllIndexed => self.source.indexes.complete_candidates(),
-            CandidateStrategy::UseIndex => match index_candidates {
-                IndexCandidateResult::Candidates(candidates) => candidates,
-                IndexCandidateResult::All | IndexCandidateResult::Unavailable => Vec::new(),
+            CandidateStrategy::AllIndexed => self.source.indexes.all_indexed_candidates(),
+            CandidateStrategy::UseIndex => match index_plan {
+                CandidatePlan::Narrowed(candidates) => candidates,
+                CandidatePlan::AllIndexed | CandidatePlan::Unavailable => Vec::new(),
             },
-            CandidateStrategy::MergeIndexAndWalk => match index_candidates {
-                IndexCandidateResult::Candidates(candidates) => self.merge_unindexed(candidates)?,
-                IndexCandidateResult::All | IndexCandidateResult::Unavailable => {
+            CandidateStrategy::MergeIndexAndWalk => match index_plan {
+                CandidatePlan::Narrowed(candidates) => self.merge_unindexed(candidates)?,
+                CandidatePlan::AllIndexed | CandidatePlan::Unavailable => {
                     FileWalk::from_filter(self.source.filter).candidates()?
                 }
             },
@@ -122,14 +122,14 @@ impl<'a> CandidatePlanner<'a> {
             .into_vec())
     }
 
-    const fn index_status(&self, index_candidates: &IndexCandidateResult) -> IndexStatus {
+    const fn index_status(&self, index_plan: &CandidatePlan) -> IndexStatus {
         if self.source.indexes.is_empty() {
             IndexStatus::Empty
         } else {
-            match index_candidates {
-                IndexCandidateResult::Unavailable => IndexStatus::NoCandidateIndex,
-                IndexCandidateResult::All => IndexStatus::AllCandidates,
-                IndexCandidateResult::Candidates(_) => IndexStatus::CanNarrow,
+            match index_plan {
+                CandidatePlan::Unavailable => IndexStatus::NoCandidateIndex,
+                CandidatePlan::AllIndexed => IndexStatus::AllCandidates,
+                CandidatePlan::Narrowed(_) => IndexStatus::CanNarrow,
             }
         }
     }

@@ -496,7 +496,7 @@ fn bench_candidates(c: &mut Criterion) {
             patterns: &["beta".to_string()],
             flags: CandidateFlags::empty(),
         };
-        b.iter(|| black_box(index.candidates(&spec)));
+        b.iter(|| black_box(index.plan(&spec)));
     });
 
     g.bench_function("required_literal", |b| {
@@ -504,7 +504,7 @@ fn bench_candidates(c: &mut Criterion) {
             patterns: &["[A-Z]+_RESUME".to_string()],
             flags: CandidateFlags::empty(),
         };
-        b.iter(|| black_box(index.candidates(&spec)));
+        b.iter(|| black_box(index.plan(&spec)));
     });
 
     g.bench_function("full_scan_fallback", |b| {
@@ -512,7 +512,7 @@ fn bench_candidates(c: &mut Criterion) {
             patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
             flags: CandidateFlags::empty(),
         };
-        b.iter(|| black_box(index.candidates(&spec)));
+        b.iter(|| black_box(index.plan(&spec)));
     });
 
     g.bench_function("alternation", |b| {
@@ -520,7 +520,7 @@ fn bench_candidates(c: &mut Criterion) {
             patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
             flags: CandidateFlags::empty(),
         };
-        b.iter(|| black_box(index.candidates(&spec)));
+        b.iter(|| black_box(index.plan(&spec)));
     });
 
     g.bench_function("case_insensitive", |b| {
@@ -528,7 +528,7 @@ fn bench_candidates(c: &mut Criterion) {
             patterns: &["beta".to_string()],
             flags: CandidateFlags::CASE_INSENSITIVE,
         };
-        b.iter(|| black_box(index.candidates(&spec)));
+        b.iter(|| black_box(index.plan(&spec)));
     });
 
     g.finish();
