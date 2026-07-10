@@ -485,6 +485,8 @@ impl OutputDecl {
             mode: effective_mode,
             emission: if quiet {
                 OutputEmission::Quiet
+            } else if effective_mode.is_summary() {
+                OutputEmission::Summary
             } else {
                 OutputEmission::Normal
             },
