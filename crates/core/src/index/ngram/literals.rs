@@ -10,10 +10,11 @@ impl Config {
     /// Extract literal byte arms from a query spec.
     /// Returns `None` if no usable literals for this N-gram width can be extracted.
     ///
-    /// Case-insensitive queries still extract **case-sensitive** literal bytes. ASCII
-    /// case folding happens at posting lookup so alternations keep long arms instead of
-    /// exploding into short Unicode case prefixes. Non-ASCII case-insensitive literals
-    /// decline narrowing (full scan) to avoid false negatives.
+    /// Case-insensitive queries extract case-preserving arms; [`GramMatch`] at
+    /// lookup folds ASCII letter case. Non-ASCII case-insensitive literals
+    /// decline narrowing so candidates stay conservative.
+    ///
+    /// [`GramMatch`]: super::gram::GramMatch
     pub(crate) fn extract_literal_arms(self, query: &CandidateSpec<'_>) -> Option<Vec<Vec<u8>>> {
         if query.invert_match() {
             return None;
@@ -25,7 +26,8 @@ impl Config {
             let arms = if query.fixed_strings() {
                 vec![p.as_bytes().to_vec()]
             } else {
-                // Extract without HIR case folding so arms stay long and ASCII.
+                // Keep HIR case-sensitive so arms stay long; matching policy is
+                // chosen by the caller via GramMatch.
                 Self::plan_pattern(
                     p.as_str(),
                     false,
