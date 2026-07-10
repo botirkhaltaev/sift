@@ -124,7 +124,7 @@ impl Index {
         let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
             return CandidatePlan::Unavailable;
         };
-        let ids = self.candidate_file_ids(&arms);
+        let ids = self.candidate_file_ids(&arms, query.case_insensitive());
         let coverage = self.coverage();
         if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
             return CandidatePlan::AllIndexed { coverage };

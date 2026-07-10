@@ -9,19 +9,26 @@ use super::config::Config;
 impl Config {
     /// Extract literal byte arms from a query spec.
     /// Returns `None` if no usable literals for this N-gram width can be extracted.
+    ///
+    /// Case-insensitive queries still extract **case-sensitive** literal bytes. ASCII
+    /// case folding happens at posting lookup so alternations keep long arms instead of
+    /// exploding into short Unicode case prefixes. Non-ASCII case-insensitive literals
+    /// decline narrowing (full scan) to avoid false negatives.
     pub(crate) fn extract_literal_arms(self, query: &CandidateSpec<'_>) -> Option<Vec<Vec<u8>>> {
         if query.invert_match() {
             return None;
         }
         let width = self.width().get();
+        let case_insensitive = query.case_insensitive();
         let mut literal_arms: Vec<Vec<u8>> = Vec::new();
         for p in query.patterns {
             let arms = if query.fixed_strings() {
-                Self::fixed_string_literals(p.as_bytes(), query.case_insensitive())
+                vec![p.as_bytes().to_vec()]
             } else {
+                // Extract without HIR case folding so arms stay long and ASCII.
                 Self::plan_pattern(
                     p.as_str(),
-                    query.case_insensitive(),
+                    false,
                     query.word_regexp(),
                     query.line_regexp(),
                     width,
@@ -29,6 +36,9 @@ impl Config {
             };
             for lit in arms {
                 if lit.len() < width {
+                    return None;
+                }
+                if case_insensitive && !lit.is_ascii() {
                     return None;
                 }
                 literal_arms.push(lit);
@@ -146,13 +156,5 @@ impl Config {
             }
         }
         out
-    }
-
-    fn fixed_string_literals(lit: &[u8], case_insensitive: bool) -> Vec<Vec<u8>> {
-        if case_insensitive {
-            vec![lit.to_ascii_lowercase()]
-        } else {
-            vec![lit.to_vec()]
-        }
     }
 }

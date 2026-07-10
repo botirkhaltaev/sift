@@ -159,6 +159,41 @@ mod candidate_tests {
     }
 
     #[test]
+    fn case_insensitive_alternation_keeps_long_arms() {
+        let spec = CandidateSpec {
+            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
+            flags: CandidateFlags::CASE_INSENSITIVE,
+        };
+        let arms = default_config()
+            .extract_literal_arms(&spec)
+            .expect("casei alternation should extract");
+        assert_eq!(arms.len(), 4);
+        assert!(arms.iter().all(|arm| arm.len() >= 7));
+        assert!(arms.iter().any(|arm| arm == b"ERR_SYS"));
+    }
+
+    #[test]
+    fn case_insensitive_fixed_string_keeps_original_bytes() {
+        let spec = CandidateSpec {
+            patterns: &["ERR_SYS".to_string()],
+            flags: CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
+        };
+        let arms = default_config()
+            .extract_literal_arms(&spec)
+            .expect("fixed casei should extract");
+        assert_eq!(arms, vec![b"ERR_SYS".to_vec()]);
+    }
+
+    #[test]
+    fn case_insensitive_non_ascii_declines_narrowing() {
+        let spec = CandidateSpec {
+            patterns: &["café".to_string()],
+            flags: CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
+        };
+        assert!(default_config().extract_literal_arms(&spec).is_none());
+    }
+
+    #[test]
     fn required_literal_inside_regex_narrows() {
         assert!(narrow(&["[A-Z]+_RESUME".to_string()], false, false, false));
     }

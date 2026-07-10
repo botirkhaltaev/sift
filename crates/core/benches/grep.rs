@@ -107,6 +107,17 @@ fn bench_indexed_search(c: &mut Criterion) {
         b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
     });
 
+    g.bench_function("case_insensitive_alternation", |b| {
+        let query = make_search(
+            &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT"],
+            SearchOptions {
+                case_mode: sift_core::search::CaseMode::Insensitive,
+                ..Default::default()
+            },
+        );
+        b.iter(|| black_box(run_grep(&indexes, &filter, &query)));
+    });
+
     g.bench_function("full_scan_fallback", |b| {
         let query = make_search(
             &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}"],
