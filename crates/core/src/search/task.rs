@@ -132,13 +132,23 @@ impl<'a> SearchTask<'a> {
             .line_terminator(LineTerminator::byte(self.options.line_terminator()))
             .invert_match(self.options.invert_match())
             .line_number(true)
-            .max_matches(self.options.max_results.map(|n| n as u64));
+            .max_matches(self.match_limit());
         builder.before_context(self.options.before_context);
         builder.after_context(self.options.after_context);
         if self.options.multiline() {
             builder.multi_line(true);
         }
         builder.build()
+    }
+
+    fn match_limit(&self) -> Option<u64> {
+        match self.mode {
+            SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch => Some(1),
+            SearchMode::Lines
+            | SearchMode::Matches
+            | SearchMode::CountLines { .. }
+            | SearchMode::CountMatches { .. } => self.options.max_results.map(|n| n as u64),
+        }
     }
 
     fn binary_detection(&self, origin: InputOrigin) -> BinaryDetection {
