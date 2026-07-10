@@ -203,7 +203,7 @@ impl Indexes {
         let Some(index) = self.first() else {
             return Vec::new();
         };
-        index.materialize_file_ids(file_ids)
+        index.materialize(file_ids)
     }
 
     #[must_use]

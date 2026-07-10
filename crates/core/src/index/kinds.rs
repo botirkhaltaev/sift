@@ -195,9 +195,9 @@ impl Index {
     }
 
     #[must_use]
-    pub fn materialize_file_ids(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+    pub fn materialize(&self, ids: &[u32]) -> Vec<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.materialize_file_ids(ids),
+            Self::NGram(index) => index.materialize(ids),
         }
     }
 

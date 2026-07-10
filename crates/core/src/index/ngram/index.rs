@@ -216,7 +216,7 @@ impl Index {
     }
 
     #[must_use]
-    pub fn materialize_file_ids(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+    pub(crate) fn materialize(&self, ids: &[u32]) -> Vec<crate::Candidate> {
         ids.par_iter()
             .filter_map(|&id| {
                 let fid = FileId::new(usize::try_from(id).ok()?);
