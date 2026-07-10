@@ -95,21 +95,19 @@ impl Searcher {
 
         let search_start = Instant::now();
         let event_collection = events.collection();
-        let (mut outcomes, inputs_searched, bytes_searched) = match self.options().search_bound {
+        let options = self.options();
+        let (mut outcomes, inputs_searched, bytes_searched) = match options.search_bound {
             SearchBound::Exhaustive => {
                 let outcomes: Vec<_> = inputs
                     .as_slice()
                     .par_iter()
-                    .map(|input| {
-                        SearchTask::new(
-                            &self.matcher,
-                            self.options(),
-                            mode,
-                            event_collection,
-                            input,
-                        )
-                        .execute()
-                    })
+                    .map_init(
+                        || SearchTask::discovered_searcher(options, mode),
+                        |grep, input| {
+                            SearchTask::new(&self.matcher, options, mode, event_collection, input)
+                                .execute(grep)
+                        },
+                    )
                     .collect();
                 let len = inputs.len();
                 let bytes = inputs.byte_count();
@@ -119,16 +117,12 @@ impl Searcher {
                 let mut found = Vec::new();
                 let mut searched = 0usize;
                 let mut bytes = 0u64;
+                let mut grep = SearchTask::discovered_searcher(options, mode);
                 for input in inputs.as_slice() {
                     searched += 1;
-                    let outcome = SearchTask::new(
-                        &self.matcher,
-                        self.options(),
-                        mode,
-                        event_collection,
-                        input,
-                    )
-                    .execute();
+                    let outcome =
+                        SearchTask::new(&self.matcher, options, mode, event_collection, input)
+                            .execute(&mut grep);
                     bytes = bytes.saturating_add(outcome.bytes_searched);
                     let selected = mode.selects(outcome.matched);
                     if selected {
