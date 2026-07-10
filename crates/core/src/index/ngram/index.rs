@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
 use crate::candidates::CandidateSpec;
 use crate::index::{CandidatePlan, CorpusKind, FileId, IndexedCorpus};
 
@@ -135,7 +137,7 @@ impl Index {
             return CandidatePlan::AllIndexed { coverage };
         }
         CandidatePlan::Narrowed {
-            candidates: self.materialize_file_ids(ids),
+            candidates: self.materialize_file_ids(&ids),
             coverage,
         }
     }
@@ -158,7 +160,7 @@ impl Index {
         self.storage
             .files
             .as_slice()
-            .iter()
+            .par_iter()
             .map(|fp| {
                 crate::Candidate::with_metadata(
                     fp.path.clone(),
@@ -175,9 +177,9 @@ impl Index {
         self.storage.files.coverage()
     }
 
-    fn materialize_file_ids(&self, ids: Vec<u32>) -> Vec<crate::Candidate> {
-        ids.into_iter()
-            .filter_map(|id| {
+    fn materialize_file_ids(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+        ids.par_iter()
+            .filter_map(|&id| {
                 let fid = FileId::new(usize::try_from(id).ok()?);
                 let fp = self.storage.files.get(fid)?;
                 Some(crate::Candidate::with_metadata(
