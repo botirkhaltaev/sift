@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use crate::Error;
 use crate::GrepError;
 use crate::search::PrefilterCompatibility;
-use crate::search::event::{SearchEvent, SearchSink};
+use crate::search::event::SearchSink;
 use crate::search::input::Inputs;
 use crate::search::matcher::{Matcher, MatcherBuilder};
 use crate::search::mode::SearchMode;
