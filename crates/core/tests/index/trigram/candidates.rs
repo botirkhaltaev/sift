@@ -45,10 +45,7 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
         flags: CandidateFlags::empty(),
     };
 
-    assert!(matches!(
-        index.plan(&spec),
-        CandidatePlan::AllIndexed { .. }
-    ));
+    assert!(matches!(index.plan(&spec), CandidatePlan::AllIndexed));
 }
 
 #[test]

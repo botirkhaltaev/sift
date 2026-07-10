@@ -28,26 +28,15 @@ pub enum CandidatePlan {
     /// The query has no usable index terms.
     Unavailable,
     /// Every indexed file is a possible match, so the index cannot narrow further.
-    AllIndexed { coverage: IndexedCorpus },
+    AllIndexed,
     /// A narrowed set of possible matching files.
-    Narrowed {
-        candidates: Vec<crate::Candidate>,
-        coverage: IndexedCorpus,
-    },
+    Narrowed { candidates: Vec<crate::Candidate> },
 }
 
 impl CandidatePlan {
     #[must_use]
     pub const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
-    }
-
-    #[must_use]
-    pub const fn coverage(&self) -> Option<&IndexedCorpus> {
-        match self {
-            Self::Unavailable => None,
-            Self::AllIndexed { coverage } | Self::Narrowed { coverage, .. } => Some(coverage),
-        }
     }
 }
 
