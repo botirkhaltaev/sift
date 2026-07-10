@@ -10,7 +10,7 @@ use super::config::Config;
 use super::files::FileFingerprint;
 use super::files::FileTable;
 use super::gram::GramWidth;
-use super::index::{Index, IndexedFiles, NGramIndexError, Storage};
+use super::index::{Index, IndexedFiles, IndexedFilesSource, NGramIndexError, Storage};
 use super::storage::grams::{GramSet, GramSets};
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
@@ -100,7 +100,11 @@ impl Config {
                     width,
                     storage: Storage::new(
                         root.to_path_buf(),
-                        IndexedFiles::from_decoded(files, tables.fingerprints.clone()),
+                        IndexedFiles::new(IndexedFilesSource::Built {
+                            table: files,
+                            fingerprints: tables.fingerprints.clone(),
+                        })
+                        .map_err(crate::Error::Io)?,
                         gram_sets,
                         lexicon,
                         postings,
@@ -155,7 +159,8 @@ impl Config {
                 }
 
                 let files = FileTable::open(&files_path).map_err(NGramIndexError::Io)?;
-                let indexed_files = IndexedFiles::from_table(files).map_err(NGramIndexError::Io)?;
+                let indexed_files = IndexedFiles::new(IndexedFilesSource::Stored(files))
+                    .map_err(NGramIndexError::Io)?;
 
                 let lexicon = Lexicon::open(&lexicon_path, width).map_err(NGramIndexError::Io)?;
                 let postings = Postings::open(&postings_path).map_err(NGramIndexError::Io)?;
@@ -176,7 +181,8 @@ impl Config {
             IndexSource::Snapshot { reader, namespace } => {
                 let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
                 let files = FileTable::from_artifact(files_data).map_err(NGramIndexError::Io)?;
-                let indexed_files = IndexedFiles::from_table(files).map_err(NGramIndexError::Io)?;
+                let indexed_files = IndexedFiles::new(IndexedFilesSource::Stored(files))
+                    .map_err(NGramIndexError::Io)?;
 
                 let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
                 let lexicon =
@@ -247,7 +253,11 @@ impl Config {
             width,
             storage: Storage::new(
                 root.to_path_buf(),
-                IndexedFiles::from_decoded(files, tables.fingerprints.clone()),
+                IndexedFiles::new(IndexedFilesSource::Built {
+                    table: files,
+                    fingerprints: tables.fingerprints.clone(),
+                })
+                .map_err(crate::Error::Io)?,
                 gram_sets,
                 lexicon,
                 postings,

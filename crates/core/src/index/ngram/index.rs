@@ -47,29 +47,44 @@ pub struct IndexedFiles {
     coverage: OnceLock<IndexedCorpus>,
 }
 
-impl IndexedFiles {
-    /// Opened table with paths validated; fingerprints decode on first use.
-    pub(crate) fn from_table(table: FileTable) -> std::io::Result<Self> {
-        table.validate_paths()?;
-        Ok(Self {
-            table,
-            fingerprints: OnceLock::new(),
-            coverage: OnceLock::new(),
-        })
-    }
+/// How file rows are supplied when constructing [`IndexedFiles`].
+pub enum IndexedFilesSource {
+    /// On-disk table: validate paths now; decode fingerprints on first use.
+    Stored(FileTable),
+    /// Build output: fingerprints already decoded.
+    Built {
+        table: FileTable,
+        fingerprints: Vec<FileFingerprint>,
+    },
+}
 
-    /// Table plus already-decoded fingerprints (build/create path).
-    pub(crate) fn from_decoded(table: FileTable, fingerprints: Vec<FileFingerprint>) -> Self {
-        let decoded = OnceLock::new();
-        let _ = decoded.set(fingerprints);
-        Self {
-            table,
-            fingerprints: decoded,
-            coverage: OnceLock::new(),
+impl IndexedFiles {
+    pub(crate) fn new(source: IndexedFilesSource) -> std::io::Result<Self> {
+        match source {
+            IndexedFilesSource::Stored(table) => {
+                table.validate_paths()?;
+                Ok(Self {
+                    table,
+                    fingerprints: OnceLock::new(),
+                    coverage: OnceLock::new(),
+                })
+            }
+            IndexedFilesSource::Built {
+                table,
+                fingerprints,
+            } => {
+                let decoded = OnceLock::new();
+                let _ = decoded.set(fingerprints);
+                Ok(Self {
+                    table,
+                    fingerprints: decoded,
+                    coverage: OnceLock::new(),
+                })
+            }
         }
     }
 
-    fn decoded(&self) -> &[FileFingerprint] {
+    fn fingerprints(&self) -> &[FileFingerprint] {
         self.fingerprints.get_or_init(|| {
             self.table
                 .to_fingerprints()
@@ -78,11 +93,11 @@ impl IndexedFiles {
     }
 
     pub(crate) fn as_slice(&self) -> &[FileFingerprint] {
-        self.decoded()
+        self.fingerprints()
     }
 
     pub(crate) fn get(&self, id: FileId) -> Option<&FileFingerprint> {
-        self.decoded().get(id.get())
+        self.fingerprints().get(id.get())
     }
 
     pub(crate) const fn len(&self) -> usize {
@@ -92,7 +107,7 @@ impl IndexedFiles {
     pub(crate) fn coverage(&self) -> IndexedCorpus {
         self.coverage
             .get_or_init(|| {
-                IndexedCorpus::from_paths(self.decoded().iter().map(|fp| fp.path.clone()))
+                IndexedCorpus::from_paths(self.fingerprints().iter().map(|fp| fp.path.clone()))
             })
             .clone()
     }
