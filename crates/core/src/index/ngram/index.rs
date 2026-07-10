@@ -177,9 +177,7 @@ impl Index {
         if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
             return CandidatePlan::AllIndexed;
         }
-        CandidatePlan::Narrowed {
-            candidates: self.materialize_file_ids(&ids),
-        }
+        CandidatePlan::Narrowed { file_ids: ids }
     }
 
     /// Returns an explanation of how a query would be handled.
@@ -217,7 +215,8 @@ impl Index {
         self.storage.files.coverage()
     }
 
-    fn materialize_file_ids(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+    #[must_use]
+    pub fn materialize_file_ids(&self, ids: &[u32]) -> Vec<crate::Candidate> {
         ids.par_iter()
             .filter_map(|&id| {
                 let fid = FileId::new(usize::try_from(id).ok()?);

@@ -29,8 +29,8 @@ pub enum CandidatePlan {
     Unavailable,
     /// Every indexed file is a possible match, so the index cannot narrow further.
     AllIndexed,
-    /// A narrowed set of possible matching files.
-    Narrowed { candidates: Vec<crate::Candidate> },
+    /// Narrowed file ids (materialize at resolve time).
+    Narrowed { file_ids: Vec<u32> },
 }
 
 impl CandidatePlan {
@@ -191,6 +191,13 @@ impl Index {
     pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
         match self {
             Self::NGram(index) => index.plan(query),
+        }
+    }
+
+    #[must_use]
+    pub fn materialize_file_ids(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+        match self {
+            Self::NGram(index) => index.materialize_file_ids(ids),
         }
     }
 

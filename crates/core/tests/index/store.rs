@@ -22,10 +22,11 @@ fn build_and_reopen_indexes() {
         patterns: &["hello".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let files = match indexes.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
+    let file_ids = match indexes.plan(&spec) {
+        sift_core::CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
+    let files = indexes.materialize(&file_ids);
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].rel_path().as_os_str(), "a.txt");
 }

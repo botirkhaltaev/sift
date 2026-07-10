@@ -19,10 +19,11 @@ fn literal_query_returns_indexed_candidates() {
         patterns: &["beta".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let candidates = match index.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
+    let file_ids = match index.plan(&spec) {
+        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
+    let candidates = index.materialize_file_ids(&file_ids);
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -59,10 +60,12 @@ fn literal_candidates_narrow_to_expected_file() {
         patterns: &["beta".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let candidates = match open_indexes(&sift_dir).plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
+    let indexes = open_indexes(&sift_dir);
+    let file_ids = match indexes.plan(&spec) {
+        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
+    let candidates = indexes.materialize(&file_ids);
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -93,10 +96,11 @@ fn case_insensitive_uppercase_corpus_narrows() {
         patterns: &[pattern],
         flags: CandidateFlags::CASE_INSENSITIVE,
     };
-    let candidates = match index.plan(&spec) {
-        CandidatePlan::Narrowed { candidates, .. } => candidates,
+    let file_ids = match index.plan(&spec) {
+        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed casei plan, got {other:?}"),
     };
+    let candidates = index.materialize_file_ids(&file_ids);
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].rel_path(), Path::new("hit.rs"));
 }
@@ -128,9 +132,10 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
         patterns: &[pattern],
         flags: CandidateFlags::CASE_INSENSITIVE,
     };
-    let candidates = match index.plan(&spec) {
-        CandidatePlan::Narrowed { candidates, .. } => candidates,
+    let file_ids = match index.plan(&spec) {
+        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed casei alternation, got {other:?}"),
     };
+    let candidates = index.materialize_file_ids(&file_ids);
     assert_eq!(candidates.len(), 4);
 }

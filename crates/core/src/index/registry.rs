@@ -168,7 +168,7 @@ impl Indexes {
         }
 
         let mut narrowed = plans.into_iter().filter_map(|plan| match plan {
-            CandidatePlan::Narrowed { candidates } => Some(candidates),
+            CandidatePlan::Narrowed { file_ids } => Some(file_ids),
             CandidatePlan::AllIndexed | CandidatePlan::Unavailable => None,
         });
         let Some(mut current) = narrowed.next() else {
@@ -176,16 +176,34 @@ impl Indexes {
         };
 
         for next in narrowed {
-            let lookup: HashSet<&Path> = next.iter().map(crate::Candidate::rel_path).collect();
-            current.retain(|c| lookup.contains(c.rel_path()));
+            let mut out = Vec::with_capacity(current.len().min(next.len()));
+            let (mut i, mut j) = (0usize, 0usize);
+            while i < current.len() && j < next.len() {
+                match current[i].cmp(&next[j]) {
+                    std::cmp::Ordering::Less => i += 1,
+                    std::cmp::Ordering::Greater => j += 1,
+                    std::cmp::Ordering::Equal => {
+                        out.push(current[i]);
+                        i += 1;
+                        j += 1;
+                    }
+                }
+            }
+            current = out;
             if current.is_empty() {
                 break;
             }
         }
 
-        CandidatePlan::Narrowed {
-            candidates: current,
-        }
+        CandidatePlan::Narrowed { file_ids: current }
+    }
+
+    #[must_use]
+    pub fn materialize(&self, file_ids: &[u32]) -> Vec<crate::Candidate> {
+        let Some(index) = self.first() else {
+            return Vec::new();
+        };
+        index.materialize_file_ids(file_ids)
     }
 
     #[must_use]
