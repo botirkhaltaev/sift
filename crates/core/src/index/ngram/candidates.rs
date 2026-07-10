@@ -45,27 +45,34 @@ impl Index {
                 if ids.is_empty() { None } else { Some(ids) }
             }
             GramMatch::AsciiCase => {
+                let file_count = self.storage.files.len();
                 let mut window = vec![0u8; width];
                 let mut cur: Option<Vec<u32>> = None;
                 for offset in 0..=lit.len() - width {
                     window.copy_from_slice(&lit[offset..offset + width]);
-                    let mut runs = Vec::new();
+                    let mut slices: Vec<&[u8]> = Vec::new();
                     for gram in gram_match.grams(&mut window) {
                         let slice = self.posting_bytes_slice(gram);
                         if !slice.is_empty() {
-                            runs.push(
-                                Postings::decode_sorted(slice).expect("postings validated at open"),
-                            );
+                            slices.push(slice);
                         }
                     }
-                    let unioned = Self::merge_sorted_runs(runs);
-                    if unioned.is_empty() {
+                    if slices.is_empty() {
                         return None;
                     }
-                    cur = Some(match cur {
-                        None => unioned,
-                        Some(prev) => Postings::intersect_slices(&prev, &unioned),
-                    });
+                    cur = Some(cur.map_or_else(
+                        || Self::union_posting_slices(&slices, file_count),
+                        |prev| {
+                            let bits = Self::posting_union_bits(&slices, file_count);
+                            prev.into_iter()
+                                .filter(|&id| {
+                                    let idx = id as usize;
+                                    bits.get(idx / 64)
+                                        .is_some_and(|word| word & (1u64 << (idx % 64)) != 0)
+                                })
+                                .collect()
+                        },
+                    ));
                     if cur.as_ref().is_some_and(Vec::is_empty) {
                         return None;
                     }
@@ -88,6 +95,41 @@ impl Index {
         self.storage
             .postings
             .slice(start, end.saturating_sub(start))
+    }
+
+    /// Union posting lists into a file-id bitset (one bit per indexed file).
+    fn posting_union_bits(slices: &[&[u8]], file_count: usize) -> Vec<u64> {
+        let mut bits = vec![0u64; file_count.div_ceil(64)];
+        for slice in slices {
+            let ids = Postings::decode_sorted(slice).expect("postings validated at open");
+            for id in ids {
+                let idx = id as usize;
+                if idx < file_count {
+                    bits[idx / 64] |= 1u64 << (idx % 64);
+                }
+            }
+        }
+        bits
+    }
+
+    fn union_posting_slices(slices: &[&[u8]], file_count: usize) -> Vec<u32> {
+        if slices.len() == 1 {
+            return Postings::decode_sorted(slices[0]).expect("postings validated at open");
+        }
+        let bits = Self::posting_union_bits(slices, file_count);
+        let mut out = Vec::new();
+        for (word_idx, word) in bits.iter().enumerate() {
+            let mut w = *word;
+            while w != 0 {
+                let bit = w.trailing_zeros() as usize;
+                let id = word_idx * 64 + bit;
+                if let Ok(id) = u32::try_from(id) {
+                    out.push(id);
+                }
+                w &= w - 1;
+            }
+        }
+        out
     }
 
     pub(crate) fn intersect_sorted_slices(slices: &[&[u8]]) -> Vec<u32> {
