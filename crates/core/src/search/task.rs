@@ -39,6 +39,10 @@ pub struct SearchOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MatchEmission {
+    /// `-l` / `-L`: file presence only.
+    Presence,
+    /// `-c` line counts: count matching lines, no span scan.
+    LineCount,
     Lines,
     Spans,
 }
@@ -109,7 +113,7 @@ impl<'a> SearchTask<'a> {
                 let _ = grep.search_slice(grep_matcher, bytes, &mut sink);
             }
         }
-        let has_match = !sink.matches.is_empty();
+        let has_match = sink.line_matches > 0;
         SearchOutcome {
             path: display_path,
             matched: has_match,
@@ -131,7 +135,10 @@ impl<'a> SearchTask<'a> {
             .binary_detection(self.binary_detection(origin))
             .line_terminator(LineTerminator::byte(self.options.line_terminator()))
             .invert_match(self.options.invert_match())
-            .line_number(true)
+            .line_number(!matches!(
+                self.mode,
+                SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
+            ))
             .max_matches(self.match_limit());
         builder.before_context(self.options.before_context);
         builder.after_context(self.options.after_context);
@@ -173,10 +180,24 @@ impl SearchOutcome {
 
 impl MatchEmission {
     const fn from(mode: SearchMode, options: &SearchOptions) -> Self {
-        if matches!(mode, SearchMode::Matches) || options.only_matching() {
-            Self::Spans
-        } else {
-            Self::Lines
+        if options.replace.is_some() {
+            return if matches!(mode, SearchMode::Matches) || options.only_matching() {
+                Self::Spans
+            } else {
+                Self::Lines
+            };
+        }
+        match mode {
+            SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch => Self::Presence,
+            SearchMode::CountLines { .. } => Self::LineCount,
+            SearchMode::CountMatches { .. } | SearchMode::Matches => Self::Spans,
+            SearchMode::Lines => {
+                if options.only_matching() {
+                    Self::Spans
+                } else {
+                    Self::Lines
+                }
+            }
         }
     }
 }
@@ -232,10 +253,45 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
     ) -> Result<bool, Self::Error> {
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
+        self.line_matches += 1;
+
+        if matches!(
+            self.match_emission,
+            MatchEmission::Presence | MatchEmission::LineCount
+        ) {
+            self.event_collection.push(
+                &mut self.events,
+                SearchEvent::Match(MatchEvent {
+                    path: self.path.clone(),
+                    line_number: mat.line_number(),
+                    absolute_byte_offset: Some(mat.absolute_byte_offset()),
+                    bytes: Vec::new(),
+                    ranges: Vec::new(),
+                    replacement: None,
+                    replacement_matches: Vec::new(),
+                }),
+            );
+            return Ok(true);
+        }
+
+        let scan_spans = self.replacement.is_some()
+            || matches!(self.match_emission, MatchEmission::Spans)
+            || matches!(self.event_collection, EventCollection::Collect);
+
+        if !scan_spans {
+            if matches!(self.match_emission, MatchEmission::Lines) {
+                self.matches.push(Match {
+                    file: self.path.clone(),
+                    line,
+                    text: String::from_utf8_lossy(line_bytes).into_owned(),
+                });
+            }
+            return Ok(true);
+        }
+
         let replacement = self.replacement.as_deref().and_then(|replacement| {
             Replacement::expand(self.matcher, line_bytes, replacement).ok()
         });
-        self.line_matches += 1;
         let mut ranges = Vec::new();
         let _ = self
             .matcher
