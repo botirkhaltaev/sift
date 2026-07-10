@@ -224,7 +224,7 @@ impl<'a> CandidateInputPlan<'a> {
         }
     }
 
-    fn identity(&self, candidate: &Candidate) -> InputIdentity {
+    pub(crate) fn identity(&self, candidate: &Candidate) -> InputIdentity {
         let display_path = match self.path_display {
             PathDisplay::Relative => candidate.rel_path(),
             PathDisplay::Absolute => candidate.abs_path(),
@@ -238,18 +238,44 @@ impl<'a> CandidateInputPlan<'a> {
 }
 
 /// Inputs ready for [`crate::search::Searcher`] execution.
-pub enum SearchInputs<'a, 'c> {
+pub enum SearchInputs<'a> {
     /// Fully materialized inputs.
-    Complete(Inputs<'c>),
+    Complete(Inputs<'a>),
     /// Candidate-backed inputs resolved on demand; byte streams are eager.
     Progressive {
-        candidates: &'c [Candidate],
+        candidates: ProgressiveCandidates<'a>,
         streams: Inputs<'a>,
         plan: CandidateInputPlan<'a>,
     },
 }
 
-impl SearchInputs<'_, '_> {
+/// Candidate-backed inputs for progressive search.
+pub enum ProgressiveCandidates<'a> {
+    /// Already materialized candidates.
+    Ready(Vec<Candidate>),
+    /// Indexed ids materialized during `FirstMatch` search.
+    Indexed(crate::candidates::IndexedCandidates<'a>),
+}
+
+impl ProgressiveCandidates<'_> {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        match self {
+            Self::Ready(candidates) => candidates.is_empty(),
+            Self::Indexed(indexed) => indexed.is_empty(),
+        }
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        match self {
+            Self::Ready(candidates) => candidates.len(),
+            Self::Indexed(indexed) => indexed.len(),
+        }
+    }
+}
+
+impl SearchInputs<'_> {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         match self {

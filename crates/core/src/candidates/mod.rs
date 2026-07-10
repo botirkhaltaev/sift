@@ -1,8 +1,10 @@
+pub mod indexed;
 pub mod planner;
 pub mod request;
 pub mod source;
 pub mod spec;
 
+pub use indexed::{CandidateMaterialization, IndexedCandidates, ResolvedCandidates};
 pub use planner::CandidatePlanner;
 pub(crate) use planner::IndexNarrowing;
 pub use request::{

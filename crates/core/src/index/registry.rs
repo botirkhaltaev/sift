@@ -213,6 +213,29 @@ impl Indexes {
         index.materialize(file_ids, request)
     }
 
+    /// Materialize one indexed file id.
+    #[must_use]
+    pub fn candidate(
+        &self,
+        file_id: u32,
+        request: super::MaterializeRequest<'_>,
+    ) -> Option<crate::Candidate> {
+        self.first()?.candidate(file_id, request)
+    }
+
+    /// Number of files in the primary index, when present.
+    #[must_use]
+    pub fn primary_file_count(&self) -> Option<u32> {
+        let index = self.first()?;
+        u32::try_from(index.file_count()).ok()
+    }
+
+    /// Whether more than one index is registered.
+    #[must_use]
+    pub fn is_single_index(&self) -> bool {
+        self.snapshot.indexes().len() <= 1
+    }
+
     #[must_use]
     pub fn first(&self) -> Option<&Index> {
         self.snapshot.indexes().first()

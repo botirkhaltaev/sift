@@ -6,7 +6,7 @@ use crate::Error;
 use crate::GrepError;
 use crate::search::PrefilterCompatibility;
 use crate::search::event::SearchSink;
-use crate::search::input::SearchInputs;
+use crate::search::input::{ProgressiveCandidates, SearchInputs};
 use crate::search::matcher::{Matcher, MatcherBuilder};
 use crate::search::mode::SearchMode;
 use crate::search::options::{SearchBound, SearchOptions};
@@ -60,7 +60,7 @@ impl Searcher {
     /// # Errors
     ///
     /// Returns an error if search execution fails.
-    pub fn search(&self, inputs: SearchInputs<'_, '_>, stats: StatsMode) -> crate::Result<Report> {
+    pub fn search(&self, inputs: SearchInputs<'_>, stats: StatsMode) -> crate::Result<Report> {
         self.execute(inputs, stats, SearchMode::Lines, EventEmission::Discard)
     }
 
@@ -71,7 +71,7 @@ impl Searcher {
     /// Returns an error if search execution or sink handling fails.
     pub fn stream(
         &self,
-        inputs: SearchInputs<'_, '_>,
+        inputs: SearchInputs<'_>,
         mode: SearchMode,
         stats: StatsMode,
         sink: &mut impl SearchSink,
@@ -81,7 +81,7 @@ impl Searcher {
 
     pub(crate) fn execute(
         &self,
-        inputs: SearchInputs<'_, '_>,
+        inputs: SearchInputs<'_>,
         stats: StatsMode,
         mode: SearchMode,
         events: EventEmission<'_>,
@@ -113,7 +113,7 @@ impl Searcher {
 
     fn search_exhaustive(
         &self,
-        inputs: SearchInputs<'_, '_>,
+        inputs: SearchInputs<'_>,
         mode: SearchMode,
         event_collection: EventCollection,
     ) -> crate::Result<(Vec<SearchOutcome>, usize, u64)> {
@@ -143,13 +143,40 @@ impl Searcher {
                 let mut outcomes = Vec::with_capacity(candidates.len() + streams.len());
                 let mut bytes = 0u64;
                 let mut grep = SearchTask::discovered_searcher(options, mode);
-                for candidate in candidates {
-                    let input = plan.materialize(candidate)?;
-                    let outcome =
-                        SearchTask::new(&self.matcher, options, mode, event_collection, &input)
+                match &candidates {
+                    ProgressiveCandidates::Ready(candidates) => {
+                        for candidate in candidates {
+                            let input = plan.materialize(candidate)?;
+                            let outcome = SearchTask::new(
+                                &self.matcher,
+                                options,
+                                mode,
+                                event_collection,
+                                &input,
+                            )
                             .execute(&mut grep);
-                    bytes = bytes.saturating_add(outcome.bytes_searched);
-                    outcomes.push(outcome);
+                            bytes = bytes.saturating_add(outcome.bytes_searched);
+                            outcomes.push(outcome);
+                        }
+                    }
+                    ProgressiveCandidates::Indexed(indexed) => {
+                        for index in 0..indexed.len() {
+                            let Some(candidate) = indexed.candidate_at(index) else {
+                                continue;
+                            };
+                            let input = plan.materialize(&candidate)?;
+                            let outcome = SearchTask::new(
+                                &self.matcher,
+                                options,
+                                mode,
+                                event_collection,
+                                &input,
+                            )
+                            .execute(&mut grep);
+                            bytes = bytes.saturating_add(outcome.bytes_searched);
+                            outcomes.push(outcome);
+                        }
+                    }
                 }
                 for input in streams.as_slice() {
                     let outcome =
@@ -166,7 +193,7 @@ impl Searcher {
 
     fn search_first_match(
         &self,
-        inputs: SearchInputs<'_, '_>,
+        inputs: SearchInputs<'_>,
         mode: SearchMode,
         event_collection: EventCollection,
     ) -> crate::Result<(Vec<SearchOutcome>, usize, u64)> {
@@ -195,19 +222,56 @@ impl Searcher {
                 streams,
                 plan,
             } => {
-                for candidate in candidates {
-                    searched += 1;
-                    let input = plan.materialize(candidate)?;
-                    let outcome =
-                        SearchTask::new(&self.matcher, options, mode, event_collection, &input)
+                let selected = match &candidates {
+                    ProgressiveCandidates::Ready(candidates) => {
+                        let mut selected = false;
+                        for candidate in candidates {
+                            searched += 1;
+                            let input = plan.materialize(candidate)?;
+                            let outcome = SearchTask::new(
+                                &self.matcher,
+                                options,
+                                mode,
+                                event_collection,
+                                &input,
+                            )
                             .execute(&mut grep);
-                    bytes = bytes.saturating_add(outcome.bytes_searched);
-                    if mode.selects(outcome.matched) {
-                        found.push(outcome);
-                        break;
+                            bytes = bytes.saturating_add(outcome.bytes_searched);
+                            if mode.selects(outcome.matched) {
+                                found.push(outcome);
+                                selected = true;
+                                break;
+                            }
+                        }
+                        selected
                     }
-                }
-                if found.is_empty() {
+                    ProgressiveCandidates::Indexed(indexed) => {
+                        let mut selected = false;
+                        for index in 0..indexed.len() {
+                            let Some(candidate) = indexed.candidate_at(index) else {
+                                continue;
+                            };
+                            searched += 1;
+                            let input = plan.materialize(&candidate)?;
+                            let outcome = SearchTask::new(
+                                &self.matcher,
+                                options,
+                                mode,
+                                event_collection,
+                                &input,
+                            )
+                            .execute(&mut grep);
+                            bytes = bytes.saturating_add(outcome.bytes_searched);
+                            if mode.selects(outcome.matched) {
+                                found.push(outcome);
+                                selected = true;
+                                break;
+                            }
+                        }
+                        selected
+                    }
+                };
+                if !selected {
                     for input in streams.as_slice() {
                         searched += 1;
                         let outcome =

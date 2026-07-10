@@ -65,11 +65,11 @@ fn run_grep(
         order: CandidateOrder::default(),
     };
     let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
-        .resolve()
+        .resolve(sift_core::candidates::CandidateMaterialization::Eager)
         .unwrap();
     let input_request = InputRequest::from_candidates();
     let inputs = input_request
-        .resolve(&candidates, InputExtent::Complete)
+        .resolve(candidates, InputExtent::Complete)
         .unwrap();
     searcher.search(inputs, StatsMode::Off).unwrap().matched()
 }

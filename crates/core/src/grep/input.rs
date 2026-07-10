@@ -1,10 +1,11 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use crate::corpus::Candidate;
+use crate::candidates::ResolvedCandidates;
 use crate::corpus::candidate::PathDisplay;
 use crate::search::{
-    CandidateInputPlan, CandidateTransform, InputExtent, InputIdentity, Inputs, SearchInputs,
+    CandidateInputPlan, CandidateTransform, InputExtent, InputIdentity, Inputs,
+    ProgressiveCandidates, SearchInputs,
 };
 
 pub struct ByteInput<'a> {
@@ -61,60 +62,60 @@ impl<'a> InputRequest<'a> {
     /// # Errors
     ///
     /// Returns an error if the configured candidate transform cannot read input bytes.
-    pub fn resolve<'c>(
+    pub fn resolve(
         &'a self,
-        candidates: &'c [Candidate],
+        candidates: ResolvedCandidates<'a>,
         extent: InputExtent,
-    ) -> crate::Result<SearchInputs<'a, 'c>>
-    where
-        'a: 'c,
-    {
+    ) -> crate::Result<SearchInputs<'a>> {
         match extent {
             InputExtent::Complete => self.resolve_complete(candidates),
             InputExtent::Progressive => Ok(self.resolve_progressive(candidates)),
         }
     }
 
-    fn resolve_complete<'c>(
+    fn resolve_complete(
         &'a self,
-        candidates: &'c [Candidate],
-    ) -> crate::Result<SearchInputs<'a, 'c>>
-    where
-        'a: 'c,
-    {
+        candidates: ResolvedCandidates<'a>,
+    ) -> crate::Result<SearchInputs<'a>> {
+        let ready = match candidates {
+            ResolvedCandidates::Ready(candidates) => candidates,
+            ResolvedCandidates::Indexed(indexed) => indexed.materialize_all(),
+        };
         let plan = self.plan();
-        let mut inputs = Inputs::with_capacity(candidates.len() + self.streams.len());
-        for candidate in candidates {
-            match plan.materialize(candidate)? {
-                crate::search::Input::Path {
-                    path,
-                    identity,
-                    explicit,
-                } => inputs.push_path(path, identity, explicit),
-                crate::search::Input::Bytes {
-                    path,
-                    bytes,
-                    identity,
-                    explicit,
-                } => {
-                    if explicit {
-                        inputs.push_explicit_bytes(path, bytes, identity);
-                    } else {
-                        inputs.push_bytes(path, bytes, identity);
-                    }
+        let mut inputs = Inputs::with_capacity(ready.len() + self.streams.len());
+        for candidate in ready {
+            let explicit = self
+                .explicit_paths
+                .iter()
+                .any(|path| path == candidate.rel_path() || path == candidate.abs_path());
+            if let Some(transform) = self.candidate_transform {
+                let bytes = transform.read_candidate(&candidate)?;
+                let path = Cow::Owned(candidate.abs_path().display().to_string());
+                let identity = plan.identity(&candidate);
+                if explicit {
+                    inputs.push_explicit_bytes(path, Cow::Owned(bytes), identity);
+                } else {
+                    inputs.push_bytes(path, Cow::Owned(bytes), identity);
                 }
+            } else {
+                inputs.push_path(
+                    Cow::Owned(candidate.abs_path().to_path_buf()),
+                    plan.identity(&candidate),
+                    explicit,
+                );
             }
         }
         self.push_streams(&mut inputs);
         Ok(SearchInputs::Complete(inputs))
     }
 
-    fn resolve_progressive<'c>(&'a self, candidates: &'c [Candidate]) -> SearchInputs<'a, 'c>
-    where
-        'a: 'c,
-    {
+    fn resolve_progressive(&'a self, candidates: ResolvedCandidates<'a>) -> SearchInputs<'a> {
         let mut streams = Inputs::with_capacity(self.streams.len());
         self.push_streams(&mut streams);
+        let candidates = match candidates {
+            ResolvedCandidates::Ready(candidates) => ProgressiveCandidates::Ready(candidates),
+            ResolvedCandidates::Indexed(indexed) => ProgressiveCandidates::Indexed(indexed),
+        };
         SearchInputs::Progressive {
             candidates,
             streams,

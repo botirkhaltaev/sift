@@ -4,7 +4,8 @@ pub mod error;
 pub mod input;
 
 use crate::candidates::{
-    CandidateExtent, CandidatePlanner, CandidateSelection, CandidateSource, CandidateSpec,
+    CandidateExtent, CandidateMaterialization, CandidatePlanner, CandidateSelection,
+    CandidateSource, CandidateSpec,
 };
 use crate::search::{
     EventEmission, InputExtent, PrefilterCompatibility, Report, SearchBound, SearchMode,
@@ -92,6 +93,7 @@ impl<'a> Grep<'a> {
     ) -> crate::Result<Report> {
         let candidate_extent = request.candidate_extent();
         let input_extent = request.input_extent();
+        let materialization = request.candidate_materialization();
         let query = request.query;
         let searcher = Searcher::new(query.clone())?;
         let mut spec = CandidateSpec::from(&query);
@@ -106,8 +108,8 @@ impl<'a> Grep<'a> {
             spec,
             request.candidates.request(candidate_extent),
         )
-        .resolve()?;
-        let inputs = request.inputs.resolve(&candidates, input_extent)?;
+        .resolve(materialization)?;
+        let inputs = request.inputs.resolve(candidates, input_extent)?;
         searcher.execute(inputs, request.stats, request.mode, events)
     }
 }
@@ -130,6 +132,13 @@ impl GrepRequest<'_> {
         match self.query.options().search_bound {
             SearchBound::Exhaustive => InputExtent::Complete,
             SearchBound::FirstMatch => InputExtent::Progressive,
+        }
+    }
+
+    const fn candidate_materialization(&self) -> CandidateMaterialization {
+        match self.input_extent() {
+            InputExtent::Complete => CandidateMaterialization::Eager,
+            InputExtent::Progressive => CandidateMaterialization::Deferred,
         }
     }
 }
