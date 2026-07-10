@@ -205,9 +205,10 @@ impl Index {
             .filter_map(|id| {
                 let row = self.storage.files.row(FileId::new(id))?;
                 let rel = PathBuf::from(row.path);
+                let abs = self.storage.root.join(&rel);
                 Some(crate::Candidate::with_metadata(
-                    rel.clone(),
-                    self.storage.root.join(&rel),
+                    rel,
+                    abs,
                     Some(row.size),
                     None,
                 ))
@@ -227,9 +228,10 @@ impl Index {
                 let fid = FileId::new(usize::try_from(id).ok()?);
                 let row = self.storage.files.row(fid)?;
                 let rel = PathBuf::from(row.path);
+                let abs = self.storage.root.join(&rel);
                 Some(crate::Candidate::with_metadata(
-                    rel.clone(),
-                    self.storage.root.join(&rel),
+                    rel,
+                    abs,
                     Some(row.size),
                     None,
                 ))

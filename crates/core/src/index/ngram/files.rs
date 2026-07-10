@@ -30,6 +30,12 @@ pub struct FileRow<'a> {
     pub size: u64,
 }
 
+/// Raw on-disk entry fields used by path/row accessors.
+struct FileEntry<'a> {
+    path: &'a [u8],
+    size: u64,
+}
+
 #[derive(Debug)]
 pub struct FileTable {
     data: ArtifactData,
@@ -171,6 +177,25 @@ impl FileTable {
 
     /// Borrow the UTF-8 path bytes for `id` without allocating a `PathBuf`.
     pub fn path_bytes(&self, id: usize) -> std::io::Result<&[u8]> {
+        Ok(self.entry(id)?.path)
+    }
+
+    /// Borrow path and size for `id` without decoding the full fingerprint table.
+    pub fn row(&self, id: usize) -> std::io::Result<FileRow<'_>> {
+        let entry = self.entry(id)?;
+        let path = std::str::from_utf8(entry.path).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("path {id} is not valid UTF-8: {err}"),
+            )
+        })?;
+        Ok(FileRow {
+            path,
+            size: entry.size,
+        })
+    }
+
+    fn entry(&self, id: usize) -> std::io::Result<FileEntry<'_>> {
         if id >= self.count {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -182,28 +207,14 @@ impl FileTable {
         let path_len = read_u32_le(bytes, off) as usize;
         let path_start = off + 4;
         let path_end = path_start + path_len;
-        bytes.get(path_start..path_end).ok_or_else(|| {
+        let path = bytes.get(path_start..path_end).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("path {id} extends past files table end"),
             )
-        })
-    }
-
-    /// Borrow path and size for `id` without decoding the full fingerprint table.
-    pub fn row(&self, id: usize) -> std::io::Result<FileRow<'_>> {
-        let path_bytes = self.path_bytes(id)?;
-        let path = std::str::from_utf8(path_bytes).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("path {id} is not valid UTF-8: {err}"),
-            )
         })?;
-        let bytes = self.bytes();
-        let off = read_u32_le(bytes, self.offset_table_start + id * 4) as usize;
-        let path_len = read_u32_le(bytes, off) as usize;
-        let size = read_u64_le(bytes, off + 4 + path_len + 8);
-        Ok(FileRow { path, size })
+        let size = read_u64_le(bytes, path_end + 8);
+        Ok(FileEntry { path, size })
     }
 
     /// Validate stored paths without decoding them into `PathBuf`s.
