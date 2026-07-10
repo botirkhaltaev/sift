@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use super::config::CorpusKind;
 use super::error::IndexError;
 use super::kinds::{CandidatePlan, Index};
-use super::paths::IndexedPaths;
+use super::paths::IndexedCorpus;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
 use crate::corpus::filter::CandidateFilter;
@@ -102,8 +102,8 @@ impl Indexes {
         self.indexed_paths().into_set()
     }
 
-    fn indexed_paths(&self) -> IndexedPaths {
-        IndexedPaths::from_indexes(self.snapshot.indexes())
+    fn indexed_paths(&self) -> IndexedCorpus {
+        IndexedCorpus::from_indexes(self.snapshot.indexes())
     }
 
     /// Corpus-relative search hits not yet present in the current snapshot.
@@ -167,12 +167,13 @@ impl Indexes {
             return CandidatePlan::Unavailable;
         }
 
+        let coverage = IndexedCorpus::from_indexes(indexes);
         let mut narrowed = plans.into_iter().filter_map(|plan| match plan {
-            CandidatePlan::Narrowed(candidates) => Some(candidates),
-            CandidatePlan::AllIndexed | CandidatePlan::Unavailable => None,
+            CandidatePlan::Narrowed { candidates, .. } => Some(candidates),
+            CandidatePlan::AllIndexed { .. } | CandidatePlan::Unavailable => None,
         });
         let Some(mut current) = narrowed.next() else {
-            return CandidatePlan::AllIndexed;
+            return CandidatePlan::AllIndexed { coverage };
         };
 
         for next in narrowed {
@@ -183,7 +184,10 @@ impl Indexes {
             }
         }
 
-        CandidatePlan::Narrowed(current)
+        CandidatePlan::Narrowed {
+            candidates: current,
+            coverage,
+        }
     }
 
     #[must_use]

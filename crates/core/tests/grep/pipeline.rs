@@ -54,6 +54,40 @@ fn grep_finds_match_in_indexed_corpus() {
 }
 
 #[test]
+fn candidate_planner_all_indexed_uses_index_when_metadata_missing() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    make_parity_corpus(&corpus);
+
+    let sift_dir = tmp.path().join(".sift");
+    super::common::build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
+    let query = SearchQueryBuilder::new(vec!["alpha|beta|gamma|delta".to_string()])
+        .options(SearchOptions::default())
+        .build()
+        .expect("query");
+    let source = CandidateSource {
+        indexes: &indexes,
+        filter: &filter,
+        store_meta: None,
+    };
+    let request = CandidateRequest {
+        scope: CandidateScope::Indexed,
+        corpus: CorpusMode::Indexed,
+        fallback: IndexFallback::WalkOnStaleSnapshot,
+        order: CandidateOrder::default(),
+    };
+
+    let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
+        .resolve()
+        .expect("candidates");
+
+    assert_eq!(candidates.len(), 2);
+}
+
+#[test]
 fn high_level_grep_search_resolves_candidates_and_reports_matches() {
     let tmp = TempDir::new().expect("tempdir");
     let corpus = tmp.path().join("corpus");

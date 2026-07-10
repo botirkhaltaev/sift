@@ -20,7 +20,7 @@ fn literal_query_returns_indexed_candidates() {
         flags: CandidateFlags::empty(),
     };
     let candidates = match index.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
     assert!(!candidates.is_empty());
@@ -45,7 +45,10 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
         flags: CandidateFlags::empty(),
     };
 
-    assert!(matches!(index.plan(&spec), CandidatePlan::AllIndexed));
+    assert!(matches!(
+        index.plan(&spec),
+        CandidatePlan::AllIndexed { .. }
+    ));
 }
 
 #[test]
@@ -60,7 +63,7 @@ fn literal_candidates_narrow_to_expected_file() {
         flags: CandidateFlags::empty(),
     };
     let candidates = match open_indexes(&sift_dir).plan(&spec) {
-        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
     assert!(!candidates.is_empty());

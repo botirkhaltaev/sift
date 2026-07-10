@@ -24,7 +24,7 @@ fn gitignore_honored_without_git_repo() {
         flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = match open_indexes(&sift_dir).plan(&spec) {
-        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
         other => panic!("expected narrowed plan, got {other:?}"),
     }
     .into_iter()
@@ -57,7 +57,7 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
         flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = match open_indexes(&sift_dir).plan(&spec) {
-        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
         other => panic!("expected narrowed plan, got {other:?}"),
     }
     .into_iter()
@@ -82,7 +82,7 @@ fn defaults_exclude_gitignored_and_ignore_file_paths() {
         flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = match open_indexes(&sift_dir).plan(&spec) {
-        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
         other => panic!("expected narrowed plan, got {other:?}"),
     }
     .into_iter()
@@ -118,7 +118,7 @@ fn build_respects_hidden_files_by_default() {
         flags: CandidateFlags::empty(),
     };
     let paths: Vec<_> = match Indexes::open(sift_dir.path()).expect("open").plan(&spec) {
-        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
         other => panic!("expected narrowed plan, got {other:?}"),
     }
     .into_iter()
