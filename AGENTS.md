@@ -39,6 +39,8 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 - **No `unsafe`** except in `index/mmap.rs` (documented safety invariant).
 - **Strict clippy:** workspace uses `pedantic + nursery + cargo` warnings; CI uses `-D warnings`.
 - Fix lints at the root cause. `#[allow]` is **never** permitted.
+- **Never** add free helper functions or callback/`FnOnce` APIs (see Function
+  Evolution).
 - Prefer small, focused commits when the design is already right. When the design
   is wrong, make the sweeping change — do not paper over it with a local patch.
 - Follow existing patterns in the crate you touch when they match these rules;
@@ -152,13 +154,35 @@ If a different signature is needed:
 
 ### No free helper functions
 
-Do not add module-level free functions (`fn intersect_sorted_ids(...)`,
-`fn resolve_*_from_args(...)`, `fn helper_*`) to share logic. Put behavior on
-the type that owns the data (methods), or inline it at the single call site.
+**Never** add module-level free functions to share logic — not `fn helper_*`,
+not `fn intersect_sorted_ids(...)`, not `fn resolve_*_from_args(...)`, not
+`const fn plan_*(...)` extracted “just for reuse”. Put behavior on the type that
+owns the data (methods), or inline it at the single call site.
 
 Nested closures or tiny blocks inside one function are fine when they remove
 local duplication. A separate free function or a second method named after how
 it differs from the first is not.
+
+### No callback / `FnOnce` APIs
+
+**Never** design APIs around callbacks, `impl FnOnce`, `impl Fn`, or
+`impl FnMut` parameters to defer work or avoid constructing values. That hides
+control flow and fights the domain model.
+
+Prefer an explicit `match` on a domain enum at the call site (construct only in
+the arms that need the value), or a method that returns a decision the caller
+acts on. Do not pass “build the event/value later” closures into callees.
+
+```rust
+// Do this:
+match collection {
+    EventCollection::Discard => {}
+    EventCollection::Collect => events.push(SearchEvent::Match(...)),
+}
+
+// NOT this:
+collection.push(events, || SearchEvent::Match(...));
+```
 
 Examples of **bad** names that flag the pattern:
 - `build_locked` (the variant adds a lock)
@@ -167,6 +191,7 @@ Examples of **bad** names that flag the pattern:
 - `open_with_lease`
 - `posting_ids_for_ascii_casei_literal` (parallel path for one mode)
 - `intersect_sorted_ids` (free helper instead of a type method / inline)
+- `push(events, || SearchEvent::...)` (callback/`FnOnce` instead of match)
 
 Examples of **good** names that describe the domain action:
 - `publish_snapshot` (it writes files and commits)
@@ -226,9 +251,13 @@ Clap parses `*Decl` flag groups; **`Argv` resolves effective runtime values**
 - Use `#[allow]` attributes.
 - Preserve old APIs or shapes out of habit — redesign when the architecture is
   better served by a breaking change (see Architecture & Design).
-- Add free helper functions or parallel `*_with_*` / use-case-specific APIs —
-  evolve the existing domain API instead (see Architecture & Design / Function
-  Evolution).
+- **Never** add free helper functions — put logic on the owning type or inline
+  it (see Function Evolution / No free helper functions).
+- **Never** add callback / `FnOnce` / `Fn` / `FnMut` parameters to defer
+  construction — `match` on a domain enum at the call site instead (see
+  Function Evolution / No callback APIs).
+- Do not add parallel `*_with_*` / use-case-specific APIs — evolve the existing
+  domain API instead (see Architecture & Design / Function Evolution).
 - Overfit an API to one caller or test; keep operations general and let callers
   compose.
 - Ship a local workaround when the right fix is a broader redesign of the
