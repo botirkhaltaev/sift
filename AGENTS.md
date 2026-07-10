@@ -69,10 +69,27 @@ Write idiomatic Rust. Prefer strong domain types, explicit ownership, clear erro
 boundaries, and small composable interfaces. Redesign weak abstractions instead
 of layering new behavior on top of them.
 
-Keep APIs general and composable. Avoid helpers, method names, or signatures that
-overfit one caller, one test, one branch, or one implementation detail. Name
-types and functions after the domain concept they model, not the incidental
-mechanism they use.
+**Keep the design general, and keep the code simple.** Prefer the smallest API
+that expresses the domain concept. Do not add layers, wrappers, or special-case
+branches for one caller, one test, one benchmark, or one feature flag.
+
+### Composition over specialization
+
+Callers compose domain operations. Callees expose general operations; they do
+not grow boolean forks or parallel code paths for each use case.
+
+- Model real alternatives with domain types (enums/structs), then let the caller
+  pass the choice.
+- Do not bake a use case into a callee when the caller can compose existing
+  operations (`extract` → `lookup` → `intersect`, walk → filter → materialize).
+- Avoid helpers, method names, or signatures that overfit one caller or one
+  implementation detail.
+
+### Naming
+
+Name types and functions after the **domain concept**, with short simple words.
+Do not name things after the mechanism, the caller, or how they differ from a
+sibling (`*_casei_*`, `*_with_*`, `*_for_ascii_*`, `helper_*`, `utils`).
 
 When adding request/config structs, name them after the domain decision they
 represent, not the mechanical data they carry. Avoid vague bundles such as
@@ -96,31 +113,41 @@ locking, and channel communication kept at clear orchestration boundaries.
 
 ## Function Evolution
 
-Do not create `*_with_*`, `*_locked`, `*_async`, `*_new`, or similarly named
-parallel variants when the new function is the old function plus one extra
-feature, mode, lock, flag, or parameter. This creates duplicate execution paths
-and weakens the domain model.
+**Evolve existing functions and APIs. Do not create new ones alongside them.**
 
-If a different signature is needed, evolve the original API around the domain
-concept. Use a domain enum, options struct, or grouped parameter type as
-appropriate rather than creating parallel variant functions.
+Do not create `*_with_*`, `*_locked`, `*_async`, `*_new`, `*_casei_*`, or
+similarly named parallel variants when the new function is the old function plus
+one extra feature, mode, lock, flag, or parameter. That duplicates execution
+paths and weakens the domain model.
 
-If behavior gains another input or mode:
-- Evolve the original function body so it owns the concept.
-- Introduce a domain type that represents the concept.
-- Use a small private helper named after the **domain operation** it performs,
-  not after how it differs from the variant it serves.
+If a different signature is needed:
+- Change the original function to take a domain type for the new concept.
+- Put the behavior in that one function body (match on the domain type).
+- Delete the old shape rather than leaving a wrapper.
+
+### No free helper functions
+
+Do not add module-level free functions (`fn intersect_sorted_ids(...)`,
+`fn resolve_*_from_args(...)`, `fn helper_*`) to share logic. Put behavior on
+the type that owns the data (methods), or inline it at the single call site.
+
+Nested closures or tiny blocks inside one function are fine when they remove
+local duplication. A separate free function or a second method named after how
+it differs from the first is not.
 
 Examples of **bad** names that flag the pattern:
 - `build_locked` (the variant adds a lock)
 - `current_with_lease` (the variant adds a lease)
 - `run_search_with_index` (the variant adds an index)
 - `open_with_lease`
+- `posting_ids_for_ascii_casei_literal` (parallel path for one mode)
+- `intersect_sorted_ids` (free helper instead of a type method / inline)
 
 Examples of **good** names that describe the domain action:
 - `publish_snapshot` (it writes files and commits)
 - `resolve_candidates` (it looks up matching files)
 - `build_index_metadata`
+- `posting_ids` with a `GramMatch` (or similar) argument
 
 When a lifecycle function needs to write to either a directory or a
 snapshot store, use a domain enum instead of `*_to_dir` / `*_into` variants:
@@ -133,10 +160,6 @@ pub fn build(config: &IndexConfig<'_>, dest: IndexDestination) -> Result<Self>;
 fn build(config, output_dir) -> Result;     // directory
 fn build_into(config, writer, ns) -> Result; // snapshot
 ```
-
-Small local helpers are acceptable only when they remove duplication inside one
-function or one orchestration path, and their name describes what they do, not
-how they differ from an alternate path.
 
 ## IndexSource / IndexDestination
 
@@ -176,6 +199,11 @@ Clap parses `*Decl` flag groups; **`Argv` resolves effective runtime values**
 - Add dependencies without justification.
 - Commit secrets, `.env` files, or editor-specific directories.
 - Use `#[allow]` attributes.
+- Add free helper functions or parallel `*_with_*` / use-case-specific APIs —
+  evolve the existing domain API instead (see Architecture & Design / Function
+  Evolution).
+- Overfit an API to one caller or test; keep operations general and let callers
+  compose.
 
 ## Cursor Cloud specific instructions
 
