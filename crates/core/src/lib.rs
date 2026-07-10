@@ -31,8 +31,8 @@ pub use index::ngram::{
 };
 pub use index::store::IndexStore;
 pub use index::{
-    CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexCandidateResult,
-    IndexConfig, IndexCoverage, IndexError, IndexId, Indexes, PlanMode, QueryPlanOutput,
+    CandidatePlan, CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig,
+    IndexCoverage, IndexError, IndexId, IndexedCorpus, Indexes, PlanMode, QueryPlanOutput,
     ReconcileOutcome, SnapshotId, WalkMeta,
 };
 

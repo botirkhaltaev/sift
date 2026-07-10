@@ -18,8 +18,8 @@ index/
 
 | Module | Description |
 |--------|-------------|
-| [`kinds.rs`](kinds.rs) | `IndexConfig` enum (configured identity), `Index` enum (query dispatch), `FileId`, `IndexId` |
-| [`registry.rs`](registry.rs) | `Indexes`: opens all indexes in a snapshot, intersects candidate sets |
+| [`kinds.rs`](kinds.rs) | `IndexConfig` enum (configured identity), `Index` enum (query dispatch), `CandidatePlan`, `FileId`, `IndexId` |
+| [`registry.rs`](registry.rs) | `Indexes`: opens all indexes in a snapshot, combines candidate plans |
 | [`store.rs`](store.rs) | `IndexStore`: snapshot-based persistence, atomic build/update/publish |
 | [`config.rs`](config.rs) | `IndexBuildConfig`, `CorpusSpec`, `CorpusKind`, `WalkOptions` |
 | [`meta.rs`](meta.rs) | `StoreMeta`: persistent manifest (`meta.json`) with corpus, walk, filter, and index configuration metadata |
@@ -39,14 +39,14 @@ store.build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])?;
 
 // Open all indexes for search
 let indexes = Indexes::open(&sift_dir)?;
-let candidates = indexes.candidates(&query_spec);
+let plan = indexes.plan(&query_spec);
 ```
 
 ## Adding a New Index Kind
 
 1. Add a variant to `IndexConfig` and `Index` in `kinds.rs`.
 2. Implement configured lifecycle routing through `IndexConfig` and query dispatch through `Index`.
-3. Implement `root`, `corpus_kind`, `candidates`, `all_files` in the `Index` match arms.
+3. Implement `root`, `corpus_kind`, `plan`, `all_files`, and `coverage` in the `Index` match arms.
 4. Create a sibling module to `ngram/` with the index implementation.
 
 The `Indexes` registry, `IndexStore`, snapshot layer, query planner, and CLI require no changes.

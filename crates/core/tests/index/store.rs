@@ -22,10 +22,10 @@ fn build_and_reopen_indexes() {
         patterns: &["hello".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let files = indexes
-        .candidates(&spec)
-        .into_candidates()
-        .expect("candidates");
+    let files = match indexes.plan(&spec) {
+        sift_core::CandidatePlan::Narrowed { candidates, .. } => candidates,
+        other => panic!("expected narrowed plan, got {other:?}"),
+    };
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].rel_path().as_os_str(), "a.txt");
 }

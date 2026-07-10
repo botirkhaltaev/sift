@@ -3,9 +3,12 @@ use std::path::{Path, PathBuf};
 
 use super::config::CorpusKind;
 use super::error::IndexError;
-use super::kinds::{Index, IndexCandidateResult};
+use super::kinds::{CandidatePlan, Index};
+use super::paths::IndexedCorpus;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
+use crate::corpus::filter::CandidateFilter;
+use crate::corpus::walk::FileWalk;
 
 /// Registry of opened indexes read from a snapshot store.
 ///
@@ -82,61 +85,48 @@ impl Indexes {
         self.snapshot.id()
     }
 
-    /// Produce narrowed candidates from all indexes that can narrow the query.
-    ///
-    /// Returns `None` if no index could narrow. When at least one index
-    /// narrows, all narrowed candidate sets are intersected.
+    /// Plan candidate coverage from all indexes that can narrow the query.
     #[must_use]
-    pub fn candidates(&self, query: &crate::candidates::CandidateSpec<'_>) -> IndexCandidateResult {
+    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
         let indexes = self.snapshot.indexes();
         match indexes.len() {
-            0 => IndexCandidateResult::Unavailable,
-            1 => indexes[0].candidates(query),
-            _ => Self::candidates_multi(indexes, query),
+            0 => CandidatePlan::Unavailable,
+            1 => indexes[0].plan(query),
+            _ => Self::plan_multi(indexes, query),
         }
     }
 
     /// Corpus-relative paths present in the current snapshot.
     #[must_use]
     pub fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
-        let indexes = self.snapshot.indexes();
-        let Some(first) = indexes.first() else {
-            return HashSet::new();
-        };
+        self.indexed_paths().into_set()
+    }
 
-        let mut paths: HashSet<PathBuf> = first
-            .all_files()
-            .into_iter()
-            .map(|c| c.rel_path().to_path_buf())
-            .collect();
-
-        for index in indexes.iter().skip(1) {
-            let next: HashSet<PathBuf> = index
-                .all_files()
-                .into_iter()
-                .map(|c| c.rel_path().to_path_buf())
-                .collect();
-            paths.retain(|p| next.contains(p));
-            if paths.is_empty() {
-                break;
-            }
-        }
-
-        paths
+    fn indexed_paths(&self) -> IndexedCorpus {
+        IndexedCorpus::from_indexes(self.snapshot.indexes())
     }
 
     /// Corpus-relative search hits not yet present in the current snapshot.
     #[must_use]
     pub fn unindexed_hits(&self, hits: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-        let indexed = self.indexed_rel_paths();
+        let indexed = self.indexed_paths();
         hits.into_iter()
             .filter(|path| !indexed.contains(path))
             .collect()
     }
 
+    /// Candidates under `filter` whose paths are not present in the current snapshot.
+    pub(crate) fn unindexed_candidates(
+        &self,
+        filter: &CandidateFilter,
+    ) -> crate::Result<Vec<crate::Candidate>> {
+        let indexed = self.indexed_paths();
+        FileWalk::from_filter(filter).candidates_matching(indexed.unindexed_files())
+    }
+
     /// Return all indexed candidates across all registered indexes.
     #[must_use]
-    pub(crate) fn complete_candidates(&self) -> Vec<crate::Candidate> {
+    pub(crate) fn all_indexed_candidates(&self) -> Vec<crate::Candidate> {
         let indexes = self.snapshot.indexes();
         let mut iter = indexes.iter();
         let Some(first) = iter.next() else {
@@ -161,31 +151,32 @@ impl Indexes {
     }
 
     /// Intersect candidates from multiple indexes.
-    fn candidates_multi(
+    fn plan_multi(
         indexes: &[Index],
         query: &crate::candidates::CandidateSpec<'_>,
-    ) -> IndexCandidateResult {
+    ) -> CandidatePlan {
         use rayon::prelude::*;
 
-        let sets: Vec<IndexCandidateResult> = indexes
+        let plans: Vec<CandidatePlan> = indexes
             .par_iter()
-            .map(|idx| idx.candidates(query))
-            .filter(|result| !result.is_unavailable())
+            .map(|idx| idx.plan(query))
+            .filter(|plan| !plan.is_unavailable())
             .collect();
 
-        if sets.is_empty() {
-            return IndexCandidateResult::Unavailable;
+        if plans.is_empty() {
+            return CandidatePlan::Unavailable;
         }
 
-        let mut result = sets.into_iter().filter_map(|result| match result {
-            IndexCandidateResult::Candidates(candidates) => Some(candidates),
-            IndexCandidateResult::All | IndexCandidateResult::Unavailable => None,
+        let coverage = IndexedCorpus::from_indexes(indexes);
+        let mut narrowed = plans.into_iter().filter_map(|plan| match plan {
+            CandidatePlan::Narrowed { candidates, .. } => Some(candidates),
+            CandidatePlan::AllIndexed { .. } | CandidatePlan::Unavailable => None,
         });
-        let Some(mut current) = result.next() else {
-            return IndexCandidateResult::All;
+        let Some(mut current) = narrowed.next() else {
+            return CandidatePlan::AllIndexed { coverage };
         };
 
-        for next in result {
+        for next in narrowed {
             let lookup: HashSet<&Path> = next.iter().map(crate::Candidate::rel_path).collect();
             current.retain(|c| lookup.contains(c.rel_path()));
             if current.is_empty() {
@@ -193,7 +184,10 @@ impl Indexes {
             }
         }
 
-        IndexCandidateResult::Candidates(current)
+        CandidatePlan::Narrowed {
+            candidates: current,
+            coverage,
+        }
     }
 
     #[must_use]

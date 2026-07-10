@@ -5,6 +5,7 @@ pub mod kinds;
 pub mod meta;
 pub mod mmap;
 pub mod ngram;
+mod paths;
 pub mod registry;
 pub mod snapshot;
 pub mod store;
@@ -12,10 +13,9 @@ pub mod store;
 pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexBuildConfig};
 pub use error::IndexError;
-pub use kinds::{
-    FileId, Index, IndexCandidateResult, IndexConfig, IndexId, PlanMode, QueryPlanOutput,
-};
+pub use kinds::{CandidatePlan, FileId, Index, IndexConfig, IndexId, PlanMode, QueryPlanOutput};
 pub use meta::{CorpusMeta, FilterMeta, IndexCoverage, WalkMeta};
+pub use paths::IndexedCorpus;
 pub use registry::Indexes;
 pub use snapshot::SnapshotId;
 pub use store::ReconcileOutcome;
