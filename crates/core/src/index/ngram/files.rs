@@ -23,6 +23,13 @@ pub struct FileFingerprint {
     pub size: u64,
 }
 
+/// Borrowed file row from the on-disk table (no `PathBuf` allocation).
+#[derive(Debug, Clone, Copy)]
+pub struct FileRow<'a> {
+    pub path: &'a str,
+    pub size: u64,
+}
+
 #[derive(Debug)]
 pub struct FileTable {
     data: ArtifactData,
@@ -181,6 +188,22 @@ impl FileTable {
                 format!("path {id} extends past files table end"),
             )
         })
+    }
+
+    /// Borrow path and size for `id` without decoding the full fingerprint table.
+    pub fn row(&self, id: usize) -> std::io::Result<FileRow<'_>> {
+        let path_bytes = self.path_bytes(id)?;
+        let path = std::str::from_utf8(path_bytes).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("path {id} is not valid UTF-8: {err}"),
+            )
+        })?;
+        let bytes = self.bytes();
+        let off = read_u32_le(bytes, self.offset_table_start + id * 4) as usize;
+        let path_len = read_u32_le(bytes, off) as usize;
+        let size = read_u64_le(bytes, off + 4 + path_len + 8);
+        Ok(FileRow { path, size })
     }
 
     /// Validate stored paths without decoding them into `PathBuf`s.

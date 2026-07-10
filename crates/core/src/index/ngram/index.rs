@@ -100,6 +100,11 @@ impl IndexedFiles {
         self.fingerprints().get(id.get())
     }
 
+    /// Borrow a single file row without decoding the full fingerprint table.
+    pub(crate) fn row(&self, id: FileId) -> Option<super::files::FileRow<'_>> {
+        self.table.row(id.get()).ok()
+    }
+
     pub(crate) const fn len(&self) -> usize {
         self.table.len()
     }
@@ -195,17 +200,17 @@ impl Index {
 
     #[must_use]
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
-        self.storage
-            .files
-            .as_slice()
-            .par_iter()
-            .map(|fp| {
-                crate::Candidate::with_metadata(
-                    fp.path.clone(),
-                    self.storage.root.join(&fp.path),
-                    Some(fp.size),
+        (0..self.storage.files.len())
+            .into_par_iter()
+            .filter_map(|id| {
+                let row = self.storage.files.row(FileId::new(id))?;
+                let rel = PathBuf::from(row.path);
+                Some(crate::Candidate::with_metadata(
+                    rel.clone(),
+                    self.storage.root.join(&rel),
+                    Some(row.size),
                     None,
-                )
+                ))
             })
             .collect()
     }
@@ -220,11 +225,12 @@ impl Index {
         ids.par_iter()
             .filter_map(|&id| {
                 let fid = FileId::new(usize::try_from(id).ok()?);
-                let fp = self.storage.files.get(fid)?;
+                let row = self.storage.files.row(fid)?;
+                let rel = PathBuf::from(row.path);
                 Some(crate::Candidate::with_metadata(
-                    fp.path.clone(),
-                    self.storage.root.join(&fp.path),
-                    Some(fp.size),
+                    rel.clone(),
+                    self.storage.root.join(&rel),
+                    Some(row.size),
                     None,
                 ))
             })
