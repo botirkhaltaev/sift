@@ -13,7 +13,10 @@ pub mod store;
 pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexBuildConfig};
 pub use error::IndexError;
-pub use kinds::{CandidatePlan, FileId, Index, IndexConfig, IndexId, PlanMode, QueryPlanOutput};
+pub use kinds::{
+    CandidatePlan, FileId, Index, IndexConfig, IndexId, MaterializeRequest, PlanMode,
+    QueryPlanOutput,
+};
 pub use meta::{CorpusMeta, FilterMeta, IndexCoverage, WalkMeta};
 pub use paths::IndexedCorpus;
 pub use registry::Indexes;

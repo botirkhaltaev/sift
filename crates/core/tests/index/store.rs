@@ -26,7 +26,7 @@ fn build_and_reopen_indexes() {
         sift_core::CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
-    let files = indexes.materialize(&file_ids);
+    let files = indexes.materialize(&file_ids, sift_core::MaterializeRequest::All);
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].rel_path().as_os_str(), "a.txt");
 }

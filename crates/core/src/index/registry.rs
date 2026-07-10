@@ -126,18 +126,21 @@ impl Indexes {
 
     /// Return all indexed candidates across all registered indexes.
     #[must_use]
-    pub(crate) fn all_indexed_candidates(&self) -> Vec<crate::Candidate> {
+    pub(crate) fn all_indexed_candidates(
+        &self,
+        request: super::MaterializeRequest<'_>,
+    ) -> Vec<crate::Candidate> {
         let indexes = self.snapshot.indexes();
         let mut iter = indexes.iter();
         let Some(first) = iter.next() else {
             return Vec::new();
         };
 
-        let mut files = first.all_files();
+        let mut files = first.all_files(request);
 
         for index in iter {
             let next: HashSet<PathBuf> = index
-                .all_files()
+                .all_files(super::MaterializeRequest::All)
                 .into_iter()
                 .map(|c| c.rel_path().to_path_buf())
                 .collect();
@@ -199,11 +202,15 @@ impl Indexes {
     }
 
     #[must_use]
-    pub fn materialize(&self, file_ids: &[u32]) -> Vec<crate::Candidate> {
+    pub fn materialize(
+        &self,
+        file_ids: &[u32],
+        request: super::MaterializeRequest<'_>,
+    ) -> Vec<crate::Candidate> {
         let Some(index) = self.first() else {
             return Vec::new();
         };
-        index.materialize(file_ids)
+        index.materialize(file_ids, request)
     }
 
     #[must_use]
