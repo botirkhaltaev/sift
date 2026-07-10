@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::candidates::CandidateSpec;
 use crate::index::{CandidatePlan, CorpusKind, FileId, IndexedCorpus};
@@ -40,15 +41,14 @@ pub struct Storage {
 #[derive(Debug)]
 pub struct IndexedFiles {
     fingerprints: Vec<FileFingerprint>,
-    coverage: IndexedCorpus,
+    coverage: OnceLock<IndexedCorpus>,
 }
 
 impl IndexedFiles {
-    pub(crate) fn new(fingerprints: Vec<FileFingerprint>) -> Self {
-        let coverage = IndexedCorpus::from_paths(fingerprints.iter().map(|fp| fp.path.clone()));
+    pub(crate) const fn new(fingerprints: Vec<FileFingerprint>) -> Self {
         Self {
             fingerprints,
-            coverage,
+            coverage: OnceLock::new(),
         }
     }
 
@@ -65,7 +65,11 @@ impl IndexedFiles {
     }
 
     pub(crate) fn coverage(&self) -> IndexedCorpus {
-        self.coverage.clone()
+        self.coverage
+            .get_or_init(|| {
+                IndexedCorpus::from_paths(self.fingerprints.iter().map(|fp| fp.path.clone()))
+            })
+            .clone()
     }
 }
 
@@ -130,13 +134,11 @@ impl Index {
             GramMatch::Exact
         };
         let ids = self.candidate_file_ids(&arms, gram_match);
-        let coverage = self.coverage();
         if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
-            return CandidatePlan::AllIndexed { coverage };
+            return CandidatePlan::AllIndexed;
         }
         CandidatePlan::Narrowed {
             candidates: self.materialize_file_ids(ids),
-            coverage,
         }
     }
 

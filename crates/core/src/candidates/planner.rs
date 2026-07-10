@@ -106,8 +106,8 @@ impl<'a> CandidatePlanner<'a> {
             CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).candidates()?,
             CandidateStrategy::AllIndexed => self.source.indexes.all_indexed_candidates(),
             CandidateStrategy::UseIndex => match index_plan {
-                CandidatePlan::Narrowed { candidates, .. } => candidates,
-                CandidatePlan::AllIndexed { .. } | CandidatePlan::Unavailable => Vec::new(),
+                CandidatePlan::Narrowed { candidates } => candidates,
+                CandidatePlan::AllIndexed | CandidatePlan::Unavailable => Vec::new(),
             },
             CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_plan)?,
         };
@@ -123,7 +123,7 @@ impl<'a> CandidatePlanner<'a> {
         } else {
             match index_plan {
                 CandidatePlan::Unavailable => IndexStatus::NoCandidateIndex,
-                CandidatePlan::AllIndexed { .. } => IndexStatus::AllCandidates,
+                CandidatePlan::AllIndexed => IndexStatus::AllCandidates,
                 CandidatePlan::Narrowed { .. } => IndexStatus::CanNarrow,
             }
         }
@@ -146,7 +146,7 @@ impl<'a> CandidatePlanner<'a> {
     }
 
     fn merge_unindexed(&self, index_plan: CandidatePlan) -> crate::Result<Vec<Candidate>> {
-        let CandidatePlan::Narrowed { mut candidates, .. } = index_plan else {
+        let CandidatePlan::Narrowed { mut candidates } = index_plan else {
             return FileWalk::from_filter(self.source.filter).candidates();
         };
 

@@ -167,13 +167,12 @@ impl Indexes {
             return CandidatePlan::Unavailable;
         }
 
-        let coverage = IndexedCorpus::from_indexes(indexes);
         let mut narrowed = plans.into_iter().filter_map(|plan| match plan {
-            CandidatePlan::Narrowed { candidates, .. } => Some(candidates),
-            CandidatePlan::AllIndexed { .. } | CandidatePlan::Unavailable => None,
+            CandidatePlan::Narrowed { candidates } => Some(candidates),
+            CandidatePlan::AllIndexed | CandidatePlan::Unavailable => None,
         });
         let Some(mut current) = narrowed.next() else {
-            return CandidatePlan::AllIndexed { coverage };
+            return CandidatePlan::AllIndexed;
         };
 
         for next in narrowed {
@@ -186,7 +185,6 @@ impl Indexes {
 
         CandidatePlan::Narrowed {
             candidates: current,
-            coverage,
         }
     }
 
