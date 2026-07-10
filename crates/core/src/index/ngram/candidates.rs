@@ -12,19 +12,19 @@ impl Index {
         }
         if arms.len() == 1 {
             return self
-                .posting_ids_for_literal(&arms[0], gram_match)
+                .posting_ids(&arms[0], gram_match)
                 .unwrap_or_default();
         }
         let mut id_lists: Vec<Vec<u32>> = Vec::with_capacity(arms.len());
         for arm in arms {
-            if let Some(ids) = self.posting_ids_for_literal(arm, gram_match) {
+            if let Some(ids) = self.posting_ids(arm, gram_match) {
                 id_lists.push(ids);
             }
         }
         Self::merge_sorted_runs(id_lists)
     }
 
-    fn posting_ids_for_literal(&self, lit: &[u8], gram_match: GramMatch) -> Option<Vec<u32>> {
+    fn posting_ids(&self, lit: &[u8], gram_match: GramMatch) -> Option<Vec<u32>> {
         let width = self.width.get();
         if lit.len() < width {
             return None;
