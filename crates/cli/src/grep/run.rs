@@ -241,12 +241,8 @@ impl Run {
             mode,
             stats,
         };
-        let report = if pattern_argv.quiet {
-            grep.search(request)
-        } else {
-            SearchPrinter::print_grep(&grep, request, print_spec, &separators, extras)
-        }
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let report = SearchPrinter::print_grep(&grep, request, print_spec, &separators, extras)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         if let Some(s) = report.stats.as_ref() {
             OutputDecl::write_stats(s);
