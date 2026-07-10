@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use crate::Error;
 use crate::GrepError;
 use crate::search::PrefilterCompatibility;
-use crate::search::event::{SearchEvent, SearchSink};
+use crate::search::event::SearchSink;
 use crate::search::input::Inputs;
 use crate::search::matcher::{Matcher, MatcherBuilder};
 use crate::search::mode::SearchMode;
@@ -171,14 +171,5 @@ impl EventEmission<'_> {
             sink.event(event)?;
         }
         Ok(())
-    }
-}
-
-impl EventCollection {
-    pub(in crate::search) fn push(self, events: &mut Vec<SearchEvent>, event: SearchEvent) {
-        match self {
-            Self::Discard => {}
-            Self::Collect => events.push(event),
-        }
     }
 }
