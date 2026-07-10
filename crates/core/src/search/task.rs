@@ -39,9 +39,9 @@ pub struct SearchOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MatchEmission {
-    /// `-l` / `-L`: file presence only.
+    /// File presence only; no line text or span scan.
     Presence,
-    /// `-c` line counts: count matching lines, no span scan.
+    /// Count matching lines without scanning match spans.
     LineCount,
     Lines,
     Spans,
@@ -255,81 +255,78 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
         let line_bytes = mat.bytes();
         self.line_matches += 1;
 
-        if matches!(
-            self.match_emission,
-            MatchEmission::Presence | MatchEmission::LineCount
-        ) {
-            self.event_collection.push(
-                &mut self.events,
-                SearchEvent::Match(MatchEvent {
-                    path: self.path.clone(),
-                    line_number: mat.line_number(),
-                    absolute_byte_offset: Some(mat.absolute_byte_offset()),
-                    bytes: Vec::new(),
-                    ranges: Vec::new(),
-                    replacement: None,
-                    replacement_matches: Vec::new(),
-                }),
-            );
-            return Ok(true);
-        }
-
-        let scan_spans = self.replacement.is_some()
-            || matches!(self.match_emission, MatchEmission::Spans)
-            || matches!(self.event_collection, EventCollection::Collect);
-
-        if !scan_spans {
-            if matches!(self.match_emission, MatchEmission::Lines) {
+        match self.match_emission {
+            MatchEmission::Presence | MatchEmission::LineCount => {
+                self.event_collection.push(
+                    &mut self.events,
+                    SearchEvent::Match(MatchEvent {
+                        path: self.path.clone(),
+                        line_number: mat.line_number(),
+                        absolute_byte_offset: Some(mat.absolute_byte_offset()),
+                        bytes: Vec::new(),
+                        ranges: Vec::new(),
+                        replacement: None,
+                        replacement_matches: Vec::new(),
+                    }),
+                );
+                Ok(true)
+            }
+            MatchEmission::Lines
+                if self.replacement.is_none()
+                    && matches!(self.event_collection, EventCollection::Discard) =>
+            {
                 self.matches.push(Match {
                     file: self.path.clone(),
                     line,
                     text: String::from_utf8_lossy(line_bytes).into_owned(),
                 });
+                Ok(true)
             }
-            return Ok(true);
-        }
-
-        let replacement = self.replacement.as_deref().and_then(|replacement| {
-            Replacement::expand(self.matcher, line_bytes, replacement).ok()
-        });
-        let mut ranges = Vec::new();
-        let _ = self
-            .matcher
-            .find_iter(line_bytes, |m: grep_matcher::Match| {
-                ranges.push(m.start()..m.end());
-                self.match_spans += 1;
-                if matches!(self.match_emission, MatchEmission::Spans) {
+            MatchEmission::Lines | MatchEmission::Spans => {
+                let replacement = self.replacement.as_deref().and_then(|replacement| {
+                    Replacement::expand(self.matcher, line_bytes, replacement).ok()
+                });
+                let mut ranges = Vec::new();
+                let _ = self
+                    .matcher
+                    .find_iter(line_bytes, |m: grep_matcher::Match| {
+                        ranges.push(m.start()..m.end());
+                        self.match_spans += 1;
+                        if matches!(self.match_emission, MatchEmission::Spans) {
+                            self.matches.push(Match {
+                                file: self.path.clone(),
+                                line,
+                                text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()])
+                                    .into_owned(),
+                            });
+                        }
+                        true
+                    });
+                if matches!(self.match_emission, MatchEmission::Lines) {
                     self.matches.push(Match {
                         file: self.path.clone(),
                         line,
-                        text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()]).into_owned(),
+                        text: String::from_utf8_lossy(line_bytes).into_owned(),
                     });
                 }
-                true
-            });
-        if matches!(self.match_emission, MatchEmission::Lines) {
-            self.matches.push(Match {
-                file: self.path.clone(),
-                line,
-                text: String::from_utf8_lossy(line_bytes).into_owned(),
-            });
+                self.event_collection.push(
+                    &mut self.events,
+                    SearchEvent::Match(MatchEvent {
+                        path: self.path.clone(),
+                        line_number: mat.line_number(),
+                        absolute_byte_offset: Some(mat.absolute_byte_offset()),
+                        bytes: line_bytes.to_vec(),
+                        ranges,
+                        replacement: replacement
+                            .as_ref()
+                            .map(|replacement| replacement.line.clone()),
+                        replacement_matches: replacement
+                            .map_or_else(Vec::new, |replacement| replacement.matches),
+                    }),
+                );
+                Ok(true)
+            }
         }
-        self.event_collection.push(
-            &mut self.events,
-            SearchEvent::Match(MatchEvent {
-                path: self.path.clone(),
-                line_number: mat.line_number(),
-                absolute_byte_offset: Some(mat.absolute_byte_offset()),
-                bytes: line_bytes.to_vec(),
-                ranges,
-                replacement: replacement
-                    .as_ref()
-                    .map(|replacement| replacement.line.clone()),
-                replacement_matches: replacement
-                    .map_or_else(Vec::new, |replacement| replacement.matches),
-            }),
-        );
-        Ok(true)
     }
 
     fn context(
