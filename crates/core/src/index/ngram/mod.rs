@@ -214,8 +214,8 @@ mod candidate_tests {
     }
 
     #[test]
-    fn short_literal_full_scan() {
-        assert!(full_scan(&["ab".to_string()], false, false, false));
+    fn short_literal_covers_with_wildcard_grams() {
+        assert!(narrow(&["ab".to_string()], false, false, false));
     }
 
     #[test]

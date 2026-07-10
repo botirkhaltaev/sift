@@ -37,7 +37,9 @@ impl Config {
                 )?
             };
             for lit in arms {
-                if lit.len() < width {
+                // Need at most one wildcard byte to cover a short literal with
+                // existing N-gram postings (e.g. `fn` → `?fn` ∪ `fn?`).
+                if lit.len() + 1 < width {
                     return None;
                 }
                 if case_insensitive && !lit.is_ascii() {
@@ -195,7 +197,8 @@ impl Config {
         let mut out = Vec::new();
         for lit in lits {
             let bytes = lit.as_bytes();
-            if bytes.len() >= width {
+            // Keep arms that are full-width or one byte short (covered by wildcard grams).
+            if bytes.len() + 1 >= width {
                 out.push(bytes.to_vec());
             }
         }

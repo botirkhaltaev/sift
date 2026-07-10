@@ -69,6 +69,10 @@ impl Index {
     fn posting_ids(&self, lit: &[u8], gram_match: GramMatch) -> Option<Vec<u32>> {
         let width = self.width.get();
         if lit.len() < width {
+            // One missing byte: union postings for every gram that covers `lit`.
+            if lit.len() + 1 == width {
+                return self.posting_ids_covering(lit, gram_match);
+            }
             return None;
         }
         match gram_match {
@@ -121,6 +125,39 @@ impl Index {
                 cur.filter(|ids| !ids.is_empty())
             }
         }
+    }
+
+    /// Union postings for every width-gram that contains `lit` as a contiguous substring.
+    fn posting_ids_covering(&self, lit: &[u8], gram_match: GramMatch) -> Option<Vec<u32>> {
+        let width = self.width.get();
+        debug_assert_eq!(lit.len() + 1, width);
+        let file_count = self.storage.files.len();
+        let mut window = vec![0u8; width];
+        let mut slices: Vec<&[u8]> = Vec::new();
+        for wild_pos in 0..width {
+            for b in 0..=u8::MAX {
+                let mut lit_i = 0usize;
+                for (pos, slot) in window.iter_mut().enumerate() {
+                    if pos == wild_pos {
+                        *slot = b;
+                    } else {
+                        *slot = lit[lit_i];
+                        lit_i += 1;
+                    }
+                }
+                for gram in gram_match.grams(&mut window) {
+                    let slice = self.posting_bytes_slice(gram);
+                    if !slice.is_empty() {
+                        slices.push(slice);
+                    }
+                }
+            }
+        }
+        if slices.is_empty() {
+            return None;
+        }
+        let ids = FileIdSet::union_postings(&slices, file_count).file_ids();
+        if ids.is_empty() { None } else { Some(ids) }
     }
 
     fn posting_bytes_slice(&self, gram: Gram) -> &[u8] {
