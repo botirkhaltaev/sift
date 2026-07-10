@@ -113,17 +113,14 @@ impl<'a> Grep<'a> {
 impl GrepRequest<'_> {
     const fn candidate_extent(&self) -> CandidateExtent {
         match self.mode {
-            SearchMode::CountLines { .. }
-            | SearchMode::FilesWithoutMatch
-            | SearchMode::CountMatches {
-                zeros: ZeroCounts::Include,
-            } => CandidateExtent::Complete,
-            SearchMode::Lines
-            | SearchMode::Matches
-            | SearchMode::CountMatches {
-                zeros: ZeroCounts::Omit,
+            SearchMode::FilesWithoutMatch => CandidateExtent::Complete,
+            SearchMode::CountLines { zeros } | SearchMode::CountMatches { zeros } => match zeros {
+                ZeroCounts::Include => CandidateExtent::Complete,
+                ZeroCounts::Omit => CandidateExtent::PotentialMatches,
+            },
+            SearchMode::Lines | SearchMode::Matches | SearchMode::FilesWithMatches => {
+                CandidateExtent::PotentialMatches
             }
-            | SearchMode::FilesWithMatches => CandidateExtent::PotentialMatches,
         }
     }
 }
@@ -196,5 +193,62 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
     /// Returns an error if request building, candidate resolution, search, or sink handling fails.
     pub fn stream(self, sink: &mut impl SearchSink) -> crate::Result<Report> {
         self.grep.stream(self.build()?, sink)
+    }
+}
+
+#[cfg(test)]
+mod candidate_extent_tests {
+    use super::*;
+    use crate::search::SearchQueryBuilder;
+
+    fn extent(mode: SearchMode) -> CandidateExtent {
+        GrepRequest {
+            query: SearchQueryBuilder::new(vec!["x".into()])
+                .build()
+                .expect("query"),
+            candidates: CandidateSelection::None,
+            inputs: InputRequest::from_candidates(),
+            mode,
+            stats: StatsMode::Off,
+        }
+        .candidate_extent()
+    }
+
+    #[test]
+    fn count_lines_omit_uses_potential_matches() {
+        assert_eq!(
+            extent(SearchMode::CountLines {
+                zeros: ZeroCounts::Omit
+            }),
+            CandidateExtent::PotentialMatches
+        );
+    }
+
+    #[test]
+    fn count_lines_include_uses_complete() {
+        assert_eq!(
+            extent(SearchMode::CountLines {
+                zeros: ZeroCounts::Include
+            }),
+            CandidateExtent::Complete
+        );
+    }
+
+    #[test]
+    fn count_matches_omit_uses_potential_matches() {
+        assert_eq!(
+            extent(SearchMode::CountMatches {
+                zeros: ZeroCounts::Omit
+            }),
+            CandidateExtent::PotentialMatches
+        );
+    }
+
+    #[test]
+    fn files_without_match_uses_complete() {
+        assert_eq!(
+            extent(SearchMode::FilesWithoutMatch),
+            CandidateExtent::Complete
+        );
     }
 }

@@ -96,3 +96,29 @@ fn stats_counts_matches_across_multiple_files() {
         "expected all files searched in stderr, got: {stderr:?}"
     );
 }
+
+#[test]
+fn count_mode_narrows_indexed_candidates() {
+    let p = TestProject::new("stats-count-narrow");
+    p.write("a.txt", "hello world\n");
+    p.write("b.txt", "goodbye\n");
+    p.build_index();
+
+    // `-E none` keeps index narrowing enabled (default Auto may disable it).
+    let output = p.index_output(["hello", "-c", "-E", "none", "--stats"]);
+    common::assert_success(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("1 files searched"),
+        "expected -c without --include-zero to narrow like line search, got: {stderr:?}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("a.txt:1"),
+        "expected count for matching file, got: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("b.txt"),
+        "expected non-matching file omitted without --include-zero, got: {stdout:?}"
+    );
+}
