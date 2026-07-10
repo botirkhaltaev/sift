@@ -17,9 +17,9 @@ pub use grep::{
 };
 pub use search::{
     BinaryEvent, BinaryMode, CaseMode, ContextEvent, ContextKind, FileEvent, FileReport, Input,
-    InputEncoding, InputIdentity, Inputs, Match, MatchEvent, RegexEngine, Report, SearchEvent,
-    SearchFlags, SearchMode, SearchOptions, SearchQuery, SearchQueryBuilder, SearchSink, Searcher,
-    Stats, StatsMode, ZeroCounts,
+    InputEncoding, InputIdentity, Inputs, Match, MatchEvent, RegexEngine, Report, SearchBound,
+    SearchEvent, SearchFlags, SearchMode, SearchOptions, SearchQuery, SearchQueryBuilder,
+    SearchSink, Searcher, Stats, StatsMode, ZeroCounts,
 };
 
 pub use ignore::{Walk, WalkBuilder};

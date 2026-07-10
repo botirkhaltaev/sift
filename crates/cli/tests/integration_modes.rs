@@ -128,6 +128,23 @@ fn quiet_no_output_on_match() {
 }
 
 #[test]
+fn quiet_stats_stops_after_first_match() {
+    let p = TestProject::new("modes-quiet-first-match-stats");
+    p.write("a.txt", "hit\n");
+    p.write("b.txt", "miss\n");
+    p.write("c.txt", "hit\n");
+    p.build_index();
+
+    let out = p.index_output(["-q", "-E", "none", "--stats", "hit"]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("1 files searched"),
+        "expected quiet to stop after first match, got: {stderr:?}"
+    );
+}
+
+#[test]
 fn no_match_exit_code_1() {
     let p = TestProject::new("modes-no-match-exit");
     p.write("a.txt", "something\n");

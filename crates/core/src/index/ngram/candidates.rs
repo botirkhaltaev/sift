@@ -11,9 +11,7 @@ impl Index {
             return Vec::new();
         }
         if arms.len() == 1 {
-            return self
-                .posting_ids(&arms[0], gram_match)
-                .unwrap_or_default();
+            return self.posting_ids(&arms[0], gram_match).unwrap_or_default();
         }
         let mut id_lists: Vec<Vec<u32>> = Vec::with_capacity(arms.len());
         for arm in arms {
