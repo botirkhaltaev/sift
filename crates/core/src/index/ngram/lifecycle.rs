@@ -10,7 +10,7 @@ use super::config::Config;
 use super::files::FileFingerprint;
 use super::files::FileTable;
 use super::gram::GramWidth;
-use super::index::{Index, IndexedFiles, NGramIndexError, Storage};
+use super::index::{Index, IndexedFiles, IndexedFilesLocation, NGramIndexError, Storage};
 use super::storage::grams::{GramSet, GramSets};
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
@@ -93,15 +93,18 @@ impl Config {
                 writer.put_artifact(namespace, crate::POSTINGS_BIN, postings_bytes)?;
                 writer.put_artifact(namespace, crate::GRAMS_BIN, gram_sets_bytes)?;
 
-                let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
-                Self::validate_file_paths(&fingerprints)?;
+                Self::validate_file_paths(&tables.fingerprints)?;
                 Self::validate_lexicon_postings(&lexicon, &postings)?;
 
                 Ok(Index {
                     width,
                     storage: Storage::new(
                         root.to_path_buf(),
-                        IndexedFiles::new(fingerprints),
+                        IndexedFiles::new(IndexedFilesLocation::Memory {
+                            table: files,
+                            fingerprints: tables.fingerprints.clone(),
+                        })
+                        .map_err(crate::Error::Io)?,
                         gram_sets,
                         lexicon,
                         postings,
@@ -156,8 +159,8 @@ impl Config {
                 }
 
                 let files = FileTable::open(&files_path).map_err(NGramIndexError::Io)?;
-                let fingerprints = files.to_fingerprints().map_err(NGramIndexError::Io)?;
-                Self::validate_file_paths(&fingerprints)?;
+                let indexed_files = IndexedFiles::new(IndexedFilesLocation::Disk(files))
+                    .map_err(NGramIndexError::Io)?;
 
                 let lexicon = Lexicon::open(&lexicon_path, width).map_err(NGramIndexError::Io)?;
                 let postings = Postings::open(&postings_path).map_err(NGramIndexError::Io)?;
@@ -167,7 +170,7 @@ impl Config {
                     width,
                     storage: Storage::new(
                         root.to_path_buf(),
-                        IndexedFiles::new(fingerprints),
+                        indexed_files,
                         gram_sets,
                         lexicon,
                         postings,
@@ -178,8 +181,8 @@ impl Config {
             IndexSource::Snapshot { reader, namespace } => {
                 let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
                 let files = FileTable::from_artifact(files_data).map_err(NGramIndexError::Io)?;
-                let fingerprints = files.to_fingerprints().map_err(NGramIndexError::Io)?;
-                Self::validate_file_paths(&fingerprints)?;
+                let indexed_files = IndexedFiles::new(IndexedFilesLocation::Disk(files))
+                    .map_err(NGramIndexError::Io)?;
 
                 let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
                 let lexicon =
@@ -197,7 +200,7 @@ impl Config {
                     width,
                     storage: Storage::new(
                         root.to_path_buf(),
-                        IndexedFiles::new(fingerprints),
+                        indexed_files,
                         gram_sets,
                         lexicon,
                         postings,
@@ -243,15 +246,18 @@ impl Config {
         let postings = pr.map_err(crate::Error::Io)?;
         let gram_sets = gr.map_err(crate::Error::Io)?;
 
-        let fingerprints = files.to_fingerprints().map_err(crate::Error::Io)?;
-        Self::validate_file_paths(&fingerprints)?;
+        Self::validate_file_paths(&tables.fingerprints)?;
         Self::validate_lexicon_postings(&lexicon, &postings)?;
 
         Ok(Index {
             width,
             storage: Storage::new(
                 root.to_path_buf(),
-                IndexedFiles::new(fingerprints),
+                IndexedFiles::new(IndexedFilesLocation::Memory {
+                    table: files,
+                    fingerprints: tables.fingerprints.clone(),
+                })
+                .map_err(crate::Error::Io)?,
                 gram_sets,
                 lexicon,
                 postings,
