@@ -222,10 +222,26 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
     ) -> Result<bool, Self::Error> {
         let line = usize::try_from(mat.line_number().unwrap_or(0)).unwrap_or(0);
         let line_bytes = mat.bytes();
+        self.line_matches += 1;
+
+        let scan_spans = self.replacement.is_some()
+            || matches!(self.match_emission, MatchEmission::Spans)
+            || matches!(self.event_collection, EventCollection::Collect);
+
+        if !scan_spans {
+            if matches!(self.match_emission, MatchEmission::Lines) {
+                self.matches.push(Match {
+                    file: self.path.clone(),
+                    line,
+                    text: String::from_utf8_lossy(line_bytes).into_owned(),
+                });
+            }
+            return Ok(true);
+        }
+
         let replacement = self.replacement.as_deref().and_then(|replacement| {
             Replacement::expand(self.matcher, line_bytes, replacement).ok()
         });
-        self.line_matches += 1;
         let mut ranges = Vec::new();
         let _ = self
             .matcher
