@@ -158,9 +158,54 @@ impl FileTable {
         Ok((count, offset_table_start))
     }
 
-    #[cfg(test)]
     pub const fn len(&self) -> usize {
         self.count
+    }
+
+    /// Borrow the UTF-8 path bytes for `id` without allocating a `PathBuf`.
+    pub fn path_bytes(&self, id: usize) -> std::io::Result<&[u8]> {
+        if id >= self.count {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "file id out of range",
+            ));
+        }
+        let bytes = self.bytes();
+        let off = read_u32_le(bytes, self.offset_table_start + id * 4) as usize;
+        let path_len = read_u32_le(bytes, off) as usize;
+        let path_start = off + 4;
+        let path_end = path_start + path_len;
+        bytes.get(path_start..path_end).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("path {id} extends past files table end"),
+            )
+        })
+    }
+
+    /// Validate stored paths without decoding them into `PathBuf`s.
+    pub fn validate_paths(&self) -> std::io::Result<()> {
+        for id in 0..self.count {
+            let path = self.path_bytes(id)?;
+            if path.is_empty()
+                || path.starts_with(b"/")
+                || path
+                    .split(|&b| b == b'/' || b == b'\\')
+                    .any(|component| component == b"..")
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid file path in index at id {id}"),
+                ));
+            }
+            std::str::from_utf8(path).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("path {id} is not valid UTF-8: {err}"),
+                )
+            })?;
+        }
+        Ok(())
     }
 
     pub fn to_fingerprints(&self) -> std::io::Result<Vec<FileFingerprint>> {
