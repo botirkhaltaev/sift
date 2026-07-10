@@ -38,9 +38,24 @@ impl Input<'_> {
     /// Display path for matching and optional corpus rel-path for hit tracking.
     #[must_use]
     pub fn paths(&self) -> (PathBuf, Option<PathBuf>) {
+        (
+            self.display_path().to_path_buf(),
+            self.hit_path().map(Path::to_path_buf),
+        )
+    }
+
+    #[must_use]
+    pub fn display_path(&self) -> &Path {
+        match self {
+            Self::Path { identity, .. } | Self::Bytes { identity, .. } => &identity.display_path,
+        }
+    }
+
+    #[must_use]
+    pub fn hit_path(&self) -> Option<&Path> {
         match self {
             Self::Path { identity, .. } | Self::Bytes { identity, .. } => {
-                (identity.display_path.clone(), identity.hit_path.clone())
+                identity.hit_path.as_deref()
             }
         }
     }

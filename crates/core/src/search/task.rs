@@ -1,5 +1,5 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use grep_matcher::{Captures, LineTerminator, Matcher as GrepMatcherTrait};
 use grep_searcher::{
@@ -125,10 +125,15 @@ impl<'a> SearchTask<'a> {
         grep_matcher: &M,
         origin: InputOrigin,
     ) -> SearchOutcome {
-        let (display_path, hit_path) = self.input.paths();
         let match_emission = MatchEmission::from(self.mode, self.options);
+        let sink_path = match (match_emission, self.events) {
+            (MatchEmission::Presence | MatchEmission::LineCount, EventCollection::Discard) => {
+                PathBuf::new()
+            }
+            _ => self.input.display_path().to_path_buf(),
+        };
         let mut sink = MatchSink {
-            path: display_path.clone(),
+            path: sink_path,
             origin,
             matcher: grep_matcher,
             replacement: self
@@ -156,7 +161,7 @@ impl<'a> SearchTask<'a> {
         }
         let has_match = sink.line_matches > 0;
         SearchOutcome {
-            path: display_path,
+            path: self.input.display_path().to_path_buf(),
             matched: has_match,
             matches: sink.matches,
             events: sink.events,
@@ -164,7 +169,9 @@ impl<'a> SearchTask<'a> {
             match_spans: sink.match_spans,
             bytes_searched: sink.bytes_searched,
             binary_byte_offset: sink.binary_byte_offset,
-            hit_path: has_match.then_some(hit_path).flatten(),
+            hit_path: has_match
+                .then(|| self.input.hit_path().map(Path::to_path_buf))
+                .flatten(),
         }
     }
 
