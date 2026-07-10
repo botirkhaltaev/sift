@@ -39,7 +39,10 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 - **No `unsafe`** except in `index/mmap.rs` (documented safety invariant).
 - **Strict clippy:** workspace uses `pedantic + nursery + cargo` warnings; CI uses `-D warnings`.
 - Fix lints at the root cause. `#[allow]` is **never** permitted.
-- Small, focused changes; follow existing patterns in the crate you touch.
+- Prefer small, focused commits when the design is already right. When the design
+  is wrong, make the sweeping change — do not paper over it with a local patch.
+- Follow existing patterns in the crate you touch when they match these rules;
+  redesign when they do not.
 - Do not commit `target/`, `.cursor/`, local `.sift/` directories.
 
 ## Branch Names
@@ -59,19 +62,36 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Architecture & Design
 
-Prefer the best current design over backward compatibility. Do not preserve old
-APIs, signatures, names, or structures by default when a cleaner architecture is
-available. Preserve compatibility only when explicitly requested or when there is
-a concrete persisted-data, shipped-behavior, external-consumer, or migration
+**No backward-compatibility bias.** Prefer the best current design. Do not
+preserve old APIs, signatures, names, structures, call sites, or tests by
+default when a cleaner architecture is available. Rename, delete, and reshape
+freely. Preserve compatibility only when explicitly requested or when there is a
+concrete persisted-data, shipped-behavior, external-consumer, or migration
 requirement.
 
-Write idiomatic Rust. Prefer strong domain types, explicit ownership, clear error
-boundaries, and small composable interfaces. Redesign weak abstractions instead
-of layering new behavior on top of them.
+**Prefer sweeping architecture fixes over incremental patches.** If a change
+reveals a weak abstraction, a parallel API, a boolean fork, or a use-case-shaped
+helper, fix the design across the affected surface in the same change. Do not
+leave the old shape behind "for compatibility" or defer the cleanup to a follow-up
+when the right design is already clear. A larger, coherent diff is better than a
+small diff that entrenches a bad API.
 
 **Keep the design general, and keep the code simple.** Prefer the smallest API
 that expresses the domain concept. Do not add layers, wrappers, or special-case
 branches for one caller, one test, one benchmark, or one feature flag.
+
+### Idiomatic Rust
+
+Write idiomatic, best-practice Rust:
+
+- Strong domain types over primitives and boolean flags.
+- Explicit ownership and lifetimes; avoid unnecessary `clone`, `RefCell`, or
+  interior mutability when a clearer ownership boundary exists.
+- Clear `Result` / error boundaries; prefer typed errors at API edges.
+- Small composable interfaces; one responsibility per type and method.
+- Prefer iterators, `match`, and enums over ad-hoc boolean control flow.
+- Redesign weak abstractions instead of layering new behavior on top of them.
+- No `unsafe` except the documented mmap invariant; no `#[allow]` for clippy.
 
 ### Composition over specialization
 
@@ -204,11 +224,15 @@ Clap parses `*Decl` flag groups; **`Argv` resolves effective runtime values**
 - Add dependencies without justification.
 - Commit secrets, `.env` files, or editor-specific directories.
 - Use `#[allow]` attributes.
+- Preserve old APIs or shapes out of habit — redesign when the architecture is
+  better served by a breaking change (see Architecture & Design).
 - Add free helper functions or parallel `*_with_*` / use-case-specific APIs —
   evolve the existing domain API instead (see Architecture & Design / Function
   Evolution).
 - Overfit an API to one caller or test; keep operations general and let callers
   compose.
+- Ship a local workaround when the right fix is a broader redesign of the
+  surrounding types or call sites.
 
 ## Cursor Cloud specific instructions
 
