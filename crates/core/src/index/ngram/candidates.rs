@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use super::gram::{Gram, GramMatch, GramWindows};
+use super::gram::{Gram, GramMatch, GramWindows, LiteralNarrowing};
 use super::index::Index;
 use super::storage::postings::Postings;
 
@@ -68,58 +68,88 @@ impl Index {
 
     fn posting_ids(&self, lit: &[u8], gram_match: GramMatch) -> Option<Vec<u32>> {
         let width = self.width.get();
-        if lit.len() < width {
-            return None;
-        }
-        match gram_match {
-            GramMatch::Exact => {
-                let grams: Vec<Gram> = GramWindows::new(lit, self.width).collect();
-                if grams.is_empty() {
-                    return None;
-                }
-                let mut slices: Vec<&[u8]> = Vec::with_capacity(grams.len());
-                for gram in &grams {
-                    let s = self.posting_bytes_slice(*gram);
-                    if s.is_empty() {
-                        return None;
-                    }
-                    slices.push(s);
-                }
-                let ids = Self::intersect_sorted_slices(&slices);
-                if ids.is_empty() { None } else { Some(ids) }
-            }
-            GramMatch::AsciiCase => {
+        match self.width.literal_narrowing(lit.len()) {
+            LiteralNarrowing::TooShort => None,
+            LiteralNarrowing::Covering => {
+                // Union postings for every width-gram that contains `lit`.
                 let file_count = self.storage.files.len();
                 let mut window = vec![0u8; width];
-                let mut cur: Option<Vec<u32>> = None;
-                for offset in 0..=lit.len() - width {
-                    window.copy_from_slice(&lit[offset..offset + width]);
-                    let mut slices: Vec<&[u8]> = Vec::new();
-                    for gram in gram_match.grams(&mut window) {
-                        let slice = self.posting_bytes_slice(gram);
-                        if !slice.is_empty() {
-                            slices.push(slice);
+                let mut slices: Vec<&[u8]> = Vec::new();
+                for wild_pos in 0..width {
+                    for b in 0..=u8::MAX {
+                        let mut lit_i = 0usize;
+                        for (pos, slot) in window.iter_mut().enumerate() {
+                            if pos == wild_pos {
+                                *slot = b;
+                            } else {
+                                *slot = lit[lit_i];
+                                lit_i += 1;
+                            }
+                        }
+                        for gram in gram_match.grams(&mut window) {
+                            let slice = self.posting_bytes_slice(gram);
+                            if !slice.is_empty() {
+                                slices.push(slice);
+                            }
                         }
                     }
-                    if slices.is_empty() {
-                        return None;
-                    }
-                    // Single posting list: decode directly on the first window.
-                    cur = Some(if cur.is_none() && slices.len() == 1 {
-                        Postings::decode_sorted(slices[0]).expect("postings validated at open")
-                    } else {
-                        let set = FileIdSet::union_postings(&slices, file_count);
-                        cur.map_or_else(
-                            || set.file_ids(),
-                            |prev| prev.into_iter().filter(|&id| set.contains(id)).collect(),
-                        )
-                    });
-                    if cur.as_ref().is_some_and(Vec::is_empty) {
-                        return None;
-                    }
                 }
-                cur.filter(|ids| !ids.is_empty())
+                if slices.is_empty() {
+                    return None;
+                }
+                let ids = FileIdSet::union_postings(&slices, file_count).file_ids();
+                if ids.is_empty() { None } else { Some(ids) }
             }
+            LiteralNarrowing::Windows => match gram_match {
+                GramMatch::Exact => {
+                    let grams: Vec<Gram> = GramWindows::new(lit, self.width).collect();
+                    if grams.is_empty() {
+                        return None;
+                    }
+                    let mut slices: Vec<&[u8]> = Vec::with_capacity(grams.len());
+                    for gram in &grams {
+                        let s = self.posting_bytes_slice(*gram);
+                        if s.is_empty() {
+                            return None;
+                        }
+                        slices.push(s);
+                    }
+                    let ids = Self::intersect_sorted_slices(&slices);
+                    if ids.is_empty() { None } else { Some(ids) }
+                }
+                GramMatch::AsciiCase => {
+                    let file_count = self.storage.files.len();
+                    let mut window = vec![0u8; width];
+                    let mut cur: Option<Vec<u32>> = None;
+                    for offset in 0..=lit.len() - width {
+                        window.copy_from_slice(&lit[offset..offset + width]);
+                        let mut slices: Vec<&[u8]> = Vec::new();
+                        for gram in gram_match.grams(&mut window) {
+                            let slice = self.posting_bytes_slice(gram);
+                            if !slice.is_empty() {
+                                slices.push(slice);
+                            }
+                        }
+                        if slices.is_empty() {
+                            return None;
+                        }
+                        // Single posting list: decode directly on the first window.
+                        cur = Some(if cur.is_none() && slices.len() == 1 {
+                            Postings::decode_sorted(slices[0]).expect("postings validated at open")
+                        } else {
+                            let set = FileIdSet::union_postings(&slices, file_count);
+                            cur.map_or_else(
+                                || set.file_ids(),
+                                |prev| prev.into_iter().filter(|&id| set.contains(id)).collect(),
+                            )
+                        });
+                        if cur.as_ref().is_some_and(Vec::is_empty) {
+                            return None;
+                        }
+                    }
+                    cur.filter(|ids| !ids.is_empty())
+                }
+            },
         }
     }
 

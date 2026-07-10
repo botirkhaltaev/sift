@@ -5,6 +5,7 @@ use regex_syntax::hir::{self, Hir};
 use crate::candidates::CandidateSpec;
 
 use super::config::Config;
+use super::gram::{GramWidth, LiteralNarrowing};
 
 impl Config {
     /// Extract literal byte arms from a query spec.
@@ -19,7 +20,7 @@ impl Config {
         if query.invert_match() {
             return None;
         }
-        let width = self.width().get();
+        let width = self.width();
         let case_insensitive = query.case_insensitive();
         let mut literal_arms: Vec<Vec<u8>> = Vec::new();
         for p in query.patterns {
@@ -37,7 +38,10 @@ impl Config {
                 )?
             };
             for lit in arms {
-                if lit.len() < width {
+                if matches!(
+                    width.literal_narrowing(lit.len()),
+                    LiteralNarrowing::TooShort
+                ) {
                     return None;
                 }
                 if case_insensitive && !lit.is_ascii() {
@@ -58,18 +62,19 @@ impl Config {
     /// Under default BOM sniffing, UTF-16 files are decoded at search time.
     /// Expand ASCII arms with UTF-16LE/BE encodings so those files stay reachable
     /// while byte narrowing remains enabled for the UTF-8 majority.
-    fn expand_bom_sniffing_arms(arms: &mut Vec<Vec<u8>>, width: usize) -> Option<()> {
+    fn expand_bom_sniffing_arms(arms: &mut Vec<Vec<u8>>, width: GramWidth) -> Option<()> {
         if arms.iter().any(|arm| !arm.is_ascii()) {
             return None;
         }
+        let min_len = width.get();
         let ascii_arms = arms.clone();
         for arm in ascii_arms {
             let le = Self::utf16_le(&arm);
             let be = Self::utf16_be(&arm);
-            if le.len() >= width {
+            if le.len() >= min_len {
                 arms.push(le);
             }
-            if be.len() >= width {
+            if be.len() >= min_len {
                 arms.push(be);
             }
         }
@@ -99,7 +104,7 @@ impl Config {
         case_insensitive: bool,
         word_regexp: bool,
         line_regexp: bool,
-        width: usize,
+        width: GramWidth,
     ) -> Option<Vec<Vec<u8>>> {
         let hir = Self::build_configured_hir(pattern, case_insensitive)?;
         let shaped = Self::shape_hir(hir, word_regexp, line_regexp);
@@ -145,7 +150,7 @@ impl Config {
         ])
     }
 
-    fn extract_literals(hir: &Hir, width: usize) -> Vec<Vec<u8>> {
+    fn extract_literals(hir: &Hir, width: GramWidth) -> Vec<Vec<u8>> {
         let extractor_prefix = Extractor::new();
         let extractor_suffix = {
             let mut e = Extractor::new();
@@ -165,7 +170,7 @@ impl Config {
     fn pick_better_lits(
         lits_a: Option<&[regex_syntax::hir::literal::Literal]>,
         lits_b: Option<&[regex_syntax::hir::literal::Literal]>,
-        width: usize,
+        width: GramWidth,
     ) -> Vec<Vec<u8>> {
         fn total_bytes(lits: Option<&[regex_syntax::hir::literal::Literal]>) -> usize {
             lits.map_or(0, |l| l.iter().map(|lit| lit.as_bytes().len()).sum())
@@ -195,7 +200,10 @@ impl Config {
         let mut out = Vec::new();
         for lit in lits {
             let bytes = lit.as_bytes();
-            if bytes.len() >= width {
+            if !matches!(
+                width.literal_narrowing(bytes.len()),
+                LiteralNarrowing::TooShort
+            ) {
                 out.push(bytes.to_vec());
             }
         }
