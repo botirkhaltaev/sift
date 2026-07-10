@@ -191,13 +191,8 @@ impl MatchEmission {
             SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch => Self::Presence,
             SearchMode::CountLines { .. } => Self::LineCount,
             SearchMode::CountMatches { .. } | SearchMode::Matches => Self::Spans,
-            SearchMode::Lines => {
-                if options.only_matching() {
-                    Self::Spans
-                } else {
-                    Self::Lines
-                }
-            }
+            SearchMode::Lines if options.only_matching() => Self::Spans,
+            SearchMode::Lines => Self::Lines,
         }
     }
 }
@@ -282,7 +277,7 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
                 });
                 Ok(true)
             }
-            MatchEmission::Lines | MatchEmission::Spans => {
+            MatchEmission::Lines => {
                 let replacement = self.replacement.as_deref().and_then(|replacement| {
                     Replacement::expand(self.matcher, line_bytes, replacement).ok()
                 });
@@ -292,23 +287,48 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
                     .find_iter(line_bytes, |m: grep_matcher::Match| {
                         ranges.push(m.start()..m.end());
                         self.match_spans += 1;
-                        if matches!(self.match_emission, MatchEmission::Spans) {
-                            self.matches.push(Match {
-                                file: self.path.clone(),
-                                line,
-                                text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()])
-                                    .into_owned(),
-                            });
-                        }
                         true
                     });
-                if matches!(self.match_emission, MatchEmission::Lines) {
-                    self.matches.push(Match {
-                        file: self.path.clone(),
-                        line,
-                        text: String::from_utf8_lossy(line_bytes).into_owned(),
+                self.matches.push(Match {
+                    file: self.path.clone(),
+                    line,
+                    text: String::from_utf8_lossy(line_bytes).into_owned(),
+                });
+                self.event_collection.push(
+                    &mut self.events,
+                    SearchEvent::Match(MatchEvent {
+                        path: self.path.clone(),
+                        line_number: mat.line_number(),
+                        absolute_byte_offset: Some(mat.absolute_byte_offset()),
+                        bytes: line_bytes.to_vec(),
+                        ranges,
+                        replacement: replacement
+                            .as_ref()
+                            .map(|replacement| replacement.line.clone()),
+                        replacement_matches: replacement
+                            .map_or_else(Vec::new, |replacement| replacement.matches),
+                    }),
+                );
+                Ok(true)
+            }
+            MatchEmission::Spans => {
+                let replacement = self.replacement.as_deref().and_then(|replacement| {
+                    Replacement::expand(self.matcher, line_bytes, replacement).ok()
+                });
+                let mut ranges = Vec::new();
+                let _ = self
+                    .matcher
+                    .find_iter(line_bytes, |m: grep_matcher::Match| {
+                        ranges.push(m.start()..m.end());
+                        self.match_spans += 1;
+                        self.matches.push(Match {
+                            file: self.path.clone(),
+                            line,
+                            text: String::from_utf8_lossy(&line_bytes[m.start()..m.end()])
+                                .into_owned(),
+                        });
+                        true
                     });
-                }
                 self.event_collection.push(
                     &mut self.events,
                     SearchEvent::Match(MatchEvent {
