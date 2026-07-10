@@ -199,19 +199,15 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
+    pub(crate) fn all_files(
+        &self,
+        request: crate::index::MaterializeRequest<'_>,
+    ) -> Vec<crate::Candidate> {
         (0..self.storage.files.len())
             .into_par_iter()
             .filter_map(|id| {
-                let row = self.storage.files.row(FileId::new(id))?;
-                let rel = PathBuf::from(row.path);
-                let abs = self.storage.root.join(&rel);
-                Some(crate::Candidate::with_metadata(
-                    rel,
-                    abs,
-                    Some(row.size),
-                    None,
-                ))
+                let id = u32::try_from(id).ok()?;
+                self.candidate_from_id(id, request)
             })
             .collect()
     }
@@ -222,21 +218,32 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn materialize(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+    pub(crate) fn materialize(
+        &self,
+        ids: &[u32],
+        request: crate::index::MaterializeRequest<'_>,
+    ) -> Vec<crate::Candidate> {
         ids.par_iter()
-            .filter_map(|&id| {
-                let fid = FileId::new(usize::try_from(id).ok()?);
-                let row = self.storage.files.row(fid)?;
-                let rel = PathBuf::from(row.path);
-                let abs = self.storage.root.join(&rel);
-                Some(crate::Candidate::with_metadata(
-                    rel,
-                    abs,
-                    Some(row.size),
-                    None,
-                ))
-            })
+            .filter_map(|&id| self.candidate_from_id(id, request))
             .collect()
+    }
+
+    fn candidate_from_id(
+        &self,
+        id: u32,
+        request: crate::index::MaterializeRequest<'_>,
+    ) -> Option<crate::Candidate> {
+        let fid = FileId::new(usize::try_from(id).ok()?);
+        let row = self.storage.files.row(fid)?;
+        let rel = PathBuf::from(row.path);
+        let abs = self.storage.root.join(&rel);
+        let candidate = crate::Candidate::with_metadata(rel, abs, Some(row.size), None);
+        match request {
+            crate::index::MaterializeRequest::All => Some(candidate),
+            crate::index::MaterializeRequest::Matching { filter, admission } => {
+                candidate.matches(filter, admission).then_some(candidate)
+            }
+        }
     }
     pub(crate) fn merge_partial_fingerprints(
         existing: &[FileFingerprint],

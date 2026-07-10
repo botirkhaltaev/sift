@@ -29,7 +29,7 @@ fn gitignore_honored_without_git_repo() {
         other => panic!("expected narrowed plan, got {other:?}"),
     };
     let paths: Vec<_> = indexes
-        .materialize(&file_ids)
+        .materialize(&file_ids, sift_core::MaterializeRequest::All)
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
         .collect();
@@ -65,7 +65,7 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
         other => panic!("expected narrowed plan, got {other:?}"),
     };
     let paths: Vec<_> = indexes
-        .materialize(&file_ids)
+        .materialize(&file_ids, sift_core::MaterializeRequest::All)
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
         .collect();
@@ -93,7 +93,7 @@ fn defaults_exclude_gitignored_and_ignore_file_paths() {
         other => panic!("expected narrowed plan, got {other:?}"),
     };
     let paths: Vec<_> = indexes
-        .materialize(&file_ids)
+        .materialize(&file_ids, sift_core::MaterializeRequest::All)
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
         .collect();
@@ -132,7 +132,7 @@ fn build_respects_hidden_files_by_default() {
         other => panic!("expected narrowed plan, got {other:?}"),
     };
     let paths: Vec<_> = indexes
-        .materialize(&file_ids)
+        .materialize(&file_ids, sift_core::MaterializeRequest::All)
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
         .collect();

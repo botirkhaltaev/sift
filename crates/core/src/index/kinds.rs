@@ -6,6 +6,8 @@ use super::config::{CorpusKind, IndexBuildConfig};
 use super::ngram;
 use super::{IndexDestination, IndexSource, IndexedCorpus};
 
+use crate::corpus::filter::{CandidateFilter, FilterAdmission};
+
 /// How an index query plan resolves candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PlanMode {
@@ -38,6 +40,18 @@ impl CandidatePlan {
     pub const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
     }
+}
+
+/// How indexed file ids become [`crate::Candidate`] values.
+#[derive(Debug, Clone, Copy)]
+pub enum MaterializeRequest<'a> {
+    /// Emit every id (tests and internal callers).
+    All,
+    /// Apply filter rules while materializing.
+    Matching {
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+    },
 }
 
 /// Configured index identity persisted in metadata and snapshot manifests.
@@ -195,16 +209,20 @@ impl Index {
     }
 
     #[must_use]
-    pub fn materialize(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+    pub fn materialize(
+        &self,
+        ids: &[u32],
+        request: MaterializeRequest<'_>,
+    ) -> Vec<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.materialize(ids),
+            Self::NGram(index) => index.materialize(ids, request),
         }
     }
 
     #[must_use]
-    pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
+    pub(crate) fn all_files(&self, request: MaterializeRequest<'_>) -> Vec<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.all_files(),
+            Self::NGram(index) => index.all_files(request),
         }
     }
 

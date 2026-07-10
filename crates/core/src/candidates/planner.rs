@@ -10,7 +10,7 @@ use crate::candidates::{
 use crate::corpus::Candidate;
 use crate::corpus::filter::FilterAdmission;
 use crate::corpus::walk::FileWalk;
-use crate::index::CandidatePlan;
+use crate::index::{CandidatePlan, MaterializeRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexNarrowing {
@@ -104,21 +104,35 @@ impl<'a> CandidatePlanner<'a> {
         order: crate::corpus::CandidateOrder,
         snapshot_status: SnapshotStatus,
     ) -> crate::Result<Vec<Candidate>> {
-        let raw = match strategy {
-            CandidateStrategy::None => Vec::new(),
-            CandidateStrategy::Walk => FileWalk::from_filter(self.source.filter).candidates()?,
-            CandidateStrategy::AllIndexed => self.source.indexes.all_indexed_candidates(),
-            CandidateStrategy::UseIndex => match index_plan {
-                CandidatePlan::Narrowed { file_ids } => self.source.indexes.materialize(&file_ids),
-                CandidatePlan::AllIndexed | CandidatePlan::Unavailable => Vec::new(),
-            },
-            CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_plan)?,
+        let admission = strategy.filter_admission(snapshot_status);
+        let matching = MaterializeRequest::Matching {
+            filter: self.source.filter,
+            admission,
         };
-        let admission = filter_admission(strategy, snapshot_status);
-        Ok(CandidateSet::new(raw)
-            .retain_matches(self.source.filter, admission)
-            .order(order)?
-            .into_vec())
+        let (raw, filtered) = match strategy {
+            CandidateStrategy::None => (Vec::new(), true),
+            CandidateStrategy::Walk => (
+                FileWalk::from_filter(self.source.filter).candidates()?,
+                false,
+            ),
+            CandidateStrategy::AllIndexed => {
+                (self.source.indexes.all_indexed_candidates(matching), true)
+            }
+            CandidateStrategy::UseIndex => match index_plan {
+                CandidatePlan::Narrowed { file_ids } => {
+                    (self.source.indexes.materialize(&file_ids, matching), true)
+                }
+                CandidatePlan::AllIndexed | CandidatePlan::Unavailable => (Vec::new(), true),
+            },
+            CandidateStrategy::MergeIndexAndWalk => (self.merge_unindexed(index_plan)?, false),
+        };
+        let set = CandidateSet::new(raw);
+        let set = if filtered {
+            set
+        } else {
+            set.retain_matches(self.source.filter, admission)
+        };
+        Ok(set.order(order)?.into_vec())
     }
 
     const fn index_status(&self, index_plan: &CandidatePlan) -> IndexStatus {
@@ -153,7 +167,10 @@ impl<'a> CandidatePlanner<'a> {
         let CandidatePlan::Narrowed { file_ids } = index_plan else {
             return FileWalk::from_filter(self.source.filter).candidates();
         };
-        let mut candidates = self.source.indexes.materialize(&file_ids);
+        let mut candidates = self
+            .source
+            .indexes
+            .materialize(&file_ids, MaterializeRequest::All);
 
         let walked = self
             .source
@@ -220,18 +237,17 @@ const fn plan_indexed(input: PlanInput) -> CandidateStrategy {
     }
 }
 
-const fn filter_admission(
-    strategy: CandidateStrategy,
-    snapshot_status: SnapshotStatus,
-) -> FilterAdmission {
-    match (strategy, snapshot_status) {
-        (
-            CandidateStrategy::UseIndex | CandidateStrategy::AllIndexed,
-            SnapshotStatus::TrustedComplete
-            | SnapshotStatus::TrustedLazy
-            | SnapshotStatus::StaleComplete,
-        ) => FilterAdmission::Indexed,
-        _ => FilterAdmission::Full,
+impl CandidateStrategy {
+    const fn filter_admission(self, snapshot_status: SnapshotStatus) -> FilterAdmission {
+        match (self, snapshot_status) {
+            (
+                Self::UseIndex | Self::AllIndexed,
+                SnapshotStatus::TrustedComplete
+                | SnapshotStatus::TrustedLazy
+                | SnapshotStatus::StaleComplete,
+            ) => FilterAdmission::Indexed,
+            _ => FilterAdmission::Full,
+        }
     }
 }
 

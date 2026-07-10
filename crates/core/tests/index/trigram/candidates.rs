@@ -24,7 +24,7 @@ fn literal_query_returns_indexed_candidates() {
         CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
-    let candidates = index.materialize(&file_ids);
+    let candidates = index.materialize(&file_ids, sift_core::MaterializeRequest::All);
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -66,7 +66,7 @@ fn literal_candidates_narrow_to_expected_file() {
         CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed plan, got {other:?}"),
     };
-    let candidates = indexes.materialize(&file_ids);
+    let candidates = indexes.materialize(&file_ids, sift_core::MaterializeRequest::All);
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -101,7 +101,7 @@ fn case_insensitive_uppercase_corpus_narrows() {
         CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed casei plan, got {other:?}"),
     };
-    let candidates = index.materialize(&file_ids);
+    let candidates = index.materialize(&file_ids, sift_core::MaterializeRequest::All);
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].rel_path(), Path::new("hit.rs"));
 }
@@ -137,6 +137,6 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
         CandidatePlan::Narrowed { file_ids, .. } => file_ids,
         other => panic!("expected narrowed casei alternation, got {other:?}"),
     };
-    let candidates = index.materialize(&file_ids);
+    let candidates = index.materialize(&file_ids, sift_core::MaterializeRequest::All);
     assert_eq!(candidates.len(), 4);
 }
