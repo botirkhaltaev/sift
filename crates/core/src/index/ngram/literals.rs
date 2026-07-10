@@ -49,7 +49,49 @@ impl Config {
         if literal_arms.is_empty() {
             return None;
         }
+        if query.bom_sniffing() {
+            Self::expand_bom_sniffing_arms(&mut literal_arms, width)?;
+        }
         Some(literal_arms)
+    }
+
+    /// Under default BOM sniffing, UTF-16 files are decoded at search time.
+    /// Expand ASCII arms with UTF-16LE/BE encodings so those files stay reachable
+    /// while byte narrowing remains enabled for the UTF-8 majority.
+    fn expand_bom_sniffing_arms(arms: &mut Vec<Vec<u8>>, width: usize) -> Option<()> {
+        if arms.iter().any(|arm| !arm.is_ascii()) {
+            return None;
+        }
+        let ascii_arms = arms.clone();
+        for arm in ascii_arms {
+            let le = Self::utf16_le(&arm);
+            let be = Self::utf16_be(&arm);
+            if le.len() >= width {
+                arms.push(le);
+            }
+            if be.len() >= width {
+                arms.push(be);
+            }
+        }
+        Some(())
+    }
+
+    fn utf16_le(ascii: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(ascii.len() * 2);
+        for &b in ascii {
+            out.push(b);
+            out.push(0);
+        }
+        out
+    }
+
+    fn utf16_be(ascii: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(ascii.len() * 2);
+        for &b in ascii {
+            out.push(0);
+            out.push(b);
+        }
+        out
     }
 
     fn plan_pattern(

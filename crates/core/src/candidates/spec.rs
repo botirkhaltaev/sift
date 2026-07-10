@@ -8,10 +8,13 @@ bitflags::bitflags! {
         const LINE_REGEXP      = 1 << 3;
         const INVERT_MATCH     = 1 << 4;
         const DISABLE_INDEX_NARROWING = 1 << 5;
+        /// Default `InputEncoding::Auto`: BOM sniffing may decode rare UTF-16 files.
+        /// Index narrowing stays on for ASCII arms, with UTF-16LE/BE arm expansion.
+        const BOM_SNIFFING = 1 << 6;
     }
 }
 
-use crate::search::{RegexEngine, SearchFlags, SearchQuery};
+use crate::search::{InputEncoding, RegexEngine, SearchFlags, SearchQuery};
 
 /// Index-agnostic description used to narrow candidate files.
 #[derive(Debug, Clone, Copy)]
@@ -38,9 +41,12 @@ impl<'a> From<&'a SearchQuery> for CandidateSpec<'a> {
         if query.options.flags.contains(SearchFlags::INVERT_MATCH) {
             flags |= CandidateFlags::INVERT_MATCH;
         }
-        if query.options.input_encoding.uses_decoded_input()
-            || matches!(query.options.regex_engine, RegexEngine::Pcre2)
-        {
+        if query.options.input_encoding.forces_decode() {
+            flags |= CandidateFlags::DISABLE_INDEX_NARROWING;
+        } else if matches!(query.options.input_encoding, InputEncoding::Auto) {
+            flags |= CandidateFlags::BOM_SNIFFING;
+        }
+        if matches!(query.options.regex_engine, RegexEngine::Pcre2) {
             flags |= CandidateFlags::DISABLE_INDEX_NARROWING;
         }
         Self {
@@ -74,6 +80,11 @@ impl CandidateSpec<'_> {
     #[must_use]
     pub const fn invert_match(&self) -> bool {
         self.flags.contains(CandidateFlags::INVERT_MATCH)
+    }
+
+    #[must_use]
+    pub const fn bom_sniffing(&self) -> bool {
+        self.flags.contains(CandidateFlags::BOM_SNIFFING)
     }
 
     #[must_use]
