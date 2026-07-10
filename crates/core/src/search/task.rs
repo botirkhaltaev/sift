@@ -232,11 +232,12 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
     type Error = io::Error;
 
     fn begin(&mut self, _searcher: &RegexSearcher) -> Result<bool, Self::Error> {
-        self.event_collection.push(&mut self.events, || {
-            SearchEvent::Begin(FileEvent {
+        match self.event_collection {
+            EventCollection::Discard => {}
+            EventCollection::Collect => self.events.push(SearchEvent::Begin(FileEvent {
                 path: self.path.clone(),
-            })
-        });
+            })),
+        }
         Ok(true)
     }
 
@@ -251,8 +252,9 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
 
         match self.match_emission {
             MatchEmission::Presence | MatchEmission::LineCount => {
-                self.event_collection.push(&mut self.events, || {
-                    SearchEvent::Match(MatchEvent {
+                match self.event_collection {
+                    EventCollection::Discard => {}
+                    EventCollection::Collect => self.events.push(SearchEvent::Match(MatchEvent {
                         path: self.path.clone(),
                         line_number: mat.line_number(),
                         absolute_byte_offset: Some(mat.absolute_byte_offset()),
@@ -260,8 +262,8 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
                         ranges: Vec::new(),
                         replacement: None,
                         replacement_matches: Vec::new(),
-                    })
-                });
+                    })),
+                }
                 Ok(true)
             }
             MatchEmission::Lines
@@ -292,8 +294,9 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
                     line,
                     text: String::from_utf8_lossy(line_bytes).into_owned(),
                 });
-                self.event_collection.push(&mut self.events, || {
-                    SearchEvent::Match(MatchEvent {
+                match self.event_collection {
+                    EventCollection::Discard => {}
+                    EventCollection::Collect => self.events.push(SearchEvent::Match(MatchEvent {
                         path: self.path.clone(),
                         line_number: mat.line_number(),
                         absolute_byte_offset: Some(mat.absolute_byte_offset()),
@@ -304,8 +307,8 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
                             .map(|replacement| replacement.line.clone()),
                         replacement_matches: replacement
                             .map_or_else(Vec::new, |replacement| replacement.matches),
-                    })
-                });
+                    })),
+                }
                 Ok(true)
             }
             MatchEmission::Spans => {
@@ -326,8 +329,9 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
                         });
                         true
                     });
-                self.event_collection.push(&mut self.events, || {
-                    SearchEvent::Match(MatchEvent {
+                match self.event_collection {
+                    EventCollection::Discard => {}
+                    EventCollection::Collect => self.events.push(SearchEvent::Match(MatchEvent {
                         path: self.path.clone(),
                         line_number: mat.line_number(),
                         absolute_byte_offset: Some(mat.absolute_byte_offset()),
@@ -338,8 +342,8 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
                             .map(|replacement| replacement.line.clone()),
                         replacement_matches: replacement
                             .map_or_else(Vec::new, |replacement| replacement.matches),
-                    })
-                });
+                    })),
+                }
                 Ok(true)
             }
         }
@@ -350,21 +354,24 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
         _searcher: &RegexSearcher,
         context: &SinkContext<'_>,
     ) -> Result<bool, Self::Error> {
-        self.event_collection.push(&mut self.events, || {
-            SearchEvent::Context(ContextEvent {
+        match self.event_collection {
+            EventCollection::Discard => {}
+            EventCollection::Collect => self.events.push(SearchEvent::Context(ContextEvent {
                 path: self.path.clone(),
                 kind: ContextKind::from(context.kind()),
                 line_number: context.line_number(),
                 absolute_byte_offset: context.absolute_byte_offset(),
                 bytes: context.bytes().to_vec(),
-            })
-        });
+            })),
+        }
         Ok(true)
     }
 
     fn context_break(&mut self, _searcher: &RegexSearcher) -> Result<bool, Self::Error> {
-        self.event_collection
-            .push(&mut self.events, || SearchEvent::ContextBreak);
+        match self.event_collection {
+            EventCollection::Discard => {}
+            EventCollection::Collect => self.events.push(SearchEvent::ContextBreak),
+        }
         Ok(true)
     }
 
@@ -374,13 +381,14 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
         binary_byte_offset: u64,
     ) -> Result<bool, Self::Error> {
         self.binary_byte_offset.get_or_insert(binary_byte_offset);
-        self.event_collection.push(&mut self.events, || {
-            SearchEvent::Binary(BinaryEvent {
+        match self.event_collection {
+            EventCollection::Discard => {}
+            EventCollection::Collect => self.events.push(SearchEvent::Binary(BinaryEvent {
                 path: self.path.clone(),
                 absolute_byte_offset: binary_byte_offset,
                 explicit: matches!(self.origin, InputOrigin::Explicit),
-            })
-        });
+            })),
+        }
         Ok(true)
     }
 
@@ -393,11 +401,12 @@ impl<M: GrepMatcherTrait> Sink for MatchSink<'_, M> {
         if self.binary_byte_offset.is_none() {
             self.binary_byte_offset = finish.binary_byte_offset();
         }
-        self.event_collection.push(&mut self.events, || {
-            SearchEvent::End(FileEvent {
+        match self.event_collection {
+            EventCollection::Discard => {}
+            EventCollection::Collect => self.events.push(SearchEvent::End(FileEvent {
                 path: self.path.clone(),
-            })
-        });
+            })),
+        }
         Ok(())
     }
 }

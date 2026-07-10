@@ -173,16 +173,3 @@ impl EventEmission<'_> {
         Ok(())
     }
 }
-
-impl EventCollection {
-    pub(in crate::search) fn push(
-        self,
-        events: &mut Vec<SearchEvent>,
-        build: impl FnOnce() -> SearchEvent,
-    ) {
-        match self {
-            Self::Discard => {}
-            Self::Collect => events.push(build()),
-        }
-    }
-}
