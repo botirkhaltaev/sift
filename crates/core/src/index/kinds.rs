@@ -23,29 +23,21 @@ pub struct QueryPlanOutput {
     pub mode: PlanMode,
 }
 
-/// Candidate information produced by an index.
+/// How an opened index covers a query.
 #[derive(Debug)]
-pub enum IndexCandidateResult {
+pub enum CandidatePlan {
     /// The query has no usable index terms.
     Unavailable,
     /// Every indexed file is a possible match, so the index cannot narrow further.
-    All,
+    AllIndexed,
     /// A narrowed set of possible matching files.
-    Candidates(Vec<crate::Candidate>),
+    Narrowed(Vec<crate::Candidate>),
 }
 
-impl IndexCandidateResult {
+impl CandidatePlan {
     #[must_use]
     pub const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
-    }
-
-    #[must_use]
-    pub fn into_candidates(self) -> Option<Vec<crate::Candidate>> {
-        match self {
-            Self::Candidates(candidates) => Some(candidates),
-            Self::Unavailable | Self::All => None,
-        }
     }
 }
 
@@ -197,9 +189,9 @@ impl Index {
     }
 
     #[must_use]
-    pub fn candidates(&self, query: &crate::candidates::CandidateSpec<'_>) -> IndexCandidateResult {
+    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
         match self {
-            Self::NGram(index) => index.candidates(query),
+            Self::NGram(index) => index.plan(query),
         }
     }
 

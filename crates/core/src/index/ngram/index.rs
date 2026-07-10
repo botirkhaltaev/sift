@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::candidates::CandidateSpec;
-use crate::index::{CorpusKind, FileId, IndexCandidateResult};
+use crate::index::{CandidatePlan, CorpusKind, FileId};
 
 use super::config::Config;
 use super::files::FileFingerprint;
@@ -69,17 +69,17 @@ impl Index {
         self.storage.corpus_kind
     }
 
-    /// Produce candidate information for the query.
+    /// Plan candidate coverage for the query.
     #[must_use]
-    pub fn candidates(&self, query: &CandidateSpec<'_>) -> IndexCandidateResult {
+    pub fn plan(&self, query: &CandidateSpec<'_>) -> CandidatePlan {
         let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
-            return IndexCandidateResult::Unavailable;
+            return CandidatePlan::Unavailable;
         };
         let ids = self.candidate_file_ids(&arms);
         if ids.len() == self.storage.fingerprints.len() && self.storage.fingerprints.len() > 1 {
-            return IndexCandidateResult::All;
+            return CandidatePlan::AllIndexed;
         }
-        IndexCandidateResult::Candidates(
+        CandidatePlan::Narrowed(
             ids.into_iter()
                 .filter_map(|id| {
                     let fid = FileId::new(usize::try_from(id).ok()?);

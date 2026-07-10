@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use sift_core::IndexCandidateResult;
+use sift_core::CandidatePlan;
 use sift_core::candidates::{CandidateFlags, CandidateSpec};
 use tempfile::TempDir;
 
@@ -19,10 +19,10 @@ fn literal_query_returns_indexed_candidates() {
         patterns: &["beta".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let candidates = index
-        .candidates(&spec)
-        .into_candidates()
-        .expect("candidates");
+    let candidates = match index.plan(&spec) {
+        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        other => panic!("expected narrowed plan, got {other:?}"),
+    };
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -45,7 +45,7 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
         flags: CandidateFlags::empty(),
     };
 
-    assert!(matches!(index.candidates(&spec), IndexCandidateResult::All));
+    assert!(matches!(index.plan(&spec), CandidatePlan::AllIndexed));
 }
 
 #[test]
@@ -59,10 +59,10 @@ fn literal_candidates_narrow_to_expected_file() {
         patterns: &["beta".to_string()],
         flags: CandidateFlags::empty(),
     };
-    let candidates = open_indexes(&sift_dir)
-        .candidates(&spec)
-        .into_candidates()
-        .expect("candidates");
+    let candidates = match open_indexes(&sift_dir).plan(&spec) {
+        sift_core::CandidatePlan::Narrowed(candidates) => candidates,
+        other => panic!("expected narrowed plan, got {other:?}"),
+    };
     assert!(!candidates.is_empty());
     assert!(
         candidates

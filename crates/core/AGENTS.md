@@ -58,7 +58,7 @@ CLI format path:
 
 - **Determinism:** parallel search merges hits sorted by `(file, line, text)`.
 - **Index file order:** lexicographic relative paths (stable file IDs).
-- **Conservative candidates:** `Index::candidates` may over-return but must not under-return.
+- **Conservative candidates:** `Index::plan` may over-return candidates but must not under-return.
 - **Index independence:** each configured index narrows candidates independently; the registry combines results.
 
 ## Testing
