@@ -6,7 +6,9 @@ use sift_core::candidates::{
     IndexFallback,
 };
 use sift_core::grep::{CandidateFilter, CandidateFilterConfig, InputRequest, VisibilityConfig};
-use sift_core::search::{SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode};
+use sift_core::search::{
+    InputExtent, SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode,
+};
 use sift_core::{
     CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, NGramConfig,
 };
@@ -102,10 +104,10 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
         return;
     };
     let input_request = InputRequest::from_candidates();
-    let Ok(inputs) = input_request.resolve(&candidates) else {
+    let Ok(inputs) = input_request.resolve(&candidates, InputExtent::Complete) else {
         return;
     };
-    let _ = searcher.search(&inputs, StatsMode::Off);
+    let _ = searcher.search(inputs, StatsMode::Off);
 }
 
 fuzz_target!(|data: &[u8]| {

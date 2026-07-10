@@ -7,8 +7,8 @@ use crate::candidates::{
     CandidateExtent, CandidatePlanner, CandidateSelection, CandidateSource, CandidateSpec,
 };
 use crate::search::{
-    EventEmission, PrefilterCompatibility, Report, SearchMode, SearchQuery, SearchSink, Searcher,
-    StatsMode, ZeroCounts,
+    EventEmission, InputExtent, PrefilterCompatibility, Report, SearchBound, SearchMode,
+    SearchQuery, SearchSink, Searcher, StatsMode, ZeroCounts,
 };
 
 pub use crate::corpus::Candidate;
@@ -20,8 +20,9 @@ pub use crate::corpus::filter::{
 pub use crate::corpus::order::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
 pub use crate::corpus::walk::{AllFiles, FileWalk, WalkFile, WalkMetadata, WalkSelector};
 pub use crate::index::Indexes;
+pub use crate::search::CandidateTransform;
 pub use error::Error;
-pub use input::{ByteInput, CandidateTransform, InputRequest};
+pub use input::{ByteInput, InputRequest};
 
 pub struct Grep<'a> {
     source: CandidateSource<'a>,
@@ -90,6 +91,7 @@ impl<'a> Grep<'a> {
         events: EventEmission<'_>,
     ) -> crate::Result<Report> {
         let candidate_extent = request.candidate_extent();
+        let input_extent = request.input_extent();
         let query = request.query;
         let searcher = Searcher::new(query.clone())?;
         let mut spec = CandidateSpec::from(&query);
@@ -105,8 +107,8 @@ impl<'a> Grep<'a> {
             request.candidates.request(candidate_extent),
         )
         .resolve()?;
-        let inputs = request.inputs.resolve(&candidates)?;
-        searcher.execute(&inputs, request.stats, request.mode, events)
+        let inputs = request.inputs.resolve(&candidates, input_extent)?;
+        searcher.execute(inputs, request.stats, request.mode, events)
     }
 }
 
@@ -121,6 +123,13 @@ impl GrepRequest<'_> {
             SearchMode::Lines | SearchMode::Matches | SearchMode::FilesWithMatches => {
                 CandidateExtent::PotentialMatches
             }
+        }
+    }
+
+    const fn input_extent(&self) -> InputExtent {
+        match self.query.options().search_bound {
+            SearchBound::Exhaustive => InputExtent::Complete,
+            SearchBound::FirstMatch => InputExtent::Progressive,
         }
     }
 }

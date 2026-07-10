@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 
 use std::borrow::Cow;
 
+use crate::corpus::Candidate;
+use crate::corpus::candidate::PathDisplay;
+
 #[derive(Debug, Clone)]
 pub struct InputIdentity {
     pub display_path: PathBuf,
@@ -142,5 +145,120 @@ impl<'a> Inputs<'a> {
     #[must_use]
     pub fn as_slice(&self) -> &[Input<'_>] {
         &self.items
+    }
+}
+
+/// How candidate-backed inputs are materialized before search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputExtent {
+    /// Materialize every candidate-backed input before search starts.
+    Complete,
+    /// Materialize candidate-backed inputs one-at-a-time during search.
+    Progressive,
+}
+
+/// Read transformed bytes that should be searched for one candidate.
+pub trait CandidateTransform {
+    /// # Errors
+    ///
+    /// Returns an error if transformed content cannot be read.
+    fn read_candidate(&self, candidate: &Candidate) -> crate::Result<Vec<u8>>;
+}
+
+/// Plan for turning corpus candidates into [`Input`] values.
+pub struct CandidateInputPlan<'a> {
+    explicit_paths: &'a [PathBuf],
+    path_display: PathDisplay,
+    transform: Option<&'a dyn CandidateTransform>,
+}
+
+impl<'a> CandidateInputPlan<'a> {
+    #[must_use]
+    pub const fn new(
+        explicit_paths: &'a [PathBuf],
+        path_display: PathDisplay,
+        transform: Option<&'a dyn CandidateTransform>,
+    ) -> Self {
+        Self {
+            explicit_paths,
+            path_display,
+            transform,
+        }
+    }
+
+    /// Materialize one candidate into a searchable input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configured candidate transform cannot read input bytes.
+    pub fn materialize<'c>(&self, candidate: &'c Candidate) -> crate::Result<Input<'c>> {
+        let explicit = self
+            .explicit_paths
+            .iter()
+            .any(|path| path == candidate.rel_path() || path == candidate.abs_path());
+        let identity = self.identity(candidate);
+        if let Some(transform) = self.transform {
+            let bytes = transform.read_candidate(candidate)?;
+            let path = Cow::Owned(candidate.abs_path().display().to_string());
+            Ok(if explicit {
+                Input::Bytes {
+                    path,
+                    bytes: Cow::Owned(bytes),
+                    identity,
+                    explicit: true,
+                }
+            } else {
+                Input::Bytes {
+                    path,
+                    bytes: Cow::Owned(bytes),
+                    identity,
+                    explicit: false,
+                }
+            })
+        } else {
+            Ok(Input::Path {
+                path: Cow::Borrowed(candidate.abs_path()),
+                identity,
+                explicit,
+            })
+        }
+    }
+
+    fn identity(&self, candidate: &Candidate) -> InputIdentity {
+        let display_path = match self.path_display {
+            PathDisplay::Relative => candidate.rel_path(),
+            PathDisplay::Absolute => candidate.abs_path(),
+        };
+        InputIdentity {
+            display_path: display_path.to_path_buf(),
+            hit_path: Some(candidate.rel_path().to_path_buf()),
+            byte_len: candidate.cached_size(),
+        }
+    }
+}
+
+/// Inputs ready for [`crate::search::Searcher`] execution.
+pub enum SearchInputs<'a, 'c> {
+    /// Fully materialized inputs.
+    Complete(Inputs<'c>),
+    /// Candidate-backed inputs resolved on demand; byte streams are eager.
+    Progressive {
+        candidates: &'c [Candidate],
+        streams: Inputs<'a>,
+        plan: CandidateInputPlan<'a>,
+    },
+}
+
+impl SearchInputs<'_, '_> {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        match self {
+            Self::Complete(inputs) => inputs.is_empty(),
+            Self::Progressive {
+                candidates,
+                streams,
+                ..
+            } => candidates.is_empty() && streams.is_empty(),
+        }
     }
 }

@@ -17,12 +17,12 @@ use crate::search::mode::SearchMode;
 use crate::search::options::{BinaryMode, SearchOptions};
 use crate::search::searcher::EventCollection;
 
-pub(in crate::search) struct SearchTask<'a> {
-    matcher: &'a Matcher,
-    options: &'a SearchOptions,
+pub(in crate::search) struct SearchTask<'searcher, 'input> {
+    matcher: &'searcher Matcher,
+    options: &'searcher SearchOptions,
     mode: SearchMode,
     events: EventCollection,
-    input: &'a Input<'a>,
+    input: &'input Input<'input>,
 }
 
 pub struct SearchOutcome {
@@ -53,13 +53,13 @@ enum InputOrigin {
     Discovered,
 }
 
-impl<'a> SearchTask<'a> {
+impl<'searcher, 'input> SearchTask<'searcher, 'input> {
     pub(in crate::search) const fn new(
-        matcher: &'a Matcher,
-        options: &'a SearchOptions,
+        matcher: &'searcher Matcher,
+        options: &'searcher SearchOptions,
         mode: SearchMode,
         events: EventCollection,
-        input: &'a Input<'a>,
+        input: &'input Input<'input>,
     ) -> Self {
         Self {
             matcher,
