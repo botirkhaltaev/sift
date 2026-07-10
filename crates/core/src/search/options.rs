@@ -87,6 +87,15 @@ impl InputEncoding {
     pub const fn uses_decoded_input(&self) -> bool {
         matches!(self, Self::Auto | Self::Explicit(_))
     }
+
+    /// Whether search may transcode file bytes before matching (explicit `-E`).
+    ///
+    /// `Auto` only BOM-sniffs and usually still matches raw UTF-8/ASCII bytes, so
+    /// it does **not** force decode for index-narrowing decisions.
+    #[must_use]
+    pub const fn forces_decode(&self) -> bool {
+        matches!(self, Self::Explicit(_))
+    }
 }
 
 impl FromStr for InputEncoding {

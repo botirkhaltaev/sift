@@ -21,8 +21,8 @@ fn stats_reports_matches_and_files_searched() {
         "expected files-with-matches count in stderr, got: {stderr:?}"
     );
     assert!(
-        stderr.contains("2 files searched"),
-        "expected files searched in stderr, got: {stderr:?}"
+        stderr.contains("1 files searched"),
+        "expected narrowed files searched in stderr, got: {stderr:?}"
     );
     assert!(
         stderr.contains("bytes printed"),
