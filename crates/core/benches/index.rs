@@ -531,6 +531,14 @@ fn bench_candidates(c: &mut Criterion) {
         b.iter(|| black_box(index.plan(&spec)));
     });
 
+    g.bench_function("case_insensitive_alternation", |b| {
+        let spec = CandidateSpec {
+            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
+            flags: CandidateFlags::CASE_INSENSITIVE,
+        };
+        b.iter(|| black_box(index.plan(&spec)));
+    });
+
     g.finish();
 }
 

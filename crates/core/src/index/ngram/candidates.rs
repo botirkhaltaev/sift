@@ -1,46 +1,80 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use super::gram::{Gram, GramWindows};
+use super::gram::{Gram, GramMatch, GramWindows};
 use super::index::Index;
 use super::storage::postings::Postings;
 
 impl Index {
-    pub(crate) fn candidate_file_ids(&self, arms: &[Vec<u8>]) -> Vec<u32> {
+    pub(crate) fn candidate_file_ids(&self, arms: &[Vec<u8>], gram_match: GramMatch) -> Vec<u32> {
         if arms.is_empty() {
             return Vec::new();
         }
         if arms.len() == 1 {
-            return self.posting_ids_for_literal(&arms[0]).unwrap_or_default();
+            return self
+                .posting_ids(&arms[0], gram_match)
+                .unwrap_or_default();
         }
         let mut id_lists: Vec<Vec<u32>> = Vec::with_capacity(arms.len());
         for arm in arms {
-            if let Some(ids) = self.posting_ids_for_literal(arm) {
+            if let Some(ids) = self.posting_ids(arm, gram_match) {
                 id_lists.push(ids);
             }
         }
         Self::merge_sorted_runs(id_lists)
     }
 
-    fn posting_ids_for_literal(&self, lit: &[u8]) -> Option<Vec<u32>> {
+    fn posting_ids(&self, lit: &[u8], gram_match: GramMatch) -> Option<Vec<u32>> {
         let width = self.width.get();
         if lit.len() < width {
             return None;
         }
-        let grams: Vec<Gram> = GramWindows::new(lit, self.width).collect();
-        if grams.is_empty() {
-            return None;
-        }
-        let mut slices: Vec<&[u8]> = Vec::with_capacity(grams.len());
-        for gram in &grams {
-            let s = self.posting_bytes_slice(*gram);
-            if s.is_empty() {
-                return None;
+        match gram_match {
+            GramMatch::Exact => {
+                let grams: Vec<Gram> = GramWindows::new(lit, self.width).collect();
+                if grams.is_empty() {
+                    return None;
+                }
+                let mut slices: Vec<&[u8]> = Vec::with_capacity(grams.len());
+                for gram in &grams {
+                    let s = self.posting_bytes_slice(*gram);
+                    if s.is_empty() {
+                        return None;
+                    }
+                    slices.push(s);
+                }
+                let ids = Self::intersect_sorted_slices(&slices);
+                if ids.is_empty() { None } else { Some(ids) }
             }
-            slices.push(s);
+            GramMatch::AsciiCase => {
+                let mut window = vec![0u8; width];
+                let mut cur: Option<Vec<u32>> = None;
+                for offset in 0..=lit.len() - width {
+                    window.copy_from_slice(&lit[offset..offset + width]);
+                    let mut runs = Vec::new();
+                    for gram in gram_match.grams(&mut window) {
+                        let slice = self.posting_bytes_slice(gram);
+                        if !slice.is_empty() {
+                            runs.push(
+                                Postings::decode_sorted(slice).expect("postings validated at open"),
+                            );
+                        }
+                    }
+                    let unioned = Self::merge_sorted_runs(runs);
+                    if unioned.is_empty() {
+                        return None;
+                    }
+                    cur = Some(match cur {
+                        None => unioned,
+                        Some(prev) => Postings::intersect_slices(&prev, &unioned),
+                    });
+                    if cur.as_ref().is_some_and(Vec::is_empty) {
+                        return None;
+                    }
+                }
+                cur.filter(|ids| !ids.is_empty())
+            }
         }
-        let ids = Self::intersect_sorted_slices(&slices);
-        if ids.is_empty() { None } else { Some(ids) }
     }
 
     fn posting_bytes_slice(&self, gram: Gram) -> &[u8] {

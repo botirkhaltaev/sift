@@ -242,7 +242,7 @@ impl Postings {
     }
 
     /// Intersect two ascending, unique id slices via a linear merge.
-    fn intersect_slices(a: &[u32], b: &[u32]) -> Vec<u32> {
+    pub(crate) fn intersect_slices(a: &[u32], b: &[u32]) -> Vec<u32> {
         let mut out = Vec::with_capacity(a.len().min(b.len()));
         let (mut i, mut j) = (0usize, 0usize);
         while i < a.len() && j < b.len() {

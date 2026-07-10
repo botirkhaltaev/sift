@@ -5,7 +5,7 @@ use crate::index::{CandidatePlan, CorpusKind, FileId, IndexedCorpus};
 
 use super::config::Config;
 use super::files::FileFingerprint;
-use super::gram::GramWidth;
+use super::gram::{GramMatch, GramWidth};
 use super::storage::grams::GramSets;
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
@@ -124,7 +124,12 @@ impl Index {
         let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
             return CandidatePlan::Unavailable;
         };
-        let ids = self.candidate_file_ids(&arms);
+        let gram_match = if query.case_insensitive() {
+            GramMatch::AsciiCase
+        } else {
+            GramMatch::Exact
+        };
+        let ids = self.candidate_file_ids(&arms, gram_match);
         let coverage = self.coverage();
         if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
             return CandidatePlan::AllIndexed { coverage };
