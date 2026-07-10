@@ -27,6 +27,30 @@ impl GramWidth {
     pub fn as_u32(self) -> u32 {
         u32::from(self.0)
     }
+
+    /// How a literal of `lit_len` bytes can be narrowed with this width.
+    #[must_use]
+    pub(crate) const fn literal_narrowing(self, lit_len: usize) -> LiteralNarrowing {
+        let width = self.get();
+        if lit_len + 1 < width {
+            LiteralNarrowing::TooShort
+        } else if lit_len < width {
+            LiteralNarrowing::Covering
+        } else {
+            LiteralNarrowing::Windows
+        }
+    }
+}
+
+/// How a query literal relates to gram width for posting lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiteralNarrowing {
+    /// Shorter than `width - 1`: postings cannot prove presence.
+    TooShort,
+    /// Exactly `width - 1`: union every width-gram that contains the literal.
+    Covering,
+    /// At least `width`: intersect sliding windows.
+    Windows,
 }
 
 /// Packed runtime-width N-gram key.
