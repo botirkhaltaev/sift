@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, value_parser};
 use sift_core::search::{
-    BinaryMode, CaseMode, RegexEngine, SearchFlags, SearchOptions, SearchQuery, SearchQueryBuilder,
+    BinaryMode, CaseMode, RegexEngine, SearchBound, SearchFlags, SearchOptions, SearchQuery,
+    SearchQueryBuilder,
 };
 
 use crate::format::PrintMode;
@@ -97,6 +98,11 @@ impl PatternDecl {
         let mut opts = SearchOptions {
             case_mode: pattern_argv.case_mode,
             max_results: self.max_count,
+            search_bound: if pattern_argv.quiet && !pattern_argv.invert_match {
+                SearchBound::FirstMatch
+            } else {
+                SearchBound::Exhaustive
+            },
             ..SearchOptions::default()
         };
         if self.search_flags.fixed_strings {

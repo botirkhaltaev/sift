@@ -17,7 +17,9 @@ pub use hit::Match;
 pub use input::{Input, InputIdentity, Inputs};
 pub(crate) use matcher::PrefilterCompatibility;
 pub use mode::{SearchMode, ZeroCounts};
-pub use options::{BinaryMode, CaseMode, InputEncoding, RegexEngine, SearchFlags, SearchOptions};
+pub use options::{
+    BinaryMode, CaseMode, InputEncoding, RegexEngine, SearchBound, SearchFlags, SearchOptions,
+};
 pub use query::{SearchQuery, SearchQueryBuilder};
 pub use report::{FileReport, Report};
 pub(crate) use searcher::EventEmission;

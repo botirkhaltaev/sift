@@ -61,6 +61,16 @@ pub enum BinaryMode {
     AsText,
 }
 
+/// When search may stop before exhausting every input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchBound {
+    /// Search every input.
+    #[default]
+    Exhaustive,
+    /// Stop after the first matching input (quiet existence checks).
+    FirstMatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum InputEncoding {
     #[default]
@@ -122,6 +132,7 @@ pub struct SearchOptions {
     pub before_context: usize,
     pub after_context: usize,
     pub binary_mode: BinaryMode,
+    pub search_bound: SearchBound,
     pub input_encoding: InputEncoding,
     pub replace: Option<String>,
     pub unicode: bool,
@@ -139,6 +150,7 @@ impl Default for SearchOptions {
             before_context: 0,
             after_context: 0,
             binary_mode: BinaryMode::default(),
+            search_bound: SearchBound::default(),
             input_encoding: InputEncoding::default(),
             replace: None,
             unicode: true,

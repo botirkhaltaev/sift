@@ -9,7 +9,7 @@ use crate::search::event::{SearchEvent, SearchSink};
 use crate::search::input::Inputs;
 use crate::search::matcher::{Matcher, MatcherBuilder};
 use crate::search::mode::SearchMode;
-use crate::search::options::SearchOptions;
+use crate::search::options::{SearchBound, SearchOptions};
 use crate::search::query::SearchQuery;
 use crate::search::report::{Report, SearchSummary};
 use crate::search::stats::StatsMode;
@@ -95,19 +95,55 @@ impl Searcher {
 
         let search_start = Instant::now();
         let event_collection = events.collection();
-        let mut outcomes: Vec<_> = inputs
-            .as_slice()
-            .par_iter()
-            .map(|input| {
-                SearchTask::new(&self.matcher, self.options(), mode, event_collection, input)
-                    .execute()
-            })
-            .collect();
+        let (mut outcomes, inputs_searched, bytes_searched) = match self.options().search_bound {
+            SearchBound::Exhaustive => {
+                let outcomes: Vec<_> = inputs
+                    .as_slice()
+                    .par_iter()
+                    .map(|input| {
+                        SearchTask::new(
+                            &self.matcher,
+                            self.options(),
+                            mode,
+                            event_collection,
+                            input,
+                        )
+                        .execute()
+                    })
+                    .collect();
+                let len = inputs.len();
+                let bytes = inputs.byte_count();
+                (outcomes, len, bytes)
+            }
+            SearchBound::FirstMatch => {
+                let mut found = Vec::new();
+                let mut searched = 0usize;
+                let mut bytes = 0u64;
+                for input in inputs.as_slice() {
+                    searched += 1;
+                    let outcome = SearchTask::new(
+                        &self.matcher,
+                        self.options(),
+                        mode,
+                        event_collection,
+                        input,
+                    )
+                    .execute();
+                    bytes = bytes.saturating_add(outcome.bytes_searched);
+                    let selected = mode.selects(outcome.matched);
+                    if selected {
+                        found.push(outcome);
+                        break;
+                    }
+                }
+                (found, searched, bytes)
+            }
+        };
         let summary = SearchSummary {
             mode,
             stats,
-            inputs_len: inputs.len(),
-            bytes_searched: inputs.byte_count(),
+            inputs_len: inputs_searched,
+            bytes_searched,
             elapsed: search_start.elapsed(),
         };
         events.emit(&mut outcomes)?;
