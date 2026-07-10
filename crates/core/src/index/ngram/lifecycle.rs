@@ -10,7 +10,7 @@ use super::config::Config;
 use super::files::FileFingerprint;
 use super::files::FileTable;
 use super::gram::GramWidth;
-use super::index::{Index, IndexedFiles, IndexedFilesSource, NGramIndexError, Storage};
+use super::index::{Index, IndexedFiles, IndexedFilesLocation, NGramIndexError, Storage};
 use super::storage::grams::{GramSet, GramSets};
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
@@ -100,7 +100,7 @@ impl Config {
                     width,
                     storage: Storage::new(
                         root.to_path_buf(),
-                        IndexedFiles::new(IndexedFilesSource::Built {
+                        IndexedFiles::new(IndexedFilesLocation::Memory {
                             table: files,
                             fingerprints: tables.fingerprints.clone(),
                         })
@@ -159,7 +159,7 @@ impl Config {
                 }
 
                 let files = FileTable::open(&files_path).map_err(NGramIndexError::Io)?;
-                let indexed_files = IndexedFiles::new(IndexedFilesSource::Stored(files))
+                let indexed_files = IndexedFiles::new(IndexedFilesLocation::Disk(files))
                     .map_err(NGramIndexError::Io)?;
 
                 let lexicon = Lexicon::open(&lexicon_path, width).map_err(NGramIndexError::Io)?;
@@ -181,7 +181,7 @@ impl Config {
             IndexSource::Snapshot { reader, namespace } => {
                 let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
                 let files = FileTable::from_artifact(files_data).map_err(NGramIndexError::Io)?;
-                let indexed_files = IndexedFiles::new(IndexedFilesSource::Stored(files))
+                let indexed_files = IndexedFiles::new(IndexedFilesLocation::Disk(files))
                     .map_err(NGramIndexError::Io)?;
 
                 let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
@@ -253,7 +253,7 @@ impl Config {
             width,
             storage: Storage::new(
                 root.to_path_buf(),
-                IndexedFiles::new(IndexedFilesSource::Built {
+                IndexedFiles::new(IndexedFilesLocation::Memory {
                     table: files,
                     fingerprints: tables.fingerprints.clone(),
                 })

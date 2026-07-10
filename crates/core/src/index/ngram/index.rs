@@ -47,21 +47,21 @@ pub struct IndexedFiles {
     coverage: OnceLock<IndexedCorpus>,
 }
 
-/// How file rows are supplied when constructing [`IndexedFiles`].
-pub enum IndexedFilesSource {
-    /// On-disk table: validate paths now; decode fingerprints on first use.
-    Stored(FileTable),
-    /// Build output: fingerprints already decoded.
-    Built {
+/// Whether [`IndexedFiles`] is loaded from disk or already in memory.
+pub enum IndexedFilesLocation {
+    /// `files.bin` on disk; fingerprints decode on first use.
+    Disk(FileTable),
+    /// Fingerprints already in memory (just-built index).
+    Memory {
         table: FileTable,
         fingerprints: Vec<FileFingerprint>,
     },
 }
 
 impl IndexedFiles {
-    pub(crate) fn new(source: IndexedFilesSource) -> std::io::Result<Self> {
-        match source {
-            IndexedFilesSource::Stored(table) => {
+    pub(crate) fn new(location: IndexedFilesLocation) -> std::io::Result<Self> {
+        match location {
+            IndexedFilesLocation::Disk(table) => {
                 table.validate_paths()?;
                 Ok(Self {
                     table,
@@ -69,7 +69,7 @@ impl IndexedFiles {
                     coverage: OnceLock::new(),
                 })
             }
-            IndexedFilesSource::Built {
+            IndexedFilesLocation::Memory {
                 table,
                 fingerprints,
             } => {
