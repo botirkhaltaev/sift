@@ -3,16 +3,9 @@ use std::path::PathBuf;
 
 use crate::corpus::Candidate;
 use crate::corpus::candidate::PathDisplay;
-use crate::search::{InputIdentity, Inputs};
-
-pub trait CandidateTransform {
-    /// Read the transformed bytes that should be searched for one candidate.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if transformed content cannot be read.
-    fn read_candidate(&self, candidate: &Candidate) -> crate::Result<Vec<u8>>;
-}
+use crate::search::{
+    CandidateInputPlan, CandidateTransform, InputExtent, InputIdentity, Inputs, SearchInputs,
+};
 
 pub struct ByteInput<'a> {
     pub path: Cow<'a, str>,
@@ -63,38 +56,81 @@ impl<'a> InputRequest<'a> {
         self
     }
 
-    /// Resolve candidate paths and byte streams into executable grep inputs.
+    /// Resolve candidate paths and byte streams into executable search inputs.
     ///
     /// # Errors
     ///
     /// Returns an error if the configured candidate transform cannot read input bytes.
-    pub fn resolve<'c>(&'a self, candidates: &'c [Candidate]) -> crate::Result<Inputs<'c>>
+    pub fn resolve<'c>(
+        &'a self,
+        candidates: &'c [Candidate],
+        extent: InputExtent,
+    ) -> crate::Result<SearchInputs<'a, 'c>>
     where
         'a: 'c,
     {
+        match extent {
+            InputExtent::Complete => self.resolve_complete(candidates),
+            InputExtent::Progressive => Ok(self.resolve_progressive(candidates)),
+        }
+    }
+
+    fn resolve_complete<'c>(
+        &'a self,
+        candidates: &'c [Candidate],
+    ) -> crate::Result<SearchInputs<'a, 'c>>
+    where
+        'a: 'c,
+    {
+        let plan = self.plan();
         let mut inputs = Inputs::with_capacity(candidates.len() + self.streams.len());
         for candidate in candidates {
-            let explicit = self
-                .explicit_paths
-                .iter()
-                .any(|path| path == candidate.rel_path() || path == candidate.abs_path());
-            if let Some(transform) = self.candidate_transform {
-                let bytes = transform.read_candidate(candidate)?;
-                let path = Cow::Owned(candidate.abs_path().display().to_string());
-                let identity = candidate_identity(candidate, self.path_display);
-                if explicit {
-                    inputs.push_explicit_bytes(path, Cow::Owned(bytes), identity);
-                } else {
-                    inputs.push_bytes(path, Cow::Owned(bytes), identity);
-                }
-            } else {
-                inputs.push_path(
-                    Cow::Borrowed(candidate.abs_path()),
-                    candidate_identity(candidate, self.path_display),
+            match plan.materialize(candidate)? {
+                crate::search::Input::Path {
+                    path,
+                    identity,
                     explicit,
-                );
+                } => inputs.push_path(path, identity, explicit),
+                crate::search::Input::Bytes {
+                    path,
+                    bytes,
+                    identity,
+                    explicit,
+                } => {
+                    if explicit {
+                        inputs.push_explicit_bytes(path, bytes, identity);
+                    } else {
+                        inputs.push_bytes(path, bytes, identity);
+                    }
+                }
             }
         }
+        self.push_streams(&mut inputs);
+        Ok(SearchInputs::Complete(inputs))
+    }
+
+    fn resolve_progressive<'c>(&'a self, candidates: &'c [Candidate]) -> SearchInputs<'a, 'c>
+    where
+        'a: 'c,
+    {
+        let mut streams = Inputs::with_capacity(self.streams.len());
+        self.push_streams(&mut streams);
+        SearchInputs::Progressive {
+            candidates,
+            streams,
+            plan: self.plan(),
+        }
+    }
+
+    fn plan(&'a self) -> CandidateInputPlan<'a> {
+        CandidateInputPlan::new(
+            &self.explicit_paths,
+            self.path_display,
+            self.candidate_transform,
+        )
+    }
+
+    fn push_streams(&self, inputs: &mut Inputs<'a>) {
         for stream in &self.streams {
             if stream.explicit {
                 inputs.push_explicit_bytes(
@@ -110,18 +146,5 @@ impl<'a> InputRequest<'a> {
                 );
             }
         }
-        Ok(inputs)
-    }
-}
-
-fn candidate_identity(candidate: &Candidate, path_display: PathDisplay) -> InputIdentity {
-    let display_path = match path_display {
-        PathDisplay::Relative => candidate.rel_path(),
-        PathDisplay::Absolute => candidate.abs_path(),
-    };
-    InputIdentity {
-        display_path: display_path.to_path_buf(),
-        hit_path: Some(candidate.rel_path().to_path_buf()),
-        byte_len: candidate.cached_size(),
     }
 }

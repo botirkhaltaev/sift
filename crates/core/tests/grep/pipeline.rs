@@ -8,8 +8,8 @@ use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, InputRequest,
 };
 use sift_core::search::{
-    InputIdentity, Inputs, SearchEvent, SearchMode, SearchOptions, SearchQueryBuilder, SearchSink,
-    Searcher, StatsMode,
+    InputExtent, InputIdentity, Inputs, SearchEvent, SearchInputs, SearchMode, SearchOptions,
+    SearchQueryBuilder, SearchSink, Searcher, StatsMode,
 };
 use tempfile::TempDir;
 
@@ -47,9 +47,11 @@ fn grep_finds_match_in_indexed_corpus() {
         .resolve()
         .expect("candidates");
     let input_request = InputRequest::from_candidates();
-    let inputs = input_request.resolve(&candidates).expect("inputs");
+    let inputs = input_request
+        .resolve(&candidates, InputExtent::Complete)
+        .expect("inputs");
 
-    let report = searcher.search(&inputs, StatsMode::Off).expect("grep run");
+    let report = searcher.search(inputs, StatsMode::Off).expect("grep run");
     assert!(report.matched());
 }
 
@@ -290,7 +292,9 @@ fn grep_finds_match_in_stdin_stream() {
         InputIdentity::from_name("<stdin>"),
     );
 
-    let report = query.search(&inputs, StatsMode::Off).expect("grep run");
+    let report = query
+        .search(SearchInputs::Complete(inputs), StatsMode::Off)
+        .expect("grep run");
     assert!(report.matched());
     assert_eq!(report.matches.len(), 1);
     assert!(report.matches[0].text.contains("needle"));

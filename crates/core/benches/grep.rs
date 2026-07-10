@@ -12,7 +12,9 @@ use sift_core::candidates::{
 };
 use sift_core::grep::InputRequest;
 use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder};
-use sift_core::search::{SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode};
+use sift_core::search::{
+    InputExtent, SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode,
+};
 use sift_core::{Index, Indexes, NGramIndex};
 
 mod common;
@@ -66,8 +68,10 @@ fn run_grep(
         .resolve()
         .unwrap();
     let input_request = InputRequest::from_candidates();
-    let inputs = input_request.resolve(&candidates).unwrap();
-    searcher.search(&inputs, StatsMode::Off).unwrap().matched()
+    let inputs = input_request
+        .resolve(&candidates, InputExtent::Complete)
+        .unwrap();
+    searcher.search(inputs, StatsMode::Off).unwrap().matched()
 }
 
 fn bench_indexed_search(c: &mut Criterion) {
