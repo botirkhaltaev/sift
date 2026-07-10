@@ -70,13 +70,53 @@ impl<'a> SearchTask<'a> {
         }
     }
 
-    pub(in crate::search) fn execute(self) -> SearchOutcome {
+    pub(in crate::search) fn execute(self, grep: &mut RegexSearcher) -> SearchOutcome {
         let origin = InputOrigin::from(self.input);
-        let mut grep = self.grep_searcher(origin);
-        match self.matcher {
-            Matcher::Rust(matcher) => self.search_with_matcher(&mut grep, matcher, origin),
-            Matcher::Pcre2(matcher) => self.search_with_matcher(&mut grep, matcher, origin),
+        match origin {
+            InputOrigin::Discovered => match self.matcher {
+                Matcher::Rust(matcher) => self.search_with_matcher(grep, matcher, origin),
+                Matcher::Pcre2(matcher) => self.search_with_matcher(grep, matcher, origin),
+            },
+            InputOrigin::Explicit => {
+                let mut explicit = Self::searcher(self.options, self.mode, origin);
+                match self.matcher {
+                    Matcher::Rust(matcher) => {
+                        self.search_with_matcher(&mut explicit, matcher, origin)
+                    }
+                    Matcher::Pcre2(matcher) => {
+                        self.search_with_matcher(&mut explicit, matcher, origin)
+                    }
+                }
+            }
         }
+    }
+
+    pub(in crate::search) fn discovered_searcher(
+        options: &SearchOptions,
+        mode: SearchMode,
+    ) -> RegexSearcher {
+        Self::searcher(options, mode, InputOrigin::Discovered)
+    }
+
+    fn searcher(options: &SearchOptions, mode: SearchMode, origin: InputOrigin) -> RegexSearcher {
+        let mut builder = RegexSearcherBuilder::new();
+        builder
+            .encoding(options.input_encoding.explicit())
+            .bom_sniffing(options.input_encoding.bom_sniffing())
+            .binary_detection(Self::binary_detection_for(options, origin))
+            .line_terminator(LineTerminator::byte(options.line_terminator()))
+            .invert_match(options.invert_match())
+            .line_number(!matches!(
+                mode,
+                SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
+            ))
+            .max_matches(Self::match_limit_for(mode, options));
+        builder.before_context(options.before_context);
+        builder.after_context(options.after_context);
+        if options.multiline() {
+            builder.multi_line(true);
+        }
+        builder.build()
     }
 
     fn search_with_matcher<M: GrepMatcherTrait>(
@@ -86,6 +126,7 @@ impl<'a> SearchTask<'a> {
         origin: InputOrigin,
     ) -> SearchOutcome {
         let (display_path, hit_path) = self.input.paths();
+        let match_emission = MatchEmission::from(self.mode, self.options);
         let mut sink = MatchSink {
             path: display_path.clone(),
             origin,
@@ -96,7 +137,7 @@ impl<'a> SearchTask<'a> {
                 .as_deref()
                 .map(str::as_bytes)
                 .map(<[u8]>::to_vec),
-            match_emission: MatchEmission::from(self.mode, self.options),
+            match_emission,
             event_collection: self.events,
             line_matches: 0,
             match_spans: 0,
@@ -127,42 +168,21 @@ impl<'a> SearchTask<'a> {
         }
     }
 
-    fn grep_searcher(&self, origin: InputOrigin) -> RegexSearcher {
-        let mut builder = RegexSearcherBuilder::new();
-        builder
-            .encoding(self.options.input_encoding.explicit())
-            .bom_sniffing(self.options.input_encoding.bom_sniffing())
-            .binary_detection(self.binary_detection(origin))
-            .line_terminator(LineTerminator::byte(self.options.line_terminator()))
-            .invert_match(self.options.invert_match())
-            .line_number(!matches!(
-                self.mode,
-                SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch
-            ))
-            .max_matches(self.match_limit());
-        builder.before_context(self.options.before_context);
-        builder.after_context(self.options.after_context);
-        if self.options.multiline() {
-            builder.multi_line(true);
-        }
-        builder.build()
-    }
-
-    fn match_limit(&self) -> Option<u64> {
-        match self.mode {
+    fn match_limit_for(mode: SearchMode, options: &SearchOptions) -> Option<u64> {
+        match mode {
             SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch => Some(1),
             SearchMode::Lines
             | SearchMode::Matches
             | SearchMode::CountLines { .. }
-            | SearchMode::CountMatches { .. } => self.options.max_results.map(|n| n as u64),
+            | SearchMode::CountMatches { .. } => options.max_results.map(|n| n as u64),
         }
     }
 
-    fn binary_detection(&self, origin: InputOrigin) -> BinaryDetection {
-        if self.options.null_data() {
+    fn binary_detection_for(options: &SearchOptions, origin: InputOrigin) -> BinaryDetection {
+        if options.null_data() {
             return BinaryDetection::none();
         }
-        match (self.options.binary_mode, origin) {
+        match (options.binary_mode, origin) {
             (BinaryMode::Quit, InputOrigin::Explicit) | (BinaryMode::Binary, _) => {
                 BinaryDetection::convert(b'\x00')
             }
