@@ -12,7 +12,7 @@ Primary search entrypoint (re-exported from `lib.rs`):
 
 - `Query`, `Report`, `Stats`, `SearchOptions`, `Inputs`, `Input`
 - Index types: `Indexes`, `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`
-- Supporting grep/candidate types: `SearchFlags`, `CandidateFilter`, `CandidateSource`, `CandidateRequest`, `CandidateScope`, `FileWalk`
+- Supporting grep/candidate types: `SearchFlags`, `CandidateFilter`, `CandidateSource`, `CandidateRequest`, `CandidateScope`, `FileWalk`, `WalkFile`, `WalkMetadata`
 
 Internal modules (`pub(crate)`): `corpus/`, `query/`.
 

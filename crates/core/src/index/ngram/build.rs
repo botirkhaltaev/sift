@@ -10,8 +10,8 @@ use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
 use super::storage::postings::Postings;
 
-use crate::corpus::walk::FileWalk;
 use crate::corpus::walk::LinkTraversal;
+use crate::corpus::walk::{FileWalk, WalkFile};
 use crate::index::{CorpusKind, IndexBuildConfig};
 
 /// Collected index data ready for persistence.
@@ -215,7 +215,10 @@ impl IndexTables {
                         .one_file_system(config.walk.one_file_system)
                         .max_depth(config.walk.max_depth)
                         .max_filesize(config.walk.max_filesize)
-                        .collect_paths()?
+                        .files()?
+                        .into_iter()
+                        .map(WalkFile::into_rel_path)
+                        .collect()
                 } else {
                     paths.to_vec()
                 };
@@ -253,8 +256,8 @@ impl IndexTables {
 mod tests {
     use super::*;
     use crate::corpus::filter::IgnoreConfig;
-    use crate::corpus::walk::FileWalk;
     use crate::corpus::walk::LinkTraversal;
+    use crate::corpus::walk::{FileWalk, WalkFile};
     use crate::grep::{CandidateFilter, CandidateFilterConfig, VisibilityConfig};
     use crate::index::config::IndexWalkConfig;
     use crate::index::ngram::gram::GramWidth;
@@ -446,11 +449,14 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let paths = FileWalk::new(config.corpus.root)
+        let paths: Vec<_> = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect_paths()
-            .expect("walk corpus");
+            .files()
+            .expect("walk corpus")
+            .into_iter()
+            .map(WalkFile::into_rel_path)
+            .collect();
         assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
         assert!(!paths.iter().any(|p| p.starts_with("skip")));
         assert!(!paths.iter().any(|p| p.starts_with("also_skip")));
@@ -475,11 +481,14 @@ mod tests {
                 ..Default::default()
             },
         };
-        let paths = FileWalk::new(config.corpus.root)
+        let paths: Vec<_> = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect_paths()
-            .expect("walk corpus");
+            .files()
+            .expect("walk corpus")
+            .into_iter()
+            .map(WalkFile::into_rel_path)
+            .collect();
         assert!(paths.iter().any(|p| p.starts_with("skip")));
         assert!(paths.iter().any(|p| p.starts_with("also_skip")));
     }
@@ -500,11 +509,14 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let indexed = FileWalk::new(config.corpus.root)
+        let indexed: Vec<_> = FileWalk::new(config.corpus.root)
             .visibility(config.visibility.clone())
             .links(LinkTraversal::DoNotFollow)
-            .collect_paths()
-            .expect("walk corpus");
+            .files()
+            .expect("walk corpus")
+            .into_iter()
+            .map(WalkFile::into_rel_path)
+            .collect();
         let filter = CandidateFilter::new(&FilterParity::filter_config(&config), tmp.path())
             .expect("filter");
 
