@@ -100,6 +100,11 @@ impl IndexedFiles {
         self.fingerprints().get(id.get())
     }
 
+    /// Borrow a single file row without decoding the full fingerprint table.
+    pub(crate) fn row(&self, id: FileId) -> Option<super::files::FileRow<'_>> {
+        self.table.row(id.get()).ok()
+    }
+
     pub(crate) const fn len(&self) -> usize {
         self.table.len()
     }
@@ -177,9 +182,7 @@ impl Index {
         if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
             return CandidatePlan::AllIndexed;
         }
-        CandidatePlan::Narrowed {
-            candidates: self.materialize_file_ids(&ids),
-        }
+        CandidatePlan::Narrowed { file_ids: ids }
     }
 
     /// Returns an explanation of how a query would be handled.
@@ -197,17 +200,18 @@ impl Index {
 
     #[must_use]
     pub(crate) fn all_files(&self) -> Vec<crate::Candidate> {
-        self.storage
-            .files
-            .as_slice()
-            .par_iter()
-            .map(|fp| {
-                crate::Candidate::with_metadata(
-                    fp.path.clone(),
-                    self.storage.root.join(&fp.path),
-                    Some(fp.size),
+        (0..self.storage.files.len())
+            .into_par_iter()
+            .filter_map(|id| {
+                let row = self.storage.files.row(FileId::new(id))?;
+                let rel = PathBuf::from(row.path);
+                let abs = self.storage.root.join(&rel);
+                Some(crate::Candidate::with_metadata(
+                    rel,
+                    abs,
+                    Some(row.size),
                     None,
-                )
+                ))
             })
             .collect()
     }
@@ -217,15 +221,18 @@ impl Index {
         self.storage.files.coverage()
     }
 
-    fn materialize_file_ids(&self, ids: &[u32]) -> Vec<crate::Candidate> {
+    #[must_use]
+    pub(crate) fn materialize(&self, ids: &[u32]) -> Vec<crate::Candidate> {
         ids.par_iter()
             .filter_map(|&id| {
                 let fid = FileId::new(usize::try_from(id).ok()?);
-                let fp = self.storage.files.get(fid)?;
+                let row = self.storage.files.row(fid)?;
+                let rel = PathBuf::from(row.path);
+                let abs = self.storage.root.join(&rel);
                 Some(crate::Candidate::with_metadata(
-                    fp.path.clone(),
-                    self.storage.root.join(&fp.path),
-                    Some(fp.size),
+                    rel,
+                    abs,
+                    Some(row.size),
                     None,
                 ))
             })
