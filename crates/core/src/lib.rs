@@ -12,8 +12,8 @@ pub mod search;
 pub use corpus::Candidate;
 pub use grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateTransform,
-    Error as GrepError, GlobConfig, Grep, GrepBuilder, GrepRequest, HiddenMode, IgnoreConfig,
-    IgnoreSources, InputRequest, TypeFilterRule, VisibilityConfig,
+    Error as GrepError, FilterAdmission, GlobConfig, Grep, GrepBuilder, GrepRequest, HiddenMode,
+    IgnoreConfig, IgnoreSources, InputRequest, TypeFilterRule, VisibilityConfig,
 };
 pub use search::{
     BinaryEvent, BinaryMode, CaseMode, ContextEvent, ContextKind, FileEvent, FileReport, Input,

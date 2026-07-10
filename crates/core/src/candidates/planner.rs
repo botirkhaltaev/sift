@@ -8,6 +8,7 @@ use crate::candidates::{
     CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, IndexFallback,
 };
 use crate::corpus::Candidate;
+use crate::corpus::filter::FilterAdmission;
 use crate::corpus::walk::FileWalk;
 use crate::index::CandidatePlan;
 
@@ -85,14 +86,15 @@ impl<'a> CandidatePlanner<'a> {
         let index_narrowing = self.spec.index_narrowing();
         let resolved = self.request.resolve(index_narrowing);
         let index_plan = self.source.indexes.plan(&self.spec);
+        let snapshot_status = self.snapshot_status();
         let strategy = plan(PlanInput {
             scope: resolved.scope,
             index_narrowing,
             index_status: self.index_status(&index_plan),
-            snapshot_status: self.snapshot_status(),
+            snapshot_status,
             fallback: resolved.fallback,
         });
-        self.execute(strategy, index_plan, resolved.order)
+        self.execute(strategy, index_plan, resolved.order, snapshot_status)
     }
 
     fn execute(
@@ -100,6 +102,7 @@ impl<'a> CandidatePlanner<'a> {
         strategy: CandidateStrategy,
         index_plan: CandidatePlan,
         order: crate::corpus::CandidateOrder,
+        snapshot_status: SnapshotStatus,
     ) -> crate::Result<Vec<Candidate>> {
         let raw = match strategy {
             CandidateStrategy::None => Vec::new(),
@@ -111,8 +114,9 @@ impl<'a> CandidatePlanner<'a> {
             },
             CandidateStrategy::MergeIndexAndWalk => self.merge_unindexed(index_plan)?,
         };
+        let admission = filter_admission(strategy, snapshot_status);
         Ok(CandidateSet::new(raw)
-            .retain_matches(self.source.filter)
+            .retain_matches(self.source.filter, admission)
             .order(order)?
             .into_vec())
     }
@@ -216,16 +220,35 @@ const fn plan_indexed(input: PlanInput) -> CandidateStrategy {
     }
 }
 
+const fn filter_admission(
+    strategy: CandidateStrategy,
+    snapshot_status: SnapshotStatus,
+) -> FilterAdmission {
+    match (strategy, snapshot_status) {
+        (
+            CandidateStrategy::UseIndex | CandidateStrategy::AllIndexed,
+            SnapshotStatus::TrustedComplete
+            | SnapshotStatus::TrustedLazy
+            | SnapshotStatus::StaleComplete,
+        ) => FilterAdmission::Indexed,
+        _ => FilterAdmission::Full,
+    }
+}
+
 impl CandidateSet {
     const fn new(candidates: Vec<Candidate>) -> Self {
         Self { candidates }
     }
 
-    fn retain_matches(mut self, filter: &crate::corpus::filter::CandidateFilter) -> Self {
+    fn retain_matches(
+        mut self,
+        filter: &crate::corpus::filter::CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Self {
         self.candidates = self
             .candidates
             .into_par_iter()
-            .filter(|candidate| candidate.matches(filter))
+            .filter(|candidate| candidate.matches(filter, admission))
             .collect();
         self
     }

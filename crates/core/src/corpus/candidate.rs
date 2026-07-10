@@ -132,12 +132,16 @@ impl Candidate {
         })
     }
 
-    /// Check all configured filter rules: depth, filesize, and path-based rules.
+    /// Check configured filter rules under the given admission policy.
     #[must_use]
-    pub fn matches(&self, filter: &CandidateFilter) -> bool {
+    pub fn matches(
+        &self,
+        filter: &CandidateFilter,
+        admission: crate::corpus::filter::FilterAdmission,
+    ) -> bool {
         self.within_depth(filter.max_depth())
             && self.within_filesize(filter.max_filesize())
-            && filter.matches_candidate(self)
+            && filter.matches_candidate(self, admission)
     }
 }
 

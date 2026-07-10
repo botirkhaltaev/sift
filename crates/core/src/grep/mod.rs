@@ -14,8 +14,8 @@ use crate::search::{
 pub use crate::corpus::Candidate;
 pub use crate::corpus::candidate::PathDisplay;
 pub use crate::corpus::filter::{
-    CandidateFilter, CandidateFilterConfig, GlobConfig, HiddenMode, IgnoreConfig, IgnoreSources,
-    TypeFilterRule, VisibilityConfig,
+    CandidateFilter, CandidateFilterConfig, FilterAdmission, GlobConfig, HiddenMode, IgnoreConfig,
+    IgnoreSources, TypeFilterRule, VisibilityConfig,
 };
 pub use crate::corpus::order::{CandidateOrder, CandidateOrderDirection, CandidateOrderKey};
 pub use crate::corpus::walk::{AllFiles, FileWalk, WalkFile, WalkMetadata, WalkSelector};

@@ -17,6 +17,16 @@ pub use config::{
     VisibilityConfig,
 };
 
+/// Which filter rules apply when admitting a candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterAdmission {
+    /// Walked or untrusted files: apply ignore, hidden, glob, type, and scope.
+    Full,
+    /// Indexed under matching visibility: ignore/hidden already applied at build.
+    /// Still apply scope, exclude, glob, type, depth, and filesize.
+    Indexed,
+}
+
 #[derive(Debug)]
 pub struct CandidateFilter {
     root: PathBuf,
@@ -62,8 +72,13 @@ impl CandidateFilter {
     }
 
     #[must_use]
+    pub(crate) const fn needs_search_globs(&self) -> bool {
+        self.glob.is_some() || self.type_glob.is_some()
+    }
+
+    #[must_use]
     pub(crate) const fn needs_rel_str_for_matching(&self) -> bool {
-        self.gitignore.is_some() || self.glob.is_some() || self.type_glob.is_some()
+        self.gitignore.is_some() || self.needs_search_globs()
     }
 
     #[must_use]
@@ -155,25 +170,39 @@ impl CandidateFilter {
         self.matches_file(rel_path)
     }
 
-    /// Check path-based rules only (scope, hidden, gitignore, glob, type).
+    /// Check path-based rules for a candidate under the given admission policy.
     /// Depth and filesize are checked by [`crate::Candidate::matches`].
     #[must_use]
-    pub(crate) fn matches_candidate(&self, candidate: &crate::Candidate) -> bool {
+    pub(crate) fn matches_candidate(
+        &self,
+        candidate: &crate::Candidate,
+        admission: FilterAdmission,
+    ) -> bool {
         if !self.in_scope(candidate.rel_path()) {
             return false;
         }
         if self.is_excluded(candidate.rel_path()) {
             return false;
         }
-        if self.visibility.hidden == crate::corpus::filter::config::HiddenMode::Respect
-            && Self::path_is_hidden(candidate.rel_path())
-        {
-            return false;
+        match admission {
+            FilterAdmission::Full => {
+                if self.visibility.hidden == crate::corpus::filter::config::HiddenMode::Respect
+                    && Self::path_is_hidden(candidate.rel_path())
+                {
+                    return false;
+                }
+                if !self.needs_rel_str_for_matching() {
+                    return true;
+                }
+                self.matches_file_str(Path::new(candidate.rel_str()))
+            }
+            FilterAdmission::Indexed => {
+                if !self.needs_search_globs() {
+                    return true;
+                }
+                self.matches_search_globs(Path::new(candidate.rel_str()))
+            }
         }
-        if !self.needs_rel_str_for_matching() {
-            return true;
-        }
-        self.matches_file_str(Path::new(candidate.rel_str()))
     }
 
     fn is_excluded(&self, rel_path: &Path) -> bool {
@@ -217,7 +246,10 @@ impl CandidateFilter {
         {
             return false;
         }
+        self.matches_search_globs(rel_path)
+    }
 
+    fn matches_search_globs(&self, rel_path: &Path) -> bool {
         if let Some(ref glob) = self.glob {
             if self.glob_case_insensitive {
                 let rel_str = rel_path.to_string_lossy();
@@ -248,6 +280,7 @@ impl CandidateFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::filter::FilterAdmission;
     use crate::corpus::filter::config::*;
 
     fn make_filter(config: &CandidateFilterConfig) -> CandidateFilter {
@@ -329,7 +362,7 @@ mod tests {
         let info = crate::Candidate::new(rel_path.to_path_buf(), PathBuf::from("/root/src/lib.rs"));
         assert_eq!(
             filter.matches_path(rel_path),
-            filter.matches_candidate(&info)
+            filter.matches_candidate(&info, FilterAdmission::Full)
         );
     }
 
@@ -479,5 +512,36 @@ mod tests {
         };
         let filter = make_filter(&config);
         assert_eq!(filter.scopes(), &[PathBuf::from("src")]);
+    }
+
+    #[test]
+    fn indexed_admission_skips_hidden_and_ignore_rules() {
+        let config = CandidateFilterConfig::default();
+        let filter = make_filter(&config);
+        let hidden = crate::Candidate::new(
+            PathBuf::from(".hidden/file.txt"),
+            PathBuf::from("/root/.hidden/file.txt"),
+        );
+        assert!(!hidden.matches(&filter, FilterAdmission::Full));
+        assert!(hidden.matches(&filter, FilterAdmission::Indexed));
+    }
+
+    #[test]
+    fn indexed_admission_still_applies_globs() {
+        let config = CandidateFilterConfig {
+            visibility: VisibilityConfig {
+                hidden: HiddenMode::Include,
+                ignore: IgnoreConfig::default(),
+            },
+            glob: GlobConfig {
+                patterns: vec!["!*.log".to_string()],
+                case_insensitive: false,
+            },
+            ..CandidateFilterConfig::default()
+        };
+        let filter = make_filter(&config);
+        let log =
+            crate::Candidate::new(PathBuf::from("debug.log"), PathBuf::from("/root/debug.log"));
+        assert!(!log.matches(&filter, FilterAdmission::Indexed));
     }
 }
