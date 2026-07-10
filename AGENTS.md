@@ -91,6 +91,11 @@ Name types and functions after the **domain concept**, with short simple words.
 Do not name things after the mechanism, the caller, or how they differ from a
 sibling (`*_casei_*`, `*_with_*`, `*_for_ascii_*`, `helper_*`, `utils`).
 
+Do not use `_for_*` in method names to restate an argument
+(`posting_ids_for_literal(lit, …)` → `posting_ids(lit, …)`). The parameter
+already says what was passed; the method name should say what is returned or
+done.
+
 When adding request/config structs, name them after the domain decision they
 represent, not the mechanical data they carry. Avoid vague bundles such as
 `Context`, `State`, `Read`, or `Options` unless those are the actual domain
