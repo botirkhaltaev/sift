@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::fs;
 
-use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::candidates::{CandidateSource, ScanScope, SnapshotFreshness};
 use sift_core::grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest,
     PathDisplay,
@@ -13,6 +13,13 @@ use sift_core::search::{
 use tempfile::TempDir;
 
 use super::common::{make_parity_corpus, open_indexes};
+
+const fn index_scope(order: CandidateOrder) -> ScanScope {
+    ScanScope::Index {
+        order,
+        freshness: SnapshotFreshness::Current,
+    }
+}
 
 #[test]
 fn grep_finds_match_in_indexed_corpus() {
@@ -33,14 +40,10 @@ fn grep_finds_match_in_indexed_corpus() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
-    };
-    let selection = CandidateSelection::Index {
-        fallback: IndexFallback::WalkOnStaleSnapshot,
-        order: CandidateOrder::default(),
+        scope: index_scope(CandidateOrder::default()),
     };
     let request = GrepRequest {
         query: query.clone(),
-        selection,
         streams: Inputs::empty(),
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
         mode: SearchMode::Lines,
@@ -78,13 +81,10 @@ fn candidate_planner_all_indexed_uses_index_when_metadata_missing() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
+        scope: index_scope(CandidateOrder::default()),
     };
     let request = GrepRequest {
         query,
-        selection: CandidateSelection::Index {
-            fallback: IndexFallback::WalkOnStaleSnapshot,
-            order: CandidateOrder::default(),
-        },
         streams: Inputs::empty(),
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
         mode: SearchMode::Lines,
@@ -112,6 +112,7 @@ fn high_level_grep_search_resolves_candidates_and_reports_matches() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
+        scope: index_scope(CandidateOrder::default()),
     };
 
     let report = Grep::new(source)
@@ -120,10 +121,6 @@ fn high_level_grep_search_resolves_candidates_and_reports_matches() {
                 .options(SearchOptions::default())
                 .build()
                 .expect("query"),
-            selection: CandidateSelection::Index {
-                fallback: IndexFallback::IndexHitsOnly,
-                order: CandidateOrder::default(),
-            },
             streams: Inputs::empty(),
             conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::Lines,
@@ -153,6 +150,7 @@ fn high_level_grep_stream_emits_events_without_collecting_matches() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
+        scope: index_scope(CandidateOrder::default()),
     };
     let mut sink = EventRecorder::default();
 
@@ -163,10 +161,6 @@ fn high_level_grep_stream_emits_events_without_collecting_matches() {
                     .options(SearchOptions::default())
                     .build()
                     .expect("query"),
-                selection: CandidateSelection::Index {
-                    fallback: IndexFallback::IndexHitsOnly,
-                    order: CandidateOrder::default(),
-                },
                 streams: Inputs::empty(),
                 conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
                 mode: SearchMode::Lines,
@@ -196,6 +190,9 @@ fn high_level_grep_files_without_match_selects_nonmatching_files() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
+        scope: ScanScope::Walk {
+            order: CandidateOrder::default(),
+        },
     };
 
     let report = Grep::new(source)
@@ -204,9 +201,6 @@ fn high_level_grep_files_without_match_selects_nonmatching_files() {
                 .options(SearchOptions::default())
                 .build()
                 .expect("query"),
-            selection: CandidateSelection::Walk {
-                order: CandidateOrder::default(),
-            },
             streams: Inputs::empty(),
             conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::FilesWithoutMatch,
@@ -241,6 +235,7 @@ fn high_level_grep_files_without_match_uses_full_corpus_with_index() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
+        scope: index_scope(CandidateOrder::default()),
     };
 
     let report = Grep::new(source)
@@ -249,10 +244,6 @@ fn high_level_grep_files_without_match_uses_full_corpus_with_index() {
                 .options(SearchOptions::default())
                 .build()
                 .expect("query"),
-            selection: CandidateSelection::Index {
-                fallback: IndexFallback::WalkOnStaleSnapshot,
-                order: CandidateOrder::default(),
-            },
             streams: Inputs::empty(),
             conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::FilesWithoutMatch,
@@ -286,6 +277,7 @@ fn high_level_grep_files_without_match_is_not_selected_when_all_files_match() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
+        scope: index_scope(CandidateOrder::default()),
     };
 
     let report = Grep::new(source)
@@ -294,10 +286,6 @@ fn high_level_grep_files_without_match_is_not_selected_when_all_files_match() {
                 .options(SearchOptions::default())
                 .build()
                 .expect("query"),
-            selection: CandidateSelection::Index {
-                fallback: IndexFallback::IndexHitsOnly,
-                order: CandidateOrder::default(),
-            },
             streams: Inputs::empty(),
             conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::FilesWithoutMatch,
@@ -348,10 +336,10 @@ fn grep_finds_match_in_stdin_stream() {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
+        scope: ScanScope::StreamsOnly,
     };
     let request = GrepRequest {
         query: query.clone(),
-        selection: CandidateSelection::None,
         streams: Inputs::empty(),
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
         mode: SearchMode::Lines,

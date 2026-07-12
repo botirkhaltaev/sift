@@ -20,7 +20,7 @@ fn build_and_reopen_indexes() {
     build_store(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
-    assert!(indexes.availability().is_some());
+    assert!(indexes.session().is_some());
     let files = index_candidates(
         &indexes,
         &corpus,

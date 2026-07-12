@@ -13,10 +13,10 @@ use crate::candidates::Candidates;
 use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
 
-/// Identity of a usable index: everything needed to trust or validate it.
+/// Read-only view of an opened snapshot usable for search.
 ///
-/// `snapshot` is `None` for in-memory snapshots built with [`Snapshot::from_indexes`].
-pub struct IndexAvailability<'a> {
+/// `snapshot` is `None` when the opened snapshot has no committed id.
+pub struct IndexSession<'a> {
     pub root: &'a Path,
     pub corpus: CorpusKind,
     pub snapshot: Option<SnapshotId>,
@@ -57,9 +57,9 @@ impl Indexes {
         Self { snapshot }
     }
 
-    /// Whether opened indexes are usable for candidate discovery.
+    /// Opened snapshot identity when indexes are usable for candidate discovery.
     #[must_use]
-    pub fn availability(&self) -> Option<IndexAvailability<'_>> {
+    pub fn session(&self) -> Option<IndexSession<'_>> {
         if self.snapshot.is_empty() {
             return None;
         }
@@ -71,7 +71,7 @@ impl Indexes {
             return None;
         }
         let snapshot = self.snapshot.id().cloned();
-        Some(IndexAvailability {
+        Some(IndexSession {
             root,
             corpus,
             snapshot,

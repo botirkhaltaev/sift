@@ -700,8 +700,8 @@ fn daemon_validates_only_current_committed_snapshot() {
     let daemon = Daemon::new(p.sift_dir().to_path_buf());
     let first = Indexes::open(p.sift_dir()).expect("open indexes");
     let first_id = first
-        .availability()
-        .expect("snapshot availability")
+        .session()
+        .expect("index session")
         .snapshot
         .expect("committed snapshot id");
     assert!(
@@ -717,8 +717,8 @@ fn daemon_validates_only_current_committed_snapshot() {
 
     let second = Indexes::open(p.sift_dir()).expect("open indexes");
     let second_id = second
-        .availability()
-        .expect("snapshot availability")
+        .session()
+        .expect("index session")
         .snapshot
         .expect("committed snapshot id");
     assert_ne!(

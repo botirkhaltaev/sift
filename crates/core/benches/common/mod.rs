@@ -10,11 +10,12 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, NGramConfig, NGramIndex,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
+    IndexCoverage, IndexStore, IndexWalkConfig, Indexes, StoreMeta, WalkMeta,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -77,46 +78,52 @@ pub fn materialize_large_corpus(
     }
 }
 
-// ─── Index helpers ───────────────────────────────────────────────────────────
-
-/// Trigram-specialized N-gram tables written directly under `idx_dir`.
-pub fn build_index(corpus: &Path, idx_dir: &Path) -> NGramIndex {
-    let (root, kind, include_paths) = if corpus.is_file() {
-        let parent = corpus.parent().unwrap_or(corpus);
-        let filename = corpus.file_name().map(PathBuf::from).unwrap_or_default();
-        (parent, CorpusKind::SingleFile, vec![filename])
-    } else {
-        (corpus, CorpusKind::Directory, vec![])
-    };
+fn build_index_store(corpus: &Path, sift_dir: &Path) {
+    let root = corpus
+        .canonicalize()
+        .unwrap_or_else(|_| corpus.to_path_buf());
+    let meta = StoreMeta::new(
+        CorpusMeta {
+            root,
+            kind: CorpusKind::Directory,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
+        },
+        IndexCoverage::Complete,
+        WalkMeta {
+            follow_links: false,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        },
+        FilterMeta {
+            visibility: VisibilityConfig::default(),
+        },
+        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+    );
+    let mut store = IndexStore::open_or_create(sift_dir, &meta).unwrap();
     let config = IndexBuildConfig {
         corpus: CorpusSpec {
-            root,
-            kind,
+            root: corpus,
+            kind: CorpusKind::Directory,
             follow_links: false,
-            include_paths: &include_paths,
+            include_paths: &[],
             exclude_paths: &[],
         },
         walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
-    let config_index = NGramConfig::new(GramWidth::TRIGRAM);
-    config_index.build(&config, idx_dir, &[]).unwrap();
-    NGramConfig::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
+    store
+        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
+        .unwrap();
 }
 
-pub fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> NGramIndex {
-    NGramConfig::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
-}
-
-pub fn open_large_index() -> (tempfile::TempDir, NGramIndex) {
+pub fn open_large_indexes() -> (tempfile::TempDir, Indexes) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = tmp.path().join("corpus");
     materialize_large_corpus(&corpus, 8_000, 100, 256);
-    let idx = tmp.path().join(".sift");
-    let built = build_index(&corpus, &idx);
-    let root = built.root().to_path_buf();
-    let kind = built.corpus_kind();
-    drop(built);
-    let index = open_index(&idx, &root, kind);
-    (tmp, index)
+    let sift_dir = tmp.path().join(".sift");
+    build_index_store(&corpus, &sift_dir);
+    let indexes = Indexes::open(&sift_dir).unwrap();
+    (tmp, indexes)
 }

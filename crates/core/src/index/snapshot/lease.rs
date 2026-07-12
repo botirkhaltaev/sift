@@ -5,7 +5,6 @@ pub const LEASES_DIR: &str = "leases";
 /// A lease that prevents a snapshot from being garbage-collected.
 pub enum SnapshotLease {
     File { path: PathBuf },
-    InMemory,
 }
 
 impl SnapshotLease {
@@ -28,8 +27,7 @@ impl SnapshotLease {
 
 impl Drop for SnapshotLease {
     fn drop(&mut self) {
-        if let Self::File { path } = self {
-            let _ = std::fs::remove_file(path);
-        }
+        let Self::File { path } = self;
+        let _ = std::fs::remove_file(path);
     }
 }

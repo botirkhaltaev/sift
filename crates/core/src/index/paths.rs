@@ -14,7 +14,7 @@ pub struct IndexedCorpus {
 
 impl IndexedCorpus {
     #[must_use]
-    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+    pub(crate) fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             paths: Arc::new(paths.into_iter().collect()),
         }
@@ -47,12 +47,8 @@ impl IndexedCorpus {
         self.paths.contains(path)
     }
 
-    pub fn paths(&self) -> impl Iterator<Item = &Path> {
-        self.paths.iter().map(PathBuf::as_path)
-    }
-
     #[must_use]
-    pub fn into_set(self) -> HashSet<PathBuf> {
+    pub(crate) fn into_set(self) -> HashSet<PathBuf> {
         Arc::try_unwrap(self.paths).unwrap_or_else(|paths| (*paths).clone())
     }
 

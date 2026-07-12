@@ -75,7 +75,7 @@ Keep lifecycle, snapshot, and search on separate types. Do not add orchestration
 | Core candidates | `CandidatePlanner`, `Grep` | Plan, resolve, search |
 | CLI | `IndexJob`, `SnapshotRefresh`, daemon | Reconcile, debounce, IPC |
 
-**Do not add to core:** `from_single`, `Indexes::candidates`, `reconcile`, `unindexed_hit_paths`, or other caller-specific helpers. Callers compose `Snapshot::from_indexes`, `Indexes::from_snapshot`, `indexed_corpus().retain_unindexed`, and `Grep::resolve_candidates`.
+**Do not add to core:** `from_single`, `Indexes::candidates`, `reconcile`, `unindexed_hit_paths`, or other caller-specific helpers. Callers compose `Snapshot::open_current`, `Indexes::open`, `indexed_corpus().retain_unindexed`, and `Grep::resolve_candidates`.
 
 ## Architecture & Design
 

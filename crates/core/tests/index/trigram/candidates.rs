@@ -6,8 +6,7 @@ use sift_core::search::SearchOptions;
 use tempfile::TempDir;
 
 use super::super::common::{
-    build_store, build_trigram_in_dir, index_candidates, make_filter_corpus, make_parity_corpus,
-    open_indexes, wrap_indexes,
+    build_store, index_candidates, make_filter_corpus, make_parity_corpus, open_indexes,
 };
 
 #[test]
@@ -16,8 +15,10 @@ fn literal_query_returns_indexed_candidates() {
     let corpus = tmp.path().join("corpus");
     make_parity_corpus(&corpus);
 
-    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let indexes = wrap_indexes(index);
+    let sift_dir = tmp.path().join(".sift");
+    build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
     let candidates = index_candidates(
         &indexes,
         &corpus,
@@ -41,8 +42,10 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
     fs::write(corpus.join("a.txt"), "shared beta\n").expect("write a");
     fs::write(corpus.join("b.txt"), "another beta\n").expect("write b");
 
-    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let indexes = wrap_indexes(index);
+    let sift_dir = tmp.path().join(".sift");
+    build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
     let candidates = index_candidates(
         &indexes,
         &corpus,
@@ -92,8 +95,10 @@ fn case_insensitive_uppercase_corpus_narrows() {
         .expect("write noise");
     }
 
-    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let indexes = wrap_indexes(index);
+    let sift_dir = tmp.path().join(".sift");
+    build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
     let pattern = "err_sys|pme_turn_off".to_string();
     let options = SearchOptions {
         case_mode: CaseMode::Insensitive,
@@ -129,8 +134,10 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
         .expect("write noise");
     }
 
-    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let indexes = wrap_indexes(index);
+    let sift_dir = tmp.path().join(".sift");
+    build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
     let pattern = "ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string();
     let options = SearchOptions {
         case_mode: CaseMode::Insensitive,

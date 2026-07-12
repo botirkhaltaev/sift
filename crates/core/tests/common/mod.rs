@@ -12,11 +12,11 @@ use sift_core::grep::{
 use sift_core::search::{
     InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode,
 };
-use sift_core::{Candidate, CandidateOrder, CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::{Candidate, CandidateOrder, CandidateSource, ScanScope, SnapshotFreshness};
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, Index, IndexBuildConfig,
-    IndexConfig, IndexCoverage, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramConfig,
-    NGramIndex, Snapshot, StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
+    IndexCoverage, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramConfig, NGramIndex,
+    StoreMeta, WalkMeta,
 };
 
 pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexConfig>) -> StoreMeta {
@@ -124,11 +124,6 @@ pub fn open_indexes(sift_dir: &Path) -> Indexes {
     Indexes::open(sift_dir).expect("open indexes")
 }
 
-pub fn wrap_indexes(index: NGramIndex) -> Indexes {
-    let root = index.root().to_path_buf();
-    Indexes::from_snapshot(Snapshot::from_indexes(root, vec![Index::NGram(index)]))
-}
-
 pub fn index_candidates(
     indexes: &Indexes,
     corpus: &Path,
@@ -153,6 +148,10 @@ pub fn index_candidates(
         indexes,
         filter: &filter,
         store_meta,
+        scope: ScanScope::Index {
+            order: CandidateOrder::default(),
+            freshness: SnapshotFreshness::Current,
+        },
     };
     let query = SearchQueryBuilder::new(patterns.to_vec())
         .options(options)
@@ -160,10 +159,6 @@ pub fn index_candidates(
         .expect("query");
     let request = GrepRequest {
         query,
-        selection: CandidateSelection::Index {
-            fallback: IndexFallback::WalkOnStaleSnapshot,
-            order: CandidateOrder::default(),
-        },
         streams: Inputs::empty(),
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
         mode: SearchMode::Lines,

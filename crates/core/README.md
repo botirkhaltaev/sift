@@ -38,8 +38,8 @@ IndexConfig ──IndexStore──> snapshot on disk
 
 ```rust
 use sift_core::{
-    CandidateSelection, CandidateSource, Grep, GrepRequest, IndexFallback, Indexes, Inputs,
-    InputConversion, PathDisplay, SearchMode, SearchOptions, SearchQuery, StatsMode,
+    CandidateSource, Grep, GrepRequest, Indexes, Inputs, InputConversion, PathDisplay, ScanScope,
+    SnapshotFreshness, SearchMode, SearchOptions, SearchQuery, StatsMode,
 };
 
 let indexes = Indexes::open(&sift_dir)?;
@@ -47,15 +47,15 @@ let source = CandidateSource {
     indexes: &indexes,
     filter: &filter,
     store_meta: store_meta.as_ref(),
+    scope: ScanScope::Index {
+        order: Default::default(),
+        freshness: SnapshotFreshness::Current,
+    },
 };
 
 let grep = Grep::new(source);
 let request = GrepRequest {
     query: SearchQuery::new(vec!["pattern".into()])?.options(SearchOptions::default()),
-    selection: CandidateSelection::Index {
-        fallback: IndexFallback::WalkOnStaleSnapshot,
-        order: Default::default(),
-    },
     streams: Inputs::empty(),
     conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
     mode: SearchMode::Lines,

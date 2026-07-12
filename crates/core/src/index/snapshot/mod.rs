@@ -46,18 +46,6 @@ impl Snapshot {
     }
 
     #[must_use]
-    pub const fn from_indexes(root: PathBuf, indexes: Vec<Index>) -> Self {
-        Self {
-            id: None,
-            root,
-            state: SnapshotState::Current(CurrentSnapshot {
-                indexes,
-                _lease: SnapshotLease::InMemory,
-            }),
-        }
-    }
-
-    #[must_use]
     pub(crate) const fn committed(
         id: SnapshotId,
         root: PathBuf,
@@ -85,7 +73,7 @@ impl Snapshot {
     }
 
     #[must_use]
-    pub fn indexes(&self) -> &[Index] {
+    pub(crate) fn indexes(&self) -> &[Index] {
         match &self.state {
             SnapshotState::Empty => &[],
             SnapshotState::Current(c) => &c.indexes,

@@ -13,10 +13,10 @@ pub mod store;
 pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexBuildConfig};
 pub use error::IndexError;
-pub use kinds::{FileId, Index, IndexConfig, IndexId, PlanMode, QueryPlanOutput};
+pub use kinds::{FileId, IndexConfig, IndexId, PlanMode, QueryPlanOutput};
 pub use meta::{CorpusMeta, FilterMeta, IndexCoverage, WalkMeta};
 pub use paths::IndexedCorpus;
-pub use search::IndexAvailability;
+pub use search::IndexSession;
 pub use search::Indexes;
 pub use snapshot::{Snapshot, SnapshotId};
 
@@ -44,6 +44,6 @@ mod tests {
         let sift_dir = tmp.path().join(".sift");
         fs::create_dir_all(&sift_dir).expect("create sift dir");
         let indexes = Indexes::open(&sift_dir).expect("open indexes");
-        assert!(indexes.availability().is_none());
+        assert!(indexes.session().is_none());
     }
 }

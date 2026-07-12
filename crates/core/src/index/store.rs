@@ -340,7 +340,7 @@ mod tests {
         let snapshot = Snapshot::open_current(&sift_dir).expect("open current");
         assert_eq!(snapshot.indexes().len(), 1);
         let canon_corpus = corpus.canonicalize().unwrap();
-        assert_eq!(snapshot.indexes()[0].root(), &canon_corpus);
+        assert_eq!(snapshot.root(), canon_corpus.as_path());
         assert!(store.current_id().is_some(), "store should have current id");
     }
 

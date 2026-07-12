@@ -8,5 +8,5 @@ pub mod source;
 mod collection;
 
 pub use collection::Candidates;
-pub use selection::{CandidateCoverage, CandidateSelection, IndexFallback};
+pub use selection::{ScanScope, SnapshotFreshness};
 pub use source::CandidateSource;

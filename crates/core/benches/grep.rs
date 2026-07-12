@@ -6,7 +6,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::candidates::{CandidateSource, ScanScope, SnapshotFreshness};
 use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, PathDisplay,
 };
@@ -14,7 +14,7 @@ use sift_core::search::{
     InputConversion, SearchFlags, SearchInputs, SearchOptions, SearchQueryBuilder, Searcher,
     StatsMode,
 };
-use sift_core::{Index, Indexes, Inputs, NGramIndex, Snapshot};
+use sift_core::{Indexes, Inputs};
 
 mod common;
 
@@ -26,11 +26,6 @@ fn sift_criterion() -> Criterion {
         .significance_level(0.05)
         .noise_threshold(0.05)
         .configure_from_args()
-}
-
-fn wrap_index(index: NGramIndex) -> Indexes {
-    let root = index.root().to_path_buf();
-    Indexes::from_snapshot(Snapshot::from_indexes(root, vec![Index::NGram(index)]))
 }
 
 fn make_search(patterns: &[&str], opts: SearchOptions) -> (Vec<String>, SearchOptions) {
@@ -51,6 +46,10 @@ fn run_grep(
         indexes,
         filter,
         store_meta: None,
+        scope: ScanScope::Index {
+            order: CandidateOrder::default(),
+            freshness: SnapshotFreshness::Current,
+        },
     };
     let query = SearchQueryBuilder::new(query.0.clone())
         .options(query.1.clone())
@@ -58,10 +57,6 @@ fn run_grep(
         .unwrap();
     let request = GrepRequest {
         query: query.clone(),
-        selection: CandidateSelection::Index {
-            fallback: IndexFallback::WalkOnStaleSnapshot,
-            order: CandidateOrder::default(),
-        },
         streams: Inputs::empty(),
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
         mode: sift_core::search::SearchMode::Lines,
@@ -79,11 +74,10 @@ fn run_grep(
 }
 
 fn bench_indexed_search(c: &mut Criterion) {
-    let fixture = common::open_large_index();
-    let index = fixture.1;
-    let indexes = wrap_index(index);
+    let fixture = common::open_large_indexes();
+    let indexes = fixture.1;
     let root = indexes
-        .availability()
+        .session()
         .expect("indexed corpus")
         .root
         .to_path_buf();

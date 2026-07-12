@@ -43,7 +43,7 @@ impl CorpusScope {
         search_paths: &[PathBuf],
         sift_dir: &Path,
     ) -> anyhow::Result<Self> {
-        match indexes.availability() {
+        match indexes.session() {
             None => {
                 let root = meta.map_or_else(
                     || cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),

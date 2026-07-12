@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::candidates::{CandidateSource, ScanScope, SnapshotFreshness};
 use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, Grep, GrepRequest, PathDisplay, VisibilityConfig,
 };
@@ -51,7 +51,7 @@ fn indexed() -> &'static IndexHolder {
             .expect("build_index");
         let indexes = Indexes::open(&sift_dir).expect("open_index");
         let root = indexes
-            .availability()
+            .session()
             .expect("indexed corpus")
             .root
             .to_path_buf();
@@ -98,13 +98,13 @@ fn run_search(holder: &IndexHolder, patterns: &[String], opts: &SearchOptions) {
         indexes: &holder.indexes,
         filter: &filter,
         store_meta: None,
+        scope: ScanScope::Index {
+            order: Default::default(),
+            freshness: SnapshotFreshness::Current,
+        },
     };
     let request = GrepRequest {
         query: query.clone(),
-        selection: CandidateSelection::Index {
-            fallback: IndexFallback::WalkOnStaleSnapshot,
-            order: Default::default(),
-        },
         streams: Inputs::empty(),
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
         mode: sift_core::search::SearchMode::Lines,

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::candidates::{CandidateSource, ScanScope, SnapshotFreshness};
 use sift_core::grep::{ByteInput, FileWalk, Grep, Inputs, PathDisplay};
 use sift_core::search::{InputConversion, SearchMode, ZeroCounts};
 use sift_core::{CorpusKind, GrepRequest, IndexCoverage};
@@ -76,13 +76,6 @@ impl RunResult {
             Self::Search { matched } => matched,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapshotTrust {
-    Unvalidated,
-    Validated,
-    Stale,
 }
 
 impl Run {
@@ -183,7 +176,7 @@ impl Run {
         let line_number_override = self.line_number_override(&output_argv);
 
         let session = self.prepare_session(argv, &sources.paths)?;
-        let sources = sources.resolve(patterns.input, session.indexes.availability().is_none())?;
+        let sources = sources.resolve(patterns.input, session.indexes.session().is_none())?;
         let transform = self.config.content.transform()?;
 
         let filename_ctx = Self::filename_context(effective_mode, &sources, &session);
@@ -199,17 +192,18 @@ impl Run {
             )
             .map_err(|e| anyhow::anyhow!(e))?;
         let separators = self.config.output.separators();
-        let snapshot = Self::snapshot_validation(&session, daemon);
-        let selection = self.candidate_selection(
+        let freshness = Self::snapshot_freshness(&session, daemon);
+        let scan_scope = self.scan_scope(
             &session,
             transform.as_ref(),
-            snapshot,
+            freshness,
             sources.resolve_candidates(),
         );
         let candidate_source = CandidateSource {
             indexes: &session.indexes,
             filter: &session.search_filter,
             store_meta: session.store_meta.as_ref(),
+            scope: scan_scope,
         };
 
         let query = self
@@ -235,7 +229,6 @@ impl Run {
         let grep = Grep::new(candidate_source);
         let request = GrepRequest {
             query,
-            selection,
             streams,
             conversion,
             mode,
@@ -260,28 +253,24 @@ impl Run {
         }
     }
 
-    fn candidate_selection(
+    fn scan_scope(
         &self,
         session: &PreparedCandidateSource,
         transform: Option<&ContentTransform>,
-        snapshot: SnapshotTrust,
+        freshness: SnapshotFreshness,
         resolve_candidates: bool,
-    ) -> CandidateSelection {
+    ) -> ScanScope {
         if !resolve_candidates {
-            return CandidateSelection::None;
+            return ScanScope::StreamsOnly;
         }
-        if session.indexes.availability().is_none() || transform.is_some() {
-            return CandidateSelection::Walk {
+        if session.indexes.session().is_none() || transform.is_some() {
+            return ScanScope::Walk {
                 order: self.config.candidate_order,
             };
         }
-        CandidateSelection::Index {
-            fallback: if matches!(snapshot, SnapshotTrust::Stale) {
-                IndexFallback::WalkOnStaleSnapshot
-            } else {
-                IndexFallback::IndexHitsOnly
-            },
+        ScanScope::Index {
             order: self.config.candidate_order,
+            freshness,
         }
     }
 
@@ -327,28 +316,27 @@ impl Run {
         } else if !sources.stdin_bytes.is_empty() && sources.paths.is_empty() {
             FilenameContext::SingleFileCorpus
         } else {
-            match session.indexes.availability().map(|index| index.corpus) {
+            match session.indexes.session().map(|index| index.corpus) {
                 Some(CorpusKind::SingleFile) => FilenameContext::SingleFileCorpus,
                 _ => FilenameContext::DirectoryCorpus,
             }
         }
     }
 
-    fn snapshot_validation(
+    fn snapshot_freshness(
         session: &PreparedCandidateSource,
         daemon: Option<&Daemon>,
-    ) -> SnapshotTrust {
+    ) -> SnapshotFreshness {
         daemon
             .and_then(|daemon| {
-                session.indexes.availability().and_then(|index| {
+                session.indexes.session().and_then(|index| {
                     let id = index.snapshot?;
                     Some(daemon.validate_snapshot(&id))
                 })
             })
-            .map_or(SnapshotTrust::Unvalidated, |validation| match validation {
-                Ok(true) => SnapshotTrust::Validated,
-                Ok(false) => SnapshotTrust::Stale,
-                Err(_) => SnapshotTrust::Unvalidated,
+            .map_or(SnapshotFreshness::Current, |validation| match validation {
+                Ok(false) => SnapshotFreshness::Stale,
+                Ok(true) | Err(_) => SnapshotFreshness::Current,
             })
     }
 

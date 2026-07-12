@@ -169,21 +169,14 @@ impl std::str::FromStr for IndexConfig {
 
 /// Opened runtime index used for query-time candidate resolution.
 #[derive(Debug)]
-pub enum Index {
+pub(crate) enum Index {
     /// Runtime-width N-gram index.
     NGram(ngram::Index),
 }
 
 impl Index {
     #[must_use]
-    pub fn root(&self) -> &Path {
-        match self {
-            Self::NGram(index) => index.root(),
-        }
-    }
-
-    #[must_use]
-    pub const fn corpus_kind(&self) -> CorpusKind {
+    pub(crate) const fn corpus_kind(&self) -> CorpusKind {
         match self {
             Self::NGram(index) => index.corpus_kind(),
         }

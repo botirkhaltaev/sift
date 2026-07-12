@@ -22,9 +22,9 @@ Today the default index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
 Search (re-exported from `lib.rs`):
 
 - `Grep`, `GrepRequest`, `Grep::resolve_candidates`, `Searcher`, `Report`
-- `Indexes`, `Snapshot`, `IndexAvailability`, `IndexedCorpus`
-- `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `GramWidth`
-- `Candidates`, `CandidateSelection`, `CandidateSource`, `CandidateCoverage`
+- `Indexes`, `Snapshot`, `IndexSession`, `IndexedCorpus`
+- `IndexConfig`, `IndexStore`, `NGramIndex`, `GramWidth`
+- `Candidates`, `CandidateSource`, `ScanScope`, `SnapshotFreshness`
 
 Internal: `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
 
@@ -47,7 +47,7 @@ Internal: `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
 ```text
 Grep::execute
   1. coverage   ← GrepRequest::candidate_coverage()
-  2. plan       ← CandidatePlanner::plan(source, query, selection, coverage)
+  2. plan       ← CandidatePlanner::plan(source, query, coverage)
   3. candidates ← plan.resolve(source)
   4. search     ← Searcher::execute(...)
 ```

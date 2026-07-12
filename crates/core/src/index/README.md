@@ -8,8 +8,8 @@ Composable index lifecycle, snapshot persistence, and search-time dispatch.
 |-------|-------|------|
 | Lifecycle | `IndexStore`, `IndexConfig`, `StoreMeta` | Build, update, publish snapshots |
 | Snapshot | `Snapshot`, `SnapshotId` | Immutable opened snapshot + indexes |
-| Search | `Indexes`, `IndexAvailability`, `IndexedCorpus` | Query, intersect, hydrate candidates |
-| Dispatch | `Index`, `IndexConfig` | Per-kind lifecycle and query routing |
+| Search | `Indexes`, `IndexSession`, `IndexedCorpus` | Query, intersect, hydrate candidates |
+| Dispatch | `IndexConfig` | Per-kind lifecycle and query routing |
 
 `IndexStore` owns write transactions. `Snapshot::open_current` and `Indexes::from_snapshot` own read/search. Candidate resolution lives in `Grep` / `CandidatePlanner`, not on `Indexes`.
 
@@ -31,7 +31,7 @@ index/
 |--------|-------------|
 | [`kinds.rs`](kinds.rs) | `IndexConfig`, `Index`, `FileId`, `IndexId` |
 | [`search.rs`](search.rs) | `Indexes`: snapshot search facade |
-| [`snapshot/mod.rs`](snapshot/mod.rs) | `Snapshot::open_current`, `Snapshot::from_indexes` |
+| [`snapshot/mod.rs`](snapshot/mod.rs) | `Snapshot::open_current` |
 | [`store.rs`](store.rs) | `IndexStore`: lifecycle orchestration |
 | [`paths.rs`](paths.rs) | `IndexedCorpus`: covered path set |
 | [`config.rs`](config.rs) | `IndexBuildConfig`, `CorpusSpec`, `CorpusKind` |
@@ -42,7 +42,7 @@ index/
 ## API
 
 ```rust
-use sift_core::{GramWidth, Index, IndexConfig, IndexStore, Indexes, Snapshot};
+use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes, NGramIndex, Snapshot};
 
 // Lifecycle
 let mut store = IndexStore::open_or_create(&sift_dir, &meta)?;
@@ -50,10 +50,6 @@ store.build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])?;
 
 // Search (committed snapshot)
 let indexes = Indexes::open(&sift_dir)?;
-
-// Tests/benches (in-memory snapshot)
-let snapshot = Snapshot::from_indexes(root, vec![Index::NGram(index)]);
-let indexes = Indexes::from_snapshot(snapshot);
 ```
 
 Resolve candidates through `Grep::resolve_candidates`, not `Indexes` directly.

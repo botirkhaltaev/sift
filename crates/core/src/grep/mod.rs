@@ -3,9 +3,10 @@
 pub mod error;
 pub mod input;
 
+use crate::candidates::CandidateSource;
 use crate::candidates::planner::CandidatePlanner;
 use crate::candidates::query::CandidateQuery;
-use crate::candidates::{CandidateCoverage, CandidateSelection, CandidateSource};
+use crate::candidates::selection::CandidateCoverage;
 use crate::search::{
     EventEmission, Report, SearchInputs, SearchMode, SearchQuery, SearchSink, Searcher, StatsMode,
     ZeroCounts,
@@ -32,7 +33,6 @@ pub struct Grep<'a> {
 pub struct GrepBuilder<'grep, 'source, 'input> {
     grep: &'grep Grep<'source>,
     query: Option<SearchQuery>,
-    selection: Option<CandidateSelection>,
     streams: Inputs<'input>,
     conversion: InputConversion<'input>,
     mode: SearchMode,
@@ -41,7 +41,6 @@ pub struct GrepBuilder<'grep, 'source, 'input> {
 
 pub struct GrepRequest<'a> {
     pub query: SearchQuery,
-    pub selection: CandidateSelection,
     pub streams: Inputs<'a>,
     pub conversion: InputConversion<'a>,
     pub mode: SearchMode,
@@ -59,7 +58,6 @@ impl<'a> Grep<'a> {
         GrepBuilder {
             grep: self,
             query: None,
-            selection: None,
             streams: Inputs::empty(),
             conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::Lines,
@@ -102,8 +100,7 @@ impl<'a> Grep<'a> {
         let searcher = Searcher::new(request.query.clone())?;
         let candidate_query =
             CandidateQuery::new(&request.query, searcher.prefilter_compatibility());
-        let plan =
-            CandidatePlanner::plan(&self.source, &candidate_query, request.selection, coverage);
+        let plan = CandidatePlanner::plan(&self.source, &candidate_query, coverage);
         plan.resolve(&self.source)
     }
 
@@ -146,12 +143,6 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
     }
 
     #[must_use]
-    pub const fn selection(mut self, selection: CandidateSelection) -> Self {
-        self.selection = Some(selection);
-        self
-    }
-
-    #[must_use]
     pub fn streams(mut self, streams: Inputs<'input>) -> Self {
         self.streams = streams;
         self
@@ -184,12 +175,8 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
         let query = self
             .query
             .ok_or(crate::Error::Search(Error::MissingSearchQuery))?;
-        let selection = self
-            .selection
-            .ok_or(crate::Error::Search(Error::MissingCandidateSelection))?;
         Ok(GrepRequest {
             query,
-            selection,
             streams: self.streams,
             conversion: self.conversion,
             mode: self.mode,
@@ -226,7 +213,6 @@ mod candidate_coverage_tests {
             query: SearchQueryBuilder::new(vec!["x".into()])
                 .build()
                 .expect("query"),
-            selection: CandidateSelection::None,
             streams: Inputs::empty(),
             conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode,
