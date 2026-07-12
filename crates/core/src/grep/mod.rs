@@ -3,8 +3,8 @@
 pub mod error;
 pub mod input;
 
-use crate::candidates::query::CandidateQuery;
-use crate::candidates::resolve::CandidatePlanner;
+use crate::candidates::narrowing::CandidateQuery;
+use crate::candidates::plan::CandidatePlanner;
 use crate::candidates::{CandidateCoverage, CandidateSelection, CandidateSource};
 use crate::search::{
     EventEmission, Report, SearchInputs, SearchMode, SearchQuery, SearchSink, Searcher, StatsMode,

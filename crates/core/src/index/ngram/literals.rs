@@ -2,7 +2,7 @@ use regex_syntax::ast::parse::Parser as AstParser;
 use regex_syntax::hir::literal::{ExtractKind, Extractor};
 use regex_syntax::hir::{self, Hir};
 
-use crate::candidates::query::CandidateQuery;
+use crate::candidates::narrowing::CandidateQuery;
 
 use super::config::Config;
 use super::gram::{GramWidth, LiteralNarrowing};

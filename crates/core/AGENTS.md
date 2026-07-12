@@ -23,12 +23,16 @@ Internal modules (`pub(crate)`): `corpus/`, `CandidatePlanner`, `CandidatePlan`,
 | `index/` | `Indexes` registry, `IndexConfig`, `Index` enum, `IndexStore`, snapshot persistence |
 | `index/ngram/` | Runtime-width N-gram index: build, load, search, storage |
 | `grep/` | Public search API — `Grep::search`, `Grep::stream`, `Grep::resolve_candidates` |
-| `candidates/` | `CandidateSource`, planning (`resolve.rs`), `Candidates` collection |
+| `candidates/` | `CandidateSource`, `plan`, `resolve`, `resolved` (`Candidates`) |
 | `grep/input.rs` | `ByteInput`, stream helpers on `Inputs` |
 | `search/input.rs` | `Input`, `Inputs`, `InputConversion`, `SearchInputs` |
 | `search/searcher.rs` | `Searcher` execution by `SearchBound` |
-| `candidates/resolve.rs` | Pure `CandidatePlanner::plan` → `CandidatePlan::resolve` I/O boundary |
-| `candidates/collection.rs` | `Candidates` enum (`IntoIterator`, `into_vec`) |
+| `candidates/plan.rs` | Pure `CandidatePlanner::plan` → `CandidatePlan` |
+| `candidates/resolve.rs` | `CandidatePlan::resolve` I/O boundary |
+| `candidates/resolved.rs` | `Candidates` enum (`IntoIterator`, `into_vec`) |
+| `candidates/selection.rs` | `CandidateSelection`, `CandidateCoverage`, `IndexFallback` |
+| `candidates/narrowing.rs` | `CandidateQuery` projection for index narrowing |
+| `candidates/source.rs` | `CandidateSource` resolve inputs |
 | `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
 | `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |
 

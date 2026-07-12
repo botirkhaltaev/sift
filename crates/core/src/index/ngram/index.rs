@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
-use crate::candidates::query::CandidateQuery;
+use crate::candidates::narrowing::CandidateQuery;
 use crate::index::kinds::NarrowingResult;
 use crate::index::{CorpusKind, FileId, IndexedCorpus};
 

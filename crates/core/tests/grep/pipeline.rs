@@ -47,9 +47,7 @@ fn grep_finds_match_in_indexed_corpus() {
         stats: StatsMode::Off,
     };
     let grep = Grep::new(source);
-    let candidates = grep
-        .resolve_candidates(&request)
-        .expect("candidates");
+    let candidates = grep.resolve_candidates(&request).expect("candidates");
     let searcher = Searcher::new(query).expect("searcher");
     let inputs = sift_core::search::SearchInputs {
         candidates,
@@ -94,9 +92,7 @@ fn candidate_planner_all_indexed_uses_index_when_metadata_missing() {
     };
 
     let grep = Grep::new(source);
-    let candidates = grep
-        .resolve_candidates(&request)
-        .expect("candidates");
+    let candidates = grep.resolve_candidates(&request).expect("candidates");
 
     assert_eq!(candidates.into_vec().len(), 2);
 }
@@ -315,9 +311,7 @@ fn grep_finds_match_in_stdin_stream() {
         stats: StatsMode::Off,
     };
     let grep = Grep::new(source);
-    let candidates = grep
-        .resolve_candidates(&request)
-        .expect("candidates");
+    let candidates = grep.resolve_candidates(&request).expect("candidates");
     let searcher = Searcher::new(query).expect("searcher");
 
     let streams = Inputs::empty().with_stream(ByteInput {

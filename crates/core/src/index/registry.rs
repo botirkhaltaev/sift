@@ -11,7 +11,7 @@ use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
 use crate::Searcher;
 use crate::candidates::Candidates;
-use crate::candidates::collection::IndexFileIds;
+use crate::candidates::resolved::IndexFileIds;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
 use crate::corpus::walk::FileWalk;
 use crate::search::SearchQuery;
@@ -112,7 +112,7 @@ impl Indexes {
         admission: FilterAdmission,
     ) -> crate::Result<Candidates<'a>> {
         let searcher = Searcher::new(query.clone())?;
-        let candidate_query = crate::candidates::query::CandidateQuery::new(
+        let candidate_query = crate::candidates::narrowing::CandidateQuery::new(
             query,
             searcher.prefilter_compatibility(),
         );
@@ -139,7 +139,7 @@ impl Indexes {
     #[must_use]
     pub(crate) fn narrow(
         &self,
-        query: &crate::candidates::query::CandidateQuery<'_>,
+        query: &crate::candidates::narrowing::CandidateQuery<'_>,
     ) -> NarrowingResult {
         let indexes = self.snapshot.indexes();
         match indexes.len() {
@@ -233,7 +233,7 @@ impl Indexes {
 
     fn narrow_multi(
         indexes: &[Index],
-        query: &crate::candidates::query::CandidateQuery<'_>,
+        query: &crate::candidates::narrowing::CandidateQuery<'_>,
     ) -> NarrowingResult {
         let plans: Vec<NarrowingResult> = indexes
             .par_iter()
