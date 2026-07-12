@@ -17,13 +17,59 @@ pub use index::{Index, NGramIndexError};
 mod candidate_tests {
     use std::path::Path;
 
-    use crate::candidates::narrowing::{CandidateFlags, CandidateQuery};
+    use crate::candidates::narrowing::CandidateQuery;
     use crate::index::ngram::storage::postings::Postings;
+    use crate::search::{
+        CaseMode, InputEncoding, PrefilterCompatibility, SearchFlags, SearchOptions, SearchQuery,
+        SearchQueryBuilder,
+    };
 
     use super::*;
 
     fn default_config() -> Config {
         Config::new(GramWidth::TRIGRAM)
+    }
+
+    fn regex_search_options(
+        case_insensitive: bool,
+        word_regexp: bool,
+        line_regexp: bool,
+    ) -> SearchOptions {
+        let mut flags = SearchFlags::empty();
+        if word_regexp {
+            flags |= SearchFlags::WORD_REGEXP;
+        }
+        if line_regexp {
+            flags |= SearchFlags::LINE_REGEXP;
+        }
+        SearchOptions {
+            flags,
+            case_mode: if case_insensitive {
+                CaseMode::Insensitive
+            } else {
+                CaseMode::Sensitive
+            },
+            input_encoding: InputEncoding::Raw,
+            ..SearchOptions::default()
+        }
+    }
+
+    struct BuiltQuery {
+        search_query: SearchQuery,
+    }
+
+    impl BuiltQuery {
+        fn new(patterns: &[String], options: SearchOptions) -> Self {
+            let search_query = SearchQueryBuilder::new(patterns.to_vec())
+                .options(options)
+                .build()
+                .expect("query");
+            Self { search_query }
+        }
+
+        fn candidate(&self) -> CandidateQuery<'_> {
+            CandidateQuery::new(&self.search_query, PrefilterCompatibility::Compatible)
+        }
     }
 
     fn narrow(
@@ -32,18 +78,13 @@ mod candidate_tests {
         word_regexp: bool,
         line_regexp: bool,
     ) -> bool {
-        let mut flags = CandidateFlags::empty();
-        if case_insensitive {
-            flags |= CandidateFlags::CASE_INSENSITIVE;
-        }
-        if word_regexp {
-            flags |= CandidateFlags::WORD_REGEXP;
-        }
-        if line_regexp {
-            flags |= CandidateFlags::LINE_REGEXP;
-        }
-        let query = CandidateQuery::from_patterns(patterns, flags);
-        default_config().extract_literal_arms(&query).is_some()
+        let built = BuiltQuery::new(
+            patterns,
+            regex_search_options(case_insensitive, word_regexp, line_regexp),
+        );
+        default_config()
+            .extract_literal_arms(&built.candidate())
+            .is_some()
     }
 
     fn full_scan(
@@ -52,18 +93,13 @@ mod candidate_tests {
         word_regexp: bool,
         line_regexp: bool,
     ) -> bool {
-        let mut flags = CandidateFlags::empty();
-        if case_insensitive {
-            flags |= CandidateFlags::CASE_INSENSITIVE;
-        }
-        if word_regexp {
-            flags |= CandidateFlags::WORD_REGEXP;
-        }
-        if line_regexp {
-            flags |= CandidateFlags::LINE_REGEXP;
-        }
-        let query = CandidateQuery::from_patterns(patterns, flags);
-        default_config().extract_literal_arms(&query).is_none()
+        let built = BuiltQuery::new(
+            patterns,
+            regex_search_options(case_insensitive, word_regexp, line_regexp),
+        );
+        default_config()
+            .extract_literal_arms(&built.candidate())
+            .is_none()
     }
 
     #[test]
@@ -161,9 +197,9 @@ mod candidate_tests {
     #[test]
     fn case_insensitive_alternation_keeps_long_arms() {
         let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::CASE_INSENSITIVE);
+        let built = BuiltQuery::new(&patterns, regex_search_options(true, false, false));
         let arms = default_config()
-            .extract_literal_arms(&query)
+            .extract_literal_arms(&built.candidate())
             .expect("casei alternation should extract");
         assert_eq!(arms.len(), 4);
         assert!(arms.iter().all(|arm| arm.len() >= 7));
@@ -173,12 +209,15 @@ mod candidate_tests {
     #[test]
     fn case_insensitive_fixed_string_keeps_original_bytes() {
         let patterns = ["ERR_SYS".to_string()];
-        let query = CandidateQuery::from_patterns(
-            &patterns,
-            CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
-        );
+        let options = SearchOptions {
+            flags: SearchFlags::FIXED_STRINGS,
+            case_mode: CaseMode::Insensitive,
+            input_encoding: InputEncoding::Raw,
+            ..SearchOptions::default()
+        };
+        let built = BuiltQuery::new(&patterns, options);
         let arms = default_config()
-            .extract_literal_arms(&query)
+            .extract_literal_arms(&built.candidate())
             .expect("fixed casei should extract");
         assert_eq!(arms, vec![b"ERR_SYS".to_vec()]);
     }
@@ -186,11 +225,18 @@ mod candidate_tests {
     #[test]
     fn case_insensitive_non_ascii_declines_narrowing() {
         let patterns = ["café".to_string()];
-        let query = CandidateQuery::from_patterns(
-            &patterns,
-            CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
+        let options = SearchOptions {
+            flags: SearchFlags::FIXED_STRINGS,
+            case_mode: CaseMode::Insensitive,
+            input_encoding: InputEncoding::Raw,
+            ..SearchOptions::default()
+        };
+        let built = BuiltQuery::new(&patterns, options);
+        assert!(
+            default_config()
+                .extract_literal_arms(&built.candidate())
+                .is_none()
         );
-        assert!(default_config().extract_literal_arms(&query).is_none());
     }
 
     #[test]
@@ -221,10 +267,16 @@ mod candidate_tests {
     #[test]
     fn generic_width_uses_spec_width_for_literal_extraction() {
         let patterns = ["ab".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        let built = BuiltQuery::new(
+            &patterns,
+            SearchOptions {
+                input_encoding: InputEncoding::Raw,
+                ..SearchOptions::default()
+            },
+        );
         assert!(
             Config::new(GramWidth::new(2))
-                .extract_literal_arms(&query)
+                .extract_literal_arms(&built.candidate())
                 .is_some()
         );
     }
@@ -232,8 +284,17 @@ mod candidate_tests {
     #[test]
     fn fixed_string_narrows() {
         let patterns = ["beta.gamma".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::FIXED_STRINGS);
-        assert!(default_config().extract_literal_arms(&query).is_some());
+        let options = SearchOptions {
+            flags: SearchFlags::FIXED_STRINGS,
+            input_encoding: InputEncoding::Raw,
+            ..SearchOptions::default()
+        };
+        let built = BuiltQuery::new(&patterns, options);
+        assert!(
+            default_config()
+                .extract_literal_arms(&built.candidate())
+                .is_some()
+        );
     }
 
     #[test]

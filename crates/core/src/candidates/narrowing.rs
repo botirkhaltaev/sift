@@ -31,16 +31,6 @@ pub(crate) struct CandidateQuery<'q> {
 }
 
 impl<'q> CandidateQuery<'q> {
-    /// Build a candidate query from patterns and flags (in-crate unit tests).
-    #[cfg(test)]
-    pub(crate) const fn from_patterns(patterns: &'q [String], flags: CandidateFlags) -> Self {
-        Self {
-            patterns,
-            flags,
-            index_narrowing: IndexNarrowing::Enabled,
-        }
-    }
-
     pub(crate) fn new(query: &'q SearchQuery, prefilter: PrefilterCompatibility) -> Self {
         let mut flags = CandidateFlags::empty();
         if query.options.flags.contains(SearchFlags::FIXED_STRINGS) {
