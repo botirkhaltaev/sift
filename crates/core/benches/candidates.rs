@@ -7,8 +7,8 @@ use std::hint::black_box;
 use std::path::Path;
 
 use sift_core::candidates::{
-    CandidateFlags, CandidatePlanner, CandidateRequest, CandidateScope, CandidateSource,
-    CandidateSpec, CorpusMode, IndexFallback,
+    CandidateFlags, CandidateMaterialization, CandidatePlanner, CandidateRequest, CandidateScope,
+    CandidateSource, CandidateSpec, CorpusMode, IndexFallback,
 };
 use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder, VisibilityConfig};
 use sift_core::{
@@ -108,7 +108,7 @@ fn resolve(
         order: CandidateOrder::default(),
     };
     CandidatePlanner::new(&source, spec, request)
-        .resolve()
+        .resolve(CandidateMaterialization::Eager)
         .unwrap()
         .len()
 }
@@ -186,7 +186,7 @@ fn bench_candidate_planner_walk(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 CandidatePlanner::new(&source, spec, request)
-                    .resolve()
+                    .resolve(CandidateMaterialization::Eager)
                     .unwrap()
                     .len(),
             );

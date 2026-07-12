@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
 use sift_core::candidates::{
-    CandidatePlanner, CandidateRequest, CandidateScope, CandidateSelection, CandidateSource,
-    CandidateSpec, CorpusMode, IndexFallback,
+    CandidateMaterialization, CandidatePlanner, CandidateRequest, CandidateScope,
+    CandidateSelection, CandidateSource, CandidateSpec, CorpusMode, IndexFallback,
 };
 use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, InputRequest,
@@ -44,11 +44,11 @@ fn grep_finds_match_in_indexed_corpus() {
         order: CandidateOrder::default(),
     };
     let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
-        .resolve()
+        .resolve(CandidateMaterialization::Eager)
         .expect("candidates");
     let input_request = InputRequest::from_candidates();
     let inputs = input_request
-        .resolve(&candidates, InputExtent::Complete)
+        .resolve(candidates, InputExtent::Complete)
         .expect("inputs");
 
     let report = searcher.search(inputs, StatsMode::Off).expect("grep run");
@@ -83,7 +83,7 @@ fn candidate_planner_all_indexed_uses_index_when_metadata_missing() {
     };
 
     let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
-        .resolve()
+        .resolve(CandidateMaterialization::Eager)
         .expect("candidates");
 
     assert_eq!(candidates.len(), 2);

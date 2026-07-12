@@ -220,6 +220,20 @@ impl Index {
     }
 
     #[must_use]
+    pub fn candidate(&self, id: u32, request: MaterializeRequest<'_>) -> Option<crate::Candidate> {
+        match self {
+            Self::NGram(index) => index.candidate_from_id(id, request),
+        }
+    }
+
+    #[must_use]
+    pub const fn file_count(&self) -> usize {
+        match self {
+            Self::NGram(index) => index.file_count(),
+        }
+    }
+
+    #[must_use]
     pub(crate) fn all_files(&self, request: MaterializeRequest<'_>) -> Vec<crate::Candidate> {
         match self {
             Self::NGram(index) => index.all_files(request),

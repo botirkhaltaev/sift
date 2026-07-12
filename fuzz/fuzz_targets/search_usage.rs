@@ -99,12 +99,13 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
         order: Default::default(),
     };
     let Ok(candidates) =
-        CandidatePlanner::new(&source, CandidateSpec::from(&query), request).resolve()
+        CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
+            .resolve(sift_core::candidates::CandidateMaterialization::Eager)
     else {
         return;
     };
     let input_request = InputRequest::from_candidates();
-    let Ok(inputs) = input_request.resolve(&candidates, InputExtent::Complete) else {
+    let Ok(inputs) = input_request.resolve(candidates, InputExtent::Complete) else {
         return;
     };
     let _ = searcher.search(inputs, StatsMode::Off);

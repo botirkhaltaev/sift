@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use rayon::prelude::*;
 
 use crate::IndexCoverage;
+use crate::candidates::indexed::{CandidateMaterialization, IndexedCandidates, ResolvedCandidates};
 use crate::candidates::{
     CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, IndexFallback,
 };
@@ -82,7 +83,10 @@ impl<'a> CandidatePlanner<'a> {
     /// # Errors
     ///
     /// Returns an error if filesystem walking or ordering fails.
-    pub fn resolve(self) -> crate::Result<Vec<Candidate>> {
+    pub fn resolve(
+        self,
+        materialization: CandidateMaterialization,
+    ) -> crate::Result<ResolvedCandidates<'a>> {
         let index_narrowing = self.spec.index_narrowing();
         let resolved = self.request.resolve(index_narrowing);
         let index_plan = self.source.indexes.plan(&self.spec);
@@ -94,7 +98,13 @@ impl<'a> CandidatePlanner<'a> {
             snapshot_status,
             fallback: resolved.fallback,
         });
-        self.execute(strategy, index_plan, resolved.order, snapshot_status)
+        self.execute(
+            strategy,
+            index_plan,
+            resolved.order,
+            snapshot_status,
+            materialization,
+        )
     }
 
     fn execute(
@@ -103,12 +113,43 @@ impl<'a> CandidatePlanner<'a> {
         index_plan: CandidatePlan,
         order: crate::corpus::CandidateOrder,
         snapshot_status: SnapshotStatus,
-    ) -> crate::Result<Vec<Candidate>> {
+        materialization: CandidateMaterialization,
+    ) -> crate::Result<ResolvedCandidates<'a>> {
         let admission = strategy.filter_admission(snapshot_status);
         let matching = MaterializeRequest::Matching {
             filter: self.source.filter,
             admission,
         };
+        let defer = matches!(materialization, CandidateMaterialization::Deferred)
+            && !order.is_sorted()
+            && self.source.indexes.is_single_index();
+
+        if defer {
+            match strategy {
+                CandidateStrategy::UseIndex => {
+                    if let CandidatePlan::Narrowed { file_ids } = index_plan {
+                        return Ok(ResolvedCandidates::Indexed(IndexedCandidates::from_ids(
+                            file_ids,
+                            self.source.indexes,
+                            matching,
+                        )));
+                    }
+                }
+                CandidateStrategy::AllIndexed => {
+                    if let Some(count) = self.source.indexes.primary_file_count() {
+                        return Ok(ResolvedCandidates::Indexed(IndexedCandidates::all(
+                            count,
+                            self.source.indexes,
+                            matching,
+                        )));
+                    }
+                }
+                CandidateStrategy::None
+                | CandidateStrategy::Walk
+                | CandidateStrategy::MergeIndexAndWalk => {}
+            }
+        }
+
         let (raw, filtered) = match strategy {
             CandidateStrategy::None => (Vec::new(), true),
             CandidateStrategy::Walk => (
@@ -132,7 +173,7 @@ impl<'a> CandidatePlanner<'a> {
         } else {
             set.retain_matches(self.source.filter, admission)
         };
-        Ok(set.order(order)?.into_vec())
+        Ok(ResolvedCandidates::Ready(set.order(order)?.into_vec()))
     }
 
     const fn index_status(&self, index_plan: &CandidatePlan) -> IndexStatus {

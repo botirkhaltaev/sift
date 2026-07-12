@@ -15,7 +15,8 @@ pub use event::{
 };
 pub use hit::Match;
 pub use input::{
-    CandidateInputPlan, CandidateTransform, Input, InputExtent, InputIdentity, Inputs, SearchInputs,
+    CandidateInputPlan, CandidateTransform, Input, InputExtent, InputIdentity, Inputs,
+    ProgressiveCandidates, SearchInputs,
 };
 pub(crate) use matcher::PrefilterCompatibility;
 pub use mode::{SearchMode, ZeroCounts};

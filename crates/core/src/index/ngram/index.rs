@@ -228,7 +228,12 @@ impl Index {
             .collect()
     }
 
-    fn candidate_from_id(
+    #[must_use]
+    pub(crate) const fn file_count(&self) -> usize {
+        self.storage.files.len()
+    }
+
+    pub(crate) fn candidate_from_id(
         &self,
         id: u32,
         request: crate::index::MaterializeRequest<'_>,
