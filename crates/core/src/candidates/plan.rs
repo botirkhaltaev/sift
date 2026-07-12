@@ -5,6 +5,7 @@ use crate::corpus::Candidate;
 use crate::corpus::filter::FilterAdmission;
 use crate::corpus::order::CandidateOrder;
 use crate::corpus::walk::FileWalk;
+use crate::index::IndexedCorpus;
 use crate::index::kinds::IndexQueryResult;
 
 use crate::candidates::source::CandidateSource;
@@ -17,6 +18,7 @@ pub(crate) struct CandidatePlan {
     pub discovery: PlannedDiscovery,
     pub order: CandidateOrder,
     pub query_result: IndexQueryResult,
+    pub indexed_corpus: IndexedCorpus,
 }
 
 /// How candidate discovery will run at resolve time.
@@ -47,18 +49,23 @@ impl CandidatePlan {
             discovery,
             order,
             query_result,
+            indexed_corpus,
         } = self;
         let candidates = match discovery {
             PlannedDiscovery::Empty => Candidates::empty(),
             PlannedDiscovery::Walk => Candidates::from(Self::walk(source)?),
-            PlannedDiscovery::Index { admission } => {
-                source
-                    .indexes
-                    .indexed_candidates(query_result, source.filter, admission)
-            }
-            PlannedDiscovery::Merge { admission } => {
-                Candidates::from(Self::merge(source, query_result, admission)?)
-            }
+            PlannedDiscovery::Index { admission } => source.indexes.indexed_candidates(
+                query_result,
+                &indexed_corpus,
+                source.filter,
+                admission,
+            ),
+            PlannedDiscovery::Merge { admission } => Candidates::from(Self::merge(
+                source,
+                query_result,
+                admission,
+                &indexed_corpus,
+            )?),
         };
         Self::order(candidates, order)
     }
@@ -72,6 +79,7 @@ impl CandidatePlan {
         source: &CandidateSource<'_>,
         query_result: IndexQueryResult,
         admission: FilterAdmission,
+        indexed_corpus: &IndexedCorpus,
     ) -> crate::Result<Vec<Candidate>> {
         let IndexQueryResult::Matched { file_ids } = query_result else {
             return Self::walk(source);
@@ -80,7 +88,7 @@ impl CandidatePlan {
             .indexes
             .hydrate_rows(&file_ids, source.filter, admission);
         let walked = FileWalk::from_filter(source.filter)
-            .candidates_matching(source.indexes.indexed_corpus().unindexed_files())?;
+            .candidates_matching(indexed_corpus.unindexed_files())?;
         let walked = source.filter.retain(walked, FilterAdmission::Full);
         let mut seen: HashSet<PathBuf> = candidates
             .iter()
