@@ -78,7 +78,7 @@ Today the default configured index is `ngram-3`, a runtime-width N-gram index. A
 
 | Path | Role |
 |------|------|
-| `crates/core/` | Index registry, query planner, search engine |
+| `crates/core/` | Index lifecycle, candidate planning, search engine |
 | `crates/cli/` | `sift` binary (ripgrep-compatible flags) |
 | `benchsuite/` | Comparative rg vs sift benchmarks + chart generation |
 | `fuzz/` | Cargo-fuzz targets |

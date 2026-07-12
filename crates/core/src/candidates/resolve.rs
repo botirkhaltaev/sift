@@ -72,10 +72,7 @@ impl CandidatePlan {
         Ok(candidates)
     }
 
-    fn order(
-        candidates: Candidates<'_>,
-        order: CandidateOrder,
-    ) -> crate::Result<Candidates<'_>> {
+    fn order(candidates: Candidates<'_>, order: CandidateOrder) -> crate::Result<Candidates<'_>> {
         if !order.is_sorted() {
             return Ok(candidates);
         }

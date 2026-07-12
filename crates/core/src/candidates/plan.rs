@@ -56,11 +56,11 @@ impl CandidatePlanner {
         selection: CandidateSelection,
         coverage: CandidateCoverage,
     ) -> CandidatePlan {
-        let query_result = source.indexes.query(query);
+        let narrowed = source.indexes.query(query);
         let index_query = query.index_query();
         let fallback = selection.fallback();
         let snapshot_status = Self::snapshot_status(source, selection);
-        let index_status = Self::index_status(source, &query_result);
+        let index_status = Self::index_status(source, &narrowed);
         let discovery = Self::discovery(
             selection,
             coverage,
@@ -69,10 +69,24 @@ impl CandidatePlanner {
             snapshot_status,
             fallback,
         );
+        let query_result = Self::resolve_query_result(narrowed, coverage);
         CandidatePlan {
             discovery,
             order: selection.order(),
             query_result,
+        }
+    }
+
+    fn resolve_query_result(
+        narrowed: IndexQueryResult,
+        coverage: CandidateCoverage,
+    ) -> IndexQueryResult {
+        if coverage == CandidateCoverage::Complete
+            && matches!(narrowed, IndexQueryResult::Matched { .. })
+        {
+            IndexQueryResult::AllIndexed
+        } else {
+            narrowed
         }
     }
 

@@ -225,6 +225,53 @@ fn high_level_grep_files_without_match_selects_nonmatching_files() {
 }
 
 #[test]
+fn high_level_grep_files_without_match_uses_full_corpus_with_index() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("create corpus");
+    fs::write(corpus.join("a.txt"), "hello\n").expect("write a");
+    fs::write(corpus.join("b.txt"), "goodbye\n").expect("write b");
+
+    let sift_dir = tmp.path().join(".sift");
+    super::common::build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
+    let source = CandidateSource {
+        indexes: &indexes,
+        filter: &filter,
+        store_meta: None,
+    };
+
+    let report = Grep::new(source)
+        .search(GrepRequest {
+            query: SearchQueryBuilder::new(vec!["hello".to_string()])
+                .options(SearchOptions::default())
+                .build()
+                .expect("query"),
+            selection: CandidateSelection::Index {
+                fallback: IndexFallback::WalkOnStaleSnapshot,
+                order: CandidateOrder::default(),
+            },
+            streams: Inputs::empty(),
+            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+            mode: SearchMode::FilesWithoutMatch,
+            stats: StatsMode::Off,
+        })
+        .expect("grep search");
+
+    assert!(report.matched);
+    assert!(report.selected);
+    assert_eq!(report.files.iter().filter(|file| file.selected).count(), 1);
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|file| file.selected && file.path.ends_with("b.txt"))
+    );
+}
+
+#[test]
 fn high_level_grep_files_without_match_is_not_selected_when_all_files_match() {
     let tmp = TempDir::new().expect("tempdir");
     let corpus = tmp.path().join("corpus");
