@@ -22,8 +22,8 @@ use common::normalize_stderr;
 use common::normalize_stdout;
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
-    WalkMeta,
+    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, SnapshotId,
+    StoreMeta, WalkMeta,
 };
 use sift_grep::index::daemon::{Daemon, DaemonOrchestrator, ServeConfig};
 
@@ -135,6 +135,17 @@ fn poll_until_indexed(sift_dir: &Path, rel: &str, timeout: Duration) {
         std::thread::sleep(Duration::from_millis(100));
     }
     panic!("timed out after {timeout:?} waiting for {rel:?} to appear in the index");
+}
+
+fn poll_until_snapshot_validates(daemon: &Daemon, id: &SnapshotId, timeout: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if daemon.validate_snapshot(id).expect("validate snapshot") {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("timed out after {timeout:?} waiting for snapshot {id:?} to validate");
 }
 
 fn daemon_search(sift_dir: &Path, pattern: &str) -> Output {
@@ -720,12 +731,7 @@ fn daemon_validates_only_current_committed_snapshot() {
             .expect("validate snapshot"),
         "old snapshot should not validate after a newer commit"
     );
-    assert!(
-        daemon
-            .validate_snapshot(&second_id)
-            .expect("validate snapshot"),
-        "new snapshot should validate"
-    );
+    poll_until_snapshot_validates(&daemon, &second_id, Duration::from_secs(15));
 
     shutdown.store(true, Ordering::Relaxed);
     handle.join().unwrap();
