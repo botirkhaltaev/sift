@@ -62,7 +62,7 @@ Linux kernel source tree, 79K files, 1.3 GB. End-to-end CLI wall-clock (includes
 
 ## Architecture
 
-Sift is built around **composable on-disk indexes**. The `Indexes` registry opens all configured indexes under a `.sift` directory and intersects their candidate sets at query time.
+Sift is built around **composable on-disk indexes**. `IndexStore` builds snapshots; `Indexes` opens them for query-time narrowing and intersects multi-index results. `Grep` resolves candidates and runs search.
 
 ```
   pattern --> Planner --> [ngram-3] [Future Index B] [Future Index C]

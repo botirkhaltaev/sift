@@ -14,6 +14,8 @@ use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
 
 /// Identity of a usable index: everything needed to trust or validate it.
+///
+/// `snapshot` is `None` for in-memory snapshots built with [`Snapshot::from_indexes`].
 pub struct IndexAvailability<'a> {
     pub root: &'a Path,
     pub corpus: CorpusKind,
@@ -33,7 +35,7 @@ impl Indexes {
     /// Returns [`IndexError::InvalidManifest`] if a snapshot manifest is
     /// malformed, or [`IndexError::Trigram`] if a trigram index is malformed.
     ///
-    /// Returns an empty registry if no current snapshot exists (walk fallback).
+    /// Returns an empty `Indexes` when no current snapshot exists (walk fallback).
     pub fn open(sift_dir: &Path) -> Result<Self, IndexError> {
         let snapshot = Snapshot::open_current(sift_dir).map_err(|e| match e {
             crate::Error::Index(ie) => ie,
@@ -55,7 +57,7 @@ impl Indexes {
         Self { snapshot }
     }
 
-    /// Whether this registry has a usable snapshot for candidate discovery.
+    /// Whether opened indexes are usable for candidate discovery.
     #[must_use]
     pub fn availability(&self) -> Option<IndexAvailability<'_>> {
         if self.snapshot.is_empty() {
@@ -120,7 +122,7 @@ impl Indexes {
         filter: &CandidateFilter,
         admission: FilterAdmission,
     ) -> Option<Candidate> {
-        self.canonical()?.hydrate_row(id, filter, admission)
+        self.lead_index()?.hydrate_row(id, filter, admission)
     }
 
     pub(crate) fn hydrate_rows(
@@ -129,13 +131,14 @@ impl Indexes {
         filter: &CandidateFilter,
         admission: FilterAdmission,
     ) -> Vec<Candidate> {
-        let Some(index) = self.canonical() else {
+        let Some(index) = self.lead_index() else {
             return Vec::new();
         };
         index.hydrate_rows(file_ids, filter, admission)
     }
 
-    fn canonical(&self) -> Option<&Index> {
+    /// Manifest-first index: owns the file table used to hydrate candidates.
+    fn lead_index(&self) -> Option<&Index> {
         self.snapshot.indexes().first()
     }
 

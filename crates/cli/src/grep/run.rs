@@ -338,12 +338,13 @@ impl Run {
         session: &PreparedCandidateSource,
         daemon: Option<&Daemon>,
     ) -> SnapshotTrust {
-        daemon.and_then(|daemon| {
-            session.indexes.availability().and_then(|index| {
-                let id = index.snapshot?;
-                Some(daemon.validate_snapshot(&id))
+        daemon
+            .and_then(|daemon| {
+                session.indexes.availability().and_then(|index| {
+                    let id = index.snapshot?;
+                    Some(daemon.validate_snapshot(&id))
+                })
             })
-        })
             .map_or(SnapshotTrust::Unvalidated, |validation| match validation {
                 Ok(true) => SnapshotTrust::Validated,
                 Ok(false) => SnapshotTrust::Stale,

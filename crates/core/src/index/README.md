@@ -1,52 +1,68 @@
 # index/
 
-Index registry and concrete index implementations. Owns configured index identity, snapshot lifecycle orchestration, and query-time dispatch.
+Composable index lifecycle, snapshot persistence, and search-time dispatch.
+
+## Layers
+
+| Layer | Types | Role |
+|-------|-------|------|
+| Lifecycle | `IndexStore`, `IndexConfig`, `StoreMeta` | Build, update, publish snapshots |
+| Snapshot | `Snapshot`, `SnapshotId` | Immutable opened snapshot + indexes |
+| Search | `Indexes`, `IndexAvailability`, `IndexedCorpus` | Query, intersect, hydrate candidates |
+| Dispatch | `Index`, `IndexConfig` | Per-kind lifecycle and query routing |
+
+`IndexStore` owns write transactions. `Snapshot::open_current` and `Indexes::from_snapshot` own read/search. Candidate resolution lives in `Grep` / `CandidatePlanner`, not on `Indexes`.
 
 ## Design
 
-Sift's index layer is built for composition. `IndexConfig` records configured/persisted index identity, `IndexStore` owns lifecycle transactions (build, open, update), and the `Index` enum drives query-time dispatch (candidate narrowing). The `Indexes` registry opens all configured indexes in a `.sift` snapshot and intersects their candidate sets, so multiple indexes together produce tighter narrowing than any single index alone.
-
-Today, the default configured index is `IndexConfig::ngram(GramWidth::TRIGRAM)` / `Index::NGram`, backed by a runtime-width N-gram implementation. Adding a new index family means adding a configured identity variant and an opened runtime variant. Everything above the index layer -- query planning, search execution, the CLI -- works unchanged.
+Multiple configured indexes can coexist. Each narrows candidates independently; `Indexes` intersects their query results. Today the default is `IndexConfig::ngram(GramWidth::TRIGRAM)` / `Index::NGram`.
 
 ```
 index/
-  ngram/       -- Runtime-width N-gram index (default width 3)
-  (future)     -- AST index, dependency graph, vector index, etc.
+  search.rs    -- Indexes: open snapshot, query, hydrate
+  snapshot/    -- atomic persistence, leases, manifests
+  store.rs     -- IndexStore: build/update/publish
+  ngram/       -- runtime-width N-gram index (default width 3)
 ```
 
 ## Modules
 
 | Module | Description |
 |--------|-------------|
-| [`kinds.rs`](kinds.rs) | `IndexConfig` enum (configured identity), `Index` enum (query dispatch), `FileId`, `IndexId` |
-| [`registry.rs`](registry.rs) | `Indexes`: opens all indexes in a snapshot, combines candidate plans |
-| [`store.rs`](store.rs) | `IndexStore`: snapshot-based persistence, atomic build/update/publish |
-| [`config.rs`](config.rs) | `IndexBuildConfig`, `CorpusSpec`, `CorpusKind`, `WalkOptions` |
-| [`meta.rs`](meta.rs) | `StoreMeta`: persistent manifest (`meta.json`) with corpus, walk, filter, and index configuration metadata |
-| [`artifacts.rs`](artifacts.rs) | `IndexSource`, `IndexDestination`: read/write dispatch for directories vs snapshots |
-| [`snapshot/`](snapshot/) | Snapshot store: atomic persistence, leases, manifests |
-| [`error.rs`](error.rs) | `IndexError` |
-| [`ngram/`](ngram/) | Runtime-width N-gram index implementation |
+| [`kinds.rs`](kinds.rs) | `IndexConfig`, `Index`, `FileId`, `IndexId` |
+| [`search.rs`](search.rs) | `Indexes`: snapshot search facade |
+| [`snapshot/mod.rs`](snapshot/mod.rs) | `Snapshot::open_current`, `Snapshot::from_indexes` |
+| [`store.rs`](store.rs) | `IndexStore`: lifecycle orchestration |
+| [`paths.rs`](paths.rs) | `IndexedCorpus`: covered path set |
+| [`config.rs`](config.rs) | `IndexBuildConfig`, `CorpusSpec`, `CorpusKind` |
+| [`meta.rs`](meta.rs) | `StoreMeta` (`.sift/meta.json`) |
+| [`artifacts.rs`](artifacts.rs) | `IndexSource`, `IndexDestination` |
+| [`ngram/`](ngram/) | N-gram implementation |
 
 ## API
 
 ```rust
-use sift_core::{FileId, GramWidth, Index, IndexConfig, IndexStore, Indexes};
+use sift_core::{GramWidth, Index, IndexConfig, IndexStore, Indexes, Snapshot};
 
-// Build via IndexStore (snapshot-managed)
+// Lifecycle
 let mut store = IndexStore::open_or_create(&sift_dir, &meta)?;
 store.build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])?;
 
-// Open all indexes for search
+// Search (committed snapshot)
 let indexes = Indexes::open(&sift_dir)?;
-let plan = indexes.plan(&query_spec);
+
+// Tests/benches (in-memory snapshot)
+let snapshot = Snapshot::from_indexes(root, vec![Index::NGram(index)]);
+let indexes = Indexes::from_snapshot(snapshot);
 ```
+
+Resolve candidates through `Grep::resolve_candidates`, not `Indexes` directly.
 
 ## Adding a New Index Kind
 
-1. Add a variant to `IndexConfig` and `Index` in `kinds.rs`.
-2. Implement configured lifecycle routing through `IndexConfig` and query dispatch through `Index`.
-3. Implement `root`, `corpus_kind`, `plan`, `all_files`, and `coverage` in the `Index` match arms.
-4. Create a sibling module to `ngram/` with the index implementation.
+1. Add variants to `IndexConfig` and `Index` in `kinds.rs`.
+2. Route lifecycle through `IndexConfig` and queries through `Index`.
+3. Implement `query`, `hydrate_row`, `all_file_ids`, `coverage` on the `Index` arm.
+4. Add a sibling module to `ngram/`.
 
-The `Indexes` registry, `IndexStore`, snapshot layer, query planner, and CLI require no changes.
+`Indexes`, `IndexStore`, snapshot layer, candidate planner, and CLI require no changes.

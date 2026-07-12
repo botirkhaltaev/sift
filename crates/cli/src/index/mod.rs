@@ -154,7 +154,7 @@ impl IndexJob {
             return ExitCode::from(2);
         }
 
-        if let Err(e) = Self::reconcile(&mut store, &meta, &[], &self.sift_dir) {
+        if let Err(e) = SnapshotRefresh::new(&self.sift_dir, &meta, &[]).run(&mut store) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
@@ -279,37 +279,53 @@ impl IndexJob {
             self.indexes.clone(),
         )
     }
+}
+
+/// CLI orchestration for snapshot build or update.
+pub struct SnapshotRefresh<'a> {
+    sift_dir: &'a Path,
+    meta: &'a StoreMeta,
+    paths: &'a [PathBuf],
+}
+
+impl<'a> SnapshotRefresh<'a> {
+    #[must_use]
+    pub const fn new(sift_dir: &'a Path, meta: &'a StoreMeta, paths: &'a [PathBuf]) -> Self {
+        Self {
+            sift_dir,
+            meta,
+            paths,
+        }
+    }
 
     /// Rebuild or update index files.
     ///
-    /// `paths` empty → full corpus. Non-empty → partial rel-paths only.
+    /// Empty `paths` → full corpus. Non-empty → partial rel-paths only.
     ///
     /// # Errors
     ///
     /// Propagates build/update failures from the underlying index kinds.
-    pub fn reconcile(
-        store: &mut IndexStore,
-        meta: &StoreMeta,
-        paths: &[PathBuf],
-        sift_dir: &Path,
-    ) -> sift_core::Result<ReconcileOutcome> {
-        let build = meta.index_config();
-        let configs = &meta.indexes;
-        let (snapshot_id, changed) = if paths.is_empty() {
+    pub fn run(self, store: &mut IndexStore) -> sift_core::Result<ReconcileOutcome> {
+        let build = self.meta.index_config();
+        let configs = &self.meta.indexes;
+        let (snapshot_id, changed) = if self.paths.is_empty() {
             if store.current_id().is_none() {
                 (SnapshotId::new(store.build(configs, &build, &[])?), true)
             } else {
                 match store.update(configs, &build, &[])? {
                     Some(id) => (SnapshotId::new(id), true),
-                    None => (Self::current_snapshot_id(store, sift_dir)?, false),
+                    None => (Self::current_snapshot_id(store, self.sift_dir)?, false),
                 }
             }
         } else if store.current_id().is_none() {
-            (SnapshotId::new(store.build(configs, &build, paths)?), true)
+            (
+                SnapshotId::new(store.build(configs, &build, self.paths)?),
+                true,
+            )
         } else {
-            match store.update(configs, &build, paths)? {
+            match store.update(configs, &build, self.paths)? {
                 Some(id) => (SnapshotId::new(id), true),
-                None => (Self::current_snapshot_id(store, sift_dir)?, false),
+                None => (Self::current_snapshot_id(store, self.sift_dir)?, false),
             }
         };
         Ok(ReconcileOutcome {

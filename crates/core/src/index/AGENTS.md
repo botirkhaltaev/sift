@@ -2,51 +2,61 @@
 
 ## Responsibility
 
-Index registry, configured index identity, lifecycle dispatch, and concrete index implementations. Owns build/open/update transactions for all configured indexes and the query-time candidate narrowing registry.
+Configured index identity, snapshot lifecycle, and search-time dispatch.
 
-## Composable Index Architecture
+## Layer split
 
-The index layer is designed for multiple coexisting index types:
+Do not mix lifecycle, snapshot I/O, and search orchestration on one type.
 
-- `IndexConfig` enum: configured/persisted index identity. One variant per index family/configuration.
-- `Index` enum: query-time dispatch (candidates, all_files). One variant per index type.
-- `Indexes` registry: opens all configured indexes from a snapshot and intersects their candidate sets.
+| Layer | Types | Owns |
+|-------|-------|------|
+| Lifecycle | `IndexStore`, `StoreMeta` | `build`, `update`, `current_id` |
+| Snapshot | `Snapshot`, `SnapshotId` | `open_current`, `from_indexes`, opened `Index` vec |
+| Search | `Indexes`, `IndexAvailability`, `IndexedCorpus` | `query`, `file_ids`, `indexed_candidates`, `hydrate_*` |
+| Kind dispatch | `Index`, `IndexConfig` | per-kind lifecycle + `query` |
 
-Today the default configured index is `IndexConfig::ngram(GramWidth::TRIGRAM)` / `Index::NGram`, backed by `ngram/`. Future index families (AST, dependency graph, vector, etc.) are added as sibling variants and sibling modules.
+CLI owns daemon orchestration (`SnapshotRefresh`, path debouncing). Core does not expose `reconcile`, `unindexed_hit_paths`, or walk-merge helpers on `Indexes`.
 
-## Key Types
+## Composable search API
 
-- `IndexConfig`: configured identity; drives persisted names, artifact names, and lifecycle routing.
-- `Index`: opened index instance for query-time dispatch; drives `candidates`, `all_files`.
-- `Indexes`: registry that opens all indexes in a `.sift` snapshot and intersects candidate sets.
-- `IndexStore`: snapshot-based persistence orchestrator; atomic build/update/publish.
-- `StoreMeta`: persistent manifest (`.sift/meta.json`) recording corpus, walk, filter, and index configuration.
-- `IndexSource` / `IndexDestination`: domain enums for read/write dispatch (directory vs snapshot).
-- `FileId`: type-safe file identifier within an index.
-- `IndexId`: type-safe index identifier in a multi-index search.
-- `Candidate`: single file candidate with `rel_path`, `abs_path`, filtering methods.
-- `NGramIndex`: runtime-width N-gram implementation opened from persisted storage.
+Callers compose primitives. Do not add use-case constructors or search shortcuts on `Indexes`.
+
+| Do | Don't |
+|----|-------|
+| `Snapshot::from_indexes` + `Indexes::from_snapshot` | `from_single`, `from_test_*` |
+| `Grep::resolve_candidates` / `CandidatePlanner` | `Indexes::candidates(SearchQuery, …)` |
+| `indexed_corpus().retain_unindexed(paths)` | `unindexed_hit_paths`, daemon filters in core |
+| `hydrate_row` / `hydrate_rows` | `materialize_*` |
+
+`lead_index()` (private) is the manifest-first index used to hydrate file rows. Multi-index intersection happens in `query` / `file_ids`, not at hydrate time.
+
+## Key types
+
+- `IndexConfig` — configured/persisted identity
+- `Index` — opened runtime dispatch (`query`, `hydrate_*`, `coverage`)
+- `Indexes` — search facade over one `Snapshot`
+- `IndexStore` — write-path orchestration only
+- `IndexedCorpus` — cheap clone of covered rel-paths; `retain_unindexed` filters paths
+- `IndexSource` / `IndexDestination` — directory vs snapshot I/O
 
 ## Conventions
 
-- Each index family lives in its own submodule (for example, `ngram/`).
-- `grep/` only talks to `Index` enum, never to concrete index internals.
-- `Index::plan` may over-return candidates but must not under-return (conservative).
-- Each configured index narrows independently; the registry combines results.
-- Keep index-family internals behind the family module; do not leak storage or extraction mechanics into callers.
+- `grep/` and `candidates/` talk to `Indexes` and `Index`, never `ngram/` internals.
+- `Index::query` may over-return; it must not under-return.
+- Each configured index narrows independently; `Indexes` intersects matched file-id sets.
+- `IndexAvailability.snapshot` is `None` for in-memory snapshots (`Snapshot::from_indexes`).
 
-## Adding a New Index Kind
+## Adding a new index kind
 
-1. Add a variant to `IndexConfig` and `Index` in `kinds.rs`.
-2. Implement configured lifecycle routing in `IndexConfig` and query-time dispatch in `Index`.
-3. Implement `root`, `corpus_kind`, `candidates`, `all_files` in the `Index` match arms.
-4. Create a sibling module to `ngram/` with the implementation.
+1. Variants in `kinds.rs`.
+2. Lifecycle on `IndexConfig`; query/hydrate on `Index`.
+3. Sibling module under `index/`.
 
-No changes needed to `Indexes`, `IndexStore`, `QueryPlanner`, or `grep/`.
+No changes to `Indexes`, `IndexStore`, `CandidatePlanner`, or `grep/`.
 
 ## Do NOT
 
-- Add N-gram specialization logic outside `ngram/`.
-- Make index implementations depend on `grep/` or `query/` internals.
-- Change enum signatures without updating all match arms.
-- Have one index kind depend on another.
+- Add N-gram logic outside `ngram/`.
+- Add daemon or CLI orchestration to core.
+- Add free functions — use methods on the owning type.
+- Add parallel `*_with_*` / test-only constructors.

@@ -2,65 +2,62 @@
 
 ## Responsibility
 
-Core engine for composable indexed code search: index registry, query planning, candidate narrowing, and grep-style matching.
+Composable indexed code search: index lifecycle, candidate planning, and grep-style matching.
 
-The engine is designed around multiple coexisting configured indexes. `IndexConfig` records configured/persisted identity, `IndexStore` owns build/open/update snapshot transactions, and `Indexes` is the query-time facade (`availability`, `candidates`). Today the default configured index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
+## Architecture
+
+```
+IndexStore (lifecycle)  →  Snapshot::open_current  →  Indexes (search)
+CandidatePlanner::plan  →  CandidatePlan::resolve  →  Grep::search
+```
+
+- `IndexStore` — build/update/publish only
+- `Snapshot` / `Indexes` — read/search (`from_snapshot`, `query`, `hydrate_*`)
+- `Grep` — single public entry for resolve + search
+
+Today the default index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
 
 ## Public API
 
-Primary search entrypoint (re-exported from `lib.rs`):
+Search (re-exported from `lib.rs`):
 
-- `Grep`, `GrepRequest`, `Grep::resolve_candidates`, `Searcher`, `Report`, `SearchInputs`, `Inputs`, `Input`
-- Index types: `Indexes`, `IndexAvailability`, `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`
-- Candidate types: `Candidates`, `CandidateSelection`, `CandidateCoverage`, `CandidateSource`
+- `Grep`, `GrepRequest`, `Grep::resolve_candidates`, `Searcher`, `Report`
+- `Indexes`, `Snapshot`, `IndexAvailability`, `IndexedCorpus`
+- `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `GramWidth`
+- `Candidates`, `CandidateSelection`, `CandidateSource`, `CandidateCoverage`
 
-Internal modules (`pub(crate)`): `corpus/`, `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
+Internal: `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
 
-## Source Map
+## Source map
 
 | Module | Responsibility |
 |--------|----------------|
-| `index/` | `Indexes` registry, `IndexConfig`, `Index` enum, `IndexStore`, snapshot persistence |
-| `index/ngram/` | Runtime-width N-gram index: build, load, search, storage |
-| `grep/` | Public search API — `Grep::search`, `Grep::stream`, `Grep::resolve_candidates` |
-| `candidates/` | `CandidateSource`, `plan`, `resolve`, `resolved` (`Candidates`) |
-| `grep/input.rs` | `ByteInput`, stream helpers on `Inputs` |
-| `search/input.rs` | `Input`, `Inputs`, `InputConversion`, `SearchInputs` |
-| `search/searcher.rs` | `Searcher` execution by `SearchBound` |
-| `candidates/plan.rs` | Pure `CandidatePlanner::plan` → `CandidatePlan` |
-| `candidates/resolve.rs` | `CandidatePlan::resolve` I/O boundary |
-| `candidates/resolved.rs` | `Candidates` enum (`IntoIterator`, `into_vec`) |
-| `candidates/selection.rs` | `CandidateSelection`, `CandidateCoverage`, `IndexFallback` |
-| `candidates/query.rs` | `CandidateQuery` projection for index queries |
-| `candidates/source.rs` | `CandidateSource` resolve inputs |
-| `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
-| `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |
+| `index/search.rs` | `Indexes` search facade |
+| `index/snapshot/` | `Snapshot`, persistence |
+| `index/store.rs` | `IndexStore` lifecycle |
+| `index/ngram/` | N-gram implementation |
+| `grep/` | Public search API |
+| `candidates/` | plan → resolve → `Candidates` |
+| `corpus/` | `Candidate`, filters, walk |
 
-Output formatting lives in `sift-grep/src/format/` (not in core).
-
-## Search Flow
+## Search flow
 
 ```text
 Grep::execute
   1. coverage   ← GrepRequest::candidate_coverage()
-  2. plan       ← CandidatePlanner::plan(source, candidate_query, selection, coverage)
-  3. candidates ← plan.resolve(source)  // lazy by default; into_vec() materializes all
-  4. search     ← Searcher::execute(SearchInputs { candidates, streams, conversion }, …)
+  2. plan       ← CandidatePlanner::plan(source, query, selection, coverage)
+  3. candidates ← plan.resolve(source)
+  4. search     ← Searcher::execute(...)
 ```
 
-`SearchBound::FirstMatch` iterates candidates lazily. `SearchBound::Exhaustive` calls `into_vec()` for parallel materialization.
-
-## Error Ownership
-
-`grep/error.rs` defines `grep::Error`. `crate::Error` wraps it as `Error::Search` (re-exported as `GrepError`).
+Planning is pure; `CandidatePlan::resolve` is the only candidate I/O boundary.
 
 ## Invariants
 
-- **Determinism:** parallel search merges hits sorted by `(file, line, text)`.
-- **Index file order:** lexicographic relative paths (stable file IDs).
-- **Conservative candidates:** index narrowing may over-return candidates but must not under-return.
-- **Index independence:** each configured index narrows candidates independently; the registry intersects results.
-- **Planning is pure; resolve is I/O:** `CandidatePlanner::plan` caches `IndexQueryResult`; `CandidatePlan::resolve` is the single candidate I/O boundary.
+- Conservative narrowing: indexes may over-return, never under-return.
+- Multi-index intersection in `Indexes::query`, not per-caller.
+- No free helper functions — logic lives on the owning type.
+- No callback/`FnOnce` APIs.
 
 ## Testing
 
@@ -68,24 +65,11 @@ Grep::execute
 cargo test -p sift-core
 ```
 
-Integration tests: `crates/core/tests/`. Unit tests co-located in `#[cfg(test)]` blocks.
-
-## Benchmarking
-
-```bash
-cargo bench -p sift-core --bench query
-cargo bench -p sift-core --bench index
-cargo bench -p sift-core --bench grep
-cargo bench -p sift-core --bench candidates
-```
-
-See [`benches/README.md`](benches/README.md).
-
 ## Do NOT
 
-- Break the public API without updating the CLI crate.
+- Break public API without updating CLI.
 - Add `unsafe` outside `index/mmap.rs`.
-- Have `grep/` import from concrete index modules such as `index::ngram`. Use `Index` enum only.
-- Put stdout or output formatting in core — that belongs in `sift-grep`.
-- Expose raw index file ids or registry internals outside `index/`.
-- Mix planning decisions with I/O in one function.
+- Import `index::ngram` from `grep/`.
+- Put stdout formatting in core.
+- Expose `Indexes::candidates` or test-only constructors.
+- Mix planning with I/O.

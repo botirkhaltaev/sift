@@ -56,6 +56,15 @@ impl IndexedCorpus {
         Arc::try_unwrap(self.paths).unwrap_or_else(|paths| (*paths).clone())
     }
 
+    /// Drop paths already present in this indexed corpus.
+    #[must_use]
+    pub fn retain_unindexed(self, paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+        paths
+            .into_iter()
+            .filter(|path| !self.contains(path))
+            .collect()
+    }
+
     pub(crate) const fn unindexed_files(&self) -> UnindexedFiles<'_> {
         UnindexedFiles { indexed: self }
     }

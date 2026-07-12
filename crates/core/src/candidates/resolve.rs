@@ -28,56 +28,59 @@ impl CandidatePlan {
         } = self;
         let candidates = match discovery {
             PlannedDiscovery::Empty => Candidates::empty(),
-            PlannedDiscovery::Walk => Candidates::from(walk_candidates(source)?),
+            PlannedDiscovery::Walk => Candidates::from(Self::walk(source)?),
             PlannedDiscovery::Index { admission } => {
                 source
                     .indexes
                     .indexed_candidates(query_result, source.filter, admission)
             }
             PlannedDiscovery::Merge { admission } => {
-                Candidates::from(merge_index_and_walk(source, query_result, admission)?)
+                Candidates::from(Self::merge(source, query_result, admission)?)
             }
         };
-        apply_order(candidates, order)
+        Self::order(candidates, order)
     }
-}
 
-fn walk_candidates(source: &CandidateSource<'_>) -> crate::Result<Vec<Candidate>> {
-    let walked = FileWalk::from_filter(source.filter).candidates()?;
-    Ok(source.filter.retain(walked, FilterAdmission::Full))
-}
+    fn walk(source: &CandidateSource<'_>) -> crate::Result<Vec<Candidate>> {
+        let walked = FileWalk::from_filter(source.filter).candidates()?;
+        Ok(source.filter.retain(walked, FilterAdmission::Full))
+    }
 
-fn merge_index_and_walk(
-    source: &CandidateSource<'_>,
-    query_result: IndexQueryResult,
-    admission: FilterAdmission,
-) -> crate::Result<Vec<Candidate>> {
-    let IndexQueryResult::Matched { file_ids } = query_result else {
-        return walk_candidates(source);
-    };
-    let mut candidates = source
-        .indexes
-        .hydrate_rows(&file_ids, source.filter, admission);
-    let walked = FileWalk::from_filter(source.filter)
-        .candidates_matching(source.indexes.indexed_corpus().unindexed_files())?;
-    let walked = source.filter.retain(walked, FilterAdmission::Full);
-    let mut seen: HashSet<PathBuf> = candidates
-        .iter()
-        .map(|candidate| candidate.rel_path().to_path_buf())
-        .collect();
-    for candidate in walked {
-        if seen.insert(candidate.rel_path().to_path_buf()) {
-            candidates.push(candidate);
+    fn merge(
+        source: &CandidateSource<'_>,
+        query_result: IndexQueryResult,
+        admission: FilterAdmission,
+    ) -> crate::Result<Vec<Candidate>> {
+        let IndexQueryResult::Matched { file_ids } = query_result else {
+            return Self::walk(source);
+        };
+        let mut candidates = source
+            .indexes
+            .hydrate_rows(&file_ids, source.filter, admission);
+        let walked = FileWalk::from_filter(source.filter)
+            .candidates_matching(source.indexes.indexed_corpus().unindexed_files())?;
+        let walked = source.filter.retain(walked, FilterAdmission::Full);
+        let mut seen: HashSet<PathBuf> = candidates
+            .iter()
+            .map(|candidate| candidate.rel_path().to_path_buf())
+            .collect();
+        for candidate in walked {
+            if seen.insert(candidate.rel_path().to_path_buf()) {
+                candidates.push(candidate);
+            }
         }
+        Ok(candidates)
     }
-    Ok(candidates)
-}
 
-fn apply_order(candidates: Candidates<'_>, order: CandidateOrder) -> crate::Result<Candidates<'_>> {
-    if !order.is_sorted() {
-        return Ok(candidates);
+    fn order(
+        candidates: Candidates<'_>,
+        order: CandidateOrder,
+    ) -> crate::Result<Candidates<'_>> {
+        if !order.is_sorted() {
+            return Ok(candidates);
+        }
+        let mut items = candidates.into_vec();
+        order.order(&mut items)?;
+        Ok(Candidates::from(items))
     }
-    let mut items = candidates.into_vec();
-    order.order(&mut items)?;
-    Ok(Candidates::from(items))
 }
