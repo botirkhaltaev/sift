@@ -8,7 +8,7 @@ bitflags::bitflags! {
         const LINE_REGEXP      = 1 << 3;
         const INVERT_MATCH     = 1 << 4;
         /// Default `InputEncoding::Auto`: BOM sniffing may decode rare UTF-16 files.
-        /// Index narrowing stays on for ASCII arms, with UTF-16LE/BE arm expansion.
+        /// Index queries stay on for ASCII arms, with UTF-16LE/BE arm expansion.
         const BOM_SNIFFING = 1 << 6;
     }
 }
@@ -16,18 +16,18 @@ bitflags::bitflags! {
 use crate::search::{InputEncoding, PrefilterCompatibility, RegexEngine, SearchFlags, SearchQuery};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IndexNarrowing {
+pub(crate) enum IndexQuery {
     Enabled,
     Disabled,
 }
 
-/// Index-agnostic query projection used to narrow candidate files.
+/// Index-agnostic query projection used to resolve candidate files.
 #[must_use]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CandidateQuery<'q> {
     pub patterns: &'q [String],
     pub flags: CandidateFlags,
-    index_narrowing: IndexNarrowing,
+    index_query: IndexQuery,
 }
 
 impl<'q> CandidateQuery<'q> {
@@ -51,19 +51,19 @@ impl<'q> CandidateQuery<'q> {
         if matches!(query.options.input_encoding, InputEncoding::Auto) {
             flags |= CandidateFlags::BOM_SNIFFING;
         }
-        let index_narrowing = if flags.contains(CandidateFlags::INVERT_MATCH)
+        let index_query = if flags.contains(CandidateFlags::INVERT_MATCH)
             || query.options.input_encoding.forces_decode()
             || matches!(query.options.regex_engine, RegexEngine::Pcre2)
             || matches!(prefilter, PrefilterCompatibility::Incompatible)
         {
-            IndexNarrowing::Disabled
+            IndexQuery::Disabled
         } else {
-            IndexNarrowing::Enabled
+            IndexQuery::Enabled
         };
         Self {
             patterns: &query.patterns,
             flags,
-            index_narrowing,
+            index_query,
         }
     }
 
@@ -98,7 +98,7 @@ impl<'q> CandidateQuery<'q> {
     }
 
     #[must_use]
-    pub(crate) const fn index_narrowing(&self) -> IndexNarrowing {
-        self.index_narrowing
+    pub(crate) const fn index_query(&self) -> IndexQuery {
+        self.index_query
     }
 }

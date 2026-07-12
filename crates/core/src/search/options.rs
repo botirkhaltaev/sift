@@ -101,7 +101,7 @@ impl InputEncoding {
     /// Whether search may transcode file bytes before matching (explicit `-E`).
     ///
     /// `Auto` only BOM-sniffs and usually still matches raw UTF-8/ASCII bytes, so
-    /// it does **not** force decode for index-narrowing decisions.
+    /// it does **not** force decode for index-query decisions.
     #[must_use]
     pub const fn forces_decode(&self) -> bool {
         matches!(self, Self::Explicit(_))

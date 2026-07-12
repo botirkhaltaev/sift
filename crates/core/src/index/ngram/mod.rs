@@ -17,7 +17,7 @@ pub use index::{Index, NGramIndexError};
 mod candidate_tests {
     use std::path::Path;
 
-    use crate::candidates::narrowing::CandidateQuery;
+    use crate::candidates::query::CandidateQuery;
     use crate::index::ngram::storage::postings::Postings;
     use crate::search::{
         CaseMode, InputEncoding, PrefilterCompatibility, SearchFlags, SearchOptions, SearchQuery,
@@ -72,7 +72,7 @@ mod candidate_tests {
         }
     }
 
-    fn narrow(
+    fn extracts_literals(
         patterns: &[String],
         case_insensitive: bool,
         word_regexp: bool,
@@ -166,7 +166,12 @@ mod candidate_tests {
 
     #[test]
     fn literal_narrows() {
-        assert!(narrow(&["beta".to_string()], false, false, false));
+        assert!(extracts_literals(
+            &["beta".to_string()],
+            false,
+            false,
+            false
+        ));
     }
 
     #[test]
@@ -176,22 +181,27 @@ mod candidate_tests {
 
     #[test]
     fn alternation_narrows() {
-        assert!(narrow(&[r"foo|bar".to_string()], false, false, false));
+        assert!(extracts_literals(
+            &[r"foo|bar".to_string()],
+            false,
+            false,
+            false
+        ));
     }
 
     #[test]
     fn word_literal_narrows() {
-        assert!(narrow(&["beta".to_string()], false, true, false));
+        assert!(extracts_literals(&["beta".to_string()], false, true, false));
     }
 
     #[test]
     fn line_regexp_narrows() {
-        assert!(narrow(&["beta".to_string()], false, false, true));
+        assert!(extracts_literals(&["beta".to_string()], false, false, true));
     }
 
     #[test]
     fn case_insensitive_narrows() {
-        assert!(narrow(&["beta".to_string()], true, false, false));
+        assert!(extracts_literals(&["beta".to_string()], true, false, false));
     }
 
     #[test]
@@ -241,7 +251,12 @@ mod candidate_tests {
 
     #[test]
     fn required_literal_inside_regex_narrows() {
-        assert!(narrow(&["[A-Z]+_RESUME".to_string()], false, false, false));
+        assert!(extracts_literals(
+            &["[A-Z]+_RESUME".to_string()],
+            false,
+            false,
+            false
+        ));
     }
 
     #[test]
@@ -261,7 +276,7 @@ mod candidate_tests {
 
     #[test]
     fn short_literal_covers_with_wildcard_grams() {
-        assert!(narrow(&["ab".to_string()], false, false, false));
+        assert!(extracts_literals(&["ab".to_string()], false, false, false));
     }
 
     #[test]

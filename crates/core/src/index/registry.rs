@@ -5,7 +5,7 @@ use rayon::prelude::*;
 
 use super::config::CorpusKind;
 use super::error::IndexError;
-use super::kinds::{Index, NarrowingResult};
+use super::kinds::{Index, IndexQueryResult};
 use super::paths::IndexedCorpus;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
@@ -26,7 +26,7 @@ pub struct IndexAvailability<'a> {
 /// Registry of opened indexes read from a snapshot store.
 ///
 /// Opens all index kinds found in the current snapshot and provides
-/// query-time candidate narrowing by intersecting results from each index.
+/// query-time candidate resolution by intersecting results from each index.
 pub struct Indexes {
     snapshot: Snapshot,
 }
@@ -112,41 +112,43 @@ impl Indexes {
         admission: FilterAdmission,
     ) -> crate::Result<Candidates<'a>> {
         let searcher = Searcher::new(query.clone())?;
-        let candidate_query = crate::candidates::narrowing::CandidateQuery::new(
+        let candidate_query = crate::candidates::query::CandidateQuery::new(
             query,
             searcher.prefilter_compatibility(),
         );
-        let narrowing = self.narrow(&candidate_query);
-        Ok(Candidates::from(
-            self.index_file_ids(narrowing, filter, admission),
-        ))
+        let query_result = self.query(&candidate_query);
+        Ok(Candidates::from(self.index_file_ids(
+            query_result,
+            filter,
+            admission,
+        )))
     }
 
     pub(crate) fn index_file_ids<'a>(
         &'a self,
-        narrowing: NarrowingResult,
+        query_result: IndexQueryResult,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> IndexFileIds<'a> {
-        let file_ids = match narrowing {
-            NarrowingResult::Unavailable | NarrowingResult::AllIndexed => {
+        let file_ids = match query_result {
+            IndexQueryResult::Unavailable | IndexQueryResult::AllIndexed => {
                 self.all_indexed_file_ids()
             }
-            NarrowingResult::Narrowed { file_ids } => file_ids,
+            IndexQueryResult::Matched { file_ids } => file_ids,
         };
         IndexFileIds::new(self, file_ids, filter, admission)
     }
 
     #[must_use]
-    pub(crate) fn narrow(
+    pub(crate) fn query(
         &self,
-        query: &crate::candidates::narrowing::CandidateQuery<'_>,
-    ) -> NarrowingResult {
+        query: &crate::candidates::query::CandidateQuery<'_>,
+    ) -> IndexQueryResult {
         let indexes = self.snapshot.indexes();
         match indexes.len() {
-            0 => NarrowingResult::Unavailable,
-            1 => indexes[0].narrow(query),
-            _ => Self::narrow_multi(indexes, query),
+            0 => IndexQueryResult::Unavailable,
+            1 => indexes[0].query(query),
+            _ => Self::query_multi(indexes, query),
         }
     }
 
@@ -232,29 +234,29 @@ impl Indexes {
         file_ids
     }
 
-    fn narrow_multi(
+    fn query_multi(
         indexes: &[Index],
-        query: &crate::candidates::narrowing::CandidateQuery<'_>,
-    ) -> NarrowingResult {
-        let plans: Vec<NarrowingResult> = indexes
+        query: &crate::candidates::query::CandidateQuery<'_>,
+    ) -> IndexQueryResult {
+        let plans: Vec<IndexQueryResult> = indexes
             .par_iter()
-            .map(|idx| idx.narrow(query))
+            .map(|idx| idx.query(query))
             .filter(|plan| !plan.is_unavailable())
             .collect();
 
         if plans.is_empty() {
-            return NarrowingResult::Unavailable;
+            return IndexQueryResult::Unavailable;
         }
 
-        let mut narrowed = plans.into_iter().filter_map(|plan| match plan {
-            NarrowingResult::Narrowed { file_ids } => Some(file_ids),
-            NarrowingResult::AllIndexed | NarrowingResult::Unavailable => None,
+        let mut matched = plans.into_iter().filter_map(|plan| match plan {
+            IndexQueryResult::Matched { file_ids } => Some(file_ids),
+            IndexQueryResult::AllIndexed | IndexQueryResult::Unavailable => None,
         });
-        let Some(mut current) = narrowed.next() else {
-            return NarrowingResult::AllIndexed;
+        let Some(mut current) = matched.next() else {
+            return IndexQueryResult::AllIndexed;
         };
 
-        for next in narrowed {
+        for next in matched {
             let mut out = Vec::with_capacity(current.len().min(next.len()));
             let (mut i, mut j) = (0usize, 0usize);
             while i < current.len() && j < next.len() {
@@ -274,6 +276,6 @@ impl Indexes {
             }
         }
 
-        NarrowingResult::Narrowed { file_ids: current }
+        IndexQueryResult::Matched { file_ids: current }
     }
 }

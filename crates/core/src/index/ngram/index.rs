@@ -3,8 +3,8 @@ use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
-use crate::candidates::narrowing::CandidateQuery;
-use crate::index::kinds::NarrowingResult;
+use crate::candidates::query::CandidateQuery;
+use crate::index::kinds::IndexQueryResult;
 use crate::index::{CorpusKind, FileId, IndexedCorpus};
 
 use super::config::Config;
@@ -168,11 +168,11 @@ impl Index {
         self.storage.corpus_kind
     }
 
-    /// Narrow candidate coverage for the query.
+    /// Resolve candidate coverage for the query.
     #[must_use]
-    pub(crate) fn narrow(&self, query: &CandidateQuery<'_>) -> NarrowingResult {
+    pub(crate) fn query(&self, query: &CandidateQuery<'_>) -> IndexQueryResult {
         let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
-            return NarrowingResult::Unavailable;
+            return IndexQueryResult::Unavailable;
         };
         let gram_match = if query.case_insensitive() {
             GramMatch::AsciiCase
@@ -181,9 +181,9 @@ impl Index {
         };
         let ids = self.candidate_file_ids(&arms, gram_match);
         if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
-            return NarrowingResult::AllIndexed;
+            return IndexQueryResult::AllIndexed;
         }
-        NarrowingResult::Narrowed { file_ids: ids }
+        IndexQueryResult::Matched { file_ids: ids }
     }
 
     /// Returns an explanation of how a query would be handled.

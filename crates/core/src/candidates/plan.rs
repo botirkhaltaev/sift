@@ -1,9 +1,9 @@
 use crate::corpus::filter::FilterAdmission;
 use crate::corpus::order::CandidateOrder;
 use crate::index::IndexCoverage;
-use crate::index::kinds::NarrowingResult;
+use crate::index::kinds::IndexQueryResult;
 
-use super::narrowing::{CandidateQuery, IndexNarrowing};
+use super::query::{CandidateQuery, IndexQuery};
 use super::selection::{CandidateCoverage, CandidateSelection, IndexFallback};
 use super::source::CandidateSource;
 
@@ -12,7 +12,7 @@ use super::source::CandidateSource;
 pub(crate) struct CandidatePlan {
     pub discovery: PlannedDiscovery,
     pub order: CandidateOrder,
-    pub narrowing: NarrowingResult,
+    pub query_result: IndexQueryResult,
 }
 
 /// How candidate discovery will run at resolve time.
@@ -39,15 +39,15 @@ impl CandidatePlanner {
         selection: CandidateSelection,
         coverage: CandidateCoverage,
     ) -> CandidatePlan {
-        let narrowing = source.indexes.narrow(query);
-        let index_narrowing = query.index_narrowing();
+        let query_result = source.indexes.query(query);
+        let index_query = query.index_query();
         let fallback = selection.fallback();
         let snapshot_status = snapshot_status(source, selection);
-        let index_status = index_status(source, &narrowing);
+        let index_status = index_status(source, &query_result);
         let discovery = planned_discovery(
             selection,
             coverage,
-            index_narrowing,
+            index_query,
             index_status,
             snapshot_status,
             fallback,
@@ -55,7 +55,7 @@ impl CandidatePlanner {
         CandidatePlan {
             discovery,
             order: selection.order(),
-            narrowing,
+            query_result,
         }
     }
 }
@@ -65,7 +65,7 @@ enum IndexStatus {
     Empty,
     NoCandidateIndex,
     AllCandidates,
-    CanNarrow,
+    CanQuery,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,14 +95,14 @@ fn snapshot_status(source: &CandidateSource<'_>, selection: CandidateSelection) 
     }
 }
 
-fn index_status(source: &CandidateSource<'_>, narrowing: &NarrowingResult) -> IndexStatus {
+fn index_status(source: &CandidateSource<'_>, query_result: &IndexQueryResult) -> IndexStatus {
     if source.indexes.availability().is_none() {
         IndexStatus::Empty
     } else {
-        match narrowing {
-            NarrowingResult::Unavailable => IndexStatus::NoCandidateIndex,
-            NarrowingResult::AllIndexed => IndexStatus::AllCandidates,
-            NarrowingResult::Narrowed { .. } => IndexStatus::CanNarrow,
+        match query_result {
+            IndexQueryResult::Unavailable => IndexStatus::NoCandidateIndex,
+            IndexQueryResult::AllIndexed => IndexStatus::AllCandidates,
+            IndexQueryResult::Matched { .. } => IndexStatus::CanQuery,
         }
     }
 }
@@ -110,7 +110,7 @@ fn index_status(source: &CandidateSource<'_>, narrowing: &NarrowingResult) -> In
 const fn planned_discovery(
     selection: CandidateSelection,
     coverage: CandidateCoverage,
-    index_narrowing: IndexNarrowing,
+    index_query: IndexQuery,
     index_status: IndexStatus,
     snapshot_status: SnapshotStatus,
     fallback: IndexFallback,
@@ -121,7 +121,7 @@ const fn planned_discovery(
         CandidateSelection::Index { .. } => match coverage {
             CandidateCoverage::Complete => plan_complete(index_status, snapshot_status, fallback),
             CandidateCoverage::PotentialMatches => {
-                plan_potential(index_status, index_narrowing, snapshot_status, fallback)
+                plan_potential(index_status, index_query, snapshot_status, fallback)
             }
         },
     }
@@ -146,13 +146,13 @@ const fn plan_complete(
 
 const fn plan_potential(
     index_status: IndexStatus,
-    index_narrowing: IndexNarrowing,
+    index_query: IndexQuery,
     snapshot_status: SnapshotStatus,
     fallback: IndexFallback,
 ) -> PlannedDiscovery {
-    match (index_status, index_narrowing, fallback) {
+    match (index_status, index_query, fallback) {
         (IndexStatus::Empty, _, _)
-        | (_, IndexNarrowing::Disabled, _)
+        | (_, IndexQuery::Disabled, _)
         | (IndexStatus::NoCandidateIndex, _, IndexFallback::WalkOnStaleSnapshot) => {
             PlannedDiscovery::Walk
         }
@@ -175,7 +175,7 @@ const fn plan_potential(
                 | SnapshotStatus::StaleComplete => PlannedDiscovery::Walk,
             }
         }
-        (IndexStatus::CanNarrow, _, _) => match snapshot_status {
+        (IndexStatus::CanQuery, _, _) => match snapshot_status {
             SnapshotStatus::TrustedLazy => PlannedDiscovery::Merge {
                 admission: index_admission(snapshot_status),
             },

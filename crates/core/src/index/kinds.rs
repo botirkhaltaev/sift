@@ -24,18 +24,18 @@ pub struct QueryPlanOutput {
     pub mode: PlanMode,
 }
 
-/// Internal index narrowing outcome before materialization.
+/// Internal index query outcome before materialization.
 #[derive(Debug)]
-pub(crate) enum NarrowingResult {
+pub(crate) enum IndexQueryResult {
     /// The query has no usable index terms.
     Unavailable,
-    /// Every indexed file is a possible match, so the index cannot narrow further.
+    /// Every indexed file is a possible match, so the index cannot filter further.
     AllIndexed,
-    /// Narrowed file ids (materialize at resolve time).
-    Narrowed { file_ids: Vec<u32> },
+    /// Matched file ids (materialize at resolve time).
+    Matched { file_ids: Vec<u32> },
 }
 
-impl NarrowingResult {
+impl IndexQueryResult {
     #[must_use]
     pub(crate) const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
@@ -167,7 +167,7 @@ impl std::str::FromStr for IndexConfig {
     }
 }
 
-/// Opened runtime index used for query-time candidate narrowing.
+/// Opened runtime index used for query-time candidate resolution.
 #[derive(Debug)]
 pub enum Index {
     /// Runtime-width N-gram index.
@@ -190,12 +190,12 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn narrow(
+    pub(crate) fn query(
         &self,
-        query: &crate::candidates::narrowing::CandidateQuery<'_>,
-    ) -> NarrowingResult {
+        query: &crate::candidates::query::CandidateQuery<'_>,
+    ) -> IndexQueryResult {
         match self {
-            Self::NGram(index) => index.narrow(query),
+            Self::NGram(index) => index.query(query),
         }
     }
 

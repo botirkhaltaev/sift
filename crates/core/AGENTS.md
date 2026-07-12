@@ -31,7 +31,7 @@ Internal modules (`pub(crate)`): `corpus/`, `CandidatePlanner`, `CandidatePlan`,
 | `candidates/resolve.rs` | `CandidatePlan::resolve` I/O boundary |
 | `candidates/resolved.rs` | `Candidates` enum (`IntoIterator`, `into_vec`) |
 | `candidates/selection.rs` | `CandidateSelection`, `CandidateCoverage`, `IndexFallback` |
-| `candidates/narrowing.rs` | `CandidateQuery` projection for index narrowing |
+| `candidates/query.rs` | `CandidateQuery` projection for index queries |
 | `candidates/source.rs` | `CandidateSource` resolve inputs |
 | `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
 | `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |
@@ -60,7 +60,7 @@ Grep::execute
 - **Index file order:** lexicographic relative paths (stable file IDs).
 - **Conservative candidates:** index narrowing may over-return candidates but must not under-return.
 - **Index independence:** each configured index narrows candidates independently; the registry intersects results.
-- **Planning is pure; resolve is I/O:** `CandidatePlanner::plan` caches `NarrowingResult`; `CandidatePlan::resolve` is the single candidate I/O boundary.
+- **Planning is pure; resolve is I/O:** `CandidatePlanner::plan` caches `IndexQueryResult`; `CandidatePlan::resolve` is the single candidate I/O boundary.
 
 ## Testing
 

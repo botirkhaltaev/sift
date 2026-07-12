@@ -5,7 +5,7 @@ use crate::corpus::Candidate;
 use crate::corpus::filter::FilterAdmission;
 use crate::corpus::order::CandidateOrder;
 use crate::corpus::walk::FileWalk;
-use crate::index::kinds::NarrowingResult;
+use crate::index::kinds::IndexQueryResult;
 
 use super::plan::{CandidatePlan, PlannedDiscovery};
 use super::resolved::Candidates;
@@ -24,7 +24,7 @@ impl CandidatePlan {
         let Self {
             discovery,
             order,
-            narrowing,
+            query_result,
         } = self;
         let candidates = match discovery {
             PlannedDiscovery::Empty => Candidates::empty(),
@@ -32,10 +32,10 @@ impl CandidatePlan {
             PlannedDiscovery::Index { admission } => Candidates::from(
                 source
                     .indexes
-                    .index_file_ids(narrowing, source.filter, admission),
+                    .index_file_ids(query_result, source.filter, admission),
             ),
             PlannedDiscovery::Merge { admission } => {
-                Candidates::from(merge_index_and_walk(source, narrowing, admission)?)
+                Candidates::from(merge_index_and_walk(source, query_result, admission)?)
             }
         };
         apply_order(candidates, order)
@@ -49,10 +49,10 @@ fn walk_candidates(source: &CandidateSource<'_>) -> crate::Result<Vec<Candidate>
 
 fn merge_index_and_walk(
     source: &CandidateSource<'_>,
-    narrowing: NarrowingResult,
+    query_result: IndexQueryResult,
     admission: FilterAdmission,
 ) -> crate::Result<Vec<Candidate>> {
-    let NarrowingResult::Narrowed { file_ids } = narrowing else {
+    let IndexQueryResult::Matched { file_ids } = query_result else {
         return walk_candidates(source);
     };
     let mut candidates = source
