@@ -113,7 +113,7 @@ impl IndexedFiles {
     pub(crate) fn coverage(&self) -> IndexedCorpus {
         self.coverage
             .get_or_init(|| {
-                IndexedCorpus::from_paths(self.fingerprints().iter().map(|fp| fp.path.clone()))
+                IndexedCorpus::new(self.fingerprints().iter().map(|fp| fp.path.clone()))
             })
             .clone()
     }

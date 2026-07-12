@@ -38,12 +38,12 @@ impl Indexes {
                 source: std::io::Error::other(e.to_string()),
             },
         })?;
-        Ok(Self::from_snapshot(snapshot))
+        Ok(Self::new(snapshot))
     }
 
     /// Wrap an already-opened snapshot for search.
     #[must_use]
-    pub(crate) const fn from_snapshot(snapshot: Snapshot) -> Self {
+    pub(crate) const fn new(snapshot: Snapshot) -> Self {
         Self { snapshot }
     }
 
@@ -83,7 +83,7 @@ impl Indexes {
     /// Corpus-relative paths covered by every opened index in this snapshot.
     #[must_use]
     pub fn indexed_corpus(&self) -> IndexedCorpus {
-        IndexedCorpus::from_indexes(self.snapshot.indexes())
+        IndexedCorpus::intersection(self.snapshot.indexes().iter().map(Index::coverage))
     }
 
     #[must_use]

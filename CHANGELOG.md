@@ -7,7 +7,8 @@ All notable changes to this project will be documented in this file.
 ### Breaking
 
 - Replace `IndexAvailability` / `CandidateSelection` / `IndexFallback` with `ScanScope`, `SnapshotFreshness`, and `IndexNarrowing` on `CandidateSource`
-- Remove `GrepBuilder`, `InputConversion::for_candidates`, in-memory `Snapshot` constructors (`from_ngram`, `from_indexes`), and public `IndexSession`
+- Remove `GrepBuilder`, `InputConversion::for_candidates`, in-memory `Snapshot` constructors (`from_ngram`), and public `IndexSession`
+- Replace mechanism-named `IndexedCorpus::{from_paths,from_indexes}` with `new` / `intersection`; `Indexes::from_snapshot` → `Indexes::new`
 - `Indexes::{usable, corpus_root, corpus_kind, snapshot_id}` replaces session accessors; `IndexedCorpus` is public for path-set filtering
 - `Grep` compiles queries once via internal `compile()`; `GrepRequest` no longer carries `selection`
 
