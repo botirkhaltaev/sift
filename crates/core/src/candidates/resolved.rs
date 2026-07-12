@@ -16,14 +16,6 @@ pub enum Candidates<'a> {
     },
 }
 
-/// Index-narrowed file ids with lazy per-row materialization.
-pub(crate) struct IndexFileIds<'a> {
-    indexes: &'a Indexes,
-    file_ids: Vec<u32>,
-    filter: &'a CandidateFilter,
-    admission: FilterAdmission,
-}
-
 /// Iterator over resolved candidates.
 pub enum IntoIter<'a> {
     Materialized(std::vec::IntoIter<Candidate>),
@@ -35,25 +27,23 @@ pub enum IntoIter<'a> {
     },
 }
 
-impl<'a> IndexFileIds<'a> {
-    pub(crate) const fn new(
+impl<'a> Candidates<'a> {
+    pub(crate) const fn empty() -> Self {
+        Self::Materialized(Vec::new())
+    }
+
+    pub(crate) const fn index(
         indexes: &'a Indexes,
         file_ids: Vec<u32>,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> Self {
-        Self {
+        Self::Index {
             indexes,
             file_ids,
             filter,
             admission,
         }
-    }
-}
-
-impl Candidates<'_> {
-    pub(crate) const fn empty() -> Self {
-        Self::Materialized(Vec::new())
     }
 
     /// Returns `true` when no candidates will be yielded.
@@ -78,7 +68,7 @@ impl Candidates<'_> {
                 file_ids,
                 filter,
                 admission,
-            } => indexes.materialize_rows(&file_ids, filter, admission),
+            } => indexes.hydrate_rows(&file_ids, filter, admission),
         }
     }
 }
@@ -86,23 +76,6 @@ impl Candidates<'_> {
 impl From<Vec<Candidate>> for Candidates<'_> {
     fn from(items: Vec<Candidate>) -> Self {
         Self::Materialized(items)
-    }
-}
-
-impl<'a> From<IndexFileIds<'a>> for Candidates<'a> {
-    fn from(ids: IndexFileIds<'a>) -> Self {
-        let IndexFileIds {
-            indexes,
-            file_ids,
-            filter,
-            admission,
-        } = ids;
-        Self::Index {
-            indexes,
-            file_ids,
-            filter,
-            admission,
-        }
     }
 }
 
@@ -125,7 +98,7 @@ impl Iterator for IntoIter<'_> {
                 admission,
             } => loop {
                 let id = ids.next()?;
-                if let Some(candidate) = indexes.materialize_row(id, filter, *admission) {
+                if let Some(candidate) = indexes.hydrate_row(id, filter, *admission) {
                     return Some(candidate);
                 }
             },

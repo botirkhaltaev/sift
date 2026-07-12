@@ -56,13 +56,13 @@ impl IndexedCorpus {
         Arc::try_unwrap(self.paths).unwrap_or_else(|paths| (*paths).clone())
     }
 
-    pub(super) const fn unindexed_files(&self) -> UnindexedFiles<'_> {
+    pub(crate) const fn unindexed_files(&self) -> UnindexedFiles<'_> {
         UnindexedFiles { indexed: self }
     }
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct UnindexedFiles<'a> {
+pub struct UnindexedFiles<'a> {
     indexed: &'a IndexedCorpus,
 }
 

@@ -19,7 +19,7 @@ use sift_core::{
     CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
     WalkMeta,
 };
-use sift_core::{Index, NGramIndex};
+use sift_core::{Index, NGramIndex, Snapshot};
 
 mod common;
 
@@ -43,7 +43,7 @@ fn sift_criterion() -> Criterion {
 
 fn wrap_index(index: NGramIndex) -> Indexes {
     let root = index.root().to_path_buf();
-    Indexes::from_single(Index::NGram(index), root)
+    Indexes::from_snapshot(Snapshot::from_indexes(root, vec![Index::NGram(index)]))
 }
 
 fn store_meta(root: &Path, coverage: IndexCoverage) -> StoreMeta {

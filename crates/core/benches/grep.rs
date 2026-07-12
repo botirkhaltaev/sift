@@ -14,7 +14,7 @@ use sift_core::search::{
     InputConversion, SearchFlags, SearchInputs, SearchOptions, SearchQueryBuilder, Searcher,
     StatsMode,
 };
-use sift_core::{Index, Indexes, Inputs, NGramIndex};
+use sift_core::{Index, Indexes, Inputs, NGramIndex, Snapshot};
 
 mod common;
 
@@ -30,7 +30,7 @@ fn sift_criterion() -> Criterion {
 
 fn wrap_index(index: NGramIndex) -> Indexes {
     let root = index.root().to_path_buf();
-    Indexes::from_single(Index::NGram(index), root)
+    Indexes::from_snapshot(Snapshot::from_indexes(root, vec![Index::NGram(index)]))
 }
 
 fn make_search(patterns: &[&str], opts: SearchOptions) -> (Vec<String>, SearchOptions) {

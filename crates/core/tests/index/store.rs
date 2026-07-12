@@ -1,11 +1,13 @@
 use std::fs;
 
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
-use sift_core::search::{SearchOptions, SearchQueryBuilder};
+use sift_core::grep::FilterAdmission;
+use sift_core::search::SearchOptions;
 use sift_core::{GramWidth, IndexConfig, IndexStore};
 use tempfile::TempDir;
 
-use super::common::{build_store, open_indexes, sample_store_meta, standard_build_config};
+use super::common::{
+    build_store, index_candidates, open_indexes, sample_store_meta, standard_build_config,
+};
 
 #[test]
 fn build_and_reopen_indexes() {
@@ -19,16 +21,13 @@ fn build_and_reopen_indexes() {
 
     let indexes = open_indexes(&sift_dir);
     assert!(indexes.availability().is_some());
-    let patterns = ["hello".to_string()];
-    let query = SearchQueryBuilder::new(patterns.to_vec())
-        .options(SearchOptions::default())
-        .build()
-        .expect("query");
-    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
-    let files = indexes
-        .candidates(&query, &filter, FilterAdmission::Full)
-        .expect("candidates")
-        .into_vec();
+    let files = index_candidates(
+        &indexes,
+        &corpus,
+        &["hello".to_string()],
+        SearchOptions::default(),
+        FilterAdmission::Full,
+    );
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].rel_path().as_os_str(), "a.txt");
 }

@@ -1,13 +1,14 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
-use sift_core::search::{SearchOptions, SearchQueryBuilder};
+use sift_core::grep::FilterAdmission;
+use sift_core::search::SearchOptions;
 use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes};
 use tempfile::TempDir;
 
 use super::common::{
-    build_store, make_filter_corpus, no_ignore_build_config, open_indexes, sample_store_meta,
+    build_store, index_candidates, make_filter_corpus, no_ignore_build_config, open_indexes,
+    sample_store_meta,
 };
 
 fn candidate_paths(
@@ -16,15 +17,7 @@ fn candidate_paths(
     patterns: &[String],
     options: SearchOptions,
 ) -> Vec<std::path::PathBuf> {
-    let query = SearchQueryBuilder::new(patterns.to_vec())
-        .options(options)
-        .build()
-        .expect("query");
-    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), corpus).expect("filter");
-    indexes
-        .candidates(&query, &filter, FilterAdmission::Indexed)
-        .expect("candidates")
-        .into_vec()
+    index_candidates(indexes, corpus, patterns, options, FilterAdmission::Indexed)
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
         .collect()

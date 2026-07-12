@@ -8,41 +8,25 @@ use super::error::IndexError;
 use super::kinds::{Index, IndexQueryResult};
 use super::paths::IndexedCorpus;
 use super::snapshot::{Snapshot, SnapshotId};
-use super::store;
-use crate::Searcher;
+
 use crate::candidates::Candidates;
-use crate::candidates::resolved::IndexFileIds;
+use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
-use crate::corpus::walk::FileWalk;
-use crate::search::SearchQuery;
 
 /// Identity of a usable index: everything needed to trust or validate it.
 pub struct IndexAvailability<'a> {
     pub root: &'a Path,
     pub corpus: CorpusKind,
-    pub snapshot: SnapshotId,
+    pub snapshot: Option<SnapshotId>,
 }
 
-/// Registry of opened indexes read from a snapshot store.
-///
-/// Opens all index kinds found in the current snapshot and provides
-/// query-time candidate resolution by intersecting results from each index.
+/// Opened snapshot indexes for query-time candidate resolution.
 pub struct Indexes {
     snapshot: Snapshot,
 }
 
 impl Indexes {
-    /// Create an Indexes registry from a single index and its root.
-    ///
-    /// Useful for testing and benchmarking.
-    #[must_use]
-    pub fn from_single(index: Index, root: PathBuf) -> Self {
-        Self {
-            snapshot: Snapshot::from_indexes(root, vec![index]),
-        }
-    }
-
-    /// Open all indexes found under `sift_dir`.
+    /// Open the current committed snapshot under `sift_dir`.
     ///
     /// # Errors
     ///
@@ -51,7 +35,7 @@ impl Indexes {
     ///
     /// Returns an empty registry if no current snapshot exists (walk fallback).
     pub fn open(sift_dir: &Path) -> Result<Self, IndexError> {
-        let store = store::IndexStore::open(sift_dir).map_err(|e| match e {
+        let snapshot = Snapshot::open_current(sift_dir).map_err(|e| match e {
             crate::Error::Index(ie) => ie,
             crate::Error::Io(io) => IndexError::Io {
                 path: sift_dir.to_path_buf(),
@@ -62,20 +46,13 @@ impl Indexes {
                 source: std::io::Error::other(e.to_string()),
             },
         })?;
+        Ok(Self::from_snapshot(snapshot))
+    }
 
-        let snapshot = store.open_current().map_err(|e| match e {
-            crate::Error::Index(ie) => ie,
-            crate::Error::Io(io) => IndexError::Io {
-                path: sift_dir.to_path_buf(),
-                source: io,
-            },
-            _ => IndexError::Io {
-                path: sift_dir.to_path_buf(),
-                source: std::io::Error::other(e.to_string()),
-            },
-        })?;
-
-        Ok(Self { snapshot })
+    /// Wrap an already-opened snapshot for search.
+    #[must_use]
+    pub const fn from_snapshot(snapshot: Snapshot) -> Self {
+        Self { snapshot }
     }
 
     /// Whether this registry has a usable snapshot for candidate discovery.
@@ -91,7 +68,7 @@ impl Indexes {
         if indexes.iter().any(|idx| idx.corpus_kind() != corpus) {
             return None;
         }
-        let snapshot = self.snapshot.id()?.clone();
+        let snapshot = self.snapshot.id().cloned();
         Some(IndexAvailability {
             root,
             corpus,
@@ -99,44 +76,10 @@ impl Indexes {
         })
     }
 
-    /// Narrow by the search query and return lazy index-backed candidates.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the search query cannot be compiled.
-    #[must_use = "resolved candidates are consumed by search"]
-    pub fn candidates<'a>(
-        &'a self,
-        query: &SearchQuery,
-        filter: &'a CandidateFilter,
-        admission: FilterAdmission,
-    ) -> crate::Result<Candidates<'a>> {
-        let searcher = Searcher::new(query.clone())?;
-        let candidate_query = crate::candidates::query::CandidateQuery::new(
-            query,
-            searcher.prefilter_compatibility(),
-        );
-        let query_result = self.query(&candidate_query);
-        Ok(Candidates::from(self.index_file_ids(
-            query_result,
-            filter,
-            admission,
-        )))
-    }
-
-    pub(crate) fn index_file_ids<'a>(
-        &'a self,
-        query_result: IndexQueryResult,
-        filter: &'a CandidateFilter,
-        admission: FilterAdmission,
-    ) -> IndexFileIds<'a> {
-        let file_ids = match query_result {
-            IndexQueryResult::Unavailable | IndexQueryResult::AllIndexed => {
-                self.all_indexed_file_ids()
-            }
-            IndexQueryResult::Matched { file_ids } => file_ids,
-        };
-        IndexFileIds::new(self, file_ids, filter, admission)
+    /// Corpus-relative paths covered by every opened index in this snapshot.
+    #[must_use]
+    pub fn indexed_corpus(&self) -> IndexedCorpus {
+        IndexedCorpus::from_indexes(self.snapshot.indexes())
     }
 
     #[must_use]
@@ -153,60 +96,46 @@ impl Indexes {
     }
 
     #[must_use]
-    pub(crate) fn materialize_row(
+    pub(crate) fn file_ids(&self, result: IndexQueryResult) -> Vec<u32> {
+        match result {
+            IndexQueryResult::Unavailable | IndexQueryResult::AllIndexed => {
+                self.all_indexed_file_ids()
+            }
+            IndexQueryResult::Matched { file_ids } => file_ids,
+        }
+    }
+
+    pub(crate) fn indexed_candidates<'a>(
+        &'a self,
+        result: IndexQueryResult,
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Candidates<'a> {
+        Candidates::index(self, self.file_ids(result), filter, admission)
+    }
+
+    pub(crate) fn hydrate_row(
         &self,
         id: u32,
         filter: &CandidateFilter,
         admission: FilterAdmission,
-    ) -> Option<crate::Candidate> {
-        let index = self.primary_index()?;
-        index.materialize_row(id, filter, admission)
+    ) -> Option<Candidate> {
+        self.canonical()?.hydrate_row(id, filter, admission)
     }
 
-    #[must_use]
-    pub(crate) fn materialize_rows(
+    pub(crate) fn hydrate_rows(
         &self,
         file_ids: &[u32],
         filter: &CandidateFilter,
         admission: FilterAdmission,
-    ) -> Vec<crate::Candidate> {
-        let Some(index) = self.primary_index() else {
+    ) -> Vec<Candidate> {
+        let Some(index) = self.canonical() else {
             return Vec::new();
         };
-        index.materialize_rows(file_ids, filter, admission)
+        index.hydrate_rows(file_ids, filter, admission)
     }
 
-    pub(crate) fn unindexed_walk_candidates(
-        &self,
-        filter: &CandidateFilter,
-    ) -> crate::Result<Vec<crate::Candidate>> {
-        let indexed = self.indexed_paths();
-        FileWalk::from_filter(filter).candidates_matching(indexed.unindexed_files())
-    }
-
-    /// Corpus-relative paths present in the current snapshot.
-    #[must_use]
-    pub(crate) fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
-        self.indexed_paths().into_set()
-    }
-
-    /// Filter hit paths to those not yet indexed in the current snapshot.
-    #[must_use]
-    pub(crate) fn unindexed_hit_paths(
-        &self,
-        hits: impl IntoIterator<Item = PathBuf>,
-    ) -> Vec<PathBuf> {
-        let indexed = self.indexed_paths();
-        hits.into_iter()
-            .filter(|path| !indexed.contains(path))
-            .collect()
-    }
-
-    fn indexed_paths(&self) -> IndexedCorpus {
-        IndexedCorpus::from_indexes(self.snapshot.indexes())
-    }
-
-    fn primary_index(&self) -> Option<&Index> {
+    fn canonical(&self) -> Option<&Index> {
         self.snapshot.indexes().first()
     }
 

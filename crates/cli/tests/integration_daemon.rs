@@ -22,8 +22,8 @@ use common::normalize_stderr;
 use common::normalize_stdout;
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, IndexStore, Indexes,
-    StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
+    WalkMeta,
 };
 use sift_grep::index::daemon::{Daemon, DaemonOrchestrator, ServeConfig};
 
@@ -121,10 +121,9 @@ where
 }
 
 fn path_indexed(sift_dir: &Path, rel: &str) -> bool {
-    IndexStore::open(sift_dir)
+    Indexes::open(sift_dir)
         .ok()
-        .and_then(|store| store.indexed_rel_paths().ok())
-        .is_some_and(|paths| paths.contains(&PathBuf::from(rel)))
+        .is_some_and(|indexes| indexes.indexed_corpus().contains(Path::new(rel)))
 }
 
 fn poll_until_indexed(sift_dir: &Path, rel: &str, timeout: Duration) {
@@ -692,7 +691,8 @@ fn daemon_validates_only_current_committed_snapshot() {
     let first_id = first
         .availability()
         .expect("snapshot availability")
-        .snapshot;
+        .snapshot
+        .expect("committed snapshot id");
     assert!(
         daemon
             .validate_snapshot(&first_id)
@@ -708,7 +708,8 @@ fn daemon_validates_only_current_committed_snapshot() {
     let second_id = second
         .availability()
         .expect("snapshot availability")
-        .snapshot;
+        .snapshot
+        .expect("committed snapshot id");
     assert_ne!(
         first_id, second_id,
         "reconcile should commit a new snapshot"

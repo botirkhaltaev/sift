@@ -2,10 +2,9 @@ use std::path::{Path, PathBuf};
 
 use super::IndexError;
 use super::meta::StoreMeta;
-use super::registry::Indexes;
 use super::snapshot::{
-    DiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotRead, SnapshotStore,
-    SnapshotWrite, SnapshotWriterSession,
+    DiskSnapshotStore, SnapshotId, SnapshotManifest, SnapshotRead, SnapshotStore, SnapshotWrite,
+    SnapshotWriterSession,
 };
 
 /// Index lifecycle orchestrator backed by a [`SnapshotStore`] for atomic
@@ -19,13 +18,6 @@ pub struct IndexStore<S: SnapshotStore = DiskSnapshotStore> {
     snapshots: S,
     sift_dir: PathBuf,
     meta: Option<StoreMeta>,
-}
-
-/// Result of reconciling store metadata and corpus state into a committed snapshot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReconcileOutcome {
-    pub snapshot_id: SnapshotId,
-    pub changed: bool,
 }
 
 impl IndexStore<DiskSnapshotStore> {
@@ -85,91 +77,6 @@ impl IndexStore<DiskSnapshotStore> {
     #[must_use]
     pub fn snapshot_dir(&self, id: &str) -> PathBuf {
         self.sift_dir.join("snapshots").join(id)
-    }
-
-    // ------------------------------------------------------------------
-    // Read path
-    // ------------------------------------------------------------------
-
-    /// Open the current snapshot, returning an immutable [`Snapshot`] with
-    /// its indexes opened and a reader lease held.
-    ///
-    /// Re-reads `CURRENT` from disk to ensure freshness. Retries once if
-    /// the snapshot disappears during opening.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest is malformed, an index kind is
-    /// unknown, or the snapshot could not be opened after retry.
-    pub(crate) fn open_current(&self) -> crate::Result<super::snapshot::Snapshot> {
-        for attempt in 0..2 {
-            let Some(current_id) = DiskSnapshotStore::read_current_id(&self.sift_dir)? else {
-                return Ok(super::snapshot::Snapshot::empty(PathBuf::new()));
-            };
-
-            let Some(ref meta) = self.meta else {
-                return Err(crate::Error::Index(IndexError::Io {
-                    path: self.sift_dir.join("sift.meta"),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "store metadata not found",
-                    ),
-                }));
-            };
-            let root = meta.corpus.root.clone();
-            let corpus_kind = meta.corpus.kind;
-
-            let snap_dir = self.sift_dir.join("snapshots").join(&current_id);
-
-            let lease = SnapshotLease::create_file(&self.sift_dir, &current_id)?;
-
-            if !snap_dir.exists() {
-                drop(lease);
-                continue;
-            }
-
-            let manifest_path = snap_dir.join("manifest.json");
-            let manifest_raw = match std::fs::read_to_string(&manifest_path) {
-                Ok(raw) => raw,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound && attempt == 0 => {
-                    drop(lease);
-                    continue;
-                }
-                Err(e) => return Err(crate::Error::Io(e)),
-            };
-
-            let manifest: SnapshotManifest = serde_json::from_str(&manifest_raw).map_err(|e| {
-                crate::Error::Index(IndexError::InvalidManifest {
-                    path: manifest_path.clone(),
-                    source: e,
-                })
-            })?;
-
-            let mut indexes = Vec::new();
-            for name in &manifest.indexes {
-                let config: super::IndexConfig = name.parse().map_err(|_| {
-                    crate::Error::Index(IndexError::UnknownIndexConfig(name.clone()))
-                })?;
-                let index_dir = snap_dir.join(name);
-                indexes.push(config.open(
-                    super::IndexSource::Directory(&index_dir),
-                    &root,
-                    corpus_kind,
-                )?);
-            }
-
-            return Ok(super::snapshot::Snapshot::committed(
-                manifest.id,
-                root,
-                indexes,
-                lease,
-            ));
-        }
-
-        Err(crate::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "snapshot disappeared during open",
-        )))
     }
 }
 
@@ -301,80 +208,6 @@ impl<S: SnapshotStore> IndexStore<S> {
         let id = writer.publish(txn, manifest)?;
         Ok(Some(id.to_string()))
     }
-
-    /// Rebuild or update index files.
-    ///
-    /// `paths` empty → full corpus. Non-empty → partial rel-paths only.
-    ///
-    /// # Errors
-    ///
-    /// Propagates build/update failures from the underlying index kinds.
-    pub fn reconcile(
-        &mut self,
-        meta: &StoreMeta,
-        paths: &[PathBuf],
-    ) -> crate::Result<ReconcileOutcome> {
-        let build = meta.index_config();
-        let configs = &meta.indexes;
-        let (snapshot_id, changed) = if paths.is_empty() {
-            if self.current_id().is_none() {
-                (SnapshotId::new(self.build(configs, &build, &[])?), true)
-            } else {
-                match self.update(configs, &build, &[])? {
-                    Some(id) => (SnapshotId::new(id), true),
-                    None => (self.current_snapshot_id()?, false),
-                }
-            }
-        } else if self.current_id().is_none() {
-            (SnapshotId::new(self.build(configs, &build, paths)?), true)
-        } else {
-            match self.update(configs, &build, paths)? {
-                Some(id) => (SnapshotId::new(id), true),
-                None => (self.current_snapshot_id()?, false),
-            }
-        };
-        Ok(ReconcileOutcome {
-            snapshot_id,
-            changed,
-        })
-    }
-
-    /// Corpus-relative paths present in the current snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the current snapshot cannot be opened.
-    pub fn indexed_rel_paths(&self) -> crate::Result<std::collections::HashSet<PathBuf>> {
-        let indexes = Indexes::open(&self.sift_dir)?;
-        Ok(indexes.indexed_rel_paths())
-    }
-
-    /// Filter search-hit paths to those not yet present in the current snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the current snapshot cannot be opened.
-    pub fn unindexed_hit_paths(
-        &self,
-        hits: impl IntoIterator<Item = PathBuf>,
-    ) -> crate::Result<Vec<PathBuf>> {
-        let indexes = Indexes::open(&self.sift_dir)?;
-        Ok(indexes.unindexed_hit_paths(hits))
-    }
-
-    fn current_snapshot_id(&self) -> crate::Result<SnapshotId> {
-        self.current_id()
-            .map(|id| SnapshotId::new(id.to_string()))
-            .ok_or_else(|| {
-                crate::Error::Index(IndexError::Io {
-                    path: self.sift_dir.clone(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "no current snapshot after reconcile",
-                    ),
-                })
-            })
-    }
 }
 fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {
     let lock_path = sift_dir.join("write.lock");
@@ -398,9 +231,10 @@ impl Drop for WriteLockGuard {
 mod tests {
     use super::*;
     use crate::corpus::filter::VisibilityConfig;
-    use crate::index::config::{IndexBuildConfig, IndexWalkConfig};
-    use crate::index::meta::{CorpusMeta, FilterMeta, StoreMeta, WalkMeta};
-    use crate::index::{CorpusKind, CorpusSpec, IndexConfig, IndexCoverage};
+    use crate::index::IndexConfig;
+    use crate::index::config::{CorpusKind, CorpusSpec, IndexBuildConfig, IndexWalkConfig};
+    use crate::index::meta::{CorpusMeta, FilterMeta, IndexCoverage, StoreMeta, WalkMeta};
+    use crate::index::snapshot::Snapshot;
     use std::fs;
     use tempfile::TempDir;
 
@@ -503,7 +337,7 @@ mod tests {
 
         drop(store);
         let store = IndexStore::open(&sift_dir).expect("reopen store");
-        let snapshot = store.open_current().expect("open current");
+        let snapshot = Snapshot::open_current(&sift_dir).expect("open current");
         assert_eq!(snapshot.indexes().len(), 1);
         let canon_corpus = corpus.canonicalize().unwrap();
         assert_eq!(snapshot.indexes()[0].root(), &canon_corpus);
@@ -518,7 +352,7 @@ mod tests {
 
         let store = IndexStore::open(&sift_dir).expect("open store");
         assert!(store.current_id().is_none());
-        let snapshot = store.open_current().expect("open current");
+        let snapshot = Snapshot::open_current(&sift_dir).expect("open current");
         assert!(snapshot.is_empty());
     }
 

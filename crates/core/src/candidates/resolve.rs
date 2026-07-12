@@ -29,11 +29,11 @@ impl CandidatePlan {
         let candidates = match discovery {
             PlannedDiscovery::Empty => Candidates::empty(),
             PlannedDiscovery::Walk => Candidates::from(walk_candidates(source)?),
-            PlannedDiscovery::Index { admission } => Candidates::from(
+            PlannedDiscovery::Index { admission } => {
                 source
                     .indexes
-                    .index_file_ids(query_result, source.filter, admission),
-            ),
+                    .indexed_candidates(query_result, source.filter, admission)
+            }
             PlannedDiscovery::Merge { admission } => {
                 Candidates::from(merge_index_and_walk(source, query_result, admission)?)
             }
@@ -57,8 +57,9 @@ fn merge_index_and_walk(
     };
     let mut candidates = source
         .indexes
-        .materialize_rows(&file_ids, source.filter, admission);
-    let walked = source.indexes.unindexed_walk_candidates(source.filter)?;
+        .hydrate_rows(&file_ids, source.filter, admission);
+    let walked = FileWalk::from_filter(source.filter)
+        .candidates_matching(source.indexes.indexed_corpus().unindexed_files())?;
     let walked = source.filter.retain(walked, FilterAdmission::Full);
     let mut seen: HashSet<PathBuf> = candidates
         .iter()

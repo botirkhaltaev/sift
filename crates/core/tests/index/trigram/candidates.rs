@@ -1,30 +1,14 @@
 use std::{fs, path::Path};
 
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
-use sift_core::search::{SearchOptions, SearchQueryBuilder};
-use sift_core::{CaseMode, Index, Indexes};
+use sift_core::grep::FilterAdmission;
+use sift_core::search::CaseMode;
+use sift_core::search::SearchOptions;
 use tempfile::TempDir;
 
 use super::super::common::{
-    build_store, build_trigram_in_dir, make_filter_corpus, make_parity_corpus, open_indexes,
+    build_store, build_trigram_in_dir, index_candidates, make_filter_corpus, make_parity_corpus,
+    open_indexes, wrap_indexes,
 };
-
-fn index_candidates(
-    indexes: &Indexes,
-    corpus: &Path,
-    patterns: &[String],
-    options: SearchOptions,
-) -> Vec<sift_core::Candidate> {
-    let query = SearchQueryBuilder::new(patterns.to_vec())
-        .options(options)
-        .build()
-        .expect("query");
-    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), corpus).expect("filter");
-    indexes
-        .candidates(&query, &filter, FilterAdmission::Full)
-        .expect("candidates")
-        .into_vec()
-}
 
 #[test]
 fn literal_query_returns_indexed_candidates() {
@@ -32,14 +16,14 @@ fn literal_query_returns_indexed_candidates() {
     let corpus = tmp.path().join("corpus");
     make_parity_corpus(&corpus);
 
-    let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
-    let root = index.root().to_path_buf();
-    let indexes = Indexes::from_single(index, root);
+    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
+    let indexes = wrap_indexes(index);
     let candidates = index_candidates(
         &indexes,
         &corpus,
         &["beta".to_string()],
         SearchOptions::default(),
+        FilterAdmission::Full,
     );
     assert!(!candidates.is_empty());
     assert!(
@@ -57,14 +41,14 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
     fs::write(corpus.join("a.txt"), "shared beta\n").expect("write a");
     fs::write(corpus.join("b.txt"), "another beta\n").expect("write b");
 
-    let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
-    let root = index.root().to_path_buf();
-    let indexes = Indexes::from_single(index, root);
+    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
+    let indexes = wrap_indexes(index);
     let candidates = index_candidates(
         &indexes,
         &corpus,
         &["beta".to_string()],
         SearchOptions::default(),
+        FilterAdmission::Full,
     );
     assert_eq!(candidates.len(), 2);
 }
@@ -82,6 +66,7 @@ fn literal_candidates_narrow_to_expected_file() {
         tmp.path(),
         &["beta".to_string()],
         SearchOptions::default(),
+        FilterAdmission::Full,
     );
     assert!(!candidates.is_empty());
     assert!(
@@ -107,15 +92,20 @@ fn case_insensitive_uppercase_corpus_narrows() {
         .expect("write noise");
     }
 
-    let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
-    let root = index.root().to_path_buf();
-    let indexes = Indexes::from_single(index, root);
+    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
+    let indexes = wrap_indexes(index);
     let pattern = "err_sys|pme_turn_off".to_string();
     let options = SearchOptions {
         case_mode: CaseMode::Insensitive,
         ..SearchOptions::default()
     };
-    let candidates = index_candidates(&indexes, &corpus, &[pattern], options);
+    let candidates = index_candidates(
+        &indexes,
+        &corpus,
+        &[pattern],
+        options,
+        FilterAdmission::Full,
+    );
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].rel_path(), Path::new("hit.rs"));
 }
@@ -129,8 +119,6 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
     fs::write(corpus.join("b.rs"), "PME_TURN_OFF\n").expect("write b");
     fs::write(corpus.join("c.rs"), "LINK_REQ_RST\n").expect("write c");
     fs::write(corpus.join("d.rs"), "CFG_BME_EVT\n").expect("write d");
-    // Short case-folded prefixes are common in noise; old HIR case folding
-    // extracted only those prefixes and collapsed to AllIndexed.
     for i in 0..80 {
         fs::write(
             corpus.join(format!("noise{i}.rs")),
@@ -141,14 +129,19 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
         .expect("write noise");
     }
 
-    let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
-    let root = index.root().to_path_buf();
-    let indexes = Indexes::from_single(index, root);
+    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
+    let indexes = wrap_indexes(index);
     let pattern = "ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string();
     let options = SearchOptions {
         case_mode: CaseMode::Insensitive,
         ..SearchOptions::default()
     };
-    let candidates = index_candidates(&indexes, &corpus, &[pattern], options);
+    let candidates = index_candidates(
+        &indexes,
+        &corpus,
+        &[pattern],
+        options,
+        FilterAdmission::Full,
+    );
     assert_eq!(candidates.len(), 4);
 }

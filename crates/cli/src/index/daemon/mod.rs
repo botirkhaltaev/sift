@@ -15,12 +15,13 @@ use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, S
 use notify::RecursiveMode;
 use notify::Watcher;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, ReconcileOutcome,
+    CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, Indexes,
     SnapshotId, StoreMeta, WalkMeta,
 };
 use thiserror::Error;
 
 use crate::grep::paths::CorpusScope;
+use crate::index::{IndexJob, ReconcileOutcome};
 
 pub(crate) const DAEMON_LOCK: &str = "lock";
 const READY_DIR: &str = "daemon-ready";
@@ -406,7 +407,7 @@ impl DaemonOrchestrator {
         let mut phase = Phase::idle(idle_timeout);
         let mut ingest = IngestTracker::from_reconcile(
             IndexStore::open_or_create(&sift_dir, &meta)
-                .and_then(|mut store| store.reconcile(&meta, &[]))?,
+                .and_then(|mut store| IndexJob::reconcile(&mut store, &meta, &[], &sift_dir))?,
         );
 
         let ipc_tx = tx.clone();
@@ -840,7 +841,7 @@ impl PendingIndex {
     fn reconcile(&mut self, sift_dir: &Path, meta: &StoreMeta) -> Option<ReconcileOutcome> {
         let paths = self.take()?;
         let result = IndexStore::open_or_create(sift_dir, meta)
-            .and_then(|mut store| store.reconcile(meta, &paths));
+            .and_then(|mut store| IndexJob::reconcile(&mut store, meta, &paths, sift_dir));
         match result {
             Ok(outcome) => Some(outcome),
             Err(e) => {
@@ -907,10 +908,14 @@ fn filter_unindexed_hits(sift_dir: &Path, paths: Vec<PathBuf>) -> Vec<PathBuf> {
     if paths.is_empty() {
         return paths;
     }
-    let Ok(store) = IndexStore::open(sift_dir) else {
+    let Ok(opened) = Indexes::open(sift_dir) else {
         return paths;
     };
-    store.unindexed_hit_paths(paths.clone()).unwrap_or(paths)
+    let corpus = opened.indexed_corpus();
+    paths
+        .into_iter()
+        .filter(|path| !corpus.contains(path))
+        .collect()
 }
 
 impl DaemonRuntime<'_> {
@@ -1139,7 +1144,7 @@ impl IndexRefresh<'_> {
             let mut outcome = None;
             if matches!(scope, RefreshScope::CorpusAndPending) {
                 let result = IndexStore::open_or_create(&sift_dir, &meta)
-                    .and_then(|mut store| store.reconcile(&meta, &[]));
+                    .and_then(|mut store| IndexJob::reconcile(&mut store, &meta, &[], &sift_dir));
                 match result {
                     Ok(committed) => outcome = Some(committed),
                     Err(e) => {

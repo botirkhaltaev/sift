@@ -9,7 +9,9 @@ pub mod grep;
 pub mod index;
 pub mod search;
 
-pub use candidates::{CandidateCoverage, CandidateSelection, Candidates, IndexFallback};
+pub use candidates::{
+    CandidateCoverage, CandidateSelection, CandidateSource, Candidates, IndexFallback,
+};
 pub use corpus::Candidate;
 pub use grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateTransform,
@@ -34,7 +36,7 @@ pub use index::store::IndexStore;
 pub use index::{
     CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexAvailability, IndexConfig,
     IndexCoverage, IndexError, IndexId, IndexedCorpus, Indexes, PlanMode, QueryPlanOutput,
-    ReconcileOutcome, SnapshotId, WalkMeta,
+    Snapshot, SnapshotId, WalkMeta,
 };
 
 use thiserror::Error;

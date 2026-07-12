@@ -214,26 +214,26 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn materialize_rows(
+    pub(crate) fn hydrate_rows(
         &self,
         ids: &[u32],
         filter: &CandidateFilter,
         admission: FilterAdmission,
     ) -> Vec<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.materialize_rows(ids, filter, admission),
+            Self::NGram(index) => index.hydrate_rows(ids, filter, admission),
         }
     }
 
     #[must_use]
-    pub(crate) fn materialize_row(
+    pub(crate) fn hydrate_row(
         &self,
         id: u32,
         filter: &CandidateFilter,
         admission: FilterAdmission,
     ) -> Option<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.materialize_row(id, filter, admission),
+            Self::NGram(index) => index.hydrate_row(id, filter, admission),
         }
     }
 

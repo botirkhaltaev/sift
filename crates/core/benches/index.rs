@@ -8,28 +8,47 @@ use std::fs;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use sift_core::grep::VisibilityConfig;
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
-use sift_core::search::{SearchOptions, SearchQueryBuilder};
+use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::grep::{CandidateOrder, Grep, GrepRequest, PathDisplay, VisibilityConfig};
+use sift_core::search::{
+    InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode,
+};
 use sift_core::{
-    CaseMode, CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig,
-    IndexConfig, IndexStore, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
+    CaseMode, CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, Index, IndexBuildConfig,
+    IndexConfig, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramIndex, Snapshot, StoreMeta,
+    WalkMeta,
 };
 
 mod common;
 
 fn index_candidate_vec(
     indexes: &Indexes,
-    filter: &CandidateFilter,
+    filter: &sift_core::grep::CandidateFilter,
     patterns: &[String],
     options: SearchOptions,
 ) -> Vec<sift_core::Candidate> {
+    let source = CandidateSource {
+        indexes,
+        filter,
+        store_meta: None,
+    };
     let query = SearchQueryBuilder::new(patterns.to_vec())
         .options(options)
         .build()
         .unwrap();
-    indexes
-        .candidates(&query, filter, FilterAdmission::Full)
+    let request = GrepRequest {
+        query,
+        selection: CandidateSelection::Index {
+            fallback: IndexFallback::WalkOnStaleSnapshot,
+            order: CandidateOrder::default(),
+        },
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
+    };
+    Grep::new(source)
+        .resolve_candidates(&request)
         .unwrap()
         .into_vec()
 }
@@ -506,8 +525,15 @@ fn bench_candidates(c: &mut Criterion) {
     let fixture = common::open_large_index();
     let index = fixture.1;
     let root = index.root().to_path_buf();
-    let indexes = Indexes::from_single(sift_core::Index::NGram(index), root.clone());
-    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &root).unwrap();
+    let indexes = Indexes::from_snapshot(Snapshot::from_indexes(
+        root.clone(),
+        vec![Index::NGram(index)],
+    ));
+    let filter = sift_core::grep::CandidateFilter::new(
+        &sift_core::grep::CandidateFilterConfig::default(),
+        &root,
+    )
+    .unwrap();
 
     let mut g = c.benchmark_group("index_candidates");
 
