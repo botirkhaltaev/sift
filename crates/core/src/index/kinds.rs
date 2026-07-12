@@ -24,9 +24,9 @@ pub struct QueryPlanOutput {
     pub mode: PlanMode,
 }
 
-/// How an opened index covers a query.
+/// Internal index narrowing outcome before materialization.
 #[derive(Debug)]
-pub enum CandidatePlan {
+pub(crate) enum NarrowingResult {
     /// The query has no usable index terms.
     Unavailable,
     /// Every indexed file is a possible match, so the index cannot narrow further.
@@ -35,23 +35,11 @@ pub enum CandidatePlan {
     Narrowed { file_ids: Vec<u32> },
 }
 
-impl CandidatePlan {
+impl NarrowingResult {
     #[must_use]
-    pub const fn is_unavailable(&self) -> bool {
+    pub(crate) const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
     }
-}
-
-/// How indexed file ids become [`crate::Candidate`] values.
-#[derive(Debug, Clone, Copy)]
-pub enum MaterializeRequest<'a> {
-    /// Emit every id (tests and internal callers).
-    All,
-    /// Apply filter rules while materializing.
-    Matching {
-        filter: &'a CandidateFilter,
-        admission: FilterAdmission,
-    },
 }
 
 /// Configured index identity persisted in metadata and snapshot manifests.
@@ -202,27 +190,47 @@ impl Index {
     }
 
     #[must_use]
-    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
+    pub(crate) fn narrow(&self, query: &crate::candidates::CandidateQuery<'_>) -> NarrowingResult {
         match self {
-            Self::NGram(index) => index.plan(query),
+            Self::NGram(index) => index.narrow(query),
         }
     }
 
     #[must_use]
-    pub fn materialize(
+    pub(crate) fn all_file_ids(&self) -> Vec<u32> {
+        match self {
+            Self::NGram(index) => index.all_file_ids(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn rel_path(&self, id: u32) -> Option<PathBuf> {
+        match self {
+            Self::NGram(index) => index.rel_path(id),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn materialize_rows(
         &self,
         ids: &[u32],
-        request: MaterializeRequest<'_>,
+        filter: &CandidateFilter,
+        admission: FilterAdmission,
     ) -> Vec<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.materialize(ids, request),
+            Self::NGram(index) => index.materialize_rows(ids, filter, admission),
         }
     }
 
     #[must_use]
-    pub(crate) fn all_files(&self, request: MaterializeRequest<'_>) -> Vec<crate::Candidate> {
+    pub(crate) fn materialize_row(
+        &self,
+        id: u32,
+        filter: &CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Option<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.all_files(request),
+            Self::NGram(index) => index.materialize_row(id, filter, admission),
         }
     }
 

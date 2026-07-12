@@ -1,13 +1,30 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::candidates::{CandidateFlags, CandidateQuery};
+use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
 use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes};
 use tempfile::TempDir;
 
 use super::common::{
     build_store, make_filter_corpus, no_ignore_build_config, open_indexes, sample_store_meta,
 };
+
+fn candidate_paths(
+    indexes: &Indexes,
+    corpus: &Path,
+    patterns: &[String],
+    flags: CandidateFlags,
+) -> Vec<std::path::PathBuf> {
+    let query = CandidateQuery::from_patterns(patterns, flags);
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), corpus).expect("filter");
+    indexes
+        .candidates(&query, &filter, FilterAdmission::Indexed)
+        .into_vec()
+        .into_iter()
+        .map(|c| c.rel_path().to_path_buf())
+        .collect()
+}
 
 #[test]
 fn gitignore_honored_without_git_repo() {
@@ -19,20 +36,13 @@ fn gitignore_honored_without_git_repo() {
     let sift_dir = tmp.path().join(".sift");
     build_store(tmp.path(), &sift_dir);
 
-    let spec = CandidateSpec {
-        patterns: &["hello".to_string(), "secret".to_string()],
-        flags: CandidateFlags::empty(),
-    };
     let indexes = open_indexes(&sift_dir);
-    let file_ids = match indexes.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed plan, got {other:?}"),
-    };
-    let paths: Vec<_> = indexes
-        .materialize(&file_ids, sift_core::MaterializeRequest::All)
-        .into_iter()
-        .map(|c| c.rel_path().to_path_buf())
-        .collect();
+    let paths = candidate_paths(
+        &indexes,
+        tmp.path(),
+        &["hello".to_string(), "secret".to_string()],
+        CandidateFlags::empty(),
+    );
     assert!(
         !paths.iter().any(|p| p.ends_with("skip.log")),
         "paths: {paths:?}"
@@ -55,20 +65,13 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
         .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
         .expect("build");
 
-    let spec = CandidateSpec {
-        patterns: &["beta".to_string()],
-        flags: CandidateFlags::empty(),
-    };
     let indexes = open_indexes(&sift_dir);
-    let file_ids = match indexes.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed plan, got {other:?}"),
-    };
-    let paths: Vec<_> = indexes
-        .materialize(&file_ids, sift_core::MaterializeRequest::All)
-        .into_iter()
-        .map(|c| c.rel_path().to_path_buf())
-        .collect();
+    let paths = candidate_paths(
+        &indexes,
+        tmp.path(),
+        &["beta".to_string()],
+        CandidateFlags::empty(),
+    );
     assert!(
         paths.iter().any(|p| p.starts_with("skip")),
         "no-ignore build should index skip/: {paths:?}"
@@ -83,20 +86,13 @@ fn defaults_exclude_gitignored_and_ignore_file_paths() {
     let sift_dir = tmp.path().join(".sift");
     build_store(tmp.path(), &sift_dir);
 
-    let spec = CandidateSpec {
-        patterns: &["beta".to_string()],
-        flags: CandidateFlags::empty(),
-    };
     let indexes = open_indexes(&sift_dir);
-    let file_ids = match indexes.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed plan, got {other:?}"),
-    };
-    let paths: Vec<_> = indexes
-        .materialize(&file_ids, sift_core::MaterializeRequest::All)
-        .into_iter()
-        .map(|c| c.rel_path().to_path_buf())
-        .collect();
+    let paths = candidate_paths(
+        &indexes,
+        tmp.path(),
+        &["beta".to_string()],
+        CandidateFlags::empty(),
+    );
     assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
     assert!(paths.iter().any(|p| p == Path::new("root.txt")));
     assert!(!paths.iter().any(|p| p.starts_with("skip")));
@@ -122,20 +118,13 @@ fn build_respects_hidden_files_by_default() {
         )
         .expect("build");
 
-    let spec = CandidateSpec {
-        patterns: &["beta".to_string()],
-        flags: CandidateFlags::empty(),
-    };
     let indexes = Indexes::open(sift_dir.path()).expect("open");
-    let file_ids = match indexes.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed plan, got {other:?}"),
-    };
-    let paths: Vec<_> = indexes
-        .materialize(&file_ids, sift_core::MaterializeRequest::All)
-        .into_iter()
-        .map(|c| c.rel_path().to_path_buf())
-        .collect();
+    let paths = candidate_paths(
+        &indexes,
+        corpus.path(),
+        &["beta".to_string()],
+        CandidateFlags::empty(),
+    );
     assert!(
         !paths.iter().any(|p| p.starts_with(".secret")),
         "hidden files excluded by default: {paths:?}"

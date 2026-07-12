@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::candidates::{CandidateFlags, CandidateQuery};
 use sift_core::{CorpusKind, FileId, Indexes, PlanMode};
 use tempfile::TempDir;
 
@@ -11,7 +11,7 @@ use crate::common::build_trigram_in_dir;
 fn open_missing_current_returns_empty_registry() {
     let tmp = TempDir::new().expect("tempdir");
     let indexes = Indexes::open(tmp.path()).expect("open");
-    assert!(indexes.is_empty());
+    assert!(indexes.availability().is_none());
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn open_empty_sift_dir_returns_empty_registry() {
     let sift_dir = tmp.path().join(".sift");
     fs::create_dir_all(&sift_dir).expect("mkdir");
     let indexes = Indexes::open(&sift_dir).expect("open");
-    assert!(indexes.is_empty());
+    assert!(indexes.availability().is_none());
 }
 
 #[test]
@@ -40,11 +40,9 @@ fn explain_reports_indexed_for_literal() {
     fs::write(corpus.join("a.txt"), "alpha beta\n").expect("write");
 
     let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let spec = CandidateSpec {
-        patterns: &["foo.*".to_string()],
-        flags: CandidateFlags::empty(),
-    };
-    let output = index.explain(&spec);
+    let patterns = ["foo.*".to_string()];
+    let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+    let output = index.explain(&query);
     assert_eq!(output.pattern, "foo.*");
     assert_eq!(output.mode, PlanMode::IndexedCandidates);
 }
@@ -57,11 +55,9 @@ fn explain_reports_full_scan_without_literal() {
     fs::write(corpus.join("a.txt"), "alpha beta\n").expect("write");
 
     let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let spec = CandidateSpec {
-        patterns: &[r"\w{5}\s+\w{5}".to_string()],
-        flags: CandidateFlags::empty(),
-    };
-    let output = index.explain(&spec);
+    let patterns = [r"\w{5}\s+\w{5}".to_string()];
+    let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+    let output = index.explain(&query);
     assert_eq!(output.mode, PlanMode::FullScan);
 }
 

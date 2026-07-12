@@ -8,8 +8,9 @@ use std::fs;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::candidates::{CandidateFlags, CandidateQuery};
 use sift_core::grep::VisibilityConfig;
+use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
     IndexStore, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
@@ -488,55 +489,82 @@ fn bench_trigram_index_methods(c: &mut Criterion) {
 fn bench_candidates(c: &mut Criterion) {
     let fixture = common::open_large_index();
     let index = fixture.1;
+    let root = index.root().to_path_buf();
+    let indexes = Indexes::from_single(sift_core::Index::NGram(index), root.clone());
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &root).unwrap();
 
     let mut g = c.benchmark_group("index_candidates");
 
     g.bench_function("literal", |b| {
-        let spec = CandidateSpec {
-            patterns: &["beta".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["beta".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        b.iter(|| {
+            black_box(
+                indexes
+                    .candidates(&query, &filter, FilterAdmission::Full)
+                    .into_vec(),
+            )
+        });
     });
 
     g.bench_function("required_literal", |b| {
-        let spec = CandidateSpec {
-            patterns: &["[A-Z]+_RESUME".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["[A-Z]+_RESUME".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        b.iter(|| {
+            black_box(
+                indexes
+                    .candidates(&query, &filter, FilterAdmission::Full)
+                    .into_vec(),
+            )
+        });
     });
 
     g.bench_function("full_scan_fallback", |b| {
-        let spec = CandidateSpec {
-            patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = [r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        b.iter(|| {
+            black_box(
+                indexes
+                    .candidates(&query, &filter, FilterAdmission::Full)
+                    .into_vec(),
+            )
+        });
     });
 
     g.bench_function("alternation", |b| {
-        let spec = CandidateSpec {
-            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        b.iter(|| {
+            black_box(
+                indexes
+                    .candidates(&query, &filter, FilterAdmission::Full)
+                    .into_vec(),
+            )
+        });
     });
 
     g.bench_function("case_insensitive", |b| {
-        let spec = CandidateSpec {
-            patterns: &["beta".to_string()],
-            flags: CandidateFlags::CASE_INSENSITIVE,
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["beta".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::CASE_INSENSITIVE);
+        b.iter(|| {
+            black_box(
+                indexes
+                    .candidates(&query, &filter, FilterAdmission::Full)
+                    .into_vec(),
+            )
+        });
     });
 
     g.bench_function("case_insensitive_alternation", |b| {
-        let spec = CandidateSpec {
-            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
-            flags: CandidateFlags::CASE_INSENSITIVE,
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::CASE_INSENSITIVE);
+        b.iter(|| {
+            black_box(
+                indexes
+                    .candidates(&query, &filter, FilterAdmission::Full)
+                    .into_vec(),
+            )
+        });
     });
 
     g.finish();
@@ -551,19 +579,15 @@ fn bench_explain(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_explain");
 
     g.bench_function("indexed_mode", |b| {
-        let spec = CandidateSpec {
-            patterns: &["beta".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.explain(&spec)));
+        let patterns = ["beta".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        b.iter(|| black_box(index.explain(&query)));
     });
 
     g.bench_function("full_scan_mode", |b| {
-        let spec = CandidateSpec {
-            patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.explain(&spec)));
+        let patterns = [r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        b.iter(|| black_box(index.explain(&query)));
     });
 
     g.finish();

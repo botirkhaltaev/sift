@@ -1,14 +1,16 @@
 use std::borrow::Cow;
+use std::fs;
 
 use sift_core::candidates::{
-    CandidatePlanner, CandidateRequest, CandidateScope, CandidateSelection, CandidateSource,
-    CandidateSpec, CorpusMode, IndexFallback,
+    CandidateCoverage, CandidateFlags, CandidatePlanner, CandidateQuery, CandidateSelection,
+    CandidateSource, IndexFallback,
 };
 use sift_core::grep::{
-    CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, InputRequest,
+    ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest,
+    PathDisplay,
 };
 use sift_core::search::{
-    InputExtent, InputIdentity, Inputs, SearchEvent, SearchInputs, SearchMode, SearchOptions,
+    InputConversion, Inputs, SearchEvent, SearchInputs, SearchMode, SearchOptions,
     SearchQueryBuilder, SearchSink, Searcher, StatsMode,
 };
 use tempfile::TempDir;
@@ -30,26 +32,32 @@ fn grep_finds_match_in_indexed_corpus() {
         .options(SearchOptions::default())
         .build()
         .expect("query");
-    let searcher = Searcher::new(query.clone()).expect("searcher");
+    let searcher = Searcher::new(query).expect("searcher");
 
     let source = CandidateSource {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
     };
-    let request = CandidateRequest {
-        scope: CandidateScope::Indexed,
-        corpus: CorpusMode::Indexed,
+    let candidate_query =
+        CandidateQuery::from_patterns(searcher.patterns(), CandidateFlags::empty());
+    let selection = CandidateSelection::Index {
         fallback: IndexFallback::WalkOnStaleSnapshot,
         order: CandidateOrder::default(),
     };
-    let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
-        .resolve()
-        .expect("candidates");
-    let input_request = InputRequest::from_candidates();
-    let inputs = input_request
-        .resolve(&candidates, InputExtent::Complete)
-        .expect("inputs");
+    let candidates = CandidatePlanner::plan(
+        &source,
+        &candidate_query,
+        selection,
+        CandidateCoverage::PotentialMatches,
+    )
+    .resolve()
+    .expect("candidates");
+    let inputs = SearchInputs {
+        candidates,
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+    };
 
     let report = searcher.search(inputs, StatsMode::Off).expect("grep run");
     assert!(report.matched());
@@ -75,18 +83,22 @@ fn candidate_planner_all_indexed_uses_index_when_metadata_missing() {
         filter: &filter,
         store_meta: None,
     };
-    let request = CandidateRequest {
-        scope: CandidateScope::Indexed,
-        corpus: CorpusMode::Indexed,
+    let candidate_query = CandidateQuery::from_patterns(query.patterns(), CandidateFlags::empty());
+    let selection = CandidateSelection::Index {
         fallback: IndexFallback::WalkOnStaleSnapshot,
         order: CandidateOrder::default(),
     };
 
-    let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
-        .resolve()
-        .expect("candidates");
+    let candidates = CandidatePlanner::plan(
+        &source,
+        &candidate_query,
+        selection,
+        CandidateCoverage::PotentialMatches,
+    )
+    .resolve()
+    .expect("candidates");
 
-    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates.into_vec().len(), 2);
 }
 
 #[test]
@@ -112,12 +124,12 @@ fn high_level_grep_search_resolves_candidates_and_reports_matches() {
                 .options(SearchOptions::default())
                 .build()
                 .expect("query"),
-            candidates: CandidateSelection::Corpus {
-                corpus: CorpusMode::Indexed,
+            selection: CandidateSelection::Index {
                 fallback: IndexFallback::IndexHitsOnly,
                 order: CandidateOrder::default(),
             },
-            inputs: InputRequest::from_candidates(),
+            streams: Inputs::empty(),
+            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::Lines,
             stats: StatsMode::On,
         })
@@ -155,12 +167,12 @@ fn high_level_grep_stream_emits_events_without_collecting_matches() {
                     .options(SearchOptions::default())
                     .build()
                     .expect("query"),
-                candidates: CandidateSelection::Corpus {
-                    corpus: CorpusMode::Indexed,
+                selection: CandidateSelection::Index {
                     fallback: IndexFallback::IndexHitsOnly,
                     order: CandidateOrder::default(),
                 },
-                inputs: InputRequest::from_candidates(),
+                streams: Inputs::empty(),
+                conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
                 mode: SearchMode::Lines,
                 stats: StatsMode::Off,
             },
@@ -196,12 +208,11 @@ fn high_level_grep_files_without_match_selects_nonmatching_files() {
                 .options(SearchOptions::default())
                 .build()
                 .expect("query"),
-            candidates: CandidateSelection::Corpus {
-                corpus: CorpusMode::Indexed,
-                fallback: IndexFallback::IndexHitsOnly,
+            selection: CandidateSelection::Walk {
                 order: CandidateOrder::default(),
             },
-            inputs: InputRequest::from_candidates(),
+            streams: Inputs::empty(),
+            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::FilesWithoutMatch,
             stats: StatsMode::Off,
         })
@@ -240,12 +251,12 @@ fn high_level_grep_files_without_match_is_not_selected_when_all_files_match() {
                 .options(SearchOptions::default())
                 .build()
                 .expect("query"),
-            candidates: CandidateSelection::Corpus {
-                corpus: CorpusMode::Indexed,
+            selection: CandidateSelection::Index {
                 fallback: IndexFallback::IndexHitsOnly,
                 order: CandidateOrder::default(),
             },
-            inputs: InputRequest::from_candidates(),
+            streams: Inputs::empty(),
+            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::FilesWithoutMatch,
             stats: StatsMode::Off,
         })
@@ -279,22 +290,46 @@ impl SearchSink for EventRecorder {
 
 #[test]
 fn grep_finds_match_in_stdin_stream() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("mkdir");
+
     let query = SearchQueryBuilder::new(vec!["needle".to_string()])
         .options(SearchOptions::default())
         .build()
         .expect("query");
-    let query = Searcher::new(query).expect("searcher");
+    let searcher = Searcher::new(query).expect("searcher");
 
-    let mut inputs = Inputs::with_capacity(1);
-    inputs.push_bytes(
-        Cow::Borrowed("<stdin>"),
-        Cow::Borrowed(b"hello needle world\n"),
-        InputIdentity::from_name("<stdin>"),
-    );
+    let indexes = open_indexes(&tmp.path().join(".sift"));
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
+    let source = CandidateSource {
+        indexes: &indexes,
+        filter: &filter,
+        store_meta: None,
+    };
+    let candidate_query =
+        CandidateQuery::from_patterns(searcher.patterns(), CandidateFlags::empty());
+    let candidates = CandidatePlanner::plan(
+        &source,
+        &candidate_query,
+        CandidateSelection::None,
+        CandidateCoverage::PotentialMatches,
+    )
+    .resolve()
+    .expect("candidates");
 
-    let report = query
-        .search(SearchInputs::Complete(inputs), StatsMode::Off)
-        .expect("grep run");
+    let streams = Inputs::empty().with_stream(ByteInput {
+        path: Cow::Borrowed("<stdin>"),
+        bytes: Cow::Borrowed(b"hello needle world\n"),
+        explicit: false,
+    });
+    let inputs = SearchInputs {
+        candidates,
+        streams,
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+    };
+
+    let report = searcher.search(inputs, StatsMode::Off).expect("grep run");
     assert!(report.matched());
     assert_eq!(report.matches.len(), 1);
     assert!(report.matches[0].text.contains("needle"));

@@ -43,23 +43,26 @@ impl CorpusScope {
         search_paths: &[PathBuf],
         sift_dir: &Path,
     ) -> anyhow::Result<Self> {
-        if indexes.is_empty() {
-            let root = meta.map_or_else(
-                || cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),
-                |m| m.corpus.root.clone(),
-            );
-            Ok(Self {
-                filter_root: root.clone(),
-                prefixes: Self::walk_prefixes(&root, search_paths)?,
-                exclude_paths: Self::excluded_paths(&root, sift_dir),
-            })
-        } else {
-            let root = indexes.root();
-            Ok(Self {
-                filter_root: root.to_path_buf(),
-                prefixes: Self::indexed_prefixes(root, cwd, search_paths)?,
-                exclude_paths: Self::excluded_paths(root, sift_dir),
-            })
+        match indexes.availability() {
+            None => {
+                let root = meta.map_or_else(
+                    || cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),
+                    |m| m.corpus.root.clone(),
+                );
+                Ok(Self {
+                    filter_root: root.clone(),
+                    prefixes: Self::walk_prefixes(&root, search_paths)?,
+                    exclude_paths: Self::excluded_paths(&root, sift_dir),
+                })
+            }
+            Some(index) => {
+                let root = index.root;
+                Ok(Self {
+                    filter_root: root.to_path_buf(),
+                    prefixes: Self::indexed_prefixes(root, cwd, search_paths)?,
+                    exclude_paths: Self::excluded_paths(root, sift_dir),
+                })
+            }
         }
     }
 

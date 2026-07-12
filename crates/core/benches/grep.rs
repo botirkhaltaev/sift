@@ -7,15 +7,15 @@ use std::hint::black_box;
 use std::path::Path;
 
 use sift_core::candidates::{
-    CandidatePlanner, CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, CorpusMode,
-    IndexFallback,
+    CandidateCoverage, CandidateFlags, CandidatePlanner, CandidateQuery, CandidateSelection,
+    CandidateSource, IndexFallback,
 };
-use sift_core::grep::InputRequest;
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder};
+use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder, PathDisplay};
 use sift_core::search::{
-    InputExtent, SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode,
+    InputConversion, SearchFlags, SearchInputs, SearchOptions, SearchQueryBuilder, Searcher,
+    StatsMode,
 };
-use sift_core::{Index, Indexes, NGramIndex};
+use sift_core::{Index, Indexes, Inputs, NGramIndex};
 
 mod common;
 
@@ -57,20 +57,26 @@ fn run_grep(
         .options(query.1.clone())
         .build()
         .unwrap();
-    let searcher = Searcher::new(query.clone()).unwrap();
-    let request = CandidateRequest {
-        scope: CandidateScope::Indexed,
-        corpus: CorpusMode::Indexed,
+    let searcher = Searcher::new(query).unwrap();
+    let candidate_query =
+        CandidateQuery::from_patterns(searcher.patterns(), CandidateFlags::empty());
+    let selection = CandidateSelection::Index {
         fallback: IndexFallback::WalkOnStaleSnapshot,
         order: CandidateOrder::default(),
     };
-    let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
-        .resolve()
-        .unwrap();
-    let input_request = InputRequest::from_candidates();
-    let inputs = input_request
-        .resolve(&candidates, InputExtent::Complete)
-        .unwrap();
+    let candidates = CandidatePlanner::plan(
+        &source,
+        &candidate_query,
+        selection,
+        CandidateCoverage::PotentialMatches,
+    )
+    .resolve()
+    .unwrap();
+    let inputs = SearchInputs {
+        candidates,
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+    };
     searcher.search(inputs, StatsMode::Off).unwrap().matched()
 }
 
@@ -78,7 +84,12 @@ fn bench_indexed_search(c: &mut Criterion) {
     let fixture = common::open_large_index();
     let index = fixture.1;
     let indexes = wrap_index(index);
-    let filter = make_filter(&CandidateFilterConfig::default(), indexes.root());
+    let root = indexes
+        .availability()
+        .expect("indexed corpus")
+        .root
+        .to_path_buf();
+    let filter = make_filter(&CandidateFilterConfig::default(), &root);
 
     let mut g = c.benchmark_group("grep_indexed");
 

@@ -903,6 +903,16 @@ struct DaemonRuntime<'a> {
     debounce: Duration,
 }
 
+fn filter_unindexed_hits(sift_dir: &Path, paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    if paths.is_empty() {
+        return paths;
+    }
+    let Ok(store) = IndexStore::open(sift_dir) else {
+        return paths;
+    };
+    store.unindexed_hit_paths(paths.clone()).unwrap_or(paths)
+}
+
 impl DaemonRuntime<'_> {
     fn run(&mut self) -> Result<(), DaemonError> {
         loop {
@@ -942,6 +952,7 @@ impl DaemonRuntime<'_> {
             }
             DaemonRequest::Index(paths) => {
                 self.ingest.observe();
+                let paths = filter_unindexed_hits(self.store.raw, paths);
                 self.refresh.apply_index(
                     paths,
                     &client.response,

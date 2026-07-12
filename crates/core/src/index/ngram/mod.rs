@@ -17,7 +17,7 @@ pub use index::{Index, NGramIndexError};
 mod candidate_tests {
     use std::path::Path;
 
-    use crate::candidates::{CandidateFlags, CandidateSpec};
+    use crate::candidates::{CandidateFlags, CandidateQuery};
     use crate::index::ngram::storage::postings::Postings;
 
     use super::*;
@@ -42,8 +42,8 @@ mod candidate_tests {
         if line_regexp {
             flags |= CandidateFlags::LINE_REGEXP;
         }
-        let spec = CandidateSpec { patterns, flags };
-        default_config().extract_literal_arms(&spec).is_some()
+        let query = CandidateQuery::from_patterns(patterns, flags);
+        default_config().extract_literal_arms(&query).is_some()
     }
 
     fn full_scan(
@@ -62,8 +62,8 @@ mod candidate_tests {
         if line_regexp {
             flags |= CandidateFlags::LINE_REGEXP;
         }
-        let spec = CandidateSpec { patterns, flags };
-        default_config().extract_literal_arms(&spec).is_none()
+        let query = CandidateQuery::from_patterns(patterns, flags);
+        default_config().extract_literal_arms(&query).is_none()
     }
 
     #[test]
@@ -160,12 +160,10 @@ mod candidate_tests {
 
     #[test]
     fn case_insensitive_alternation_keeps_long_arms() {
-        let spec = CandidateSpec {
-            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
-            flags: CandidateFlags::CASE_INSENSITIVE,
-        };
+        let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::CASE_INSENSITIVE);
         let arms = default_config()
-            .extract_literal_arms(&spec)
+            .extract_literal_arms(&query)
             .expect("casei alternation should extract");
         assert_eq!(arms.len(), 4);
         assert!(arms.iter().all(|arm| arm.len() >= 7));
@@ -174,23 +172,25 @@ mod candidate_tests {
 
     #[test]
     fn case_insensitive_fixed_string_keeps_original_bytes() {
-        let spec = CandidateSpec {
-            patterns: &["ERR_SYS".to_string()],
-            flags: CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
-        };
+        let patterns = ["ERR_SYS".to_string()];
+        let query = CandidateQuery::from_patterns(
+            &patterns,
+            CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
+        );
         let arms = default_config()
-            .extract_literal_arms(&spec)
+            .extract_literal_arms(&query)
             .expect("fixed casei should extract");
         assert_eq!(arms, vec![b"ERR_SYS".to_vec()]);
     }
 
     #[test]
     fn case_insensitive_non_ascii_declines_narrowing() {
-        let spec = CandidateSpec {
-            patterns: &["café".to_string()],
-            flags: CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
-        };
-        assert!(default_config().extract_literal_arms(&spec).is_none());
+        let patterns = ["café".to_string()];
+        let query = CandidateQuery::from_patterns(
+            &patterns,
+            CandidateFlags::CASE_INSENSITIVE | CandidateFlags::FIXED_STRINGS,
+        );
+        assert!(default_config().extract_literal_arms(&query).is_none());
     }
 
     #[test]
@@ -220,24 +220,20 @@ mod candidate_tests {
 
     #[test]
     fn generic_width_uses_spec_width_for_literal_extraction() {
-        let spec = CandidateSpec {
-            patterns: &["ab".to_string()],
-            flags: CandidateFlags::empty(),
-        };
+        let patterns = ["ab".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
         assert!(
             Config::new(GramWidth::new(2))
-                .extract_literal_arms(&spec)
+                .extract_literal_arms(&query)
                 .is_some()
         );
     }
 
     #[test]
     fn fixed_string_narrows() {
-        let spec = CandidateSpec {
-            patterns: &["beta.gamma".to_string()],
-            flags: CandidateFlags::FIXED_STRINGS,
-        };
-        assert!(default_config().extract_literal_arms(&spec).is_some());
+        let patterns = ["beta.gamma".to_string()];
+        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::FIXED_STRINGS);
+        assert!(default_config().extract_literal_arms(&query).is_some());
     }
 
     #[test]

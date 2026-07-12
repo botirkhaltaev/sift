@@ -1,13 +1,26 @@
 use std::{fs, path::Path};
 
-use sift_core::CandidatePlan;
-use sift_core::Index;
-use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::candidates::{CandidateFlags, CandidateQuery};
+use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
+use sift_core::{Index, Indexes};
 use tempfile::TempDir;
 
 use super::super::common::{
     build_store, build_trigram_in_dir, make_filter_corpus, make_parity_corpus, open_indexes,
 };
+
+fn index_candidates(
+    indexes: &Indexes,
+    corpus: &Path,
+    patterns: &[String],
+    flags: CandidateFlags,
+) -> Vec<sift_core::Candidate> {
+    let query = CandidateQuery::from_patterns(patterns, flags);
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), corpus).expect("filter");
+    indexes
+        .candidates(&query, &filter, FilterAdmission::Full)
+        .into_vec()
+}
 
 #[test]
 fn literal_query_returns_indexed_candidates() {
@@ -16,15 +29,14 @@ fn literal_query_returns_indexed_candidates() {
     make_parity_corpus(&corpus);
 
     let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
-    let spec = CandidateSpec {
-        patterns: &["beta".to_string()],
-        flags: CandidateFlags::empty(),
-    };
-    let file_ids = match index.plan(&spec) {
-        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed plan, got {other:?}"),
-    };
-    let candidates = index.materialize(&file_ids, sift_core::MaterializeRequest::All);
+    let root = index.root().to_path_buf();
+    let indexes = Indexes::from_single(index, root);
+    let candidates = index_candidates(
+        &indexes,
+        &corpus,
+        &["beta".to_string()],
+        CandidateFlags::empty(),
+    );
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -41,13 +53,16 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
     fs::write(corpus.join("a.txt"), "shared beta\n").expect("write a");
     fs::write(corpus.join("b.txt"), "another beta\n").expect("write b");
 
-    let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let spec = CandidateSpec {
-        patterns: &["beta".to_string()],
-        flags: CandidateFlags::empty(),
-    };
-
-    assert!(matches!(index.plan(&spec), CandidatePlan::AllIndexed));
+    let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
+    let root = index.root().to_path_buf();
+    let indexes = Indexes::from_single(index, root);
+    let candidates = index_candidates(
+        &indexes,
+        &corpus,
+        &["beta".to_string()],
+        CandidateFlags::empty(),
+    );
+    assert_eq!(candidates.len(), 2);
 }
 
 #[test]
@@ -57,16 +72,13 @@ fn literal_candidates_narrow_to_expected_file() {
     let sift_dir = tmp.path().join(".sift");
     build_store(tmp.path(), &sift_dir);
 
-    let spec = CandidateSpec {
-        patterns: &["beta".to_string()],
-        flags: CandidateFlags::empty(),
-    };
     let indexes = open_indexes(&sift_dir);
-    let file_ids = match indexes.plan(&spec) {
-        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed plan, got {other:?}"),
-    };
-    let candidates = indexes.materialize(&file_ids, sift_core::MaterializeRequest::All);
+    let candidates = index_candidates(
+        &indexes,
+        tmp.path(),
+        &["beta".to_string()],
+        CandidateFlags::empty(),
+    );
     assert!(!candidates.is_empty());
     assert!(
         candidates
@@ -92,16 +104,15 @@ fn case_insensitive_uppercase_corpus_narrows() {
     }
 
     let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
+    let root = index.root().to_path_buf();
+    let indexes = Indexes::from_single(index, root);
     let pattern = "err_sys|pme_turn_off".to_string();
-    let spec = CandidateSpec {
-        patterns: &[pattern],
-        flags: CandidateFlags::CASE_INSENSITIVE,
-    };
-    let file_ids = match index.plan(&spec) {
-        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed casei plan, got {other:?}"),
-    };
-    let candidates = index.materialize(&file_ids, sift_core::MaterializeRequest::All);
+    let candidates = index_candidates(
+        &indexes,
+        &corpus,
+        &[pattern],
+        CandidateFlags::CASE_INSENSITIVE,
+    );
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].rel_path(), Path::new("hit.rs"));
 }
@@ -128,15 +139,14 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
     }
 
     let index = Index::NGram(build_trigram_in_dir(&corpus, &tmp.path().join("trigram")));
+    let root = index.root().to_path_buf();
+    let indexes = Indexes::from_single(index, root);
     let pattern = "ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string();
-    let spec = CandidateSpec {
-        patterns: &[pattern],
-        flags: CandidateFlags::CASE_INSENSITIVE,
-    };
-    let file_ids = match index.plan(&spec) {
-        CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed casei alternation, got {other:?}"),
-    };
-    let candidates = index.materialize(&file_ids, sift_core::MaterializeRequest::All);
+    let candidates = index_candidates(
+        &indexes,
+        &corpus,
+        &[pattern],
+        CandidateFlags::CASE_INSENSITIVE,
+    );
     assert_eq!(candidates.len(), 4);
 }

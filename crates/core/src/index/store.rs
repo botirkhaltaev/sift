@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::IndexError;
 use super::meta::StoreMeta;
+use super::registry::Indexes;
 use super::snapshot::{
     DiskSnapshotStore, SnapshotId, SnapshotLease, SnapshotManifest, SnapshotRead, SnapshotStore,
     SnapshotWrite, SnapshotWriterSession,
@@ -336,6 +337,29 @@ impl<S: SnapshotStore> IndexStore<S> {
             snapshot_id,
             changed,
         })
+    }
+
+    /// Corpus-relative paths present in the current snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current snapshot cannot be opened.
+    pub fn indexed_rel_paths(&self) -> crate::Result<std::collections::HashSet<PathBuf>> {
+        let indexes = Indexes::open(&self.sift_dir)?;
+        Ok(indexes.indexed_rel_paths())
+    }
+
+    /// Filter search-hit paths to those not yet present in the current snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current snapshot cannot be opened.
+    pub fn unindexed_hit_paths(
+        &self,
+        hits: impl IntoIterator<Item = PathBuf>,
+    ) -> crate::Result<Vec<PathBuf>> {
+        let indexes = Indexes::open(&self.sift_dir)?;
+        Ok(indexes.unindexed_hit_paths(hits))
     }
 
     fn current_snapshot_id(&self) -> crate::Result<SnapshotId> {

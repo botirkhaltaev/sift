@@ -7,8 +7,8 @@ use std::hint::black_box;
 use std::path::Path;
 
 use sift_core::candidates::{
-    CandidateFlags, CandidatePlanner, CandidateRequest, CandidateScope, CandidateSource,
-    CandidateSpec, CorpusMode, IndexFallback,
+    CandidateCoverage, CandidateFlags, CandidatePlanner, CandidateQuery, CandidateSelection,
+    CandidateSource, IndexFallback,
 };
 use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder, VisibilityConfig};
 use sift_core::{
@@ -91,8 +91,8 @@ fn resolve(
     fixture: &PlannerFixture,
     patterns: &[String],
     flags: CandidateFlags,
-    scope: CandidateScope,
-    fallback: IndexFallback,
+    selection: CandidateSelection,
+    coverage: CandidateCoverage,
     meta: Option<&StoreMeta>,
 ) -> usize {
     let source = CandidateSource {
@@ -100,16 +100,11 @@ fn resolve(
         filter: &fixture.filter,
         store_meta: meta,
     };
-    let spec = CandidateSpec { patterns, flags };
-    let request = CandidateRequest {
-        scope,
-        corpus: CorpusMode::Indexed,
-        fallback,
-        order: CandidateOrder::default(),
-    };
-    CandidatePlanner::new(&source, spec, request)
+    let query = CandidateQuery::from_patterns(patterns, flags);
+    CandidatePlanner::plan(&source, &query, selection, coverage)
         .resolve()
         .unwrap()
+        .into_vec()
         .len()
 }
 
@@ -117,6 +112,10 @@ fn bench_candidate_planner(c: &mut Criterion) {
     let fixture = planner_fixture();
     let literal = vec!["[A-Z]+_RESUME".to_string()];
     let no_literal = vec![r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
+    let index_selection = |fallback: IndexFallback| CandidateSelection::Index {
+        fallback,
+        order: CandidateOrder::default(),
+    };
 
     let mut g = c.benchmark_group("candidate_planner");
 
@@ -126,8 +125,8 @@ fn bench_candidate_planner(c: &mut Criterion) {
                 &fixture,
                 &literal,
                 CandidateFlags::empty(),
-                CandidateScope::Indexed,
-                IndexFallback::WalkOnStaleSnapshot,
+                index_selection(IndexFallback::WalkOnStaleSnapshot),
+                CandidateCoverage::PotentialMatches,
                 Some(&fixture.complete_meta),
             ));
         });
@@ -139,8 +138,8 @@ fn bench_candidate_planner(c: &mut Criterion) {
                 &fixture,
                 &no_literal,
                 CandidateFlags::empty(),
-                CandidateScope::All,
-                IndexFallback::IndexHitsOnly,
+                index_selection(IndexFallback::IndexHitsOnly),
+                CandidateCoverage::Complete,
                 Some(&fixture.complete_meta),
             ));
         });
@@ -152,8 +151,8 @@ fn bench_candidate_planner(c: &mut Criterion) {
                 &fixture,
                 &literal,
                 CandidateFlags::empty(),
-                CandidateScope::Indexed,
-                IndexFallback::WalkOnStaleSnapshot,
+                index_selection(IndexFallback::WalkOnStaleSnapshot),
+                CandidateCoverage::PotentialMatches,
                 Some(&fixture.lazy_meta),
             ));
         });
@@ -170,13 +169,8 @@ fn bench_candidate_planner_walk(c: &mut Criterion) {
         filter: &filter,
         store_meta: None,
     };
-    let spec = CandidateSpec {
-        patterns: &patterns,
-        flags: CandidateFlags::empty(),
-    };
-    let request = CandidateRequest {
-        scope: CandidateScope::Indexed,
-        corpus: CorpusMode::Indexed,
+    let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+    let selection = CandidateSelection::Index {
         fallback: IndexFallback::WalkOnStaleSnapshot,
         order: CandidateOrder::default(),
     };
@@ -185,10 +179,16 @@ fn bench_candidate_planner_walk(c: &mut Criterion) {
     g.bench_function("walk_fallback_empty_index", |b| {
         b.iter(|| {
             black_box(
-                CandidatePlanner::new(&source, spec, request)
-                    .resolve()
-                    .unwrap()
-                    .len(),
+                CandidatePlanner::plan(
+                    &source,
+                    &query,
+                    selection,
+                    CandidateCoverage::PotentialMatches,
+                )
+                .resolve()
+                .unwrap()
+                .into_vec()
+                .len(),
             );
         });
     });

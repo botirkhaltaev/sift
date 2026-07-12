@@ -1,13 +1,15 @@
+pub mod collection;
+pub mod coverage;
+pub mod plan;
 pub mod planner;
+pub mod query;
 pub mod request;
 pub mod source;
-pub mod spec;
 
+pub use collection::Candidates;
+pub use coverage::CandidateCoverage;
+pub use plan::{CandidatePlan, PlannedDiscovery};
 pub use planner::CandidatePlanner;
-pub(crate) use planner::IndexNarrowing;
-pub use request::{
-    CandidateExtent, CandidateRequest, CandidateScope, CandidateSelection, CorpusMode,
-    IndexFallback,
-};
+pub use query::{CandidateFlags, CandidateQuery};
+pub use request::{CandidateSelection, IndexFallback};
 pub use source::CandidateSource;
-pub use spec::{CandidateFlags, CandidateSpec};

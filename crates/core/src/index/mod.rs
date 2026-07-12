@@ -13,12 +13,10 @@ pub mod store;
 pub use artifacts::{IndexDestination, IndexSource};
 pub use config::{CorpusKind, CorpusSpec, IndexBuildConfig};
 pub use error::IndexError;
-pub use kinds::{
-    CandidatePlan, FileId, Index, IndexConfig, IndexId, MaterializeRequest, PlanMode,
-    QueryPlanOutput,
-};
+pub use kinds::{FileId, Index, IndexConfig, IndexId, PlanMode, QueryPlanOutput};
 pub use meta::{CorpusMeta, FilterMeta, IndexCoverage, WalkMeta};
 pub use paths::IndexedCorpus;
+pub use registry::IndexAvailability;
 pub use registry::Indexes;
 pub use snapshot::SnapshotId;
 pub use store::ReconcileOutcome;
@@ -47,16 +45,6 @@ mod tests {
         let sift_dir = tmp.path().join(".sift");
         fs::create_dir_all(&sift_dir).expect("create sift dir");
         let indexes = Indexes::open(&sift_dir).expect("open indexes");
-        assert!(indexes.is_empty());
-        assert!(indexes.root().as_os_str().is_empty());
-    }
-
-    #[test]
-    fn indexes_first_returns_none_when_empty() {
-        let tmp = TempDir::new().expect("create temp dir");
-        let sift_dir = tmp.path().join(".sift");
-        fs::create_dir_all(&sift_dir).expect("create sift dir");
-        let indexes = Indexes::open(&sift_dir).expect("open indexes");
-        assert!(indexes.first().is_none());
+        assert!(indexes.availability().is_none());
     }
 }

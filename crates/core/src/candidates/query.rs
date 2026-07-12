@@ -7,24 +7,36 @@ bitflags::bitflags! {
         const WORD_REGEXP      = 1 << 2;
         const LINE_REGEXP      = 1 << 3;
         const INVERT_MATCH     = 1 << 4;
-        const DISABLE_INDEX_NARROWING = 1 << 5;
         /// Default `InputEncoding::Auto`: BOM sniffing may decode rare UTF-16 files.
         /// Index narrowing stays on for ASCII arms, with UTF-16LE/BE arm expansion.
         const BOM_SNIFFING = 1 << 6;
     }
 }
 
-use crate::search::{InputEncoding, RegexEngine, SearchFlags, SearchQuery};
+use crate::search::{InputEncoding, PrefilterCompatibility, RegexEngine, SearchFlags, SearchQuery};
 
-/// Index-agnostic description used to narrow candidate files.
+use super::planner::IndexNarrowing;
+
+/// Index-agnostic query projection used to narrow candidate files.
+#[must_use]
 #[derive(Debug, Clone, Copy)]
-pub struct CandidateSpec<'a> {
-    pub patterns: &'a [String],
+pub struct CandidateQuery<'q> {
+    pub patterns: &'q [String],
     pub flags: CandidateFlags,
+    index_narrowing: IndexNarrowing,
 }
 
-impl<'a> From<&'a SearchQuery> for CandidateSpec<'a> {
-    fn from(query: &'a SearchQuery) -> Self {
+impl<'q> CandidateQuery<'q> {
+    /// Build a candidate query from the search query and matcher prefilter compatibility.
+    pub const fn from_patterns(patterns: &'q [String], flags: CandidateFlags) -> Self {
+        Self {
+            patterns,
+            flags,
+            index_narrowing: IndexNarrowing::Enabled,
+        }
+    }
+
+    pub fn new(query: &'q SearchQuery, prefilter: PrefilterCompatibility) -> Self {
         let mut flags = CandidateFlags::empty();
         if query.options.flags.contains(SearchFlags::FIXED_STRINGS) {
             flags |= CandidateFlags::FIXED_STRINGS;
@@ -41,22 +53,25 @@ impl<'a> From<&'a SearchQuery> for CandidateSpec<'a> {
         if query.options.flags.contains(SearchFlags::INVERT_MATCH) {
             flags |= CandidateFlags::INVERT_MATCH;
         }
-        if query.options.input_encoding.forces_decode() {
-            flags |= CandidateFlags::DISABLE_INDEX_NARROWING;
-        } else if matches!(query.options.input_encoding, InputEncoding::Auto) {
+        if matches!(query.options.input_encoding, InputEncoding::Auto) {
             flags |= CandidateFlags::BOM_SNIFFING;
         }
-        if matches!(query.options.regex_engine, RegexEngine::Pcre2) {
-            flags |= CandidateFlags::DISABLE_INDEX_NARROWING;
-        }
+        let index_narrowing = if flags.contains(CandidateFlags::INVERT_MATCH)
+            || query.options.input_encoding.forces_decode()
+            || matches!(query.options.regex_engine, RegexEngine::Pcre2)
+            || matches!(prefilter, PrefilterCompatibility::Incompatible)
+        {
+            IndexNarrowing::Disabled
+        } else {
+            IndexNarrowing::Enabled
+        };
         Self {
             patterns: &query.patterns,
             flags,
+            index_narrowing,
         }
     }
-}
 
-impl CandidateSpec<'_> {
     #[must_use]
     pub const fn fixed_strings(&self) -> bool {
         self.flags.contains(CandidateFlags::FIXED_STRINGS)
@@ -88,15 +103,7 @@ impl CandidateSpec<'_> {
     }
 
     #[must_use]
-    pub(crate) const fn index_narrowing(&self) -> crate::candidates::IndexNarrowing {
-        if self.invert_match() || self.flags.contains(CandidateFlags::DISABLE_INDEX_NARROWING) {
-            crate::candidates::IndexNarrowing::Disabled
-        } else {
-            crate::candidates::IndexNarrowing::Enabled
-        }
-    }
-
-    pub(crate) fn disable_index_narrowing(&mut self) {
-        self.flags |= CandidateFlags::DISABLE_INDEX_NARROWING;
+    pub(crate) const fn index_narrowing(&self) -> IndexNarrowing {
+        self.index_narrowing
     }
 }

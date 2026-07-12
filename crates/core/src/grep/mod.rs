@@ -4,12 +4,13 @@ pub mod error;
 pub mod input;
 
 use crate::candidates::{
-    CandidateExtent, CandidatePlanner, CandidateSelection, CandidateSource, CandidateSpec,
+    CandidateCoverage, CandidatePlanner, CandidateQuery, CandidateSelection, CandidateSource,
 };
 use crate::search::{
-    EventEmission, InputExtent, PrefilterCompatibility, Report, SearchBound, SearchMode,
-    SearchQuery, SearchSink, Searcher, StatsMode, ZeroCounts,
+    EventEmission, Report, SearchInputs, SearchMode, SearchQuery, SearchSink, Searcher, StatsMode,
+    ZeroCounts,
 };
+pub use crate::search::{InputConversion, Inputs};
 
 pub use crate::corpus::Candidate;
 pub use crate::corpus::candidate::PathDisplay;
@@ -22,7 +23,7 @@ pub use crate::corpus::walk::{AllFiles, FileWalk, WalkFile, WalkMetadata, WalkSe
 pub use crate::index::Indexes;
 pub use crate::search::CandidateTransform;
 pub use error::Error;
-pub use input::{ByteInput, InputRequest};
+pub use input::ByteInput;
 
 pub struct Grep<'a> {
     source: CandidateSource<'a>,
@@ -32,15 +33,17 @@ pub struct GrepBuilder<'grep, 'source, 'input> {
     grep: &'grep Grep<'source>,
     query: Option<SearchQuery>,
     candidates: Option<CandidateSelection>,
-    inputs: InputRequest<'input>,
+    streams: Inputs<'input>,
+    conversion: InputConversion<'input>,
     mode: SearchMode,
     stats: StatsMode,
 }
 
 pub struct GrepRequest<'a> {
     pub query: SearchQuery,
-    pub candidates: CandidateSelection,
-    pub inputs: InputRequest<'a>,
+    pub selection: CandidateSelection,
+    pub streams: Inputs<'a>,
+    pub conversion: InputConversion<'a>,
     pub mode: SearchMode,
     pub stats: StatsMode,
 }
@@ -52,12 +55,13 @@ impl<'a> Grep<'a> {
     }
 
     #[must_use]
-    pub const fn builder<'input>(&self) -> GrepBuilder<'_, 'a, 'input> {
+    pub fn builder<'input>(&self) -> GrepBuilder<'_, 'a, 'input> {
         GrepBuilder {
             grep: self,
             query: None,
             candidates: None,
-            inputs: InputRequest::from_candidates(),
+            streams: Inputs::empty(),
+            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::Lines,
             stats: StatsMode::Off,
         }
@@ -90,46 +94,33 @@ impl<'a> Grep<'a> {
         request: GrepRequest<'a>,
         events: EventEmission<'_>,
     ) -> crate::Result<Report> {
-        let candidate_extent = request.candidate_extent();
-        let input_extent = request.input_extent();
+        let coverage = request.candidate_coverage();
         let query = request.query;
         let searcher = Searcher::new(query.clone())?;
-        let mut spec = CandidateSpec::from(&query);
-        if matches!(
-            searcher.prefilter_compatibility(),
-            PrefilterCompatibility::Incompatible
-        ) {
-            spec.disable_index_narrowing();
-        }
-        let candidates = CandidatePlanner::new(
-            &self.source,
-            spec,
-            request.candidates.request(candidate_extent),
-        )
-        .resolve()?;
-        let inputs = request.inputs.resolve(&candidates, input_extent)?;
+        let candidate_query = CandidateQuery::new(&query, searcher.prefilter_compatibility());
+        let candidates =
+            CandidatePlanner::plan(&self.source, &candidate_query, request.selection, coverage)
+                .resolve()?;
+        let inputs = SearchInputs {
+            candidates,
+            streams: request.streams,
+            conversion: request.conversion,
+        };
         searcher.execute(inputs, request.stats, request.mode, events)
     }
 }
 
 impl GrepRequest<'_> {
-    const fn candidate_extent(&self) -> CandidateExtent {
+    const fn candidate_coverage(&self) -> CandidateCoverage {
         match self.mode {
-            SearchMode::FilesWithoutMatch => CandidateExtent::Complete,
+            SearchMode::FilesWithoutMatch => CandidateCoverage::Complete,
             SearchMode::CountLines { zeros } | SearchMode::CountMatches { zeros } => match zeros {
-                ZeroCounts::Include => CandidateExtent::Complete,
-                ZeroCounts::Omit => CandidateExtent::PotentialMatches,
+                ZeroCounts::Include => CandidateCoverage::Complete,
+                ZeroCounts::Omit => CandidateCoverage::PotentialMatches,
             },
             SearchMode::Lines | SearchMode::Matches | SearchMode::FilesWithMatches => {
-                CandidateExtent::PotentialMatches
+                CandidateCoverage::PotentialMatches
             }
-        }
-    }
-
-    const fn input_extent(&self) -> InputExtent {
-        match self.query.options().search_bound {
-            SearchBound::Exhaustive => InputExtent::Complete,
-            SearchBound::FirstMatch => InputExtent::Progressive,
         }
     }
 }
@@ -148,8 +139,14 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
     }
 
     #[must_use]
-    pub fn inputs(mut self, inputs: InputRequest<'input>) -> Self {
-        self.inputs = inputs;
+    pub fn streams(mut self, streams: Inputs<'input>) -> Self {
+        self.streams = streams;
+        self
+    }
+
+    #[must_use]
+    pub const fn conversion(mut self, conversion: InputConversion<'input>) -> Self {
+        self.conversion = conversion;
         self
     }
 
@@ -179,8 +176,9 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
             .ok_or(crate::Error::Search(Error::MissingCandidateSelection))?;
         Ok(GrepRequest {
             query,
-            candidates,
-            inputs: self.inputs,
+            selection: candidates,
+            streams: self.streams,
+            conversion: self.conversion,
             mode: self.mode,
             stats: self.stats,
         })
@@ -206,58 +204,59 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
 }
 
 #[cfg(test)]
-mod candidate_extent_tests {
+mod candidate_coverage_tests {
     use super::*;
     use crate::search::SearchQueryBuilder;
 
-    fn extent(mode: SearchMode) -> CandidateExtent {
+    fn coverage(mode: SearchMode) -> CandidateCoverage {
         GrepRequest {
             query: SearchQueryBuilder::new(vec!["x".into()])
                 .build()
                 .expect("query"),
-            candidates: CandidateSelection::None,
-            inputs: InputRequest::from_candidates(),
+            selection: CandidateSelection::None,
+            streams: Inputs::empty(),
+            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode,
             stats: StatsMode::Off,
         }
-        .candidate_extent()
+        .candidate_coverage()
     }
 
     #[test]
     fn count_lines_omit_uses_potential_matches() {
         assert_eq!(
-            extent(SearchMode::CountLines {
+            coverage(SearchMode::CountLines {
                 zeros: ZeroCounts::Omit
             }),
-            CandidateExtent::PotentialMatches
+            CandidateCoverage::PotentialMatches
         );
     }
 
     #[test]
     fn count_lines_include_uses_complete() {
         assert_eq!(
-            extent(SearchMode::CountLines {
+            coverage(SearchMode::CountLines {
                 zeros: ZeroCounts::Include
             }),
-            CandidateExtent::Complete
+            CandidateCoverage::Complete
         );
     }
 
     #[test]
     fn count_matches_omit_uses_potential_matches() {
         assert_eq!(
-            extent(SearchMode::CountMatches {
+            coverage(SearchMode::CountMatches {
                 zeros: ZeroCounts::Omit
             }),
-            CandidateExtent::PotentialMatches
+            CandidateCoverage::PotentialMatches
         );
     }
 
     #[test]
     fn files_without_match_uses_complete() {
         assert_eq!(
-            extent(SearchMode::FilesWithoutMatch),
-            CandidateExtent::Complete
+            coverage(SearchMode::FilesWithoutMatch),
+            CandidateCoverage::Complete
         );
     }
 }

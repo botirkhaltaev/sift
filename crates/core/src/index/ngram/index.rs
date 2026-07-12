@@ -3,8 +3,9 @@ use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
-use crate::candidates::CandidateSpec;
-use crate::index::{CandidatePlan, CorpusKind, FileId, IndexedCorpus};
+use crate::candidates::CandidateQuery;
+use crate::index::kinds::NarrowingResult;
+use crate::index::{CorpusKind, FileId, IndexedCorpus};
 
 use super::config::Config;
 use super::files::{FileFingerprint, FileTable};
@@ -167,11 +168,11 @@ impl Index {
         self.storage.corpus_kind
     }
 
-    /// Plan candidate coverage for the query.
+    /// Narrow candidate coverage for the query.
     #[must_use]
-    pub fn plan(&self, query: &CandidateSpec<'_>) -> CandidatePlan {
+    pub(crate) fn narrow(&self, query: &CandidateQuery<'_>) -> NarrowingResult {
         let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
-            return CandidatePlan::Unavailable;
+            return NarrowingResult::Unavailable;
         };
         let gram_match = if query.case_insensitive() {
             GramMatch::AsciiCase
@@ -180,14 +181,14 @@ impl Index {
         };
         let ids = self.candidate_file_ids(&arms, gram_match);
         if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
-            return CandidatePlan::AllIndexed;
+            return NarrowingResult::AllIndexed;
         }
-        CandidatePlan::Narrowed { file_ids: ids }
+        NarrowingResult::Narrowed { file_ids: ids }
     }
 
     /// Returns an explanation of how a query would be handled.
     #[must_use]
-    pub fn explain(&self, query: &CandidateSpec<'_>) -> crate::index::QueryPlanOutput {
+    pub fn explain(&self, query: &CandidateQuery<'_>) -> crate::index::QueryPlanOutput {
         let mode = match Config::new(self.width).extract_literal_arms(query) {
             Some(_) => crate::index::PlanMode::IndexedCandidates,
             None => crate::index::PlanMode::FullScan,
@@ -199,17 +200,44 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn all_files(
-        &self,
-        request: crate::index::MaterializeRequest<'_>,
-    ) -> Vec<crate::Candidate> {
+    pub(crate) fn all_file_ids(&self) -> Vec<u32> {
         (0..self.storage.files.len())
-            .into_par_iter()
-            .filter_map(|id| {
-                let id = u32::try_from(id).ok()?;
-                self.candidate_from_id(id, request)
-            })
+            .filter_map(|id| u32::try_from(id).ok())
             .collect()
+    }
+
+    #[must_use]
+    pub(crate) fn rel_path(&self, id: u32) -> Option<PathBuf> {
+        let fid = FileId::new(usize::try_from(id).ok()?);
+        let row = self.storage.files.row(fid)?;
+        Some(PathBuf::from(row.path))
+    }
+
+    #[must_use]
+    pub(crate) fn materialize_rows(
+        &self,
+        ids: &[u32],
+        filter: &crate::corpus::filter::CandidateFilter,
+        admission: crate::corpus::filter::FilterAdmission,
+    ) -> Vec<crate::Candidate> {
+        ids.par_iter()
+            .filter_map(|&id| self.materialize_row(id, filter, admission))
+            .collect()
+    }
+
+    #[must_use]
+    pub(crate) fn materialize_row(
+        &self,
+        id: u32,
+        filter: &crate::corpus::filter::CandidateFilter,
+        admission: crate::corpus::filter::FilterAdmission,
+    ) -> Option<crate::Candidate> {
+        let fid = FileId::new(usize::try_from(id).ok()?);
+        let row = self.storage.files.row(fid)?;
+        let rel = PathBuf::from(row.path);
+        let abs = self.storage.root.join(&rel);
+        let candidate = crate::Candidate::with_metadata(rel, abs, Some(row.size), None);
+        candidate.matches(filter, admission).then_some(candidate)
     }
 
     #[must_use]
@@ -217,34 +245,6 @@ impl Index {
         self.storage.files.coverage()
     }
 
-    #[must_use]
-    pub(crate) fn materialize(
-        &self,
-        ids: &[u32],
-        request: crate::index::MaterializeRequest<'_>,
-    ) -> Vec<crate::Candidate> {
-        ids.par_iter()
-            .filter_map(|&id| self.candidate_from_id(id, request))
-            .collect()
-    }
-
-    fn candidate_from_id(
-        &self,
-        id: u32,
-        request: crate::index::MaterializeRequest<'_>,
-    ) -> Option<crate::Candidate> {
-        let fid = FileId::new(usize::try_from(id).ok()?);
-        let row = self.storage.files.row(fid)?;
-        let rel = PathBuf::from(row.path);
-        let abs = self.storage.root.join(&rel);
-        let candidate = crate::Candidate::with_metadata(rel, abs, Some(row.size), None);
-        match request {
-            crate::index::MaterializeRequest::All => Some(candidate),
-            crate::index::MaterializeRequest::Matching { filter, admission } => {
-                candidate.matches(filter, admission).then_some(candidate)
-            }
-        }
-    }
     pub(crate) fn merge_partial_fingerprints(
         existing: &[FileFingerprint],
         root: &Path,

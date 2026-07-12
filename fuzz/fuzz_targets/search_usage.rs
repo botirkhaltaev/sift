@@ -2,15 +2,17 @@
 
 use libfuzzer_sys::fuzz_target;
 use sift_core::candidates::{
-    CandidatePlanner, CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, CorpusMode,
-    IndexFallback,
+    CandidateCoverage, CandidateFlags, CandidatePlanner, CandidateQuery, CandidateSelection,
+    CandidateSource, IndexFallback,
 };
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, InputRequest, VisibilityConfig};
+use sift_core::grep::{CandidateFilter, CandidateFilterConfig, PathDisplay, VisibilityConfig};
 use sift_core::search::{
-    InputExtent, SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode,
+    InputConversion, SearchFlags, SearchInputs, SearchOptions, SearchQueryBuilder, Searcher,
+    StatsMode,
 };
 use sift_core::{
-    CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, NGramConfig,
+    CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, Inputs,
+    NGramConfig,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -20,12 +22,13 @@ const MAX_PATTERN_LEN: usize = 512;
 struct IndexHolder {
     _temp: tempfile::TempDir,
     indexes: Indexes,
+    root: std::path::PathBuf,
 }
 
 static INDEXES: OnceLock<IndexHolder> = OnceLock::new();
 
-fn indexed() -> &'static Indexes {
-    let holder = INDEXES.get_or_init(|| {
+fn indexed() -> &'static IndexHolder {
+    INDEXES.get_or_init(|| {
         let tmp = tempfile::tempdir().expect("tempdir");
         let corpus = tmp.path().join("c");
         fs::create_dir_all(&corpus).expect("mkdir");
@@ -48,12 +51,17 @@ fn indexed() -> &'static Indexes {
             .build(&config, &trigram_dir, &[])
             .expect("build_index");
         let indexes = Indexes::open(&sift_dir).expect("open_index");
+        let root = indexes
+            .availability()
+            .expect("indexed corpus")
+            .root
+            .to_path_buf();
         IndexHolder {
             _temp: tmp,
             indexes,
+            root,
         }
-    });
-    &holder.indexes
+    })
 }
 
 fn lossy_pattern(data: &[u8]) -> String {
@@ -76,7 +84,7 @@ fn opts_from_bytes(data: &[u8]) -> SearchOptions {
     }
 }
 
-fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
+fn run_search(holder: &IndexHolder, patterns: &[String], opts: &SearchOptions) {
     let Ok(query) = SearchQueryBuilder::new(patterns.to_vec())
         .options(opts.clone())
         .build()
@@ -86,26 +94,31 @@ fn run_search(indexes: &Indexes, patterns: &[String], opts: &SearchOptions) {
     let Ok(searcher) = Searcher::new(query.clone()) else {
         return;
     };
-    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), indexes.root()).unwrap();
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &holder.root).unwrap();
     let source = CandidateSource {
-        indexes,
+        indexes: &holder.indexes,
         filter: &filter,
         store_meta: None,
     };
-    let request = CandidateRequest {
-        scope: CandidateScope::Indexed,
-        corpus: CorpusMode::Indexed,
+    let candidate_query =
+        CandidateQuery::from_patterns(searcher.patterns(), CandidateFlags::empty());
+    let selection = CandidateSelection::Index {
         fallback: IndexFallback::WalkOnStaleSnapshot,
         order: Default::default(),
     };
-    let Ok(candidates) =
-        CandidatePlanner::new(&source, CandidateSpec::from(&query), request).resolve()
-    else {
+    let Ok(candidates) = CandidatePlanner::plan(
+        &source,
+        &candidate_query,
+        selection,
+        CandidateCoverage::PotentialMatches,
+    )
+    .resolve() else {
         return;
     };
-    let input_request = InputRequest::from_candidates();
-    let Ok(inputs) = input_request.resolve(&candidates, InputExtent::Complete) else {
-        return;
+    let inputs = SearchInputs {
+        candidates,
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
     };
     let _ = searcher.search(inputs, StatsMode::Off);
 }
@@ -116,16 +129,16 @@ fuzz_target!(|data: &[u8]| {
     }
 
     let opts = opts_from_bytes(data);
-    let indexes = indexed();
+    let holder = indexed();
 
     let pat1 = lossy_pattern(&data[2..]);
-    run_search(indexes, &[pat1], &opts);
+    run_search(holder, &[pat1], &opts);
 
     if data.len() > 4 {
         let mid = 2 + (data.len() - 2) / 2;
         let p_a = lossy_pattern(&data[2..mid]);
         let p_b = lossy_pattern(&data[mid..]);
-        run_search(indexes, &[p_a, p_b], &opts);
+        run_search(holder, &[p_a, p_b], &opts);
     }
 
     let p = lossy_pattern(&data[2..]);

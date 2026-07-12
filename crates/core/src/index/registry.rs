@@ -1,24 +1,29 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
 use super::config::CorpusKind;
 use super::error::IndexError;
-use super::kinds::{CandidatePlan, Index};
+use super::kinds::{Index, NarrowingResult};
 use super::paths::IndexedCorpus;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
-use crate::corpus::filter::CandidateFilter;
+use crate::candidates::{CandidateQuery, Candidates};
+use crate::corpus::filter::{CandidateFilter, FilterAdmission};
 use crate::corpus::walk::FileWalk;
+
+/// Identity of a usable index: everything needed to trust or validate it.
+pub struct IndexAvailability<'a> {
+    pub root: &'a Path,
+    pub corpus: CorpusKind,
+    pub snapshot: SnapshotId,
+}
 
 /// Registry of opened indexes read from a snapshot store.
 ///
 /// Opens all index kinds found in the current snapshot and provides
 /// query-time candidate narrowing by intersecting results from each index.
-/// Multiple indexes together produce tighter narrowing than any single
-/// index alone.
-///
-/// Owns a [`Snapshot`] that holds a reader lease, preventing the snapshot
-/// from being garbage-collected while searches are active.
 pub struct Indexes {
     snapshot: Snapshot,
 }
@@ -70,53 +75,82 @@ impl Indexes {
         Ok(Self { snapshot })
     }
 
+    /// Whether this registry has a usable snapshot for candidate discovery.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.snapshot.is_empty()
-    }
-
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        self.snapshot.root()
-    }
-
-    #[must_use]
-    pub const fn snapshot_id(&self) -> Option<&SnapshotId> {
-        self.snapshot.id()
-    }
-
-    /// Plan candidate coverage from all indexes that can narrow the query.
-    #[must_use]
-    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
+    pub fn availability(&self) -> Option<IndexAvailability<'_>> {
+        if self.snapshot.is_empty() {
+            return None;
+        }
+        let root = self.snapshot.root();
         let indexes = self.snapshot.indexes();
-        match indexes.len() {
-            0 => CandidatePlan::Unavailable,
-            1 => indexes[0].plan(query),
-            _ => Self::plan_multi(indexes, query),
+        let first = indexes.first()?;
+        let corpus = first.corpus_kind();
+        if indexes.iter().any(|idx| idx.corpus_kind() != corpus) {
+            return None;
+        }
+        let snapshot = self.snapshot.id()?.clone();
+        Some(IndexAvailability {
+            root,
+            corpus,
+            snapshot,
+        })
+    }
+
+    /// Narrow by the candidate query and return candidates.
+    #[must_use]
+    pub fn candidates<'a>(
+        &'a self,
+        query: &CandidateQuery<'_>,
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Candidates<'a> {
+        match self.narrow(query) {
+            NarrowingResult::Unavailable => Candidates::from_vec(Vec::new()),
+            NarrowingResult::AllIndexed => {
+                let file_ids = self.all_indexed_file_ids();
+                Candidates::from_index_rows(self, file_ids, filter, admission)
+            }
+            NarrowingResult::Narrowed { file_ids } => {
+                Candidates::from_index_rows(self, file_ids, filter, admission)
+            }
         }
     }
 
-    /// Corpus-relative paths present in the current snapshot.
     #[must_use]
-    pub fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
-        self.indexed_paths().into_set()
+    pub(crate) fn narrow(&self, query: &CandidateQuery<'_>) -> NarrowingResult {
+        let indexes = self.snapshot.indexes();
+        match indexes.len() {
+            0 => NarrowingResult::Unavailable,
+            1 => indexes[0].narrow(query),
+            _ => Self::narrow_multi(indexes, query),
+        }
     }
 
-    fn indexed_paths(&self) -> IndexedCorpus {
-        IndexedCorpus::from_indexes(self.snapshot.indexes())
-    }
-
-    /// Corpus-relative search hits not yet present in the current snapshot.
     #[must_use]
-    pub fn unindexed_hits(&self, hits: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-        let indexed = self.indexed_paths();
-        hits.into_iter()
-            .filter(|path| !indexed.contains(path))
-            .collect()
+    pub(crate) fn materialize_row(
+        &self,
+        id: u32,
+        filter: &CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Option<crate::Candidate> {
+        let index = self.primary_index()?;
+        index.materialize_row(id, filter, admission)
     }
 
-    /// Candidates under `filter` whose paths are not present in the current snapshot.
-    pub(crate) fn unindexed_candidates(
+    #[must_use]
+    pub(crate) fn materialize_rows(
+        &self,
+        file_ids: &[u32],
+        filter: &CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Vec<crate::Candidate> {
+        let Some(index) = self.primary_index() else {
+            return Vec::new();
+        };
+        index.materialize_rows(file_ids, filter, admission)
+    }
+
+    pub(crate) fn unindexed_walk_candidates(
         &self,
         filter: &CandidateFilter,
     ) -> crate::Result<Vec<crate::Candidate>> {
@@ -124,58 +158,73 @@ impl Indexes {
         FileWalk::from_filter(filter).candidates_matching(indexed.unindexed_files())
     }
 
-    /// Return all indexed candidates across all registered indexes.
+    /// Corpus-relative paths present in the current snapshot.
     #[must_use]
-    pub(crate) fn all_indexed_candidates(
+    pub(crate) fn indexed_rel_paths(&self) -> HashSet<PathBuf> {
+        self.indexed_paths().into_set()
+    }
+
+    /// Filter hit paths to those not yet indexed in the current snapshot.
+    #[must_use]
+    pub(crate) fn unindexed_hit_paths(
         &self,
-        request: super::MaterializeRequest<'_>,
-    ) -> Vec<crate::Candidate> {
+        hits: impl IntoIterator<Item = PathBuf>,
+    ) -> Vec<PathBuf> {
+        let indexed = self.indexed_paths();
+        hits.into_iter()
+            .filter(|path| !indexed.contains(path))
+            .collect()
+    }
+
+    fn indexed_paths(&self) -> IndexedCorpus {
+        IndexedCorpus::from_indexes(self.snapshot.indexes())
+    }
+
+    fn primary_index(&self) -> Option<&Index> {
+        self.snapshot.indexes().first()
+    }
+
+    fn all_indexed_file_ids(&self) -> Vec<u32> {
         let indexes = self.snapshot.indexes();
         let mut iter = indexes.iter();
         let Some(first) = iter.next() else {
             return Vec::new();
         };
 
-        let mut files = first.all_files(request);
+        let mut file_ids = first.all_file_ids();
 
         for index in iter {
             let next: HashSet<PathBuf> = index
-                .all_files(super::MaterializeRequest::All)
+                .all_file_ids()
                 .into_iter()
-                .map(|c| c.rel_path().to_path_buf())
+                .filter_map(|id| index.rel_path(id))
                 .collect();
-            files.retain(|c| next.contains(c.rel_path()));
-            if files.is_empty() {
+            file_ids.retain(|id| first.rel_path(*id).is_some_and(|path| next.contains(&path)));
+            if file_ids.is_empty() {
                 break;
             }
         }
 
-        files
+        file_ids
     }
 
-    /// Intersect candidates from multiple indexes.
-    fn plan_multi(
-        indexes: &[Index],
-        query: &crate::candidates::CandidateSpec<'_>,
-    ) -> CandidatePlan {
-        use rayon::prelude::*;
-
-        let plans: Vec<CandidatePlan> = indexes
+    fn narrow_multi(indexes: &[Index], query: &CandidateQuery<'_>) -> NarrowingResult {
+        let plans: Vec<NarrowingResult> = indexes
             .par_iter()
-            .map(|idx| idx.plan(query))
+            .map(|idx| idx.narrow(query))
             .filter(|plan| !plan.is_unavailable())
             .collect();
 
         if plans.is_empty() {
-            return CandidatePlan::Unavailable;
+            return NarrowingResult::Unavailable;
         }
 
         let mut narrowed = plans.into_iter().filter_map(|plan| match plan {
-            CandidatePlan::Narrowed { file_ids } => Some(file_ids),
-            CandidatePlan::AllIndexed | CandidatePlan::Unavailable => None,
+            NarrowingResult::Narrowed { file_ids } => Some(file_ids),
+            NarrowingResult::AllIndexed | NarrowingResult::Unavailable => None,
         });
         let Some(mut current) = narrowed.next() else {
-            return CandidatePlan::AllIndexed;
+            return NarrowingResult::AllIndexed;
         };
 
         for next in narrowed {
@@ -198,33 +247,6 @@ impl Indexes {
             }
         }
 
-        CandidatePlan::Narrowed { file_ids: current }
-    }
-
-    #[must_use]
-    pub fn materialize(
-        &self,
-        file_ids: &[u32],
-        request: super::MaterializeRequest<'_>,
-    ) -> Vec<crate::Candidate> {
-        let Some(index) = self.first() else {
-            return Vec::new();
-        };
-        index.materialize(file_ids, request)
-    }
-
-    #[must_use]
-    pub fn first(&self) -> Option<&Index> {
-        self.snapshot.indexes().first()
-    }
-
-    #[must_use]
-    pub fn corpus_kind(&self) -> Option<CorpusKind> {
-        let indexes = self.snapshot.indexes();
-        let kind = indexes.first()?.corpus_kind();
-        if indexes.iter().any(|idx| idx.corpus_kind() != kind) {
-            return None;
-        }
-        Some(kind)
+        NarrowingResult::Narrowed { file_ids: current }
     }
 }

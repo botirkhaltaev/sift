@@ -6,7 +6,9 @@ Guidelines for AI agents working on the sift codebase.
 
 Sift is an indexed code search engine written in Rust, built around **composable on-disk indexes**. It builds indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine.
 
-The core architecture treats code search like database query execution: multiple index configurations can coexist, each narrowing candidates independently, with the `Indexes` registry intersecting their results. Today, Sift ships a runtime-width N-gram index that defaults to trigram width. `IndexConfig` records configured/persisted index identity, `IndexStore` owns build/open/update transactions, and `Index` is the opened query-time runtime dispatch. Future index types (AST indexes, dependency graphs, vector indexes) slot into the same architecture.
+The core architecture treats code search like database query execution: multiple index configurations can coexist, each narrowing candidates independently, with the `Indexes` registry intersecting their results. Today, Sift ships a runtime-width N-gram index that defaults to trigram width. `IndexConfig` records configured/persisted index identity, `IndexStore` owns build/open/update transactions, and `Indexes` is the query-time facade (`availability`, `candidates`). Future index types (AST indexes, dependency graphs, vector indexes) slot into the same architecture.
+
+The candidate pipeline is **plan (pure) → resolve (I/O) → search**: `CandidatePlanner::plan` returns a `CandidatePlan`; `CandidatePlan::resolve` is the single I/O boundary; `Searcher` consumes a `Candidates` collection.
 
 ## Build & Test
 
@@ -137,6 +139,24 @@ would make intent clearer.
 Separate domain decisions from side effects. Prefer pure, testable logic that
 returns decisions or actions, with I/O, filesystem access, spawning, logging,
 locking, and channel communication kept at clear orchestration boundaries.
+
+**Query pipeline:** plan (pure) → resolve (I/O) → search. Planners return
+inspectable plan values; `resolve()` (consuming `self`) is the only
+side-effectful step in candidate resolution. Never interleave I/O inside planning.
+
+**Short domain names** over stage/mechanism names (`Candidates`, not
+`ResolvedCandidates` / `ProgressiveCandidates`). If two types are a near-duplicate
+across a layer boundary, merge or delete one.
+
+**`Option<T>` models absence.** Do not add custom enums whose only second arm means
+"nothing"; reserve enums for two or more meaningful alternatives.
+
+**Single-phase construction.** Build values complete at construction time; no
+post-construction mutators (`disable_*`, `set_*`) when the input is known upfront.
+
+**Collections** follow Rust conventions: a named type with `IntoIterator`, `into_vec`,
+and `is_empty`; no eager/lazy API pairs or load flags; no `len()` when iteration
+filters rows and an exact count would lie.
 
 ## Function Evolution
 
