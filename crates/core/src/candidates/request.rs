@@ -14,6 +14,22 @@ impl IndexFallback {
     }
 }
 
+impl CandidateSelection {
+    pub(crate) const fn fallback(self) -> IndexFallback {
+        match self {
+            Self::None | Self::Walk { .. } => IndexFallback::IndexHitsOnly,
+            Self::Index { fallback, .. } => fallback,
+        }
+    }
+
+    pub(crate) fn order(self) -> CandidateOrder {
+        match self {
+            Self::None => CandidateOrder::default(),
+            Self::Index { order, .. } | Self::Walk { order } => order,
+        }
+    }
+}
+
 /// Where corpus candidates come from for a search run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CandidateSelection {

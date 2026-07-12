@@ -1,17 +1,14 @@
 use std::borrow::Cow;
 use std::fs;
 
-use sift_core::candidates::{
-    CandidateCoverage, CandidateFlags, CandidatePlanner, CandidateQuery, CandidateSelection,
-    CandidateSource, IndexFallback,
-};
+use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
 use sift_core::grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest,
     PathDisplay,
 };
 use sift_core::search::{
-    InputConversion, Inputs, SearchEvent, SearchInputs, SearchMode, SearchOptions,
-    SearchQueryBuilder, SearchSink, Searcher, StatsMode,
+    InputConversion, Inputs, SearchEvent, SearchMode, SearchOptions, SearchQueryBuilder,
+    SearchSink, Searcher, StatsMode,
 };
 use tempfile::TempDir;
 
@@ -32,28 +29,29 @@ fn grep_finds_match_in_indexed_corpus() {
         .options(SearchOptions::default())
         .build()
         .expect("query");
-    let searcher = Searcher::new(query).expect("searcher");
-
     let source = CandidateSource {
         indexes: &indexes,
         filter: &filter,
         store_meta: None,
     };
-    let candidate_query =
-        CandidateQuery::from_patterns(searcher.patterns(), CandidateFlags::empty());
     let selection = CandidateSelection::Index {
         fallback: IndexFallback::WalkOnStaleSnapshot,
         order: CandidateOrder::default(),
     };
-    let candidates = CandidatePlanner::plan(
-        &source,
-        &candidate_query,
+    let request = GrepRequest {
+        query: query.clone(),
         selection,
-        CandidateCoverage::PotentialMatches,
-    )
-    .resolve()
-    .expect("candidates");
-    let inputs = SearchInputs {
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
+    };
+    let grep = Grep::new(source);
+    let candidates = grep
+        .resolve_candidates(&request)
+        .expect("candidates");
+    let searcher = Searcher::new(query).expect("searcher");
+    let inputs = sift_core::search::SearchInputs {
         candidates,
         streams: Inputs::empty(),
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
@@ -83,20 +81,22 @@ fn candidate_planner_all_indexed_uses_index_when_metadata_missing() {
         filter: &filter,
         store_meta: None,
     };
-    let candidate_query = CandidateQuery::from_patterns(query.patterns(), CandidateFlags::empty());
-    let selection = CandidateSelection::Index {
-        fallback: IndexFallback::WalkOnStaleSnapshot,
-        order: CandidateOrder::default(),
+    let request = GrepRequest {
+        query,
+        selection: CandidateSelection::Index {
+            fallback: IndexFallback::WalkOnStaleSnapshot,
+            order: CandidateOrder::default(),
+        },
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
     };
 
-    let candidates = CandidatePlanner::plan(
-        &source,
-        &candidate_query,
-        selection,
-        CandidateCoverage::PotentialMatches,
-    )
-    .resolve()
-    .expect("candidates");
+    let grep = Grep::new(source);
+    let candidates = grep
+        .resolve_candidates(&request)
+        .expect("candidates");
 
     assert_eq!(candidates.into_vec().len(), 2);
 }
@@ -298,7 +298,6 @@ fn grep_finds_match_in_stdin_stream() {
         .options(SearchOptions::default())
         .build()
         .expect("query");
-    let searcher = Searcher::new(query).expect("searcher");
 
     let indexes = open_indexes(&tmp.path().join(".sift"));
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -307,23 +306,26 @@ fn grep_finds_match_in_stdin_stream() {
         filter: &filter,
         store_meta: None,
     };
-    let candidate_query =
-        CandidateQuery::from_patterns(searcher.patterns(), CandidateFlags::empty());
-    let candidates = CandidatePlanner::plan(
-        &source,
-        &candidate_query,
-        CandidateSelection::None,
-        CandidateCoverage::PotentialMatches,
-    )
-    .resolve()
-    .expect("candidates");
+    let request = GrepRequest {
+        query: query.clone(),
+        selection: CandidateSelection::None,
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
+    };
+    let grep = Grep::new(source);
+    let candidates = grep
+        .resolve_candidates(&request)
+        .expect("candidates");
+    let searcher = Searcher::new(query).expect("searcher");
 
     let streams = Inputs::empty().with_stream(ByteInput {
         path: Cow::Borrowed("<stdin>"),
         bytes: Cow::Borrowed(b"hello needle world\n"),
         explicit: false,
     });
-    let inputs = SearchInputs {
+    let inputs = sift_core::search::SearchInputs {
         candidates,
         streams,
         conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),

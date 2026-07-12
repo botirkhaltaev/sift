@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::candidates::{CandidateFlags, CandidateQuery};
+use sift_core::search::{SearchOptions, SearchQueryBuilder};
 use sift_core::{CorpusKind, FileId, Indexes, PlanMode};
 use tempfile::TempDir;
 
@@ -40,8 +40,10 @@ fn explain_reports_indexed_for_literal() {
     fs::write(corpus.join("a.txt"), "alpha beta\n").expect("write");
 
     let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let patterns = ["foo.*".to_string()];
-    let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+    let query = SearchQueryBuilder::new(vec!["foo.*".to_string()])
+        .options(SearchOptions::default())
+        .build()
+        .expect("query");
     let output = index.explain(&query);
     assert_eq!(output.pattern, "foo.*");
     assert_eq!(output.mode, PlanMode::IndexedCandidates);
@@ -55,8 +57,10 @@ fn explain_reports_full_scan_without_literal() {
     fs::write(corpus.join("a.txt"), "alpha beta\n").expect("write");
 
     let index = build_trigram_in_dir(&corpus, &tmp.path().join("trigram"));
-    let patterns = [r"\w{5}\s+\w{5}".to_string()];
-    let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+    let query = SearchQueryBuilder::new(vec![r"\w{5}\s+\w{5}".to_string()])
+        .options(SearchOptions::default())
+        .build()
+        .expect("query");
     let output = index.explain(&query);
     assert_eq!(output.mode, PlanMode::FullScan);
 }

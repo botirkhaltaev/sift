@@ -190,7 +190,10 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn narrow(&self, query: &crate::candidates::CandidateQuery<'_>) -> NarrowingResult {
+    pub(crate) fn narrow(
+        &self,
+        query: &crate::candidates::query::CandidateQuery<'_>,
+    ) -> NarrowingResult {
         match self {
             Self::NGram(index) => index.narrow(query),
         }

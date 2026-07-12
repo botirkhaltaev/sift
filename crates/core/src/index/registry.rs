@@ -9,9 +9,12 @@ use super::kinds::{Index, NarrowingResult};
 use super::paths::IndexedCorpus;
 use super::snapshot::{Snapshot, SnapshotId};
 use super::store;
-use crate::candidates::{CandidateQuery, Candidates};
+use crate::Searcher;
+use crate::candidates::Candidates;
+use crate::candidates::collection::IndexFileIds;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
 use crate::corpus::walk::FileWalk;
+use crate::search::SearchQuery;
 
 /// Identity of a usable index: everything needed to trust or validate it.
 pub struct IndexAvailability<'a> {
@@ -96,28 +99,48 @@ impl Indexes {
         })
     }
 
-    /// Narrow by the candidate query and return candidates.
-    #[must_use]
+    /// Narrow by the search query and return lazy index-backed candidates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the search query cannot be compiled.
+    #[must_use = "resolved candidates are consumed by search"]
     pub fn candidates<'a>(
         &'a self,
-        query: &CandidateQuery<'_>,
+        query: &SearchQuery,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
-    ) -> Candidates<'a> {
-        match self.narrow(query) {
-            NarrowingResult::Unavailable => Candidates::from_vec(Vec::new()),
-            NarrowingResult::AllIndexed => {
-                let file_ids = self.all_indexed_file_ids();
-                Candidates::from_index_rows(self, file_ids, filter, admission)
-            }
-            NarrowingResult::Narrowed { file_ids } => {
-                Candidates::from_index_rows(self, file_ids, filter, admission)
-            }
-        }
+    ) -> crate::Result<Candidates<'a>> {
+        let searcher = Searcher::new(query.clone())?;
+        let candidate_query = crate::candidates::query::CandidateQuery::new(
+            query,
+            searcher.prefilter_compatibility(),
+        );
+        let narrowing = self.narrow(&candidate_query);
+        Ok(Candidates::from(
+            self.index_file_ids(narrowing, filter, admission),
+        ))
+    }
+
+    pub(crate) fn index_file_ids<'a>(
+        &'a self,
+        narrowing: NarrowingResult,
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+    ) -> IndexFileIds<'a> {
+        let file_ids = match narrowing {
+            NarrowingResult::Unavailable => Vec::new(),
+            NarrowingResult::AllIndexed => self.all_indexed_file_ids(),
+            NarrowingResult::Narrowed { file_ids } => file_ids,
+        };
+        IndexFileIds::new(self, file_ids, filter, admission)
     }
 
     #[must_use]
-    pub(crate) fn narrow(&self, query: &CandidateQuery<'_>) -> NarrowingResult {
+    pub(crate) fn narrow(
+        &self,
+        query: &crate::candidates::query::CandidateQuery<'_>,
+    ) -> NarrowingResult {
         let indexes = self.snapshot.indexes();
         match indexes.len() {
             0 => NarrowingResult::Unavailable,
@@ -208,7 +231,10 @@ impl Indexes {
         file_ids
     }
 
-    fn narrow_multi(indexes: &[Index], query: &CandidateQuery<'_>) -> NarrowingResult {
+    fn narrow_multi(
+        indexes: &[Index],
+        query: &crate::candidates::query::CandidateQuery<'_>,
+    ) -> NarrowingResult {
         let plans: Vec<NarrowingResult> = indexes
             .par_iter()
             .map(|idx| idx.narrow(query))

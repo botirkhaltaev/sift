@@ -10,11 +10,11 @@ The engine is designed around multiple coexisting configured indexes. `IndexConf
 
 Primary search entrypoint (re-exported from `lib.rs`):
 
-- `Grep`, `GrepRequest`, `Searcher`, `Report`, `SearchInputs`, `Inputs`, `Input`
+- `Grep`, `GrepRequest`, `Grep::resolve_candidates`, `Searcher`, `Report`, `SearchInputs`, `Inputs`, `Input`
 - Index types: `Indexes`, `IndexAvailability`, `Index`, `IndexConfig`, `IndexStore`, `NGramIndex`, `NGramConfig`, `GramWidth`, `Gram`
-- Candidate types: `CandidatePlanner`, `CandidatePlan`, `Candidates`, `CandidateQuery`, `CandidateSelection`, `CandidateCoverage`, `CandidateSource`, `CandidateFilter`, `FileWalk`
+- Candidate types: `Candidates`, `CandidateSelection`, `CandidateCoverage`, `CandidateSource`
 
-Internal modules (`pub(crate)`): `corpus/`.
+Internal modules (`pub(crate)`): `corpus/`, `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
 
 ## Source Map
 
@@ -22,14 +22,13 @@ Internal modules (`pub(crate)`): `corpus/`.
 |--------|----------------|
 | `index/` | `Indexes` registry, `IndexConfig`, `Index` enum, `IndexStore`, snapshot persistence |
 | `index/ngram/` | Runtime-width N-gram index: build, load, search, storage |
-| `grep/` | Public search API — `Grep::search`, `Grep::stream` |
-| `candidates/` | `CandidateSource`, `CandidatePlanner`, `CandidatePlan::resolve`, `Candidates` |
+| `grep/` | Public search API — `Grep::search`, `Grep::stream`, `Grep::resolve_candidates` |
+| `candidates/` | `CandidateSource`, planning (`resolve.rs`), `Candidates` collection |
 | `grep/input.rs` | `ByteInput`, stream helpers on `Inputs` |
 | `search/input.rs` | `Input`, `Inputs`, `InputConversion`, `SearchInputs` |
 | `search/searcher.rs` | `Searcher` execution by `SearchBound` |
-| `candidates/planner.rs` | Pure `CandidatePlanner::plan` → `CandidatePlan` |
-| `candidates/plan.rs` | `CandidatePlan::resolve` I/O boundary |
-| `candidates/collection.rs` | `Candidates` (`IntoIterator`, `into_vec`) |
+| `candidates/resolve.rs` | Pure `CandidatePlanner::plan` → `CandidatePlan::resolve` I/O boundary |
+| `candidates/collection.rs` | `Candidates` enum (`IntoIterator`, `into_vec`) |
 | `corpus/order.rs` | `CandidateOrder` — sort keys for resolved candidates |
 | `corpus/` | `Candidate`, `CandidateFilter`, `FileWalk` |
 
@@ -41,9 +40,11 @@ Output formatting lives in `sift-grep/src/format/` (not in core).
 Grep::execute
   1. coverage   ← GrepRequest::candidate_coverage()
   2. plan       ← CandidatePlanner::plan(source, candidate_query, selection, coverage)
-  3. candidates ← plan.resolve()
+  3. candidates ← plan.resolve(source)  // lazy by default; into_vec() materializes all
   4. search     ← Searcher::execute(SearchInputs { candidates, streams, conversion }, …)
 ```
+
+`SearchBound::FirstMatch` iterates candidates lazily. `SearchBound::Exhaustive` calls `into_vec()` for parallel materialization.
 
 ## Error Ownership
 
@@ -55,7 +56,7 @@ Grep::execute
 - **Index file order:** lexicographic relative paths (stable file IDs).
 - **Conservative candidates:** index narrowing may over-return candidates but must not under-return.
 - **Index independence:** each configured index narrows candidates independently; the registry intersects results.
-- **Planning is pure; resolve is I/O:** `CandidatePlanner::plan` makes decisions only; `CandidatePlan::resolve` is the single candidate I/O boundary.
+- **Planning is pure; resolve is I/O:** `CandidatePlanner::plan` caches `NarrowingResult`; `CandidatePlan::resolve` is the single candidate I/O boundary.
 
 ## Testing
 
@@ -71,6 +72,7 @@ Integration tests: `crates/core/tests/`. Unit tests co-located in `#[cfg(test)]`
 cargo bench -p sift-core --bench query
 cargo bench -p sift-core --bench index
 cargo bench -p sift-core --bench grep
+cargo bench -p sift-core --bench candidates
 ```
 
 See [`benches/README.md`](benches/README.md).

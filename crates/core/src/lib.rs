@@ -9,10 +9,7 @@ pub mod grep;
 pub mod index;
 pub mod search;
 
-pub use candidates::{
-    CandidateCoverage, CandidatePlan, CandidateQuery, CandidateSelection, Candidates,
-    IndexFallback, PlannedDiscovery,
-};
+pub use candidates::{CandidateCoverage, CandidateSelection, Candidates, IndexFallback};
 pub use corpus::Candidate;
 pub use grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateTransform,

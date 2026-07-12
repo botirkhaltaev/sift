@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
-use crate::candidates::CandidateQuery;
+use crate::candidates::query::CandidateQuery;
 use crate::index::kinds::NarrowingResult;
 use crate::index::{CorpusKind, FileId, IndexedCorpus};
 
@@ -188,13 +188,15 @@ impl Index {
 
     /// Returns an explanation of how a query would be handled.
     #[must_use]
-    pub fn explain(&self, query: &CandidateQuery<'_>) -> crate::index::QueryPlanOutput {
-        let mode = match Config::new(self.width).extract_literal_arms(query) {
+    pub fn explain(&self, query: &crate::search::SearchQuery) -> crate::index::QueryPlanOutput {
+        use crate::search::PrefilterCompatibility;
+        let candidate_query = CandidateQuery::new(query, PrefilterCompatibility::Compatible);
+        let mode = match Config::new(self.width).extract_literal_arms(&candidate_query) {
             Some(_) => crate::index::PlanMode::IndexedCandidates,
             None => crate::index::PlanMode::FullScan,
         };
         crate::index::QueryPlanOutput {
-            pattern: query.patterns.to_vec().join("|"),
+            pattern: query.patterns.join("|"),
             mode,
         }
     }

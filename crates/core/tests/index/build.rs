@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use sift_core::candidates::{CandidateFlags, CandidateQuery};
 use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
+use sift_core::search::{SearchOptions, SearchQueryBuilder};
 use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes};
 use tempfile::TempDir;
 
@@ -14,12 +14,16 @@ fn candidate_paths(
     indexes: &Indexes,
     corpus: &Path,
     patterns: &[String],
-    flags: CandidateFlags,
+    options: SearchOptions,
 ) -> Vec<std::path::PathBuf> {
-    let query = CandidateQuery::from_patterns(patterns, flags);
+    let query = SearchQueryBuilder::new(patterns.to_vec())
+        .options(options)
+        .build()
+        .expect("query");
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), corpus).expect("filter");
     indexes
         .candidates(&query, &filter, FilterAdmission::Indexed)
+        .expect("candidates")
         .into_vec()
         .into_iter()
         .map(|c| c.rel_path().to_path_buf())
@@ -41,7 +45,7 @@ fn gitignore_honored_without_git_repo() {
         &indexes,
         tmp.path(),
         &["hello".to_string(), "secret".to_string()],
-        CandidateFlags::empty(),
+        SearchOptions::default(),
     );
     assert!(
         !paths.iter().any(|p| p.ends_with("skip.log")),
@@ -70,7 +74,7 @@ fn empty_ignore_sources_indexes_gitignored_paths() {
         &indexes,
         tmp.path(),
         &["beta".to_string()],
-        CandidateFlags::empty(),
+        SearchOptions::default(),
     );
     assert!(
         paths.iter().any(|p| p.starts_with("skip")),
@@ -91,7 +95,7 @@ fn defaults_exclude_gitignored_and_ignore_file_paths() {
         &indexes,
         tmp.path(),
         &["beta".to_string()],
-        CandidateFlags::empty(),
+        SearchOptions::default(),
     );
     assert!(paths.iter().any(|p| p == Path::new("keep.txt")));
     assert!(paths.iter().any(|p| p == Path::new("root.txt")));
@@ -123,7 +127,7 @@ fn build_respects_hidden_files_by_default() {
         &indexes,
         corpus.path(),
         &["beta".to_string()],
-        CandidateFlags::empty(),
+        SearchOptions::default(),
     );
     assert!(
         !paths.iter().any(|p| p.starts_with(".secret")),

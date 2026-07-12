@@ -1,16 +1,20 @@
 //! Candidate planning and resolution benchmarks.
 //!
-//! Exercises `CandidatePlanner` strategy paths independently from grep execution.
+//! Exercises candidate resolution through the public `Grep::resolve_candidates` API.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::candidates::{
-    CandidateCoverage, CandidateFlags, CandidatePlanner, CandidateQuery, CandidateSelection,
-    CandidateSource, IndexFallback,
+use sift_core::Inputs;
+use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::grep::{
+    CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, PathDisplay,
+    VisibilityConfig,
 };
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder, VisibilityConfig};
+use sift_core::search::{
+    InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode, ZeroCounts,
+};
 use sift_core::{
     CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
     WalkMeta,
@@ -90,9 +94,9 @@ fn empty_index_fixture() -> (tempfile::TempDir, Indexes, CandidateFilter) {
 fn resolve(
     fixture: &PlannerFixture,
     patterns: &[String],
-    flags: CandidateFlags,
+    options: SearchOptions,
     selection: CandidateSelection,
-    coverage: CandidateCoverage,
+    mode: SearchMode,
     meta: Option<&StoreMeta>,
 ) -> usize {
     let source = CandidateSource {
@@ -100,9 +104,20 @@ fn resolve(
         filter: &fixture.filter,
         store_meta: meta,
     };
-    let query = CandidateQuery::from_patterns(patterns, flags);
-    CandidatePlanner::plan(&source, &query, selection, coverage)
-        .resolve()
+    let query = SearchQueryBuilder::new(patterns.to_vec())
+        .options(options)
+        .build()
+        .unwrap();
+    let request = GrepRequest {
+        query,
+        selection,
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        mode,
+        stats: StatsMode::Off,
+    };
+    Grep::new(source)
+        .resolve_candidates(&request)
         .unwrap()
         .into_vec()
         .len()
@@ -124,9 +139,9 @@ fn bench_candidate_planner(c: &mut Criterion) {
             black_box(resolve(
                 &fixture,
                 &literal,
-                CandidateFlags::empty(),
+                SearchOptions::default(),
                 index_selection(IndexFallback::WalkOnStaleSnapshot),
-                CandidateCoverage::PotentialMatches,
+                SearchMode::Lines,
                 Some(&fixture.complete_meta),
             ));
         });
@@ -137,9 +152,11 @@ fn bench_candidate_planner(c: &mut Criterion) {
             black_box(resolve(
                 &fixture,
                 &no_literal,
-                CandidateFlags::empty(),
+                SearchOptions::default(),
                 index_selection(IndexFallback::IndexHitsOnly),
-                CandidateCoverage::Complete,
+                SearchMode::CountLines {
+                    zeros: ZeroCounts::Include,
+                },
                 Some(&fixture.complete_meta),
             ));
         });
@@ -150,9 +167,9 @@ fn bench_candidate_planner(c: &mut Criterion) {
             black_box(resolve(
                 &fixture,
                 &literal,
-                CandidateFlags::empty(),
+                SearchOptions::default(),
                 index_selection(IndexFallback::WalkOnStaleSnapshot),
-                CandidateCoverage::PotentialMatches,
+                SearchMode::Lines,
                 Some(&fixture.lazy_meta),
             ));
         });
@@ -164,31 +181,36 @@ fn bench_candidate_planner(c: &mut Criterion) {
 fn bench_candidate_planner_walk(c: &mut Criterion) {
     let (_temp, indexes, filter) = empty_index_fixture();
     let patterns = vec!["beta".to_string()];
-    let source = CandidateSource {
-        indexes: &indexes,
-        filter: &filter,
-        store_meta: None,
-    };
-    let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
-    let selection = CandidateSelection::Index {
-        fallback: IndexFallback::WalkOnStaleSnapshot,
-        order: CandidateOrder::default(),
+    let query = SearchQueryBuilder::new(patterns)
+        .options(SearchOptions::default())
+        .build()
+        .unwrap();
+    let request = GrepRequest {
+        query,
+        selection: CandidateSelection::Index {
+            fallback: IndexFallback::WalkOnStaleSnapshot,
+            order: CandidateOrder::default(),
+        },
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
     };
 
     let mut g = c.benchmark_group("candidate_planner");
     g.bench_function("walk_fallback_empty_index", |b| {
         b.iter(|| {
+            let source = CandidateSource {
+                indexes: &indexes,
+                filter: &filter,
+                store_meta: None,
+            };
             black_box(
-                CandidatePlanner::plan(
-                    &source,
-                    &query,
-                    selection,
-                    CandidateCoverage::PotentialMatches,
-                )
-                .resolve()
-                .unwrap()
-                .into_vec()
-                .len(),
+                Grep::new(source)
+                    .resolve_candidates(&request)
+                    .unwrap()
+                    .into_vec()
+                    .len(),
             );
         });
     });
@@ -198,6 +220,6 @@ fn bench_candidate_planner_walk(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_candidate_planner, bench_candidate_planner_walk,
+    targets = bench_candidate_planner, bench_candidate_planner_walk
 }
 criterion_main!(benches);

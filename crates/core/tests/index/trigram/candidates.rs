@@ -1,8 +1,8 @@
 use std::{fs, path::Path};
 
-use sift_core::candidates::{CandidateFlags, CandidateQuery};
 use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
-use sift_core::{Index, Indexes};
+use sift_core::search::{SearchOptions, SearchQueryBuilder};
+use sift_core::{CaseMode, Index, Indexes};
 use tempfile::TempDir;
 
 use super::super::common::{
@@ -13,12 +13,16 @@ fn index_candidates(
     indexes: &Indexes,
     corpus: &Path,
     patterns: &[String],
-    flags: CandidateFlags,
+    options: SearchOptions,
 ) -> Vec<sift_core::Candidate> {
-    let query = CandidateQuery::from_patterns(patterns, flags);
+    let query = SearchQueryBuilder::new(patterns.to_vec())
+        .options(options)
+        .build()
+        .expect("query");
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), corpus).expect("filter");
     indexes
         .candidates(&query, &filter, FilterAdmission::Full)
+        .expect("candidates")
         .into_vec()
 }
 
@@ -35,7 +39,7 @@ fn literal_query_returns_indexed_candidates() {
         &indexes,
         &corpus,
         &["beta".to_string()],
-        CandidateFlags::empty(),
+        SearchOptions::default(),
     );
     assert!(!candidates.is_empty());
     assert!(
@@ -60,7 +64,7 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
         &indexes,
         &corpus,
         &["beta".to_string()],
-        CandidateFlags::empty(),
+        SearchOptions::default(),
     );
     assert_eq!(candidates.len(), 2);
 }
@@ -77,7 +81,7 @@ fn literal_candidates_narrow_to_expected_file() {
         &indexes,
         tmp.path(),
         &["beta".to_string()],
-        CandidateFlags::empty(),
+        SearchOptions::default(),
     );
     assert!(!candidates.is_empty());
     assert!(
@@ -107,12 +111,11 @@ fn case_insensitive_uppercase_corpus_narrows() {
     let root = index.root().to_path_buf();
     let indexes = Indexes::from_single(index, root);
     let pattern = "err_sys|pme_turn_off".to_string();
-    let candidates = index_candidates(
-        &indexes,
-        &corpus,
-        &[pattern],
-        CandidateFlags::CASE_INSENSITIVE,
-    );
+    let options = SearchOptions {
+        case_mode: CaseMode::Insensitive,
+        ..SearchOptions::default()
+    };
+    let candidates = index_candidates(&indexes, &corpus, &[pattern], options);
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].rel_path(), Path::new("hit.rs"));
 }
@@ -142,11 +145,10 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
     let root = index.root().to_path_buf();
     let indexes = Indexes::from_single(index, root);
     let pattern = "ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string();
-    let candidates = index_candidates(
-        &indexes,
-        &corpus,
-        &[pattern],
-        CandidateFlags::CASE_INSENSITIVE,
-    );
+    let options = SearchOptions {
+        case_mode: CaseMode::Insensitive,
+        ..SearchOptions::default()
+    };
+    let candidates = index_candidates(&indexes, &corpus, &[pattern], options);
     assert_eq!(candidates.len(), 4);
 }

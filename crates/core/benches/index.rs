@@ -8,15 +8,31 @@ use std::fs;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use sift_core::candidates::{CandidateFlags, CandidateQuery};
 use sift_core::grep::VisibilityConfig;
 use sift_core::grep::{CandidateFilter, CandidateFilterConfig, FilterAdmission};
+use sift_core::search::{SearchOptions, SearchQueryBuilder};
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
-    IndexStore, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
+    CaseMode, CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig,
+    IndexConfig, IndexStore, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
 };
 
 mod common;
+
+fn index_candidate_vec(
+    indexes: &Indexes,
+    filter: &CandidateFilter,
+    patterns: &[String],
+    options: SearchOptions,
+) -> Vec<sift_core::Candidate> {
+    let query = SearchQueryBuilder::new(patterns.to_vec())
+        .options(options)
+        .build()
+        .unwrap();
+    indexes
+        .candidates(&query, filter, FilterAdmission::Full)
+        .unwrap()
+        .into_vec()
+}
 
 struct IndexOpenFixture {
     temp: tempfile::TempDir,
@@ -497,73 +513,81 @@ fn bench_candidates(c: &mut Criterion) {
 
     g.bench_function("literal", |b| {
         let patterns = ["beta".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
         b.iter(|| {
-            black_box(
-                indexes
-                    .candidates(&query, &filter, FilterAdmission::Full)
-                    .into_vec(),
-            )
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
         });
     });
 
     g.bench_function("required_literal", |b| {
         let patterns = ["[A-Z]+_RESUME".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
         b.iter(|| {
-            black_box(
-                indexes
-                    .candidates(&query, &filter, FilterAdmission::Full)
-                    .into_vec(),
-            )
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
         });
     });
 
     g.bench_function("full_scan_fallback", |b| {
         let patterns = [r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
         b.iter(|| {
-            black_box(
-                indexes
-                    .candidates(&query, &filter, FilterAdmission::Full)
-                    .into_vec(),
-            )
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
         });
     });
 
     g.bench_function("alternation", |b| {
         let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
         b.iter(|| {
-            black_box(
-                indexes
-                    .candidates(&query, &filter, FilterAdmission::Full)
-                    .into_vec(),
-            )
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
         });
     });
 
     g.bench_function("case_insensitive", |b| {
         let patterns = ["beta".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::CASE_INSENSITIVE);
+        let options = SearchOptions {
+            case_mode: CaseMode::Insensitive,
+            ..SearchOptions::default()
+        };
         b.iter(|| {
-            black_box(
-                indexes
-                    .candidates(&query, &filter, FilterAdmission::Full)
-                    .into_vec(),
-            )
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                options.clone(),
+            ))
         });
     });
 
     g.bench_function("case_insensitive_alternation", |b| {
         let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::CASE_INSENSITIVE);
+        let options = SearchOptions {
+            case_mode: CaseMode::Insensitive,
+            ..SearchOptions::default()
+        };
         b.iter(|| {
-            black_box(
-                indexes
-                    .candidates(&query, &filter, FilterAdmission::Full)
-                    .into_vec(),
-            )
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                options.clone(),
+            ))
         });
     });
 
@@ -579,14 +603,19 @@ fn bench_explain(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_explain");
 
     g.bench_function("indexed_mode", |b| {
-        let patterns = ["beta".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        let query = SearchQueryBuilder::new(vec!["beta".to_string()])
+            .options(SearchOptions::default())
+            .build()
+            .unwrap();
         b.iter(|| black_box(index.explain(&query)));
     });
 
     g.bench_function("full_scan_mode", |b| {
-        let patterns = [r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
-        let query = CandidateQuery::from_patterns(&patterns, CandidateFlags::empty());
+        let query =
+            SearchQueryBuilder::new(vec![r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()])
+                .options(SearchOptions::default())
+                .build()
+                .unwrap();
         b.iter(|| black_box(index.explain(&query)));
     });
 

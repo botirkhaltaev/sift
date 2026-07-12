@@ -17,7 +17,7 @@ pub use index::{Index, NGramIndexError};
 mod candidate_tests {
     use std::path::Path;
 
-    use crate::candidates::{CandidateFlags, CandidateQuery};
+    use crate::candidates::query::{CandidateFlags, CandidateQuery};
     use crate::index::ngram::storage::postings::Postings;
 
     use super::*;

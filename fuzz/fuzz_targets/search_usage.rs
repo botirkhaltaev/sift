@@ -1,11 +1,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sift_core::candidates::{
-    CandidateCoverage, CandidateFlags, CandidatePlanner, CandidateQuery, CandidateSelection,
-    CandidateSource, IndexFallback,
+use sift_core::candidates::{CandidateSelection, CandidateSource, IndexFallback};
+use sift_core::grep::{
+    CandidateFilter, CandidateFilterConfig, Grep, GrepRequest, PathDisplay, VisibilityConfig,
 };
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, PathDisplay, VisibilityConfig};
 use sift_core::search::{
     InputConversion, SearchFlags, SearchInputs, SearchOptions, SearchQueryBuilder, Searcher,
     StatsMode,
@@ -100,19 +99,18 @@ fn run_search(holder: &IndexHolder, patterns: &[String], opts: &SearchOptions) {
         filter: &filter,
         store_meta: None,
     };
-    let candidate_query =
-        CandidateQuery::from_patterns(searcher.patterns(), CandidateFlags::empty());
-    let selection = CandidateSelection::Index {
-        fallback: IndexFallback::WalkOnStaleSnapshot,
-        order: Default::default(),
+    let request = GrepRequest {
+        query: query.clone(),
+        selection: CandidateSelection::Index {
+            fallback: IndexFallback::WalkOnStaleSnapshot,
+            order: Default::default(),
+        },
+        streams: Inputs::empty(),
+        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        mode: sift_core::search::SearchMode::Lines,
+        stats: StatsMode::Off,
     };
-    let Ok(candidates) = CandidatePlanner::plan(
-        &source,
-        &candidate_query,
-        selection,
-        CandidateCoverage::PotentialMatches,
-    )
-    .resolve() else {
+    let Ok(candidates) = Grep::new(source).resolve_candidates(&request) else {
         return;
     };
     let inputs = SearchInputs {

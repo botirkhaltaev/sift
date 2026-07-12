@@ -8,7 +8,7 @@ Sift is an indexed code search engine written in Rust, built around **composable
 
 The core architecture treats code search like database query execution: multiple index configurations can coexist, each narrowing candidates independently, with the `Indexes` registry intersecting their results. Today, Sift ships a runtime-width N-gram index that defaults to trigram width. `IndexConfig` records configured/persisted index identity, `IndexStore` owns build/open/update transactions, and `Indexes` is the query-time facade (`availability`, `candidates`). Future index types (AST indexes, dependency graphs, vector indexes) slot into the same architecture.
 
-The candidate pipeline is **plan (pure) → resolve (I/O) → search**: `CandidatePlanner::plan` returns a `CandidatePlan`; `CandidatePlan::resolve` is the single I/O boundary; `Searcher` consumes a `Candidates` collection.
+The candidate pipeline is **plan (pure) → resolve (I/O) → search**: `CandidatePlanner::plan` caches narrowing in a lifetime-free `CandidatePlan`; `CandidatePlan::resolve` is the single I/O boundary; `Searcher` consumes a lazy `Candidates` collection (`into_vec()` materializes all).
 
 ## Build & Test
 

@@ -3,9 +3,9 @@
 pub mod error;
 pub mod input;
 
-use crate::candidates::{
-    CandidateCoverage, CandidatePlanner, CandidateQuery, CandidateSelection, CandidateSource,
-};
+use crate::candidates::query::CandidateQuery;
+use crate::candidates::resolve::CandidatePlanner;
+use crate::candidates::{CandidateCoverage, CandidateSelection, CandidateSource};
 use crate::search::{
     EventEmission, Report, SearchInputs, SearchMode, SearchQuery, SearchSink, Searcher, StatsMode,
     ZeroCounts,
@@ -32,7 +32,7 @@ pub struct Grep<'a> {
 pub struct GrepBuilder<'grep, 'source, 'input> {
     grep: &'grep Grep<'source>,
     query: Option<SearchQuery>,
-    candidates: Option<CandidateSelection>,
+    selection: Option<CandidateSelection>,
     streams: Inputs<'input>,
     conversion: InputConversion<'input>,
     mode: SearchMode,
@@ -59,7 +59,7 @@ impl<'a> Grep<'a> {
         GrepBuilder {
             grep: self,
             query: None,
-            candidates: None,
+            selection: None,
             streams: Inputs::empty(),
             conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
             mode: SearchMode::Lines,
@@ -89,18 +89,31 @@ impl<'a> Grep<'a> {
         self.execute(request, EventEmission::Emit(sink))
     }
 
+    /// Resolve corpus candidates for a search request without running search.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query compilation or candidate resolution fails.
+    pub fn resolve_candidates(
+        &'a self,
+        request: &GrepRequest<'_>,
+    ) -> crate::Result<crate::Candidates<'a>> {
+        let coverage = request.candidate_coverage();
+        let searcher = Searcher::new(request.query.clone())?;
+        let candidate_query =
+            CandidateQuery::new(&request.query, searcher.prefilter_compatibility());
+        let plan =
+            CandidatePlanner::plan(&self.source, &candidate_query, request.selection, coverage);
+        plan.resolve(&self.source)
+    }
+
     fn execute(
         &self,
         request: GrepRequest<'a>,
         events: EventEmission<'_>,
     ) -> crate::Result<Report> {
-        let coverage = request.candidate_coverage();
-        let query = request.query;
-        let searcher = Searcher::new(query.clone())?;
-        let candidate_query = CandidateQuery::new(&query, searcher.prefilter_compatibility());
-        let candidates =
-            CandidatePlanner::plan(&self.source, &candidate_query, request.selection, coverage)
-                .resolve()?;
+        let candidates = self.resolve_candidates(&request)?;
+        let searcher = Searcher::new(request.query)?;
         let inputs = SearchInputs {
             candidates,
             streams: request.streams,
@@ -133,8 +146,8 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
     }
 
     #[must_use]
-    pub const fn candidates(mut self, candidates: CandidateSelection) -> Self {
-        self.candidates = Some(candidates);
+    pub const fn selection(mut self, selection: CandidateSelection) -> Self {
+        self.selection = Some(selection);
         self
     }
 
@@ -171,12 +184,12 @@ impl<'input> GrepBuilder<'_, '_, 'input> {
         let query = self
             .query
             .ok_or(crate::Error::Search(Error::MissingSearchQuery))?;
-        let candidates = self
-            .candidates
+        let selection = self
+            .selection
             .ok_or(crate::Error::Search(Error::MissingCandidateSelection))?;
         Ok(GrepRequest {
             query,
-            selection: candidates,
+            selection,
             streams: self.streams,
             conversion: self.conversion,
             mode: self.mode,

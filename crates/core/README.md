@@ -21,16 +21,15 @@ IndexConfig::ngram(GramWidth::TRIGRAM)  ──IndexStore──>  Index::NGram(NG
 | [`index/`](src/index/) | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
 | [`index/ngram/`](src/index/ngram/) | Runtime-width N-gram index: build, load, search, and on-disk storage |
 | [`grep/`](src/grep/) | Public search API: `Grep`, `GrepRequest`, `Inputs` |
-| [`candidates/`](src/candidates/) | Candidate planning and resolution: `CandidatePlanner`, `CandidatePlan`, `CandidateSelection` |
+| [`candidates/`](src/candidates/) | Candidate planning and resolution: `Candidates`, `CandidateSelection` |
 | [`corpus/`](src/corpus/) | Internal: candidates, filters, filesystem walk |
 
 ## Search API
 
 ```rust
 use sift_core::{
-    CandidateCoverage, CandidatePlanner, CandidateQuery, CandidateSelection, CandidateSource,
-    Grep, GrepRequest, IndexFallback, Indexes, Inputs, InputConversion, PathDisplay, SearchMode,
-    SearchOptions, SearchQuery, StatsMode, StoreMeta,
+    CandidateSelection, CandidateSource, Grep, GrepRequest, IndexFallback, Indexes, Inputs,
+    InputConversion, PathDisplay, SearchMode, SearchOptions, SearchQuery, StatsMode, StoreMeta,
 };
 
 let indexes = Indexes::open(&sift_dir)?;
@@ -41,8 +40,6 @@ let source = CandidateSource {
 };
 
 let query = SearchQuery::new(vec!["pattern".into()])?.options(SearchOptions::default());
-let searcher = sift_core::Searcher::new(query.clone())?;
-let candidate_query = CandidateQuery::new(&query, searcher.prefilter_compatibility());
 let selection = CandidateSelection::Index {
     fallback: IndexFallback::WalkOnStaleSnapshot,
     order: Default::default(),
@@ -59,6 +56,8 @@ let request = GrepRequest {
 };
 
 let report = grep.search(request)?;
+// Or resolve candidates without searching:
+// let candidates = grep.resolve_candidates(&request)?;
 ```
 
 Formatting and stdout live in `sift-grep` (`SearchPrinter`).
@@ -70,4 +69,5 @@ cargo test -p sift-core
 cargo bench -p sift-core --bench query
 cargo bench -p sift-core --bench index
 cargo bench -p sift-core --bench grep
+cargo bench -p sift-core --bench candidates
 ```

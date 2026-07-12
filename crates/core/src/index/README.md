@@ -18,7 +18,7 @@ index/
 
 | Module | Description |
 |--------|-------------|
-| [`kinds.rs`](kinds.rs) | `IndexConfig` enum (configured identity), `Index` enum (query dispatch), `CandidatePlan`, `FileId`, `IndexId` |
+| [`kinds.rs`](kinds.rs) | `IndexConfig` enum (configured identity), `Index` enum (query dispatch), `FileId`, `IndexId` |
 | [`registry.rs`](registry.rs) | `Indexes`: opens all indexes in a snapshot, combines candidate plans |
 | [`store.rs`](store.rs) | `IndexStore`: snapshot-based persistence, atomic build/update/publish |
 | [`config.rs`](config.rs) | `IndexBuildConfig`, `CorpusSpec`, `CorpusKind`, `WalkOptions` |

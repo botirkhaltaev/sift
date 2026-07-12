@@ -1,11 +1,14 @@
 use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
-use crate::corpus::order::CandidateOrder;
 use crate::index::Indexes;
 
-enum Backend<'a> {
-    Vec(Vec<Candidate>),
-    IndexRows {
+/// Corpus files ready for search. The index arm is lazy; call [`into_vec`](Self::into_vec) to
+/// materialize all.
+pub enum Candidates<'a> {
+    /// Walk, merge, or sorted resolve: paths already materialized.
+    Materialized(Vec<Candidate>),
+    /// Index-narrowed file ids; iteration materializes one file at a time.
+    Index {
         indexes: &'a Indexes,
         file_ids: Vec<u32>,
         filter: &'a CandidateFilter,
@@ -13,91 +16,17 @@ enum Backend<'a> {
     },
 }
 
-/// Resolved corpus candidates ready for search consumption.
-pub struct Candidates<'a> {
-    backend: Backend<'a>,
+/// Index-narrowed file ids with lazy per-row materialization.
+pub(crate) struct IndexFileIds<'a> {
+    indexes: &'a Indexes,
+    file_ids: Vec<u32>,
+    filter: &'a CandidateFilter,
+    admission: FilterAdmission,
 }
 
-impl<'a> Candidates<'a> {
-    pub(crate) const fn empty() -> Self {
-        Self {
-            backend: Backend::Vec(Vec::new()),
-        }
-    }
-
-    pub(crate) const fn from_vec(candidates: Vec<Candidate>) -> Self {
-        Self {
-            backend: Backend::Vec(candidates),
-        }
-    }
-
-    pub(crate) const fn from_index_rows(
-        indexes: &'a Indexes,
-        file_ids: Vec<u32>,
-        filter: &'a CandidateFilter,
-        admission: FilterAdmission,
-    ) -> Self {
-        Self {
-            backend: Backend::IndexRows {
-                indexes,
-                file_ids,
-                filter,
-                admission,
-            },
-        }
-    }
-
-    /// Returns `true` when no candidates will be yielded.
-    ///
-    /// For index-backed rows, `false` means the id set may still filter to
-    /// nothing during iteration.
-    #[must_use = "candidate emptiness affects whether search runs"]
-    pub const fn is_empty(&self) -> bool {
-        match &self.backend {
-            Backend::Vec(items) => items.is_empty(),
-            Backend::IndexRows { file_ids, .. } => file_ids.is_empty(),
-        }
-    }
-
-    /// Materialize every candidate. Index-backed rows materialize in parallel.
-    #[must_use = "materialized candidates are consumed by search"]
-    pub fn into_vec(self) -> Vec<Candidate> {
-        match self.backend {
-            Backend::Vec(items) => items,
-            Backend::IndexRows {
-                indexes,
-                file_ids,
-                filter,
-                admission,
-            } => indexes.materialize_rows(&file_ids, filter, admission),
-        }
-    }
-
-    pub(crate) fn order(self, order: CandidateOrder) -> crate::Result<Self> {
-        match self.backend {
-            Backend::Vec(mut items) => {
-                order.order(&mut items)?;
-                Ok(Self {
-                    backend: Backend::Vec(items),
-                })
-            }
-            Backend::IndexRows { .. } => {
-                let mut items = self.into_vec();
-                order.order(&mut items)?;
-                Ok(Self {
-                    backend: Backend::Vec(items),
-                })
-            }
-        }
-    }
-}
-
-pub struct IntoIter<'a> {
-    backend: IntoIterBackend<'a>,
-}
-
-enum IntoIterBackend<'a> {
-    Vec(std::vec::IntoIter<Candidate>),
+/// Iterator over resolved candidates.
+pub enum IntoIter<'a> {
+    Materialized(std::vec::IntoIter<Candidate>),
     Index {
         ids: std::vec::IntoIter<u32>,
         indexes: &'a Indexes,
@@ -106,13 +35,90 @@ enum IntoIterBackend<'a> {
     },
 }
 
+impl<'a> IndexFileIds<'a> {
+    pub(crate) const fn new(
+        indexes: &'a Indexes,
+        file_ids: Vec<u32>,
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Self {
+        Self {
+            indexes,
+            file_ids,
+            filter,
+            admission,
+        }
+    }
+}
+
+impl Candidates<'_> {
+    pub(crate) const fn empty() -> Self {
+        Self::Materialized(Vec::new())
+    }
+
+    /// Returns `true` when no candidates will be yielded.
+    ///
+    /// For index-backed rows, `false` means the id set may still filter to nothing during
+    /// iteration.
+    #[must_use = "candidate emptiness affects whether search runs"]
+    pub const fn is_empty(&self) -> bool {
+        match self {
+            Self::Materialized(items) => items.is_empty(),
+            Self::Index { file_ids, .. } => file_ids.is_empty(),
+        }
+    }
+
+    /// Materialize every candidate. Index-backed rows materialize in parallel.
+    #[must_use = "materialized candidates are consumed by search"]
+    pub fn into_vec(self) -> Vec<Candidate> {
+        match self {
+            Self::Materialized(items) => items,
+            Self::Index {
+                indexes,
+                file_ids,
+                filter,
+                admission,
+            } => indexes.materialize_rows(&file_ids, filter, admission),
+        }
+    }
+}
+
+impl From<Vec<Candidate>> for Candidates<'_> {
+    fn from(items: Vec<Candidate>) -> Self {
+        Self::Materialized(items)
+    }
+}
+
+impl<'a> From<IndexFileIds<'a>> for Candidates<'a> {
+    fn from(ids: IndexFileIds<'a>) -> Self {
+        let IndexFileIds {
+            indexes,
+            file_ids,
+            filter,
+            admission,
+        } = ids;
+        Self::Index {
+            indexes,
+            file_ids,
+            filter,
+            admission,
+        }
+    }
+}
+
+impl<'a> From<Candidates<'a>> for Vec<Candidate> {
+    fn from(candidates: Candidates<'a>) -> Self {
+        candidates.into_vec()
+    }
+}
+
 impl Iterator for IntoIter<'_> {
     type Item = Candidate;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.backend {
-            IntoIterBackend::Vec(iter) => iter.next(),
-            IntoIterBackend::Index {
+        match self {
+            Self::Materialized(iter) => iter.next(),
+            Self::Index {
                 ids,
                 indexes,
                 filter,
@@ -127,9 +133,9 @@ impl Iterator for IntoIter<'_> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.backend {
-            IntoIterBackend::Vec(iter) => iter.size_hint(),
-            IntoIterBackend::Index { ids, .. } => (0, Some(ids.len())),
+        match self {
+            Self::Materialized(iter) => iter.size_hint(),
+            Self::Index { ids, .. } => (0, ids.size_hint().1),
         }
     }
 }
@@ -139,22 +145,18 @@ impl<'a> IntoIterator for Candidates<'a> {
     type IntoIter = IntoIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        match self.backend {
-            Backend::Vec(items) => IntoIter {
-                backend: IntoIterBackend::Vec(items.into_iter()),
-            },
-            Backend::IndexRows {
+        match self {
+            Self::Materialized(items) => IntoIter::Materialized(items.into_iter()),
+            Self::Index {
                 indexes,
                 file_ids,
                 filter,
                 admission,
-            } => IntoIter {
-                backend: IntoIterBackend::Index {
-                    ids: file_ids.into_iter(),
-                    indexes,
-                    filter,
-                    admission,
-                },
+            } => IntoIter::Index {
+                ids: file_ids.into_iter(),
+                indexes,
+                filter,
+                admission,
             },
         }
     }

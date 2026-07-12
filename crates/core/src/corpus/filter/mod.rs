@@ -158,6 +158,19 @@ impl CandidateFilter {
         })
     }
 
+    #[must_use]
+    pub(crate) fn retain(
+        &self,
+        candidates: Vec<crate::Candidate>,
+        admission: FilterAdmission,
+    ) -> Vec<crate::Candidate> {
+        use rayon::prelude::*;
+        candidates
+            .into_par_iter()
+            .filter(|candidate| candidate.matches(self, admission))
+            .collect()
+    }
+
     /// Check whether a relative path passes all configured rules.
     #[must_use]
     pub fn matches_path(&self, rel_path: &Path) -> bool {
