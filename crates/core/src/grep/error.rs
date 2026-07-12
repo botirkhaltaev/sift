@@ -16,9 +16,6 @@ pub enum Error {
     #[error("grep request is missing a search query")]
     MissingSearchQuery,
 
-    #[error("grep request is missing candidate selection")]
-    MissingCandidateSelection,
-
     #[error("JSON output is only supported for standard search (not count or file-list modes)")]
     JsonOutputIncompatibleMode,
 

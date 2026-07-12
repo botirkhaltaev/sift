@@ -6,16 +6,15 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::candidates::{
-    CandidatePlanner, CandidateRequest, CandidateScope, CandidateSource, CandidateSpec, CorpusMode,
-    IndexFallback,
+use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
+use sift_core::grep::{
+    CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, PathDisplay,
 };
-use sift_core::grep::InputRequest;
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder};
 use sift_core::search::{
-    InputExtent, SearchFlags, SearchOptions, SearchQueryBuilder, Searcher, StatsMode,
+    InputConversion, SearchFlags, SearchInputs, SearchOptions, SearchQueryBuilder, Searcher,
+    StatsMode,
 };
-use sift_core::{Index, Indexes, NGramIndex};
+use sift_core::{Indexes, Inputs};
 
 mod common;
 
@@ -27,11 +26,6 @@ fn sift_criterion() -> Criterion {
         .significance_level(0.05)
         .noise_threshold(0.05)
         .configure_from_args()
-}
-
-fn wrap_index(index: NGramIndex) -> Indexes {
-    let root = index.root().to_path_buf();
-    Indexes::from_single(Index::NGram(index), root)
 }
 
 fn make_search(patterns: &[&str], opts: SearchOptions) -> (Vec<String>, SearchOptions) {
@@ -48,37 +42,43 @@ fn run_grep(
     filter: &CandidateFilter,
     query: &(Vec<String>, SearchOptions),
 ) -> bool {
-    let source = CandidateSource {
+    let source = CandidateSource::new(
         indexes,
         filter,
-        store_meta: None,
-    };
+        None,
+        ScanScope::Index {
+            order: CandidateOrder::default(),
+            freshness: SnapshotFreshness::Current,
+        },
+        IndexNarrowing::Allowed,
+    );
     let query = SearchQueryBuilder::new(query.0.clone())
         .options(query.1.clone())
         .build()
         .unwrap();
-    let searcher = Searcher::new(query.clone()).unwrap();
-    let request = CandidateRequest {
-        scope: CandidateScope::Indexed,
-        corpus: CorpusMode::Indexed,
-        fallback: IndexFallback::WalkOnStaleSnapshot,
-        order: CandidateOrder::default(),
+    let request = GrepRequest {
+        query: query.clone(),
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+        mode: sift_core::search::SearchMode::Lines,
+        stats: StatsMode::Off,
     };
-    let candidates = CandidatePlanner::new(&source, CandidateSpec::from(&query), request)
-        .resolve(sift_core::candidates::CandidateMaterialization::Eager)
-        .unwrap();
-    let input_request = InputRequest::from_candidates();
-    let inputs = input_request
-        .resolve(candidates, InputExtent::Complete)
-        .unwrap();
+    let grep = Grep::new(source);
+    let candidates = grep.resolve_candidates(&request).unwrap();
+    let searcher = Searcher::new(query).unwrap();
+    let inputs = SearchInputs {
+        candidates,
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+    };
     searcher.search(inputs, StatsMode::Off).unwrap().matched()
 }
 
 fn bench_indexed_search(c: &mut Criterion) {
-    let fixture = common::open_large_index();
-    let index = fixture.1;
-    let indexes = wrap_index(index);
-    let filter = make_filter(&CandidateFilterConfig::default(), indexes.root());
+    let fixture = common::open_large_indexes();
+    let indexes = fixture.1;
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
+    let filter = make_filter(&CandidateFilterConfig::default(), &root);
 
     let mut g = c.benchmark_group("grep_indexed");
 

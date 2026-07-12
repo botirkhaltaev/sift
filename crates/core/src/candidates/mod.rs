@@ -1,15 +1,12 @@
-pub mod indexed;
+pub mod plan;
 pub mod planner;
-pub mod request;
+pub mod query;
+pub mod scope;
 pub mod source;
-pub mod spec;
 
-pub use indexed::{CandidateMaterialization, IndexedCandidates, ResolvedCandidates};
-pub use planner::CandidatePlanner;
-pub(crate) use planner::IndexNarrowing;
-pub use request::{
-    CandidateExtent, CandidateRequest, CandidateScope, CandidateSelection, CorpusMode,
-    IndexFallback,
-};
+#[path = "candidates.rs"]
+mod collection;
+
+pub use collection::Candidates;
+pub use scope::{IndexNarrowing, ScanScope, SnapshotFreshness};
 pub use source::CandidateSource;
-pub use spec::{CandidateFlags, CandidateSpec};

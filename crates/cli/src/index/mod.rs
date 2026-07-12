@@ -1,11 +1,12 @@
 //! Index lifecycle (`sift index build`, `sift index update`) and background refresh.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, StoreMeta, WalkMeta,
+    CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexError, IndexStore, SnapshotId,
+    StoreMeta, WalkMeta,
 };
 
 use crate::grep::Argv;
@@ -18,6 +19,13 @@ use crate::grep::paths::CorpusScope;
 pub mod daemon;
 
 pub use daemon::{Daemon, DaemonError, DaemonOrchestrator, ServeConfig};
+
+/// Result of reconciling store metadata and corpus state into a committed snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcileOutcome {
+    pub snapshot_id: SnapshotId,
+    pub changed: bool,
+}
 
 /// Which index subcommand was requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +154,7 @@ impl IndexJob {
             return ExitCode::from(2);
         }
 
-        if let Err(e) = store.reconcile(&meta, &[]) {
+        if let Err(e) = SnapshotRefresh::new(&self.sift_dir, &meta, &[]).run(&mut store) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
@@ -270,5 +278,74 @@ impl IndexJob {
             },
             self.indexes.clone(),
         )
+    }
+}
+
+/// CLI orchestration for snapshot build or update.
+pub struct SnapshotRefresh<'a> {
+    sift_dir: &'a Path,
+    meta: &'a StoreMeta,
+    paths: &'a [PathBuf],
+}
+
+impl<'a> SnapshotRefresh<'a> {
+    #[must_use]
+    pub const fn new(sift_dir: &'a Path, meta: &'a StoreMeta, paths: &'a [PathBuf]) -> Self {
+        Self {
+            sift_dir,
+            meta,
+            paths,
+        }
+    }
+
+    /// Rebuild or update index files.
+    ///
+    /// Empty `paths` → full corpus. Non-empty → partial rel-paths only.
+    ///
+    /// # Errors
+    ///
+    /// Propagates build/update failures from the underlying index kinds.
+    pub fn run(self, store: &mut IndexStore) -> sift_core::Result<ReconcileOutcome> {
+        let build = self.meta.index_config();
+        let configs = &self.meta.indexes;
+        let (snapshot_id, changed) = if self.paths.is_empty() {
+            if store.current_id().is_none() {
+                (SnapshotId::new(store.build(configs, &build, &[])?), true)
+            } else {
+                match store.update(configs, &build, &[])? {
+                    Some(id) => (SnapshotId::new(id), true),
+                    None => (Self::current_snapshot_id(store, self.sift_dir)?, false),
+                }
+            }
+        } else if store.current_id().is_none() {
+            (
+                SnapshotId::new(store.build(configs, &build, self.paths)?),
+                true,
+            )
+        } else {
+            match store.update(configs, &build, self.paths)? {
+                Some(id) => (SnapshotId::new(id), true),
+                None => (Self::current_snapshot_id(store, self.sift_dir)?, false),
+            }
+        };
+        Ok(ReconcileOutcome {
+            snapshot_id,
+            changed,
+        })
+    }
+
+    fn current_snapshot_id(store: &IndexStore, sift_dir: &Path) -> sift_core::Result<SnapshotId> {
+        store
+            .current_id()
+            .map(|id| SnapshotId::new(id.to_string()))
+            .ok_or_else(|| {
+                sift_core::Error::Index(IndexError::Io {
+                    path: sift_dir.to_path_buf(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no current snapshot after reconcile",
+                    ),
+                })
+            })
     }
 }

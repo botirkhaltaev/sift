@@ -1,21 +1,24 @@
 //! Candidate planning and resolution benchmarks.
 //!
-//! Exercises `CandidatePlanner` strategy paths independently from grep execution.
+//! Exercises candidate resolution through the public `Grep::resolve_candidates` API.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::candidates::{
-    CandidateFlags, CandidateMaterialization, CandidatePlanner, CandidateRequest, CandidateScope,
-    CandidateSource, CandidateSpec, CorpusMode, IndexFallback,
+use sift_core::Inputs;
+use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
+use sift_core::grep::{
+    CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, PathDisplay,
+    VisibilityConfig,
 };
-use sift_core::grep::{CandidateFilter, CandidateFilterConfig, CandidateOrder, VisibilityConfig};
+use sift_core::search::{
+    InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode, ZeroCounts,
+};
 use sift_core::{
     CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
     WalkMeta,
 };
-use sift_core::{Index, NGramIndex};
 
 mod common;
 
@@ -35,11 +38,6 @@ fn sift_criterion() -> Criterion {
         .significance_level(0.05)
         .noise_threshold(0.05)
         .configure_from_args()
-}
-
-fn wrap_index(index: NGramIndex) -> Indexes {
-    let root = index.root().to_path_buf();
-    Indexes::from_single(Index::NGram(index), root)
 }
 
 fn store_meta(root: &Path, coverage: IndexCoverage) -> StoreMeta {
@@ -65,9 +63,8 @@ fn store_meta(root: &Path, coverage: IndexCoverage) -> StoreMeta {
 }
 
 fn planner_fixture() -> PlannerFixture {
-    let (temp, index) = common::open_large_index();
-    let root = index.root().to_path_buf();
-    let indexes = wrap_index(index);
+    let (temp, indexes) = common::open_large_indexes();
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &root).unwrap();
     PlannerFixture {
         _temp: temp,
@@ -90,26 +87,33 @@ fn empty_index_fixture() -> (tempfile::TempDir, Indexes, CandidateFilter) {
 fn resolve(
     fixture: &PlannerFixture,
     patterns: &[String],
-    flags: CandidateFlags,
-    scope: CandidateScope,
-    fallback: IndexFallback,
+    options: SearchOptions,
+    scope: ScanScope,
+    mode: SearchMode,
     meta: Option<&StoreMeta>,
 ) -> usize {
-    let source = CandidateSource {
-        indexes: &fixture.indexes,
-        filter: &fixture.filter,
-        store_meta: meta,
-    };
-    let spec = CandidateSpec { patterns, flags };
-    let request = CandidateRequest {
+    let source = CandidateSource::new(
+        &fixture.indexes,
+        &fixture.filter,
+        meta,
         scope,
-        corpus: CorpusMode::Indexed,
-        fallback,
-        order: CandidateOrder::default(),
+        IndexNarrowing::Allowed,
+    );
+    let query = SearchQueryBuilder::new(patterns.to_vec())
+        .options(options)
+        .build()
+        .unwrap();
+    let request = GrepRequest {
+        query,
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+        mode,
+        stats: StatsMode::Off,
     };
-    CandidatePlanner::new(&source, spec, request)
-        .resolve(CandidateMaterialization::Eager)
+    Grep::new(source)
+        .resolve_candidates(&request)
         .unwrap()
+        .into_vec()
         .len()
 }
 
@@ -117,6 +121,10 @@ fn bench_candidate_planner(c: &mut Criterion) {
     let fixture = planner_fixture();
     let literal = vec!["[A-Z]+_RESUME".to_string()];
     let no_literal = vec![r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
+    let index_scope = |freshness: SnapshotFreshness| ScanScope::Index {
+        order: CandidateOrder::default(),
+        freshness,
+    };
 
     let mut g = c.benchmark_group("candidate_planner");
 
@@ -125,9 +133,9 @@ fn bench_candidate_planner(c: &mut Criterion) {
             black_box(resolve(
                 &fixture,
                 &literal,
-                CandidateFlags::empty(),
-                CandidateScope::Indexed,
-                IndexFallback::WalkOnStaleSnapshot,
+                SearchOptions::default(),
+                index_scope(SnapshotFreshness::Current),
+                SearchMode::Lines,
                 Some(&fixture.complete_meta),
             ));
         });
@@ -138,9 +146,11 @@ fn bench_candidate_planner(c: &mut Criterion) {
             black_box(resolve(
                 &fixture,
                 &no_literal,
-                CandidateFlags::empty(),
-                CandidateScope::All,
-                IndexFallback::IndexHitsOnly,
+                SearchOptions::default(),
+                index_scope(SnapshotFreshness::Current),
+                SearchMode::CountLines {
+                    zeros: ZeroCounts::Include,
+                },
                 Some(&fixture.complete_meta),
             ));
         });
@@ -151,9 +161,9 @@ fn bench_candidate_planner(c: &mut Criterion) {
             black_box(resolve(
                 &fixture,
                 &literal,
-                CandidateFlags::empty(),
-                CandidateScope::Indexed,
-                IndexFallback::WalkOnStaleSnapshot,
+                SearchOptions::default(),
+                index_scope(SnapshotFreshness::Current),
+                SearchMode::Lines,
                 Some(&fixture.lazy_meta),
             ));
         });
@@ -165,29 +175,32 @@ fn bench_candidate_planner(c: &mut Criterion) {
 fn bench_candidate_planner_walk(c: &mut Criterion) {
     let (_temp, indexes, filter) = empty_index_fixture();
     let patterns = vec!["beta".to_string()];
-    let source = CandidateSource {
-        indexes: &indexes,
-        filter: &filter,
-        store_meta: None,
+    let query = SearchQueryBuilder::new(patterns)
+        .options(SearchOptions::default())
+        .build()
+        .unwrap();
+    let request = GrepRequest {
+        query,
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
     };
-    let spec = CandidateSpec {
-        patterns: &patterns,
-        flags: CandidateFlags::empty(),
-    };
-    let request = CandidateRequest {
-        scope: CandidateScope::Indexed,
-        corpus: CorpusMode::Indexed,
-        fallback: IndexFallback::WalkOnStaleSnapshot,
+    let scope = ScanScope::Index {
         order: CandidateOrder::default(),
+        freshness: SnapshotFreshness::Current,
     };
 
     let mut g = c.benchmark_group("candidate_planner");
     g.bench_function("walk_fallback_empty_index", |b| {
         b.iter(|| {
+            let source =
+                CandidateSource::new(&indexes, &filter, None, scope, IndexNarrowing::Allowed);
             black_box(
-                CandidatePlanner::new(&source, spec, request)
-                    .resolve(CandidateMaterialization::Eager)
+                Grep::new(source)
+                    .resolve_candidates(&request)
                     .unwrap()
+                    .into_vec()
                     .len(),
             );
         });
@@ -198,6 +211,6 @@ fn bench_candidate_planner_walk(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_candidate_planner, bench_candidate_planner_walk,
+    targets = bench_candidate_planner, bench_candidate_planner_walk
 }
 criterion_main!(benches);

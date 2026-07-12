@@ -2,7 +2,7 @@ use regex_syntax::ast::parse::Parser as AstParser;
 use regex_syntax::hir::literal::{ExtractKind, Extractor};
 use regex_syntax::hir::{self, Hir};
 
-use crate::candidates::CandidateSpec;
+use crate::candidates::query::CandidateQuery;
 
 use super::config::Config;
 use super::gram::{GramWidth, LiteralNarrowing};
@@ -16,7 +16,7 @@ impl Config {
     /// decline narrowing so candidates stay conservative.
     ///
     /// [`GramMatch`]: super::gram::GramMatch
-    pub(crate) fn extract_literal_arms(self, query: &CandidateSpec<'_>) -> Option<Vec<Vec<u8>>> {
+    pub(crate) fn extract_literal_arms(self, query: &CandidateQuery<'_>) -> Option<Vec<Vec<u8>>> {
         if query.invert_match() {
             return None;
         }

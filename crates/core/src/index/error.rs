@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::ngram::NGramIndexError;
 
-/// Errors specific to the index registry layer.
+/// Errors specific to the index layer.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
     #[error("invalid index layout: {path}")]

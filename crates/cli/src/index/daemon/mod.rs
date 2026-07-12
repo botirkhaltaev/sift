@@ -15,12 +15,13 @@ use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, S
 use notify::RecursiveMode;
 use notify::Watcher;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, ReconcileOutcome,
+    CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, Indexes,
     SnapshotId, StoreMeta, WalkMeta,
 };
 use thiserror::Error;
 
 use crate::grep::paths::CorpusScope;
+use crate::index::{ReconcileOutcome, SnapshotRefresh};
 
 pub(crate) const DAEMON_LOCK: &str = "lock";
 const READY_DIR: &str = "daemon-ready";
@@ -404,10 +405,10 @@ impl DaemonOrchestrator {
 
         let idle_timeout = config.idle_timeout;
         let mut phase = Phase::idle(idle_timeout);
-        let mut ingest = IngestTracker::from_reconcile(
-            IndexStore::open_or_create(&sift_dir, &meta)
-                .and_then(|mut store| store.reconcile(&meta, &[]))?,
-        );
+        let mut ingest =
+            IngestTracker::from_reconcile(IndexStore::open_or_create(&sift_dir, &meta).and_then(
+                |mut store| SnapshotRefresh::new(&sift_dir, &meta, &[]).run(&mut store),
+            )?);
 
         let ipc_tx = tx.clone();
         let ipc_daemon = Daemon::new(sift_dir.clone());
@@ -840,7 +841,7 @@ impl PendingIndex {
     fn reconcile(&mut self, sift_dir: &Path, meta: &StoreMeta) -> Option<ReconcileOutcome> {
         let paths = self.take()?;
         let result = IndexStore::open_or_create(sift_dir, meta)
-            .and_then(|mut store| store.reconcile(meta, &paths));
+            .and_then(|mut store| SnapshotRefresh::new(sift_dir, meta, &paths).run(&mut store));
         match result {
             Ok(outcome) => Some(outcome),
             Err(e) => {
@@ -942,6 +943,10 @@ impl DaemonRuntime<'_> {
             }
             DaemonRequest::Index(paths) => {
                 self.ingest.observe();
+                let paths = match Indexes::open(self.store.raw) {
+                    Ok(indexes) => indexes.indexed_corpus().retain_unindexed(paths),
+                    Err(_) => paths,
+                };
                 self.refresh.apply_index(
                     paths,
                     &client.response,
@@ -1127,8 +1132,9 @@ impl IndexRefresh<'_> {
             };
             let mut outcome = None;
             if matches!(scope, RefreshScope::CorpusAndPending) {
-                let result = IndexStore::open_or_create(&sift_dir, &meta)
-                    .and_then(|mut store| store.reconcile(&meta, &[]));
+                let result = IndexStore::open_or_create(&sift_dir, &meta).and_then(|mut store| {
+                    SnapshotRefresh::new(&sift_dir, &meta, &[]).run(&mut store)
+                });
                 match result {
                     Ok(committed) => outcome = Some(committed),
                     Err(e) => {

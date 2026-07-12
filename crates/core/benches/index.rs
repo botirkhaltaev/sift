@@ -8,14 +8,92 @@ use std::fs;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use sift_core::candidates::{CandidateFlags, CandidateSpec};
-use sift_core::grep::VisibilityConfig;
+use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
+use sift_core::grep::{CandidateOrder, Grep, GrepRequest, PathDisplay, VisibilityConfig};
+use sift_core::search::{
+    InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode,
+};
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
-    IndexStore, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
+    CaseMode, CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig,
+    IndexConfig, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramConfig, NGramIndex, StoreMeta,
+    WalkMeta,
 };
 
 mod common;
+
+fn build_index(corpus: &Path, idx_dir: &Path) -> NGramIndex {
+    let (root, kind, include_paths) = if corpus.is_file() {
+        let parent = corpus.parent().unwrap_or(corpus);
+        let filename = corpus.file_name().map(PathBuf::from).unwrap_or_default();
+        (parent, CorpusKind::SingleFile, vec![filename])
+    } else {
+        (corpus, CorpusKind::Directory, vec![])
+    };
+    let config = IndexBuildConfig {
+        corpus: CorpusSpec {
+            root,
+            kind,
+            follow_links: false,
+            include_paths: &include_paths,
+            exclude_paths: &[],
+        },
+        walk: IndexWalkConfig::new(false),
+        visibility: VisibilityConfig::default(),
+    };
+    let config_index = NGramConfig::new(GramWidth::TRIGRAM);
+    config_index.build(&config, idx_dir, &[]).unwrap();
+    NGramConfig::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
+}
+
+fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> NGramIndex {
+    NGramConfig::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
+}
+
+fn open_large_index() -> (tempfile::TempDir, NGramIndex) {
+    let tmp = tempfile::tempdir().unwrap();
+    let corpus = tmp.path().join("corpus");
+    common::materialize_large_corpus(&corpus, 8_000, 100, 256);
+    let idx = tmp.path().join(".sift");
+    let built = build_index(&corpus, &idx);
+    let root = built.root().to_path_buf();
+    let kind = built.corpus_kind();
+    drop(built);
+    let index = open_index(&idx, &root, kind);
+    (tmp, index)
+}
+
+fn index_candidate_vec(
+    indexes: &Indexes,
+    filter: &sift_core::grep::CandidateFilter,
+    patterns: &[String],
+    options: SearchOptions,
+) -> Vec<sift_core::Candidate> {
+    let source = CandidateSource::new(
+        indexes,
+        filter,
+        None,
+        ScanScope::Index {
+            order: CandidateOrder::default(),
+            freshness: SnapshotFreshness::Current,
+        },
+        IndexNarrowing::Allowed,
+    );
+    let query = SearchQueryBuilder::new(patterns.to_vec())
+        .options(options)
+        .build()
+        .unwrap();
+    let request = GrepRequest {
+        query,
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
+    };
+    Grep::new(source)
+        .resolve_candidates(&request)
+        .unwrap()
+        .into_vec()
+}
 
 struct IndexOpenFixture {
     temp: tempfile::TempDir,
@@ -243,7 +321,7 @@ fn build_update_fixture(files: usize, lines_per_file: usize, dir_fanout: usize) 
     let corpus = temp.path().join("corpus");
     common::materialize_large_corpus(&corpus, files, lines_per_file, dir_fanout);
     let idx = temp.path().join(".sift");
-    let index = common::build_index(&corpus, &idx);
+    let index = build_index(&corpus, &idx);
     let out_dir = temp.path().join(".sift-update");
     UpdateFixture {
         _temp: temp,
@@ -324,7 +402,7 @@ fn bench_index_open(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             make_parity_corpus(&corpus);
             let idx = tmp.path().join(".sift");
-            let built = common::build_index(&corpus, &idx);
+            let built = build_index(&corpus, &idx);
             let root = built.root().to_path_buf();
             drop(built);
             IndexOpenFixture {
@@ -334,7 +412,7 @@ fn bench_index_open(c: &mut Criterion) {
             }
         };
         b.iter(|| {
-            black_box(common::open_index(
+            black_box(open_index(
                 &fixture.idx_dir,
                 &fixture.root,
                 CorpusKind::Directory,
@@ -348,7 +426,7 @@ fn bench_index_open(c: &mut Criterion) {
             let corpus = tmp.path().join("corpus");
             common::materialize_large_corpus(&corpus, 8_000, 100, 256);
             let idx = tmp.path().join(".sift");
-            let built = common::build_index(&corpus, &idx);
+            let built = build_index(&corpus, &idx);
             let root = built.root().to_path_buf();
             drop(built);
             IndexOpenFixture {
@@ -358,7 +436,7 @@ fn bench_index_open(c: &mut Criterion) {
             }
         };
         b.iter(|| {
-            black_box(common::open_index(
+            black_box(open_index(
                 &fixture.idx_dir,
                 &fixture.root,
                 CorpusKind::Directory,
@@ -452,12 +530,12 @@ fn bench_index_save_reopen(c: &mut Criterion) {
         let corpus = tmp.path().join("corpus");
         make_parity_corpus(&corpus);
         let idx_dir = tmp.path().join(".sift");
-        let index = common::build_index(&corpus, &idx_dir);
+        let index = build_index(&corpus, &idx_dir);
         let root = index.root().to_path_buf();
         let kind = index.corpus_kind();
         drop(index);
         b.iter(|| {
-            black_box(common::open_index(&idx_dir, &root, kind));
+            black_box(open_index(&idx_dir, &root, kind));
         });
     });
 
@@ -467,7 +545,7 @@ fn bench_index_save_reopen(c: &mut Criterion) {
 // ─── Trigram-specialized N-gram method benches ───────────────────────────────
 
 fn bench_trigram_index_methods(c: &mut Criterion) {
-    let fixture = common::open_large_index();
+    let fixture = open_large_index();
     let index = fixture.1;
 
     let mut g = c.benchmark_group("trigram_index");
@@ -486,57 +564,95 @@ fn bench_trigram_index_methods(c: &mut Criterion) {
 // ─── Candidate benches ───────────────────────────────────────────────────────
 
 fn bench_candidates(c: &mut Criterion) {
-    let fixture = common::open_large_index();
-    let index = fixture.1;
+    let fixture = common::open_large_indexes();
+    let indexes = fixture.1;
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
+    let filter = sift_core::grep::CandidateFilter::new(
+        &sift_core::grep::CandidateFilterConfig::default(),
+        &root,
+    )
+    .unwrap();
 
     let mut g = c.benchmark_group("index_candidates");
 
     g.bench_function("literal", |b| {
-        let spec = CandidateSpec {
-            patterns: &["beta".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["beta".to_string()];
+        b.iter(|| {
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
+        });
     });
 
     g.bench_function("required_literal", |b| {
-        let spec = CandidateSpec {
-            patterns: &["[A-Z]+_RESUME".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["[A-Z]+_RESUME".to_string()];
+        b.iter(|| {
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
+        });
     });
 
     g.bench_function("full_scan_fallback", |b| {
-        let spec = CandidateSpec {
-            patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = [r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()];
+        b.iter(|| {
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
+        });
     });
 
     g.bench_function("alternation", |b| {
-        let spec = CandidateSpec {
-            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.plan(&spec)));
+        let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
+        b.iter(|| {
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                SearchOptions::default(),
+            ))
+        });
     });
 
     g.bench_function("case_insensitive", |b| {
-        let spec = CandidateSpec {
-            patterns: &["beta".to_string()],
-            flags: CandidateFlags::CASE_INSENSITIVE,
+        let patterns = ["beta".to_string()];
+        let options = SearchOptions {
+            case_mode: CaseMode::Insensitive,
+            ..SearchOptions::default()
         };
-        b.iter(|| black_box(index.plan(&spec)));
+        b.iter(|| {
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                options.clone(),
+            ))
+        });
     });
 
     g.bench_function("case_insensitive_alternation", |b| {
-        let spec = CandidateSpec {
-            patterns: &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()],
-            flags: CandidateFlags::CASE_INSENSITIVE,
+        let patterns = ["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string()];
+        let options = SearchOptions {
+            case_mode: CaseMode::Insensitive,
+            ..SearchOptions::default()
         };
-        b.iter(|| black_box(index.plan(&spec)));
+        b.iter(|| {
+            black_box(index_candidate_vec(
+                &indexes,
+                &filter,
+                &patterns,
+                options.clone(),
+            ))
+        });
     });
 
     g.finish();
@@ -545,25 +661,26 @@ fn bench_candidates(c: &mut Criterion) {
 // ─── Explain benches ─────────────────────────────────────────────────────────
 
 fn bench_explain(c: &mut Criterion) {
-    let fixture = common::open_large_index();
+    let fixture = open_large_index();
     let index = fixture.1;
 
     let mut g = c.benchmark_group("index_explain");
 
     g.bench_function("indexed_mode", |b| {
-        let spec = CandidateSpec {
-            patterns: &["beta".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.explain(&spec)));
+        let query = SearchQueryBuilder::new(vec!["beta".to_string()])
+            .options(SearchOptions::default())
+            .build()
+            .unwrap();
+        b.iter(|| black_box(index.explain(&query)));
     });
 
     g.bench_function("full_scan_mode", |b| {
-        let spec = CandidateSpec {
-            patterns: &[r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()],
-            flags: CandidateFlags::empty(),
-        };
-        b.iter(|| black_box(index.explain(&spec)));
+        let query =
+            SearchQueryBuilder::new(vec![r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}".to_string()])
+                .options(SearchOptions::default())
+                .build()
+                .unwrap();
+        b.iter(|| black_box(index.explain(&query)));
     });
 
     g.finish();

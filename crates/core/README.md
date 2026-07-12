@@ -2,67 +2,77 @@
 
 Core engine for indexed code search. Build on-disk indexes over a codebase, then run regex or fixed-string queries with automatic candidate narrowing.
 
-## Index Architecture
+## Index architecture
 
-The engine is built around composable indexes. Each configured index independently narrows candidates for a query; the `Indexes` registry combines their results via set intersection. Today the shipped index is a runtime-width N-gram index that defaults to trigram width. `IndexConfig` records configured/persisted identity, `IndexStore` owns build/open/update transactions, and `Index` is the opened query-time dispatch.
+Composable indexes narrow candidates independently; `Indexes` intersects their results at query time.
 
 ```
-IndexConfig::ngram(GramWidth::TRIGRAM)  ──IndexStore──>  Index::NGram(NGramIndex)
-                                                                  │
-                                                           Indexes registry
-                                                                  │
-                                               intersect candidate sets at query time
+IndexConfig ──IndexStore──> snapshot on disk
+                                │
+                    Indexes::open
+                                │
+                           Indexes (search)
+                                │
+              CandidatePlanner → CandidatePlan::resolve
+                                │
+                           Grep::search
 ```
+
+| Type | Role |
+|------|------|
+| `IndexStore` | Build, update, publish |
+| `Snapshot` | Opened snapshot (internal); use `Indexes::open` |
+| `Indexes` | Query, file ids, hydrate candidates |
+| `Grep` | Resolve candidates + run search |
 
 ## Modules
 
 | Module | Description |
 |--------|-------------|
-| [`index/`](src/index/) | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
-| [`index/ngram/`](src/index/ngram/) | Runtime-width N-gram index: build, load, search, and on-disk storage |
-| [`grep/`](src/grep/) | Public search API: `Query`, `Report`, `Inputs` |
-| [`candidates/`](src/candidates/) | Candidate planning and resolution: `CandidateSource`, `CandidateRequest`, `CandidateSpec` |
-| [`corpus/`](src/corpus/) | Internal: candidates, filters, filesystem walk |
+| [`index/`](src/index/) | Lifecycle, snapshot, search facade |
+| [`index/ngram/`](src/index/ngram/) | N-gram index implementation |
+| [`grep/`](src/grep/) | Public search API |
+| [`candidates/`](src/candidates/) | Planning and resolution |
 
 ## Search API
 
 ```rust
 use sift_core::{
-    CandidateRequest, CandidateScope, CandidateSource, CorpusMode, IndexFallback,
-    Indexes, Inputs, SearchOptions, Query, StatsMode, StoreMeta,
+    CandidateSource, Grep, GrepRequest, Indexes, IndexNarrowing, Inputs, InputConversion,
+    PathDisplay, ScanScope, SnapshotFreshness, SearchMode, SearchOptions, SearchQuery, StatsMode,
 };
 
 let indexes = Indexes::open(&sift_dir)?;
-let source = CandidateSource {
-    indexes: &indexes,
-    filter: &filter,
-    store_meta: store_meta.as_ref(),
+let source = CandidateSource::new(
+    &indexes,
+    &filter,
+    store_meta.as_ref(),
+    ScanScope::Index {
+        order: Default::default(),
+        freshness: SnapshotFreshness::Current,
+    },
+    IndexNarrowing::Allowed,
+);
+
+let grep = Grep::new(source);
+let request = GrepRequest {
+    query: SearchQuery::new(vec!["pattern".into()])?.options(SearchOptions::default()),
+    streams: Inputs::empty(),
+    conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+    mode: SearchMode::Lines,
+    stats: StatsMode::Off,
 };
 
-let query = Query::new(vec!["pattern".into()])?.options(SearchOptions::default());
-let request = CandidateRequest {
-    scope: CandidateScope::Indexed,
-    corpus: CorpusMode::Indexed,
-    fallback: IndexFallback::WalkOnStaleSnapshot,
-    order: Default::default(),
-};
-
-let candidates = query.candidates(&source, request)?;
-let mut inputs = Inputs::with_capacity(candidates.len());
-for candidate in &candidates {
-    inputs.push_path(candidate);
-}
-
-let report = query.search(&inputs, StatsMode::Off)?;
+let report = grep.search(request)?;
 ```
 
-Formatting and stdout live in `sift-grep` (`SearchPrinter`).
+Formatting lives in `sift-grep`.
 
 ## Testing
 
 ```bash
 cargo test -p sift-core
-cargo bench -p sift-core --bench query
 cargo bench -p sift-core --bench index
 cargo bench -p sift-core --bench grep
+cargo bench -p sift-core --bench candidates
 ```

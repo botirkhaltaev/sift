@@ -1,19 +1,20 @@
-use std::borrow::Cow;
 use std::path::PathBuf;
 
-use sift_core::candidates::{CandidateSelection, CandidateSource, CorpusMode, IndexFallback};
-use sift_core::grep::{ByteInput, FileWalk, Grep, InputRequest};
-use sift_core::search::{SearchMode, ZeroCounts};
-use sift_core::{CorpusKind, GrepRequest, IndexCoverage, Indexes};
+use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
+use sift_core::grep::{Grep, Inputs, PathDisplay};
+use sift_core::search::{
+    InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, ZeroCounts,
+};
+use sift_core::{CorpusKind, GrepRequest, IndexCoverage};
 
 use crate::format::output::mode::ZeroCountMode;
-use crate::format::{PathDisplay, PrintExtras, PrintMode, SearchPrinter};
+use crate::format::{PrintExtras, PrintMode, SearchPrinter};
 
 use crate::index::daemon::Daemon;
 
 use super::argv::Argv;
 use super::filter::FilterConfig;
-use super::input::{ContentTransform, ContentTransformConfig, InputSources};
+use super::input::{ContentTransformConfig, InputSources};
 use super::output::{FilenameContext, OutputArgv, OutputDecl};
 use super::paths::CorpusScope;
 use super::pattern::{PatternArgv, PatternDecl, ResolvedPatterns};
@@ -61,8 +62,8 @@ pub enum RunResult {
     Search { matched: bool },
 }
 
-struct PreparedCandidateSource {
-    indexes: Indexes,
+struct SearchSession {
+    indexes: sift_core::Indexes,
     scope: CorpusScope,
     search_filter: sift_core::grep::CandidateFilter,
     store_meta: Option<sift_core::StoreMeta>,
@@ -76,13 +77,6 @@ impl RunResult {
             Self::Search { matched } => matched,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapshotTrust {
-    Unvalidated,
-    Validated,
-    Stale,
 }
 
 impl Run {
@@ -116,10 +110,10 @@ impl Run {
         &self,
         argv: &Argv<'_>,
         search_paths: &[PathBuf],
-    ) -> anyhow::Result<PreparedCandidateSource> {
+    ) -> anyhow::Result<SearchSession> {
         self.configure_threads();
         let cwd = std::env::current_dir()?;
-        let indexes = Indexes::open(&self.config.sift_dir)?;
+        let indexes = sift_core::Indexes::open(&self.config.sift_dir)?;
         let store_meta = sift_core::StoreMeta::read(&self.config.sift_dir).ok();
         let scope = CorpusScope::resolve(
             &indexes,
@@ -135,7 +129,7 @@ impl Run {
         )?;
         let search_filter =
             sift_core::grep::CandidateFilter::new(&filter_config, &scope.filter_root)?;
-        Ok(PreparedCandidateSource {
+        Ok(SearchSession {
             indexes,
             scope,
             search_filter,
@@ -143,14 +137,44 @@ impl Run {
         })
     }
 
+    const fn candidate_source(
+        session: &SearchSession,
+        scope: ScanScope,
+        index_narrowing: IndexNarrowing,
+    ) -> CandidateSource<'_> {
+        CandidateSource::new(
+            &session.indexes,
+            &session.search_filter,
+            session.store_meta.as_ref(),
+            scope,
+            index_narrowing,
+        )
+    }
+
     fn run_files(&self, argv: &Argv<'_>) -> anyhow::Result<bool> {
         let output_argv = OutputArgv::resolve(argv);
         let session = self.prepare_session(argv, &self.config.search_paths)?;
-
-        let mut candidates = FileWalk::from_filter(&session.search_filter).candidates()?;
-        candidates.retain(|candidate| session.search_filter.matches_path(candidate.rel_path()));
-        self.config.candidate_order.order(&mut candidates)?;
+        let scope = ScanScope::Walk {
+            order: self.config.candidate_order,
+        };
+        let source = Self::candidate_source(&session, scope, IndexNarrowing::Bypassed);
+        let query = SearchQueryBuilder::new(vec![".".to_string()])
+            .options(SearchOptions::default())
+            .build()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let request = GrepRequest {
+            query,
+            streams: Inputs::empty(),
+            conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+            mode: SearchMode::Lines,
+            stats: sift_core::StatsMode::Off,
+        };
+        let grep = Grep::new(source);
+        let candidates = grep
+            .resolve_candidates(&request)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let all_paths: Vec<_> = candidates
+            .into_vec()
             .into_iter()
             .map(|candidate| candidate.rel_path().to_path_buf())
             .collect();
@@ -183,7 +207,7 @@ impl Run {
         let line_number_override = self.line_number_override(&output_argv);
 
         let session = self.prepare_session(argv, &sources.paths)?;
-        let sources = sources.resolve(patterns.input, session.indexes.is_empty())?;
+        let sources = sources.resolve(patterns.input, !session.indexes.usable())?;
         let transform = self.config.content.transform()?;
 
         let filename_ctx = Self::filename_context(effective_mode, &sources, &session);
@@ -199,32 +223,26 @@ impl Run {
             )
             .map_err(|e| anyhow::anyhow!(e))?;
         let separators = self.config.output.separators();
-        let snapshot = Self::snapshot_validation(&session, daemon);
-        let selection = self.candidate_selection(
-            &session,
-            transform.as_ref(),
-            snapshot,
-            sources.resolve_candidates(),
-        );
-        let candidate_source = CandidateSource {
-            indexes: &session.indexes,
-            filter: &session.search_filter,
-            store_meta: session.store_meta.as_ref(),
+        let freshness = Self::snapshot_freshness(&session, daemon);
+        let scan_scope = self.scan_scope(freshness, sources.resolve_candidates());
+        let index_narrowing = if transform.is_some() {
+            IndexNarrowing::Bypassed
+        } else {
+            IndexNarrowing::Allowed
         };
+        let candidate_source = Self::candidate_source(&session, scan_scope, index_narrowing);
 
         let query = self
             .config
             .pattern
             .search_query(patterns.patterns, &pattern_argv)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let mut input_request = Self::input_request(
-            &sources,
-            &Self::explicit_files(&session),
+        let explicit_files = Self::explicit_files(&session);
+        let (streams, conversion) = sources.search_inputs(
+            &explicit_files,
             print_spec.lines.path_display,
+            transform.as_ref(),
         );
-        if let Some(transform) = transform.as_ref() {
-            input_request = input_request.with_candidate_transform(transform);
-        }
         let print_stats = OutputDecl::print_stats(&output_argv, effective_mode);
         let extras = PrintExtras::hits().with_stats(print_stats);
         let mode = Self::search_mode(effective_mode, print_spec.include_zero);
@@ -236,8 +254,8 @@ impl Run {
         let grep = Grep::new(candidate_source);
         let request = GrepRequest {
             query,
-            candidates: selection,
-            inputs: input_request,
+            streams,
+            conversion,
             mode,
             stats,
         };
@@ -260,30 +278,17 @@ impl Run {
         }
     }
 
-    const fn candidate_selection(
+    const fn scan_scope(
         &self,
-        session: &PreparedCandidateSource,
-        transform: Option<&ContentTransform>,
-        snapshot: SnapshotTrust,
+        freshness: SnapshotFreshness,
         resolve_candidates: bool,
-    ) -> CandidateSelection {
+    ) -> ScanScope {
         if !resolve_candidates {
-            return CandidateSelection::None;
+            return ScanScope::StreamsOnly;
         }
-        CandidateSelection::Corpus {
-            corpus: if session.indexes.is_empty() {
-                CorpusMode::Walk
-            } else if transform.is_some() {
-                CorpusMode::Transformed
-            } else {
-                CorpusMode::Indexed
-            },
-            fallback: if matches!(snapshot, SnapshotTrust::Stale) {
-                IndexFallback::WalkOnStaleSnapshot
-            } else {
-                IndexFallback::IndexHitsOnly
-            },
+        ScanScope::Index {
             order: self.config.candidate_order,
+            freshness,
         }
     }
 
@@ -302,30 +307,23 @@ impl Run {
         }
     }
 
-    fn queue_lazy_hits(
-        daemon: Option<&Daemon>,
-        session: &PreparedCandidateSource,
-        hit_paths: Vec<PathBuf>,
-    ) {
+    fn queue_lazy_hits(daemon: Option<&Daemon>, session: &SearchSession, hit_paths: Vec<PathBuf>) {
         if let Some(daemon) = daemon
             && session
                 .store_meta
                 .as_ref()
                 .is_some_and(|meta| meta.coverage == IndexCoverage::Lazy)
+            && !hit_paths.is_empty()
+            && let Err(e) = daemon.index(hit_paths)
         {
-            let paths = session.indexes.unindexed_hits(hit_paths);
-            if !paths.is_empty()
-                && let Err(e) = daemon.index(paths)
-            {
-                eprintln!("sift: warning: index request failed: {e}");
-            }
+            eprintln!("sift: warning: index request failed: {e}");
         }
     }
 
     fn filename_context(
         effective_mode: PrintMode,
         sources: &InputSources,
-        session: &PreparedCandidateSource,
+        session: &SearchSession,
     ) -> FilenameContext {
         if OutputDecl::is_path_mode(effective_mode) {
             FilenameContext::PathMode
@@ -339,10 +337,7 @@ impl Run {
         }
     }
 
-    fn snapshot_validation(
-        session: &PreparedCandidateSource,
-        daemon: Option<&Daemon>,
-    ) -> SnapshotTrust {
+    fn snapshot_freshness(session: &SearchSession, daemon: Option<&Daemon>) -> SnapshotFreshness {
         daemon
             .and_then(|daemon| {
                 session
@@ -350,14 +345,13 @@ impl Run {
                     .snapshot_id()
                     .map(|id| daemon.validate_snapshot(id))
             })
-            .map_or(SnapshotTrust::Unvalidated, |validation| match validation {
-                Ok(true) => SnapshotTrust::Validated,
-                Ok(false) => SnapshotTrust::Stale,
-                Err(_) => SnapshotTrust::Unvalidated,
+            .map_or(SnapshotFreshness::Current, |validation| match validation {
+                Ok(false) => SnapshotFreshness::Stale,
+                Ok(true) | Err(_) => SnapshotFreshness::Current,
             })
     }
 
-    fn explicit_files(session: &PreparedCandidateSource) -> Vec<PathBuf> {
+    fn explicit_files(session: &SearchSession) -> Vec<PathBuf> {
         session
             .scope
             .prefixes
@@ -365,24 +359,5 @@ impl Run {
             .filter(|prefix| session.scope.filter_root.join(prefix).is_file())
             .cloned()
             .collect()
-    }
-
-    fn input_request<'a>(
-        sources: &'a InputSources,
-        explicit_files: &[PathBuf],
-        path_display: PathDisplay,
-    ) -> InputRequest<'a> {
-        let mut request = InputRequest::from_candidates().with_path_display(path_display);
-        for path in explicit_files {
-            request = request.with_explicit_path(path.clone());
-        }
-        for bytes in &sources.stdin_bytes {
-            request = request.with_stream(ByteInput {
-                path: Cow::Borrowed("<stdin>"),
-                bytes: Cow::Borrowed(bytes.as_slice()),
-                explicit: true,
-            });
-        }
-        request
     }
 }

@@ -4,8 +4,6 @@ use std::sync::Arc;
 
 use crate::corpus::walk::WalkSelector;
 
-use super::kinds::Index;
-
 /// Cheap-to-clone set of corpus-relative paths covered by an index.
 #[derive(Debug, Clone)]
 pub struct IndexedCorpus {
@@ -14,32 +12,30 @@ pub struct IndexedCorpus {
 
 impl IndexedCorpus {
     #[must_use]
-    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+    pub(crate) fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             paths: Arc::new(paths.into_iter().collect()),
         }
     }
 
-    pub(super) fn from_indexes(indexes: &[Index]) -> Self {
-        let mut iter = indexes.iter();
+    /// Corpus-relative paths covered by every provided coverage set.
+    #[must_use]
+    pub(crate) fn intersection(coverages: impl IntoIterator<Item = Self>) -> Self {
+        let mut iter = coverages.into_iter();
         let Some(first) = iter.next() else {
-            return Self {
-                paths: Arc::new(HashSet::new()),
-            };
+            return Self::new([]);
         };
 
-        let mut paths = first.coverage().into_set();
-        for index in iter {
-            let next = index.coverage();
-            paths.retain(|path| next.contains(path));
+        let mut paths = first.into_set();
+        for next in iter {
+            let next_paths = next.into_set();
+            paths.retain(|path| next_paths.contains(path));
             if paths.is_empty() {
                 break;
             }
         }
 
-        Self {
-            paths: Arc::new(paths),
-        }
+        Self::new(paths)
     }
 
     #[must_use]
@@ -47,22 +43,27 @@ impl IndexedCorpus {
         self.paths.contains(path)
     }
 
-    pub fn paths(&self) -> impl Iterator<Item = &Path> {
-        self.paths.iter().map(PathBuf::as_path)
-    }
-
     #[must_use]
-    pub fn into_set(self) -> HashSet<PathBuf> {
+    pub(crate) fn into_set(self) -> HashSet<PathBuf> {
         Arc::try_unwrap(self.paths).unwrap_or_else(|paths| (*paths).clone())
     }
 
-    pub(super) const fn unindexed_files(&self) -> UnindexedFiles<'_> {
+    /// Drop paths already present in this indexed corpus.
+    #[must_use]
+    pub fn retain_unindexed(self, paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+        paths
+            .into_iter()
+            .filter(|path| !self.contains(path))
+            .collect()
+    }
+
+    pub(crate) const fn unindexed_files(&self) -> UnindexedFiles<'_> {
         UnindexedFiles { indexed: self }
     }
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct UnindexedFiles<'a> {
+pub struct UnindexedFiles<'a> {
     indexed: &'a IndexedCorpus,
 }
 

@@ -8,7 +8,8 @@ Benchmarks mirror the `src/` module layout and exercise only public APIs.
 
 | File | What it measures |
 |------|------------------|
-| `query.rs` | `QueryPlanner` decisions and `Query::compile` matcher construction |
+| `query.rs` | `Searcher` / `SearchQuery` compilation |
+| `candidates.rs` | `CandidatePlanner` decisions and `CandidatePlan::resolve` |
 | `index.rs` | Runtime-width `NGramIndex` build/open, `Indexes::open`, `Index` enum methods, `candidates`, `explain`, save/reopen |
 | `grep.rs` | `Grep::run` (indexed search / walk search), `CandidateFilter` paths, output modes |
 
@@ -22,6 +23,7 @@ cargo bench -p sift-core
 
 # Per-target
 cargo bench -p sift-core --bench query
+cargo bench -p sift-core --bench candidates
 cargo bench -p sift-core --bench index
 cargo bench -p sift-core --bench grep
 
@@ -34,7 +36,7 @@ cargo bench -p sift-cli --bench cli
 ./scripts/bench.sh -- --baseline main
 ```
 
-Pass Criterion flags after `--`: `cargo bench -p sift-core --bench query -- --help`
+Pass Criterion flags after `--`: `cargo bench -p sift-core --bench candidates -- --help`
 
 ## Fixture Rules
 
@@ -51,6 +53,7 @@ cargo bench -p sift-cli --no-run
 
 # Smoke run each target
 cargo bench -p sift-core --bench query -- --noplot
+cargo bench -p sift-core --bench candidates -- --noplot
 cargo bench -p sift-core --bench index -- --noplot
 cargo bench -p sift-core --bench grep -- --noplot
 cargo bench -p sift-cli --bench cli -- --noplot

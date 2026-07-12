@@ -62,7 +62,7 @@ Linux kernel source tree, 79K files, 1.3 GB. End-to-end CLI wall-clock (includes
 
 ## Architecture
 
-Sift is built around **composable on-disk indexes**. The `Indexes` registry opens all configured indexes under a `.sift` directory and intersects their candidate sets at query time.
+Sift is built around **composable on-disk indexes**. `IndexStore` builds snapshots; `Indexes` opens them for query-time narrowing and intersects multi-index results. `Grep` resolves candidates and runs search.
 
 ```
   pattern --> Planner --> [ngram-3] [Future Index B] [Future Index C]
@@ -78,7 +78,7 @@ Today the default configured index is `ngram-3`, a runtime-width N-gram index. A
 
 | Path | Role |
 |------|------|
-| `crates/core/` | Index registry, query planner, search engine |
+| `crates/core/` | Index lifecycle, candidate planning, search engine |
 | `crates/cli/` | `sift` binary (ripgrep-compatible flags) |
 | `benchsuite/` | Comparative rg vs sift benchmarks + chart generation |
 | `fuzz/` | Cargo-fuzz targets |

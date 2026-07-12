@@ -6,7 +6,9 @@ Guidelines for AI agents working on the sift codebase.
 
 Sift is an indexed code search engine written in Rust, built around **composable on-disk indexes**. It builds indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine.
 
-The core architecture treats code search like database query execution: multiple index configurations can coexist, each narrowing candidates independently, with the `Indexes` registry intersecting their results. Today, Sift ships a runtime-width N-gram index that defaults to trigram width. `IndexConfig` records configured/persisted index identity, `IndexStore` owns build/open/update transactions, and `Index` is the opened query-time runtime dispatch. Future index types (AST indexes, dependency graphs, vector indexes) slot into the same architecture.
+The core architecture treats code search like database query execution: multiple index configurations can coexist, each narrowing candidates independently, with `Indexes` intersecting their results. `IndexStore` owns lifecycle (build/update); `Snapshot` and `Indexes` own search (`open`, `query`, `hydrate_*`). Candidate resolution goes through `Grep::resolve_candidates` / `CandidatePlanner`, not shortcut methods on `Indexes`. Today the default index is runtime-width N-gram (trigram default).
+
+The candidate pipeline is **plan (pure) → resolve (I/O) → search**: `CandidatePlanner::plan` caches `IndexQueryResult` in a lifetime-free `CandidatePlan`; `CandidatePlan::resolve` is the single I/O boundary; `Searcher` consumes a lazy `Candidates` collection (`into_vec()` materializes all).
 
 ## Build & Test
 
@@ -24,7 +26,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 |------|------|
 | `crates/core/` | `sift-core`: composable index registry, query planning, candidate narrowing, search engine |
 | `crates/core/src/candidates/` | Index-agnostic candidate description, planning, and resolution |
-| `crates/core/src/index/` | `IndexConfig` / `Index` dispatch, `Indexes` registry, `IndexStore`, snapshot persistence |
+| `crates/core/src/index/` | `IndexConfig` / `Index` dispatch, `IndexStore` lifecycle, `Snapshot`, `Indexes` search |
 | `crates/core/src/index/ngram/` | N-gram index: generic implementation plus trigram specialization (first shipped index type) |
 | `crates/core/src/grep/` | Grep search API and matcher execution |
 | `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
@@ -60,7 +62,20 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`IndexStore::open_or_create` → `IndexStore::build(configs, build_config)` → `Indexes::open` → `Query::new` → `Query::candidates` / `Query::search`. CLI: `RunConfig` → `Run::execute` → `SearchPrinter`. See `crates/core/README.md`.
+`IndexStore::open_or_create` → `build` / `update` → `Snapshot::open_current` → `Indexes::open` → `Grep::resolve_candidates` → `Searcher::execute`. CLI: `IndexJob::run` / `SnapshotRefresh::run` for lifecycle; `Run::execute` for search. See `crates/core/README.md`.
+
+## Index layer split
+
+Keep lifecycle, snapshot, and search on separate types. Do not add orchestration shortcuts to core.
+
+| Layer | Types | Role |
+|-------|-------|------|
+| Core lifecycle | `IndexStore`, `IndexConfig`, `StoreMeta` | Build, update, meta |
+| Core search | `Snapshot`, `Indexes`, `IndexedCorpus` | Open, query, hydrate |
+| Core candidates | `CandidatePlanner`, `Grep` | Plan, resolve, search |
+| CLI | `IndexJob`, `SnapshotRefresh`, daemon | Reconcile, debounce, IPC |
+
+**Do not add to core:** `from_single`, `Indexes::candidates`, `reconcile`, `unindexed_hit_paths`, or other caller-specific helpers. Callers compose `Snapshot::open_current`, `Indexes::open`, `indexed_corpus().retain_unindexed`, and `Grep::resolve_candidates`.
 
 ## Architecture & Design
 
@@ -137,6 +152,24 @@ would make intent clearer.
 Separate domain decisions from side effects. Prefer pure, testable logic that
 returns decisions or actions, with I/O, filesystem access, spawning, logging,
 locking, and channel communication kept at clear orchestration boundaries.
+
+**Query pipeline:** plan (pure) → resolve (I/O) → search. Planners return
+inspectable plan values; `resolve()` (consuming `self`) is the only
+side-effectful step in candidate resolution. Never interleave I/O inside planning.
+
+**Short domain names** over stage/mechanism names (`Candidates`, not
+`ResolvedCandidates` / `ProgressiveCandidates`). If two types are a near-duplicate
+across a layer boundary, merge or delete one.
+
+**`Option<T>` models absence.** Do not add custom enums whose only second arm means
+"nothing"; reserve enums for two or more meaningful alternatives.
+
+**Single-phase construction.** Build values complete at construction time; no
+post-construction mutators (`disable_*`, `set_*`) when the input is known upfront.
+
+**Collections** follow Rust conventions: a named type with `IntoIterator`, `into_vec`,
+and `is_empty`; no eager/lazy API pairs or load flags; no `len()` when iteration
+filters rows and an exact count would lie.
 
 ## Function Evolution
 

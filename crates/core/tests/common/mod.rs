@@ -5,11 +5,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sift_core::grep::{IgnoreConfig, VisibilityConfig};
+use sift_core::grep::{
+    CandidateFilter, CandidateFilterConfig, FilterAdmission, Grep, GrepRequest, IgnoreConfig,
+    PathDisplay, VisibilityConfig,
+};
+use sift_core::search::{
+    InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode,
+};
+use sift_core::{
+    Candidate, CandidateOrder, CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness,
+};
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
-    IndexCoverage, IndexStore, IndexWalkConfig, Indexes, NGramConfig, NGramIndex, StoreMeta,
-    WalkMeta,
+    IndexCoverage, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramConfig, NGramIndex,
+    StoreMeta, WalkMeta,
 };
 
 pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexConfig>) -> StoreMeta {
@@ -115,6 +124,53 @@ pub fn build_store(corpus: &Path, sift_dir: &Path) -> IndexStore {
 
 pub fn open_indexes(sift_dir: &Path) -> Indexes {
     Indexes::open(sift_dir).expect("open indexes")
+}
+
+pub fn index_candidates(
+    indexes: &Indexes,
+    corpus: &Path,
+    patterns: &[String],
+    options: SearchOptions,
+    admission: FilterAdmission,
+) -> Vec<Candidate> {
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), corpus).expect("filter");
+    let root = corpus
+        .canonicalize()
+        .unwrap_or_else(|_| corpus.to_path_buf());
+    let meta_storage = if admission == FilterAdmission::Indexed {
+        Some(sample_store_meta(
+            root,
+            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+        ))
+    } else {
+        None
+    };
+    let store_meta = meta_storage.as_ref();
+    let source = CandidateSource::new(
+        indexes,
+        &filter,
+        store_meta,
+        ScanScope::Index {
+            order: CandidateOrder::default(),
+            freshness: SnapshotFreshness::Current,
+        },
+        IndexNarrowing::Allowed,
+    );
+    let query = SearchQueryBuilder::new(patterns.to_vec())
+        .options(options)
+        .build()
+        .expect("query");
+    let request = GrepRequest {
+        query,
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+        mode: SearchMode::Lines,
+        stats: StatsMode::Off,
+    };
+    Grep::new(source)
+        .resolve_candidates(&request)
+        .expect("candidates")
+        .into_vec()
 }
 
 pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> NGramIndex {

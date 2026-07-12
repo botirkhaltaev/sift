@@ -1,6 +1,5 @@
-use std::path::{Path, PathBuf};
-
 use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 use crate::corpus::Candidate;
 use crate::corpus::candidate::PathDisplay;
@@ -148,15 +147,6 @@ impl<'a> Inputs<'a> {
     }
 }
 
-/// How candidate-backed inputs are materialized before search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputExtent {
-    /// Materialize every candidate-backed input before search starts.
-    Complete,
-    /// Materialize candidate-backed inputs one-at-a-time during search.
-    Progressive,
-}
-
 /// Read transformed bytes that should be searched for one candidate.
 pub trait CandidateTransform {
     /// # Errors
@@ -165,14 +155,14 @@ pub trait CandidateTransform {
     fn read_candidate(&self, candidate: &Candidate) -> crate::Result<Vec<u8>>;
 }
 
-/// Plan for turning corpus candidates into [`Input`] values.
-pub struct CandidateInputPlan<'a> {
+/// How a discovered file is presented as a search input.
+pub struct InputConversion<'a> {
     explicit_paths: &'a [PathBuf],
     path_display: PathDisplay,
     transform: Option<&'a dyn CandidateTransform>,
 }
 
-impl<'a> CandidateInputPlan<'a> {
+impl<'a> InputConversion<'a> {
     #[must_use]
     pub const fn new(
         explicit_paths: &'a [PathBuf],
@@ -224,7 +214,7 @@ impl<'a> CandidateInputPlan<'a> {
         }
     }
 
-    pub(crate) fn identity(&self, candidate: &Candidate) -> InputIdentity {
+    fn identity(&self, candidate: &Candidate) -> InputIdentity {
         let display_path = match self.path_display {
             PathDisplay::Relative => candidate.rel_path(),
             PathDisplay::Absolute => candidate.abs_path(),
@@ -238,53 +228,15 @@ impl<'a> CandidateInputPlan<'a> {
 }
 
 /// Inputs ready for [`crate::search::Searcher`] execution.
-pub enum SearchInputs<'a> {
-    /// Fully materialized inputs.
-    Complete(Inputs<'a>),
-    /// Candidate-backed inputs resolved on demand; byte streams are eager.
-    Progressive {
-        candidates: ProgressiveCandidates<'a>,
-        streams: Inputs<'a>,
-        plan: CandidateInputPlan<'a>,
-    },
-}
-
-/// Candidate-backed inputs for progressive search.
-pub enum ProgressiveCandidates<'a> {
-    /// Already materialized candidates.
-    Ready(Vec<Candidate>),
-    /// Indexed ids materialized during `FirstMatch` search.
-    Indexed(crate::candidates::IndexedCandidates<'a>),
-}
-
-impl ProgressiveCandidates<'_> {
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        match self {
-            Self::Ready(candidates) => candidates.is_empty(),
-            Self::Indexed(indexed) => indexed.is_empty(),
-        }
-    }
-
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        match self {
-            Self::Ready(candidates) => candidates.len(),
-            Self::Indexed(indexed) => indexed.len(),
-        }
-    }
+pub struct SearchInputs<'a> {
+    pub candidates: crate::candidates::Candidates<'a>,
+    pub streams: Inputs<'a>,
+    pub conversion: InputConversion<'a>,
 }
 
 impl SearchInputs<'_> {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        match self {
-            Self::Complete(inputs) => inputs.is_empty(),
-            Self::Progressive {
-                candidates,
-                streams,
-                ..
-            } => candidates.is_empty() && streams.is_empty(),
-        }
+        self.candidates.is_empty() && self.streams.is_empty()
     }
 }

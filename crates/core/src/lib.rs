@@ -9,15 +9,16 @@ pub mod grep;
 pub mod index;
 pub mod search;
 
+pub use candidates::{CandidateSource, Candidates, IndexNarrowing, ScanScope, SnapshotFreshness};
 pub use corpus::Candidate;
 pub use grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateTransform,
-    Error as GrepError, FilterAdmission, GlobConfig, Grep, GrepBuilder, GrepRequest, HiddenMode,
-    IgnoreConfig, IgnoreSources, InputRequest, TypeFilterRule, VisibilityConfig,
+    Error as GrepError, FilterAdmission, GlobConfig, Grep, GrepRequest, HiddenMode, IgnoreConfig,
+    IgnoreSources, TypeFilterRule, VisibilityConfig,
 };
 pub use search::{
     BinaryEvent, BinaryMode, CaseMode, ContextEvent, ContextKind, FileEvent, FileReport, Input,
-    InputEncoding, InputExtent, InputIdentity, Inputs, Match, MatchEvent, RegexEngine, Report,
+    InputConversion, InputEncoding, InputIdentity, Inputs, Match, MatchEvent, RegexEngine, Report,
     SearchBound, SearchEvent, SearchFlags, SearchInputs, SearchMode, SearchOptions, SearchQuery,
     SearchQueryBuilder, SearchSink, Searcher, Stats, StatsMode, ZeroCounts,
 };
@@ -31,9 +32,8 @@ pub use index::ngram::{
 };
 pub use index::store::IndexStore;
 pub use index::{
-    CandidatePlan, CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig,
-    IndexCoverage, IndexError, IndexId, IndexedCorpus, Indexes, MaterializeRequest, PlanMode,
-    QueryPlanOutput, ReconcileOutcome, SnapshotId, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, IndexConfig, IndexCoverage, IndexError,
+    IndexId, IndexedCorpus, Indexes, PlanMode, QueryPlanOutput, SnapshotId, WalkMeta,
 };
 
 use thiserror::Error;

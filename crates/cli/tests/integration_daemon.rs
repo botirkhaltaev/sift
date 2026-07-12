@@ -22,8 +22,8 @@ use common::normalize_stderr;
 use common::normalize_stdout;
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
-    WalkMeta,
+    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, SnapshotId,
+    StoreMeta, WalkMeta,
 };
 use sift_grep::index::daemon::{Daemon, DaemonOrchestrator, ServeConfig};
 
@@ -122,7 +122,8 @@ where
 
 fn path_indexed(sift_dir: &Path, rel: &str) -> bool {
     Indexes::open(sift_dir)
-        .is_ok_and(|indexes| indexes.indexed_rel_paths().contains(&PathBuf::from(rel)))
+        .ok()
+        .is_some_and(|indexes| indexes.indexed_corpus().contains(Path::new(rel)))
 }
 
 fn poll_until_indexed(sift_dir: &Path, rel: &str, timeout: Duration) {
@@ -134,6 +135,17 @@ fn poll_until_indexed(sift_dir: &Path, rel: &str, timeout: Duration) {
         std::thread::sleep(Duration::from_millis(100));
     }
     panic!("timed out after {timeout:?} waiting for {rel:?} to appear in the index");
+}
+
+fn poll_until_snapshot_validates(daemon: &Daemon, id: &SnapshotId, timeout: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if daemon.validate_snapshot(id).expect("validate snapshot") {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("timed out after {timeout:?} waiting for snapshot {id:?} to validate");
 }
 
 fn daemon_search(sift_dir: &Path, pattern: &str) -> Output {
@@ -687,10 +699,10 @@ fn daemon_validates_only_current_committed_snapshot() {
 
     let daemon = Daemon::new(p.sift_dir().to_path_buf());
     let first = Indexes::open(p.sift_dir()).expect("open indexes");
-    let first_id = first.snapshot_id().expect("snapshot id").clone();
+    let first_id = first.snapshot_id().expect("committed snapshot id");
     assert!(
         daemon
-            .validate_snapshot(&first_id)
+            .validate_snapshot(first_id)
             .expect("validate snapshot"),
         "current snapshot should validate"
     );
@@ -700,23 +712,18 @@ fn daemon_validates_only_current_committed_snapshot() {
     poll_until_indexed(p.sift_dir(), "b.txt", Duration::from_secs(15));
 
     let second = Indexes::open(p.sift_dir()).expect("open indexes");
-    let second_id = second.snapshot_id().expect("snapshot id").clone();
+    let second_id = second.snapshot_id().expect("committed snapshot id");
     assert_ne!(
         first_id, second_id,
         "reconcile should commit a new snapshot"
     );
     assert!(
         !daemon
-            .validate_snapshot(&first_id)
+            .validate_snapshot(first_id)
             .expect("validate snapshot"),
         "old snapshot should not validate after a newer commit"
     );
-    assert!(
-        daemon
-            .validate_snapshot(&second_id)
-            .expect("validate snapshot"),
-        "new snapshot should validate"
-    );
+    poll_until_snapshot_validates(&daemon, second_id, Duration::from_secs(15));
 
     shutdown.store(true, Ordering::Relaxed);
     handle.join().unwrap();

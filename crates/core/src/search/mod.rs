@@ -14,10 +14,7 @@ pub use event::{
     BinaryEvent, ContextEvent, ContextKind, FileEvent, MatchEvent, SearchEvent, SearchSink,
 };
 pub use hit::Match;
-pub use input::{
-    CandidateInputPlan, CandidateTransform, Input, InputExtent, InputIdentity, Inputs,
-    ProgressiveCandidates, SearchInputs,
-};
+pub use input::{CandidateTransform, Input, InputConversion, InputIdentity, Inputs, SearchInputs};
 pub(crate) use matcher::PrefilterCompatibility;
 pub use mode::{SearchMode, ZeroCounts};
 pub use options::{

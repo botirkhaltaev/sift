@@ -1,10 +1,13 @@
 use std::fs;
 
-use sift_core::candidates::{CandidateFlags, CandidateSpec};
+use sift_core::grep::FilterAdmission;
+use sift_core::search::SearchOptions;
 use sift_core::{GramWidth, IndexConfig, IndexStore};
 use tempfile::TempDir;
 
-use super::common::{build_store, open_indexes, sample_store_meta, standard_build_config};
+use super::common::{
+    build_store, index_candidates, open_indexes, sample_store_meta, standard_build_config,
+};
 
 #[test]
 fn build_and_reopen_indexes() {
@@ -17,16 +20,14 @@ fn build_and_reopen_indexes() {
     build_store(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
-    assert!(!indexes.is_empty());
-    let spec = CandidateSpec {
-        patterns: &["hello".to_string()],
-        flags: CandidateFlags::empty(),
-    };
-    let file_ids = match indexes.plan(&spec) {
-        sift_core::CandidatePlan::Narrowed { file_ids, .. } => file_ids,
-        other => panic!("expected narrowed plan, got {other:?}"),
-    };
-    let files = indexes.materialize(&file_ids, sift_core::MaterializeRequest::All);
+    assert!(indexes.usable());
+    let files = index_candidates(
+        &indexes,
+        &corpus,
+        &["hello".to_string()],
+        SearchOptions::default(),
+        FilterAdmission::Full,
+    );
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].rel_path().as_os_str(), "a.txt");
 }

@@ -4,8 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Breaking
+
+- Replace `IndexAvailability` / `CandidateSelection` / `IndexFallback` with `ScanScope`, `SnapshotFreshness`, and `IndexNarrowing` on `CandidateSource`
+- Remove `GrepBuilder`, `InputConversion::for_candidates`, in-memory `Snapshot` constructors (`from_ngram`), and public `IndexSession`
+- Replace mechanism-named `IndexedCorpus::{from_paths,from_indexes}` with `new` / `intersection`; `Indexes::from_snapshot` → `Indexes::new`
+- `Indexes::{usable, corpus_root, corpus_kind, snapshot_id}` replaces session accessors; `IndexedCorpus` is public for path-set filtering
+- `Grep` compiles queries once via internal `compile()`; `GrepRequest` no longer carries `selection`
+
 ### Refactor
 
+- Rename `selection.rs` → `scope.rs`; `IndexQuery` → `PrefilterNarrowing`
+- CLI: `PreparedCandidateSource` → `SearchSession`; `InputSources::search_inputs`; `run_files` routes through `Grep::resolve_candidates`
 - Delegate standard, summary, and JSON printing to `grep-printer`; remove Sift-owned matcher/searcher/output rendering wrappers.
 - Replace `grep/pattern` with simple `grep/search` query, compiler, run, and hit modules; remove `PatternCompiler`.
 - Replace public `CompiledQuery`, `Session`, and candidate-policy APIs with query-owned preparation plus `CandidateSource` and `CandidateRequest`.

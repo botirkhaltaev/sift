@@ -24,34 +24,22 @@ pub struct QueryPlanOutput {
     pub mode: PlanMode,
 }
 
-/// How an opened index covers a query.
+/// Internal index query outcome before materialization.
 #[derive(Debug)]
-pub enum CandidatePlan {
+pub(crate) enum IndexQueryResult {
     /// The query has no usable index terms.
     Unavailable,
-    /// Every indexed file is a possible match, so the index cannot narrow further.
+    /// Every indexed file is a possible match, so the index cannot filter further.
     AllIndexed,
-    /// Narrowed file ids (materialize at resolve time).
-    Narrowed { file_ids: Vec<u32> },
+    /// Matched file ids (materialize at resolve time).
+    Matched { file_ids: Vec<u32> },
 }
 
-impl CandidatePlan {
+impl IndexQueryResult {
     #[must_use]
-    pub const fn is_unavailable(&self) -> bool {
+    pub(crate) const fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable)
     }
-}
-
-/// How indexed file ids become [`crate::Candidate`] values.
-#[derive(Debug, Clone, Copy)]
-pub enum MaterializeRequest<'a> {
-    /// Emit every id (tests and internal callers).
-    All,
-    /// Apply filter rules while materializing.
-    Matching {
-        filter: &'a CandidateFilter,
-        admission: FilterAdmission,
-    },
 }
 
 /// Configured index identity persisted in metadata and snapshot manifests.
@@ -179,64 +167,66 @@ impl std::str::FromStr for IndexConfig {
     }
 }
 
-/// Opened runtime index used for query-time candidate narrowing.
+/// Opened runtime index used for query-time candidate resolution.
 #[derive(Debug)]
-pub enum Index {
+pub(crate) enum Index {
     /// Runtime-width N-gram index.
     NGram(ngram::Index),
 }
 
 impl Index {
     #[must_use]
-    pub fn root(&self) -> &Path {
-        match self {
-            Self::NGram(index) => index.root(),
-        }
-    }
-
-    #[must_use]
-    pub const fn corpus_kind(&self) -> CorpusKind {
+    pub(crate) const fn corpus_kind(&self) -> CorpusKind {
         match self {
             Self::NGram(index) => index.corpus_kind(),
         }
     }
 
     #[must_use]
-    pub fn plan(&self, query: &crate::candidates::CandidateSpec<'_>) -> CandidatePlan {
+    pub(crate) fn query(
+        &self,
+        query: &crate::candidates::query::CandidateQuery<'_>,
+    ) -> IndexQueryResult {
         match self {
-            Self::NGram(index) => index.plan(query),
+            Self::NGram(index) => index.query(query),
         }
     }
 
     #[must_use]
-    pub fn materialize(
+    pub(crate) fn all_file_ids(&self) -> Vec<u32> {
+        match self {
+            Self::NGram(index) => index.all_file_ids(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn rel_path(&self, id: u32) -> Option<PathBuf> {
+        match self {
+            Self::NGram(index) => index.rel_path(id),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn hydrate_rows(
         &self,
         ids: &[u32],
-        request: MaterializeRequest<'_>,
+        filter: &CandidateFilter,
+        admission: FilterAdmission,
     ) -> Vec<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.materialize(ids, request),
+            Self::NGram(index) => index.hydrate_rows(ids, filter, admission),
         }
     }
 
     #[must_use]
-    pub fn candidate(&self, id: u32, request: MaterializeRequest<'_>) -> Option<crate::Candidate> {
+    pub(crate) fn hydrate_row(
+        &self,
+        id: u32,
+        filter: &CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Option<crate::Candidate> {
         match self {
-            Self::NGram(index) => index.candidate_from_id(id, request),
-        }
-    }
-
-    #[must_use]
-    pub const fn file_count(&self) -> usize {
-        match self {
-            Self::NGram(index) => index.file_count(),
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn all_files(&self, request: MaterializeRequest<'_>) -> Vec<crate::Candidate> {
-        match self {
-            Self::NGram(index) => index.all_files(request),
+            Self::NGram(index) => index.hydrate_row(id, filter, admission),
         }
     }
 
