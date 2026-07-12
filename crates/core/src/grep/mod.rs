@@ -110,9 +110,10 @@ impl<'a> Grep<'a> {
             mode,
             stats,
         } = request;
+        let searcher = Searcher::new(query)?;
+        let candidate_query =
+            CandidateQuery::new(&searcher.query, searcher.prefilter_compatibility());
         let coverage = CandidateCoverage::from_mode(mode);
-        let searcher = Searcher::new(query.clone())?;
-        let candidate_query = CandidateQuery::new(&query, searcher.prefilter_compatibility());
         let candidates = self.resolve_compiled(&candidate_query, coverage)?;
         let inputs = SearchInputs {
             candidates,
