@@ -1,6 +1,3 @@
-use std::collections::HashSet;
-use std::path::PathBuf;
-
 use crate::corpus::Candidate;
 use crate::corpus::filter::FilterAdmission;
 use crate::corpus::order::CandidateOrder;
@@ -82,15 +79,7 @@ impl CandidatePlan {
         let walked = FileWalk::from_filter(source.filter)
             .candidates_matching(source.indexes.indexed_corpus().unindexed_files())?;
         let walked = source.filter.retain(walked, FilterAdmission::Full);
-        let mut seen: HashSet<PathBuf> = candidates
-            .iter()
-            .map(|candidate| candidate.rel_path().to_path_buf())
-            .collect();
-        for candidate in walked {
-            if seen.insert(candidate.rel_path().to_path_buf()) {
-                candidates.push(candidate);
-            }
-        }
+        candidates.extend(walked);
         Ok(candidates)
     }
 
