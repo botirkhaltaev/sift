@@ -37,7 +37,9 @@ Internal: `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
 | `index/store.rs` | `IndexStore` lifecycle |
 | `index/ngram/` | N-gram implementation |
 | `grep/` | Public search API |
-| `candidates/` | plan → resolve → `Candidates` |
+| `candidates/planner.rs` | `CandidatePlanner` (pure planning) |
+| `candidates/plan.rs` | `CandidatePlan`, `PlannedDiscovery`, resolve I/O |
+| `candidates/candidates.rs` | `Candidates` collection |
 | `corpus/` | `Candidate`, filters, walk |
 
 ## Search flow

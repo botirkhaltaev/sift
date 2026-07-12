@@ -3,7 +3,7 @@
 pub mod error;
 pub mod input;
 
-use crate::candidates::plan::CandidatePlanner;
+use crate::candidates::planner::CandidatePlanner;
 use crate::candidates::query::CandidateQuery;
 use crate::candidates::{CandidateCoverage, CandidateSelection, CandidateSource};
 use crate::search::{

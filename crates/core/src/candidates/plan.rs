@@ -1,11 +1,15 @@
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+use crate::corpus::Candidate;
 use crate::corpus::filter::FilterAdmission;
 use crate::corpus::order::CandidateOrder;
-use crate::index::IndexCoverage;
+use crate::corpus::walk::FileWalk;
 use crate::index::kinds::IndexQueryResult;
 
-use super::query::{CandidateQuery, IndexQuery};
-use super::selection::{CandidateCoverage, CandidateSelection, IndexFallback};
-use super::source::CandidateSource;
+use crate::candidates::source::CandidateSource;
+
+use super::collection::Candidates;
 
 /// The execution plan for candidate resolution.
 #[must_use]
@@ -29,187 +33,73 @@ pub(crate) enum PlannedDiscovery {
     },
 }
 
-pub(crate) struct CandidatePlanner;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IndexStatus {
-    Empty,
-    NoCandidateIndex,
-    AllCandidates,
-    CanQuery,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapshotStatus {
-    Missing,
-    FilterMismatch,
-    TrustedComplete,
-    TrustedLazy,
-    StaleComplete,
-}
-
-impl CandidatePlanner {
-    /// Pure decision: no filesystem or index reads beyond cheap metadata.
-    pub(crate) fn plan(
-        source: &CandidateSource<'_>,
-        query: &CandidateQuery<'_>,
-        selection: CandidateSelection,
-        coverage: CandidateCoverage,
-    ) -> CandidatePlan {
-        let narrowed = source.indexes.query(query);
-        let index_query = query.index_query();
-        let fallback = selection.fallback();
-        let snapshot_status = Self::snapshot_status(source, selection);
-        let index_status = Self::index_status(source, &narrowed);
-        let discovery = Self::discovery(
-            selection,
-            coverage,
-            index_query,
-            index_status,
-            snapshot_status,
-            fallback,
-        );
-        let query_result = Self::resolve_query_result(narrowed, coverage);
-        CandidatePlan {
+impl CandidatePlan {
+    /// Run the plan against storage: filesystem walk and/or index lookups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if filesystem walking or ordering fails.
+    pub(crate) fn resolve<'a>(
+        self,
+        source: &'a CandidateSource<'a>,
+    ) -> crate::Result<Candidates<'a>> {
+        let Self {
             discovery,
-            order: selection.order(),
+            order,
             query_result,
-        }
-    }
-
-    fn resolve_query_result(
-        narrowed: IndexQueryResult,
-        coverage: CandidateCoverage,
-    ) -> IndexQueryResult {
-        if coverage == CandidateCoverage::Complete
-            && matches!(narrowed, IndexQueryResult::Matched { .. })
-        {
-            IndexQueryResult::AllIndexed
-        } else {
-            narrowed
-        }
-    }
-
-    fn snapshot_status(
-        source: &CandidateSource<'_>,
-        selection: CandidateSelection,
-    ) -> SnapshotStatus {
-        if matches!(selection, CandidateSelection::None) {
-            return SnapshotStatus::Missing;
-        }
-        let Some(meta) = source.store_meta else {
-            return SnapshotStatus::Missing;
+        } = self;
+        let candidates = match discovery {
+            PlannedDiscovery::Empty => Candidates::empty(),
+            PlannedDiscovery::Walk => Candidates::from(Self::walk(source)?),
+            PlannedDiscovery::Index { admission } => {
+                source
+                    .indexes
+                    .indexed_candidates(query_result, source.filter, admission)
+            }
+            PlannedDiscovery::Merge { admission } => {
+                Candidates::from(Self::merge(source, query_result, admission)?)
+            }
         };
-        if !meta.covers_candidate_filter(source.filter) {
-            return SnapshotStatus::FilterMismatch;
-        }
-        let fallback = selection.fallback();
-        match meta.coverage {
-            IndexCoverage::Complete if fallback.walk_on_stale() => SnapshotStatus::StaleComplete,
-            IndexCoverage::Complete => SnapshotStatus::TrustedComplete,
-            IndexCoverage::Lazy => SnapshotStatus::TrustedLazy,
-        }
+        Self::order(candidates, order)
     }
 
-    fn index_status(source: &CandidateSource<'_>, query_result: &IndexQueryResult) -> IndexStatus {
-        if source.indexes.availability().is_none() {
-            IndexStatus::Empty
-        } else {
-            match query_result {
-                IndexQueryResult::Unavailable => IndexStatus::NoCandidateIndex,
-                IndexQueryResult::AllIndexed => IndexStatus::AllCandidates,
-                IndexQueryResult::Matched { .. } => IndexStatus::CanQuery,
+    fn walk(source: &CandidateSource<'_>) -> crate::Result<Vec<Candidate>> {
+        let walked = FileWalk::from_filter(source.filter).candidates()?;
+        Ok(source.filter.retain(walked, FilterAdmission::Full))
+    }
+
+    fn merge(
+        source: &CandidateSource<'_>,
+        query_result: IndexQueryResult,
+        admission: FilterAdmission,
+    ) -> crate::Result<Vec<Candidate>> {
+        let IndexQueryResult::Matched { file_ids } = query_result else {
+            return Self::walk(source);
+        };
+        let mut candidates = source
+            .indexes
+            .hydrate_rows(&file_ids, source.filter, admission);
+        let walked = FileWalk::from_filter(source.filter)
+            .candidates_matching(source.indexes.indexed_corpus().unindexed_files())?;
+        let walked = source.filter.retain(walked, FilterAdmission::Full);
+        let mut seen: HashSet<PathBuf> = candidates
+            .iter()
+            .map(|candidate| candidate.rel_path().to_path_buf())
+            .collect();
+        for candidate in walked {
+            if seen.insert(candidate.rel_path().to_path_buf()) {
+                candidates.push(candidate);
             }
         }
+        Ok(candidates)
     }
 
-    const fn discovery(
-        selection: CandidateSelection,
-        coverage: CandidateCoverage,
-        index_query: IndexQuery,
-        index_status: IndexStatus,
-        snapshot_status: SnapshotStatus,
-        fallback: IndexFallback,
-    ) -> PlannedDiscovery {
-        match selection {
-            CandidateSelection::None => PlannedDiscovery::Empty,
-            CandidateSelection::Walk { .. } => PlannedDiscovery::Walk,
-            CandidateSelection::Index { .. } => match coverage {
-                CandidateCoverage::Complete => {
-                    Self::complete_discovery(index_status, snapshot_status, fallback)
-                }
-                CandidateCoverage::PotentialMatches => {
-                    Self::potential_discovery(index_status, index_query, snapshot_status, fallback)
-                }
-            },
+    fn order(candidates: Candidates<'_>, order: CandidateOrder) -> crate::Result<Candidates<'_>> {
+        if !order.is_sorted() {
+            return Ok(candidates);
         }
-    }
-
-    const fn complete_discovery(
-        index_status: IndexStatus,
-        snapshot_status: SnapshotStatus,
-        fallback: IndexFallback,
-    ) -> PlannedDiscovery {
-        match (index_status, snapshot_status, fallback) {
-            (IndexStatus::Empty, _, _) => PlannedDiscovery::Walk,
-            (_, SnapshotStatus::FilterMismatch | SnapshotStatus::TrustedLazy, _)
-            | (_, SnapshotStatus::StaleComplete, IndexFallback::WalkOnStaleSnapshot) => {
-                PlannedDiscovery::Walk
-            }
-            (_, _, _) => PlannedDiscovery::Index {
-                admission: Self::admission(snapshot_status),
-            },
-        }
-    }
-
-    const fn potential_discovery(
-        index_status: IndexStatus,
-        index_query: IndexQuery,
-        snapshot_status: SnapshotStatus,
-        fallback: IndexFallback,
-    ) -> PlannedDiscovery {
-        match (index_status, index_query, fallback) {
-            (IndexStatus::Empty, _, _)
-            | (_, IndexQuery::Disabled, _)
-            | (IndexStatus::NoCandidateIndex, _, IndexFallback::WalkOnStaleSnapshot) => {
-                PlannedDiscovery::Walk
-            }
-            (
-                IndexStatus::NoCandidateIndex | IndexStatus::AllCandidates,
-                _,
-                IndexFallback::IndexHitsOnly,
-            ) => PlannedDiscovery::Index {
-                admission: Self::admission(snapshot_status),
-            },
-            (IndexStatus::AllCandidates, _, IndexFallback::WalkOnStaleSnapshot) => {
-                match snapshot_status {
-                    SnapshotStatus::Missing | SnapshotStatus::TrustedComplete => {
-                        PlannedDiscovery::Index {
-                            admission: Self::admission(snapshot_status),
-                        }
-                    }
-                    SnapshotStatus::FilterMismatch
-                    | SnapshotStatus::TrustedLazy
-                    | SnapshotStatus::StaleComplete => PlannedDiscovery::Walk,
-                }
-            }
-            (IndexStatus::CanQuery, _, _) => match snapshot_status {
-                SnapshotStatus::TrustedLazy => PlannedDiscovery::Merge {
-                    admission: Self::admission(snapshot_status),
-                },
-                _ => PlannedDiscovery::Index {
-                    admission: Self::admission(snapshot_status),
-                },
-            },
-        }
-    }
-
-    const fn admission(snapshot_status: SnapshotStatus) -> FilterAdmission {
-        match snapshot_status {
-            SnapshotStatus::TrustedComplete
-            | SnapshotStatus::TrustedLazy
-            | SnapshotStatus::StaleComplete => FilterAdmission::Indexed,
-            SnapshotStatus::Missing | SnapshotStatus::FilterMismatch => FilterAdmission::Full,
-        }
+        let mut items = candidates.into_vec();
+        order.order(&mut items)?;
+        Ok(Candidates::from(items))
     }
 }
