@@ -129,8 +129,9 @@ impl Indexes {
         admission: FilterAdmission,
     ) -> IndexFileIds<'a> {
         let file_ids = match narrowing {
-            NarrowingResult::Unavailable => Vec::new(),
-            NarrowingResult::AllIndexed => self.all_indexed_file_ids(),
+            NarrowingResult::Unavailable | NarrowingResult::AllIndexed => {
+                self.all_indexed_file_ids()
+            }
             NarrowingResult::Narrowed { file_ids } => file_ids,
         };
         IndexFileIds::new(self, file_ids, filter, admission)
