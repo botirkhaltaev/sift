@@ -4,7 +4,6 @@
 //! whole 128-value blocks SIMD delta-bitpacked via [`BitPacker4x`], then a
 //! delta-varint tail for the remaining `< 128` values.
 
-use std::cmp::Ordering;
 use std::path::Path;
 
 use bitpacking::{BitPacker, BitPacker4x};
@@ -172,91 +171,165 @@ impl Postings {
     /// Rejects truncated blocks, oversized `num_bits`, malformed tail varints,
     /// delta overflow, values exceeding `u32::MAX`, and trailing bytes.
     pub(crate) fn decode_sorted(bytes: &[u8]) -> std::io::Result<Vec<u32>> {
-        let (count, mut pos) =
-            u64::decode_var(bytes).ok_or_else(|| Self::malformed("malformed varint"))?;
-        let count =
-            usize::try_from(count).map_err(|_| Self::malformed("posting count exceeds usize"))?;
-        if count == 0 {
-            if pos != bytes.len() {
-                return Err(Self::malformed("trailing bytes after empty posting list"));
-            }
-            return Ok(Vec::new());
-        }
-
-        // Reject implausible counts before reserving so a corrupt blob cannot
-        // trigger a huge allocation: each full block needs at least its 1-byte
-        // header and each tail value at least a 1-byte varint, so `count` values
-        // require at least `full + tail` bytes of payload.
-        let full = count / BLOCK_LEN;
-        let tail = count % BLOCK_LEN;
-        if full + tail > bytes.len() - pos {
-            return Err(Self::malformed("posting count exceeds payload size"));
-        }
-
-        let mut out = Vec::with_capacity(count);
-        let bitpacker = BitPacker4x::new();
-        let mut initial = 0u32;
-        let mut block_buf = [0u32; BLOCK_LEN];
-        for _ in 0..full {
-            let num_bits = *bytes
-                .get(pos)
-                .ok_or_else(|| Self::malformed("truncated posting block header"))?;
-            pos += 1;
-            if num_bits > 32 {
-                return Err(Self::malformed("posting block num_bits exceeds 32"));
-            }
-            let block_bytes = num_bits as usize * BLOCK_LEN / 8;
-            let compressed = bytes
-                .get(pos..pos + block_bytes)
-                .ok_or_else(|| Self::malformed("truncated posting block"))?;
-            pos += block_bytes;
-            bitpacker.decompress_sorted(initial, compressed, &mut block_buf, num_bits);
-            out.extend_from_slice(&block_buf);
-            initial = block_buf[BLOCK_LEN - 1];
-        }
-
-        let mut prev = u64::from(initial);
-        for _ in 0..tail {
-            let (raw, consumed) = u64::decode_var(&bytes[pos..])
-                .ok_or_else(|| Self::malformed("malformed varint"))?;
-            pos += consumed;
-            let value = prev
-                .checked_add(raw)
-                .ok_or_else(|| Self::malformed("delta overflow in posting list"))?;
-            if value > u64::from(u32::MAX) {
-                return Err(Self::malformed("posting value exceeds u32::MAX"));
-            }
-            out.push(u32::try_from(value).expect("value bounded above"));
-            prev = value;
-        }
-
-        if pos != bytes.len() {
-            return Err(Self::malformed("trailing bytes after posting list"));
-        }
-        Ok(out)
+        PostingValues::new(bytes)?.collect()
     }
 
     pub(crate) fn intersect_sorted(ids: &[u32], encoded: &[u8]) -> std::io::Result<Vec<u32>> {
-        let other = Self::decode_sorted(encoded)?;
-        Ok(Self::intersect_slices(ids, &other))
-    }
-
-    /// Intersect two ascending, unique id slices via a linear merge.
-    pub(crate) fn intersect_slices(a: &[u32], b: &[u32]) -> Vec<u32> {
-        let mut out = Vec::with_capacity(a.len().min(b.len()));
-        let (mut i, mut j) = (0usize, 0usize);
-        while i < a.len() && j < b.len() {
-            match a[i].cmp(&b[j]) {
-                Ordering::Less => i += 1,
-                Ordering::Greater => j += 1,
-                Ordering::Equal => {
-                    out.push(a[i]);
-                    i += 1;
-                    j += 1;
-                }
+        let mut decoded = PostingValues::new(encoded)?;
+        let mut out = Vec::with_capacity(ids.len());
+        let mut i = 0usize;
+        while let Some(value) = decoded.next()? {
+            while i < ids.len() && ids[i] < value {
+                i += 1;
+            }
+            if i < ids.len() && ids[i] == value {
+                out.push(value);
+                i += 1;
             }
         }
-        out
+        Ok(out)
+    }
+}
+
+struct PostingValues<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    remaining: usize,
+    full_blocks_remaining: usize,
+    tail_remaining: usize,
+    bitpacker: BitPacker4x,
+    block_initial: u32,
+    block_buf: [u32; BLOCK_LEN],
+    block_cursor: usize,
+    in_tail: bool,
+    tail_prev: u64,
+}
+
+impl<'a> PostingValues<'a> {
+    fn new(bytes: &'a [u8]) -> std::io::Result<Self> {
+        let (count, pos) =
+            u64::decode_var(bytes).ok_or_else(|| Postings::malformed("malformed varint"))?;
+        let count = usize::try_from(count)
+            .map_err(|_| Postings::malformed("posting count exceeds usize"))?;
+        if count == 0 {
+            if pos != bytes.len() {
+                return Err(Postings::malformed(
+                    "trailing bytes after empty posting list",
+                ));
+            }
+            return Ok(Self {
+                bytes,
+                pos,
+                remaining: 0,
+                full_blocks_remaining: 0,
+                tail_remaining: 0,
+                bitpacker: BitPacker4x::new(),
+                block_initial: 0,
+                block_buf: [0; BLOCK_LEN],
+                block_cursor: BLOCK_LEN,
+                in_tail: false,
+                tail_prev: 0,
+            });
+        }
+
+        let full_blocks_remaining = count / BLOCK_LEN;
+        let tail_remaining = count % BLOCK_LEN;
+        if full_blocks_remaining + tail_remaining > bytes.len() - pos {
+            return Err(Postings::malformed("posting count exceeds payload size"));
+        }
+
+        Ok(Self {
+            bytes,
+            pos,
+            remaining: count,
+            full_blocks_remaining,
+            tail_remaining,
+            bitpacker: BitPacker4x::new(),
+            block_initial: 0,
+            block_buf: [0; BLOCK_LEN],
+            block_cursor: BLOCK_LEN,
+            in_tail: false,
+            tail_prev: 0,
+        })
+    }
+
+    fn load_block(&mut self) -> std::io::Result<()> {
+        let num_bits = *self
+            .bytes
+            .get(self.pos)
+            .ok_or_else(|| Postings::malformed("truncated posting block header"))?;
+        self.pos += 1;
+        if num_bits > 32 {
+            return Err(Postings::malformed("posting block num_bits exceeds 32"));
+        }
+        let block_bytes = num_bits as usize * BLOCK_LEN / 8;
+        let compressed = self
+            .bytes
+            .get(self.pos..self.pos + block_bytes)
+            .ok_or_else(|| Postings::malformed("truncated posting block"))?;
+        self.pos += block_bytes;
+        self.bitpacker.decompress_sorted(
+            self.block_initial,
+            compressed,
+            &mut self.block_buf,
+            num_bits,
+        );
+        self.block_initial = self.block_buf[BLOCK_LEN - 1];
+        self.block_cursor = 0;
+        self.full_blocks_remaining -= 1;
+        Ok(())
+    }
+
+    fn next(&mut self) -> std::io::Result<Option<u32>> {
+        if self.remaining == 0 {
+            if self.pos != self.bytes.len() {
+                return Err(Postings::malformed("trailing bytes after posting list"));
+            }
+            return Ok(None);
+        }
+
+        if self.block_cursor < BLOCK_LEN {
+            let value = self.block_buf[self.block_cursor];
+            self.block_cursor += 1;
+            self.remaining -= 1;
+            return Ok(Some(value));
+        }
+
+        if self.full_blocks_remaining > 0 {
+            self.load_block()?;
+            return self.next();
+        }
+
+        if self.tail_remaining > 0 {
+            if !self.in_tail {
+                self.in_tail = true;
+                self.tail_prev = u64::from(self.block_initial);
+            }
+            let (raw, consumed) = u64::decode_var(&self.bytes[self.pos..])
+                .ok_or_else(|| Postings::malformed("malformed varint"))?;
+            self.pos += consumed;
+            let value = self
+                .tail_prev
+                .checked_add(raw)
+                .ok_or_else(|| Postings::malformed("delta overflow in posting list"))?;
+            if value > u64::from(u32::MAX) {
+                return Err(Postings::malformed("posting value exceeds u32::MAX"));
+            }
+            self.tail_prev = value;
+            self.tail_remaining -= 1;
+            self.remaining -= 1;
+            return Ok(Some(u32::try_from(value).expect("value bounded above")));
+        }
+
+        Err(Postings::malformed("truncated posting list"))
+    }
+
+    fn collect(mut self) -> std::io::Result<Vec<u32>> {
+        let mut out = Vec::with_capacity(self.remaining);
+        while let Some(value) = self.next()? {
+            out.push(value);
+        }
+        Ok(out)
     }
 }
 
