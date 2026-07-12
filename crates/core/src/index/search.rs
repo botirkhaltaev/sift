@@ -1,5 +1,4 @@
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rayon::prelude::*;
 
@@ -12,15 +11,6 @@ use super::snapshot::{Snapshot, SnapshotId};
 use crate::candidates::Candidates;
 use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
-
-/// Read-only view of an opened snapshot usable for search.
-///
-/// `snapshot` is `None` when the opened snapshot has no committed id.
-pub struct IndexSession<'a> {
-    pub root: &'a Path,
-    pub corpus: CorpusKind,
-    pub snapshot: Option<SnapshotId>,
-}
 
 /// Opened snapshot indexes for query-time candidate resolution.
 pub struct Indexes {
@@ -53,29 +43,41 @@ impl Indexes {
 
     /// Wrap an already-opened snapshot for search.
     #[must_use]
-    pub const fn from_snapshot(snapshot: Snapshot) -> Self {
+    pub(crate) const fn from_snapshot(snapshot: Snapshot) -> Self {
         Self { snapshot }
     }
 
-    /// Opened snapshot identity when indexes are usable for candidate discovery.
+    /// Whether opened indexes are usable for candidate discovery.
     #[must_use]
-    pub fn session(&self) -> Option<IndexSession<'_>> {
+    pub fn usable(&self) -> bool {
         if self.snapshot.is_empty() {
-            return None;
+            return false;
         }
-        let root = self.snapshot.root();
         let indexes = self.snapshot.indexes();
-        let first = indexes.first()?;
+        let Some(first) = indexes.first() else {
+            return false;
+        };
         let corpus = first.corpus_kind();
-        if indexes.iter().any(|idx| idx.corpus_kind() != corpus) {
-            return None;
-        }
-        let snapshot = self.snapshot.id().cloned();
-        Some(IndexSession {
-            root,
-            corpus,
-            snapshot,
-        })
+        indexes.iter().all(|idx| idx.corpus_kind() == corpus)
+    }
+
+    /// Corpus root when indexes are usable.
+    #[must_use]
+    pub fn corpus_root(&self) -> Option<&Path> {
+        self.usable().then_some(self.snapshot.root())
+    }
+
+    /// Corpus kind when indexes are usable.
+    #[must_use]
+    pub fn corpus_kind(&self) -> Option<CorpusKind> {
+        let first = self.snapshot.indexes().first()?;
+        self.usable().then_some(first.corpus_kind())
+    }
+
+    /// Committed snapshot id when present.
+    #[must_use]
+    pub fn snapshot_id(&self) -> Option<&SnapshotId> {
+        self.usable().then(|| self.snapshot.id()).flatten()
     }
 
     /// Corpus-relative paths covered by every opened index in this snapshot.
@@ -143,27 +145,17 @@ impl Indexes {
     }
 
     fn all_indexed_file_ids(&self) -> Vec<u32> {
-        let indexes = self.snapshot.indexes();
-        let mut iter = indexes.iter();
-        let Some(first) = iter.next() else {
+        let Some(lead) = self.lead_index() else {
             return Vec::new();
         };
-
-        let mut file_ids = first.all_file_ids();
-
-        for index in iter {
-            let next: HashSet<PathBuf> = index
-                .all_file_ids()
-                .into_iter()
-                .filter_map(|id| index.rel_path(id))
-                .collect();
-            file_ids.retain(|id| first.rel_path(*id).is_some_and(|path| next.contains(&path)));
-            if file_ids.is_empty() {
-                break;
-            }
-        }
-
-        file_ids
+        let corpus = self.indexed_corpus();
+        lead.all_file_ids()
+            .into_iter()
+            .filter(|id| {
+                lead.rel_path(*id)
+                    .is_some_and(|path| corpus.contains(path.as_path()))
+            })
+            .collect()
     }
 
     fn query_multi(

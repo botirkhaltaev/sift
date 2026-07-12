@@ -8,7 +8,7 @@ use std::fs;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use sift_core::candidates::{CandidateSource, ScanScope, SnapshotFreshness};
+use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
 use sift_core::grep::{CandidateOrder, Grep, GrepRequest, PathDisplay, VisibilityConfig};
 use sift_core::search::{
     InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode,
@@ -68,15 +68,16 @@ fn index_candidate_vec(
     patterns: &[String],
     options: SearchOptions,
 ) -> Vec<sift_core::Candidate> {
-    let source = CandidateSource {
+    let source = CandidateSource::new(
         indexes,
         filter,
-        store_meta: None,
-        scope: ScanScope::Index {
+        None,
+        ScanScope::Index {
             order: CandidateOrder::default(),
             freshness: SnapshotFreshness::Current,
         },
-    };
+        IndexNarrowing::Allowed,
+    );
     let query = SearchQueryBuilder::new(patterns.to_vec())
         .options(options)
         .build()
@@ -84,7 +85,7 @@ fn index_candidate_vec(
     let request = GrepRequest {
         query,
         streams: Inputs::empty(),
-        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
         mode: SearchMode::Lines,
         stats: StatsMode::Off,
     };
@@ -565,11 +566,7 @@ fn bench_trigram_index_methods(c: &mut Criterion) {
 fn bench_candidates(c: &mut Criterion) {
     let fixture = common::open_large_indexes();
     let indexes = fixture.1;
-    let root = indexes
-        .session()
-        .expect("indexed corpus")
-        .root
-        .to_path_buf();
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
     let filter = sift_core::grep::CandidateFilter::new(
         &sift_core::grep::CandidateFilterConfig::default(),
         &root,

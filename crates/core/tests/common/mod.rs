@@ -12,7 +12,9 @@ use sift_core::grep::{
 use sift_core::search::{
     InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode,
 };
-use sift_core::{Candidate, CandidateOrder, CandidateSource, ScanScope, SnapshotFreshness};
+use sift_core::{
+    Candidate, CandidateOrder, CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness,
+};
 use sift_core::{
     CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
     IndexCoverage, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramConfig, NGramIndex,
@@ -144,15 +146,16 @@ pub fn index_candidates(
         None
     };
     let store_meta = meta_storage.as_ref();
-    let source = CandidateSource {
+    let source = CandidateSource::new(
         indexes,
-        filter: &filter,
+        &filter,
         store_meta,
-        scope: ScanScope::Index {
+        ScanScope::Index {
             order: CandidateOrder::default(),
             freshness: SnapshotFreshness::Current,
         },
-    };
+        IndexNarrowing::Allowed,
+    );
     let query = SearchQueryBuilder::new(patterns.to_vec())
         .options(options)
         .build()
@@ -160,7 +163,7 @@ pub fn index_candidates(
     let request = GrepRequest {
         query,
         streams: Inputs::empty(),
-        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
         mode: SearchMode::Lines,
         stats: StatsMode::Off,
     };

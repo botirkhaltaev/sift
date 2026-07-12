@@ -23,7 +23,7 @@ Two-layer flag model:
 | `grep/output.rs` | `LineNumberDecl`, … | `OutputDecl`, `OutputArgv` | `OutputArgv::resolve`, `OutputDecl::print_spec` |
 | `grep/filter.rs` | `FilterDecl`, … | `FilterConfig`, `TypeCatalog` | `FilterConfig::candidate_config` |
 | `grep/paths.rs` | `PathArgs` | `CorpusScope` | `CorpusScope::resolve` |
-| `grep/input.rs` | — | `InputSources`, `ContentTransform` | `InputSources::resolve`, `build_inputs` |
+| `grep/input.rs` | — | `InputSources`, `ContentTransform` | `InputSources::resolve`, `search_inputs` |
 | `grep/run.rs` | — | `RunConfig`, `Run`, `RunResult` | `Run::execute` |
 | `format/printer.rs` | — | `SearchPrinter`, `PrintSpec` | `SearchPrinter::print` → `Report` |
 | `index/mod.rs` | — | `IndexRequest`, `IndexJob`, `SnapshotRefresh` | `IndexJob::resolve`, `IndexJob::run`, `SnapshotRefresh::run` |
@@ -33,7 +33,7 @@ Two-layer flag model:
 
 ```text
 RunConfig → Run::execute
-InputSources → build_inputs → Inputs
+InputSources → search_inputs → Inputs
 CandidateSource + GrepRequest → Grep::resolve_candidates
 SearchPrinter::print → Report
 ```
@@ -52,7 +52,7 @@ Index lifecycle: `IndexJob::run` → `SnapshotRefresh::run` (build/update snapsh
 - Global options (e.g. `--sift-dir`) must appear **before** `index` subcommands.
 - Search paths are resolved and must sit under the corpus root in the index metadata.
 - Extend flags by threading new `SearchFlags`/`SearchOptions` fields through to `Query` in core. Do not duplicate regex logic here.
-- Mixed paths + stdin: resolve corpus candidates, append stdin in `InputSources::build_inputs`.
+- Mixed paths + stdin: resolve corpus candidates, append stdin in `InputSources::search_inputs`.
 
 ## Testing
 

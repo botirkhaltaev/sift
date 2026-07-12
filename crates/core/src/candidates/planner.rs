@@ -2,8 +2,8 @@ use crate::corpus::filter::FilterAdmission;
 use crate::index::IndexCoverage;
 use crate::index::kinds::IndexQueryResult;
 
-use crate::candidates::query::{CandidateQuery, IndexQuery};
-use crate::candidates::selection::{CandidateCoverage, ScanScope, SnapshotFreshness};
+use crate::candidates::query::{CandidateQuery, PrefilterNarrowing};
+use crate::candidates::scope::{CandidateCoverage, IndexNarrowing, ScanScope, SnapshotFreshness};
 use crate::candidates::source::CandidateSource;
 
 use super::plan::{CandidatePlan, PlannedDiscovery};
@@ -36,19 +36,19 @@ impl CandidatePlanner {
     ) -> CandidatePlan {
         let scope = source.scope;
         let narrowed = source.indexes.query(query);
-        let index_query = query.index_query();
+        let narrowing = Self::narrowing_allowed(source, query);
         let snapshot_status = Self::snapshot_status(source, scope);
         let index_status = Self::index_status(source, &narrowed);
         let freshness = scope.freshness().unwrap_or(SnapshotFreshness::Current);
         let discovery = Self::discovery(
             scope,
             coverage,
-            index_query,
+            narrowing,
             index_status,
             snapshot_status,
             freshness,
         );
-        let query_result = Self::resolve_query_result(narrowed, coverage);
+        let query_result = Self::plan_query_result(discovery, coverage, narrowed);
         CandidatePlan {
             discovery,
             order: scope.order(),
@@ -56,16 +56,22 @@ impl CandidatePlanner {
         }
     }
 
-    fn resolve_query_result(
-        narrowed: IndexQueryResult,
+    const fn narrowing_allowed(source: &CandidateSource<'_>, query: &CandidateQuery<'_>) -> bool {
+        matches!(source.index_narrowing, IndexNarrowing::Allowed)
+            && matches!(query.prefilter_narrowing(), PrefilterNarrowing::Allowed)
+    }
+
+    fn plan_query_result(
+        discovery: PlannedDiscovery,
         coverage: CandidateCoverage,
+        narrowed: IndexQueryResult,
     ) -> IndexQueryResult {
-        if coverage == CandidateCoverage::Complete
-            && matches!(narrowed, IndexQueryResult::Matched { .. })
-        {
-            IndexQueryResult::AllIndexed
-        } else {
-            narrowed
+        match (coverage, discovery) {
+            (
+                CandidateCoverage::Complete,
+                PlannedDiscovery::Index { .. } | PlannedDiscovery::Merge { .. },
+            ) => IndexQueryResult::AllIndexed,
+            _ => narrowed,
         }
     }
 
@@ -90,21 +96,21 @@ impl CandidatePlanner {
     }
 
     fn index_status(source: &CandidateSource<'_>, query_result: &IndexQueryResult) -> IndexStatus {
-        if source.indexes.session().is_none() {
-            IndexStatus::Empty
-        } else {
+        if source.indexes.usable() {
             match query_result {
                 IndexQueryResult::Unavailable => IndexStatus::NoCandidateIndex,
                 IndexQueryResult::AllIndexed => IndexStatus::AllCandidates,
                 IndexQueryResult::Matched { .. } => IndexStatus::CanQuery,
             }
+        } else {
+            IndexStatus::Empty
         }
     }
 
     const fn discovery(
         scope: ScanScope,
         coverage: CandidateCoverage,
-        index_query: IndexQuery,
+        narrowing: bool,
         index_status: IndexStatus,
         snapshot_status: SnapshotStatus,
         freshness: SnapshotFreshness,
@@ -117,7 +123,7 @@ impl CandidatePlanner {
                     Self::complete_discovery(index_status, snapshot_status)
                 }
                 CandidateCoverage::PotentialMatches => {
-                    Self::potential_discovery(index_status, index_query, snapshot_status, freshness)
+                    Self::potential_discovery(index_status, narrowing, snapshot_status, freshness)
                 }
             },
         }
@@ -143,24 +149,24 @@ impl CandidatePlanner {
 
     const fn potential_discovery(
         index_status: IndexStatus,
-        index_query: IndexQuery,
+        narrowing: bool,
         snapshot_status: SnapshotStatus,
         freshness: SnapshotFreshness,
     ) -> PlannedDiscovery {
-        match (index_status, index_query, freshness) {
+        match (index_status, narrowing, freshness) {
             (IndexStatus::Empty, _, _)
-            | (_, IndexQuery::Disabled, _)
+            | (_, false, _)
             | (IndexStatus::NoCandidateIndex, _, SnapshotFreshness::Stale) => {
                 PlannedDiscovery::Walk
             }
             (
                 IndexStatus::NoCandidateIndex | IndexStatus::AllCandidates,
-                _,
+                true,
                 SnapshotFreshness::Current,
             ) => PlannedDiscovery::Index {
                 admission: Self::admission(snapshot_status),
             },
-            (IndexStatus::AllCandidates, _, SnapshotFreshness::Stale) => match snapshot_status {
+            (IndexStatus::AllCandidates, true, SnapshotFreshness::Stale) => match snapshot_status {
                 SnapshotStatus::Missing | SnapshotStatus::TrustedComplete => {
                     PlannedDiscovery::Index {
                         admission: Self::admission(snapshot_status),
@@ -170,7 +176,7 @@ impl CandidatePlanner {
                 | SnapshotStatus::TrustedLazy
                 | SnapshotStatus::StaleComplete => PlannedDiscovery::Walk,
             },
-            (IndexStatus::CanQuery, _, _) => match snapshot_status {
+            (IndexStatus::CanQuery, true, _) => match snapshot_status {
                 SnapshotStatus::TrustedLazy => PlannedDiscovery::Merge {
                     admission: Self::admission(snapshot_status),
                 },

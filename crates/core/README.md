@@ -9,7 +9,7 @@ Composable indexes narrow candidates independently; `Indexes` intersects their r
 ```
 IndexConfig ──IndexStore──> snapshot on disk
                                 │
-                    Snapshot::open_current
+                    Indexes::open
                                 │
                            Indexes (search)
                                 │
@@ -21,7 +21,7 @@ IndexConfig ──IndexStore──> snapshot on disk
 | Type | Role |
 |------|------|
 | `IndexStore` | Build, update, publish |
-| `Snapshot` | Open committed or in-memory snapshot |
+| `Snapshot` | Opened snapshot (internal); use `Indexes::open` |
 | `Indexes` | Query, file ids, hydrate candidates |
 | `Grep` | Resolve candidates + run search |
 
@@ -38,26 +38,27 @@ IndexConfig ──IndexStore──> snapshot on disk
 
 ```rust
 use sift_core::{
-    CandidateSource, Grep, GrepRequest, Indexes, Inputs, InputConversion, PathDisplay, ScanScope,
-    SnapshotFreshness, SearchMode, SearchOptions, SearchQuery, StatsMode,
+    CandidateSource, Grep, GrepRequest, Indexes, IndexNarrowing, Inputs, InputConversion,
+    PathDisplay, ScanScope, SnapshotFreshness, SearchMode, SearchOptions, SearchQuery, StatsMode,
 };
 
 let indexes = Indexes::open(&sift_dir)?;
-let source = CandidateSource {
-    indexes: &indexes,
-    filter: &filter,
-    store_meta: store_meta.as_ref(),
-    scope: ScanScope::Index {
+let source = CandidateSource::new(
+    &indexes,
+    &filter,
+    store_meta.as_ref(),
+    ScanScope::Index {
         order: Default::default(),
         freshness: SnapshotFreshness::Current,
     },
-};
+    IndexNarrowing::Allowed,
+);
 
 let grep = Grep::new(source);
 let request = GrepRequest {
     query: SearchQuery::new(vec!["pattern".into()])?.options(SearchOptions::default()),
     streams: Inputs::empty(),
-    conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+    conversion: InputConversion::new(&[], PathDisplay::Relative, None),
     mode: SearchMode::Lines,
     stats: StatsMode::Off,
 };

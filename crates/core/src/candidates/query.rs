@@ -16,9 +16,9 @@ bitflags::bitflags! {
 use crate::search::{InputEncoding, PrefilterCompatibility, RegexEngine, SearchFlags, SearchQuery};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IndexQuery {
-    Enabled,
-    Disabled,
+pub(crate) enum PrefilterNarrowing {
+    Allowed,
+    Bypassed,
 }
 
 /// Index-agnostic query projection used to resolve candidate files.
@@ -27,7 +27,7 @@ pub(crate) enum IndexQuery {
 pub(crate) struct CandidateQuery<'q> {
     pub patterns: &'q [String],
     pub flags: CandidateFlags,
-    index_query: IndexQuery,
+    prefilter_narrowing: PrefilterNarrowing,
 }
 
 impl<'q> CandidateQuery<'q> {
@@ -51,19 +51,19 @@ impl<'q> CandidateQuery<'q> {
         if matches!(query.options.input_encoding, InputEncoding::Auto) {
             flags |= CandidateFlags::BOM_SNIFFING;
         }
-        let index_query = if flags.contains(CandidateFlags::INVERT_MATCH)
+        let prefilter_narrowing = if flags.contains(CandidateFlags::INVERT_MATCH)
             || query.options.input_encoding.forces_decode()
             || matches!(query.options.regex_engine, RegexEngine::Pcre2)
             || matches!(prefilter, PrefilterCompatibility::Incompatible)
         {
-            IndexQuery::Disabled
+            PrefilterNarrowing::Bypassed
         } else {
-            IndexQuery::Enabled
+            PrefilterNarrowing::Allowed
         };
         Self {
             patterns: &query.patterns,
             flags,
-            index_query,
+            prefilter_narrowing,
         }
     }
 
@@ -98,7 +98,7 @@ impl<'q> CandidateQuery<'q> {
     }
 
     #[must_use]
-    pub(crate) const fn index_query(&self) -> IndexQuery {
-        self.index_query
+    pub(crate) const fn prefilter_narrowing(&self) -> PrefilterNarrowing {
+        self.prefilter_narrowing
     }
 }

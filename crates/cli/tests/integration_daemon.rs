@@ -699,14 +699,10 @@ fn daemon_validates_only_current_committed_snapshot() {
 
     let daemon = Daemon::new(p.sift_dir().to_path_buf());
     let first = Indexes::open(p.sift_dir()).expect("open indexes");
-    let first_id = first
-        .session()
-        .expect("index session")
-        .snapshot
-        .expect("committed snapshot id");
+    let first_id = first.snapshot_id().expect("committed snapshot id");
     assert!(
         daemon
-            .validate_snapshot(&first_id)
+            .validate_snapshot(first_id)
             .expect("validate snapshot"),
         "current snapshot should validate"
     );
@@ -716,22 +712,18 @@ fn daemon_validates_only_current_committed_snapshot() {
     poll_until_indexed(p.sift_dir(), "b.txt", Duration::from_secs(15));
 
     let second = Indexes::open(p.sift_dir()).expect("open indexes");
-    let second_id = second
-        .session()
-        .expect("index session")
-        .snapshot
-        .expect("committed snapshot id");
+    let second_id = second.snapshot_id().expect("committed snapshot id");
     assert_ne!(
         first_id, second_id,
         "reconcile should commit a new snapshot"
     );
     assert!(
         !daemon
-            .validate_snapshot(&first_id)
+            .validate_snapshot(first_id)
             .expect("validate snapshot"),
         "old snapshot should not validate after a newer commit"
     );
-    poll_until_snapshot_validates(&daemon, &second_id, Duration::from_secs(15));
+    poll_until_snapshot_validates(&daemon, second_id, Duration::from_secs(15));
 
     shutdown.store(true, Ordering::Relaxed);
     handle.join().unwrap();

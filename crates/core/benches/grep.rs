@@ -6,7 +6,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::candidates::{CandidateSource, ScanScope, SnapshotFreshness};
+use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
 use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, PathDisplay,
 };
@@ -42,15 +42,16 @@ fn run_grep(
     filter: &CandidateFilter,
     query: &(Vec<String>, SearchOptions),
 ) -> bool {
-    let source = CandidateSource {
+    let source = CandidateSource::new(
         indexes,
         filter,
-        store_meta: None,
-        scope: ScanScope::Index {
+        None,
+        ScanScope::Index {
             order: CandidateOrder::default(),
             freshness: SnapshotFreshness::Current,
         },
-    };
+        IndexNarrowing::Allowed,
+    );
     let query = SearchQueryBuilder::new(query.0.clone())
         .options(query.1.clone())
         .build()
@@ -58,7 +59,7 @@ fn run_grep(
     let request = GrepRequest {
         query: query.clone(),
         streams: Inputs::empty(),
-        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
         mode: sift_core::search::SearchMode::Lines,
         stats: StatsMode::Off,
     };
@@ -68,7 +69,7 @@ fn run_grep(
     let inputs = SearchInputs {
         candidates,
         streams: Inputs::empty(),
-        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
     };
     searcher.search(inputs, StatsMode::Off).unwrap().matched()
 }
@@ -76,11 +77,7 @@ fn run_grep(
 fn bench_indexed_search(c: &mut Criterion) {
     let fixture = common::open_large_indexes();
     let indexes = fixture.1;
-    let root = indexes
-        .session()
-        .expect("indexed corpus")
-        .root
-        .to_path_buf();
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
     let filter = make_filter(&CandidateFilterConfig::default(), &root);
 
     let mut g = c.benchmark_group("grep_indexed");

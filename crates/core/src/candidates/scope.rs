@@ -17,7 +17,7 @@ pub enum ScanScope {
     StreamsOnly,
     /// Filesystem walk under the filter.
     Walk { order: CandidateOrder },
-    /// Index-backed discovery.
+    /// Index-backed discovery; planner chooses walk when indexes are unusable.
     Index {
         order: CandidateOrder,
         freshness: SnapshotFreshness,
@@ -31,6 +31,31 @@ pub enum SnapshotFreshness {
     Current,
     /// Daemon reports a newer snapshot was committed; this id is behind.
     Stale,
+}
+
+/// Whether index narrowing may run for this search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IndexNarrowing {
+    #[default]
+    Allowed,
+    /// Bypass index narrowing (preprocessor/transform, incompatible query, etc.).
+    Bypassed,
+}
+
+impl CandidateCoverage {
+    pub(crate) const fn from_mode(mode: crate::search::SearchMode) -> Self {
+        use crate::search::{SearchMode, ZeroCounts};
+        match mode {
+            SearchMode::FilesWithoutMatch => Self::Complete,
+            SearchMode::CountLines { zeros } | SearchMode::CountMatches { zeros } => match zeros {
+                ZeroCounts::Include => Self::Complete,
+                ZeroCounts::Omit => Self::PotentialMatches,
+            },
+            SearchMode::Lines | SearchMode::Matches | SearchMode::FilesWithMatches => {
+                Self::PotentialMatches
+            }
+        }
+    }
 }
 
 impl ScanScope {

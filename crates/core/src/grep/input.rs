@@ -1,12 +1,8 @@
-use std::borrow::Cow;
-use std::path::PathBuf;
-
-use crate::corpus::candidate::PathDisplay;
-use crate::search::{CandidateTransform, InputConversion, InputIdentity, Inputs};
+use crate::search::{InputIdentity, Inputs};
 
 pub struct ByteInput<'a> {
-    pub path: Cow<'a, str>,
-    pub bytes: Cow<'a, [u8]>,
+    pub path: std::borrow::Cow<'a, str>,
+    pub bytes: std::borrow::Cow<'a, [u8]>,
     pub explicit: bool,
 }
 
@@ -25,16 +21,5 @@ impl<'a> Inputs<'a> {
             self.push_bytes(stream.path, stream.bytes, InputIdentity::from_name(&name));
         }
         self
-    }
-}
-
-impl<'a> InputConversion<'a> {
-    #[must_use]
-    pub fn for_candidates(
-        explicit_paths: &'a [PathBuf],
-        path_display: PathDisplay,
-        transform: Option<&'a dyn CandidateTransform>,
-    ) -> Self {
-        Self::new(explicit_paths, path_display, transform)
     }
 }

@@ -7,12 +7,12 @@ Composable indexed code search: index lifecycle, candidate planning, and grep-st
 ## Architecture
 
 ```
-IndexStore (lifecycle)  →  Snapshot::open_current  →  Indexes (search)
+IndexStore (lifecycle)  →  Indexes::open  →  Indexes (search)
 CandidatePlanner::plan  →  CandidatePlan::resolve  →  Grep::search
 ```
 
 - `IndexStore` — build/update/publish only
-- `Snapshot` / `Indexes` — read/search (`from_snapshot`, `query`, `hydrate_*`)
+- `Snapshot` / `Indexes` — read/search (`open`, `query`, `hydrate_*`, `usable`, `corpus_root`)
 - `Grep` — single public entry for resolve + search
 
 Today the default index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
@@ -22,9 +22,9 @@ Today the default index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
 Search (re-exported from `lib.rs`):
 
 - `Grep`, `GrepRequest`, `Grep::resolve_candidates`, `Searcher`, `Report`
-- `Indexes`, `Snapshot`, `IndexSession`, `IndexedCorpus`
+- `Indexes`, `IndexedCorpus`, `SnapshotId`
 - `IndexConfig`, `IndexStore`, `NGramIndex`, `GramWidth`
-- `Candidates`, `CandidateSource`, `ScanScope`, `SnapshotFreshness`
+- `Candidates`, `CandidateSource`, `ScanScope`, `SnapshotFreshness`, `IndexNarrowing`
 
 Internal: `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
 

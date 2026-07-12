@@ -9,12 +9,12 @@ pub mod grep;
 pub mod index;
 pub mod search;
 
-pub use candidates::{CandidateSource, Candidates, ScanScope, SnapshotFreshness};
+pub use candidates::{CandidateSource, Candidates, IndexNarrowing, ScanScope, SnapshotFreshness};
 pub use corpus::Candidate;
 pub use grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateTransform,
-    Error as GrepError, FilterAdmission, GlobConfig, Grep, GrepBuilder, GrepRequest, HiddenMode,
-    IgnoreConfig, IgnoreSources, TypeFilterRule, VisibilityConfig,
+    Error as GrepError, FilterAdmission, GlobConfig, Grep, GrepRequest, HiddenMode, IgnoreConfig,
+    IgnoreSources, TypeFilterRule, VisibilityConfig,
 };
 pub use search::{
     BinaryEvent, BinaryMode, CaseMode, ContextEvent, ContextKind, FileEvent, FileReport, Input,
@@ -33,8 +33,7 @@ pub use index::ngram::{
 pub use index::store::IndexStore;
 pub use index::{
     CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, IndexConfig, IndexCoverage, IndexError,
-    IndexId, IndexSession, IndexedCorpus, Indexes, PlanMode, QueryPlanOutput, Snapshot, SnapshotId,
-    WalkMeta,
+    IndexId, IndexedCorpus, Indexes, PlanMode, QueryPlanOutput, SnapshotId, WalkMeta,
 };
 
 use thiserror::Error;

@@ -11,7 +11,7 @@ use crate::common::build_trigram_in_dir;
 fn open_missing_current_returns_empty_registry() {
     let tmp = TempDir::new().expect("tempdir");
     let indexes = Indexes::open(tmp.path()).expect("open");
-    assert!(indexes.session().is_none());
+    assert!(!indexes.usable());
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn open_empty_sift_dir_returns_empty_registry() {
     let sift_dir = tmp.path().join(".sift");
     fs::create_dir_all(&sift_dir).expect("mkdir");
     let indexes = Indexes::open(&sift_dir).expect("open");
-    assert!(indexes.session().is_none());
+    assert!(!indexes.usable());
 }
 
 #[test]

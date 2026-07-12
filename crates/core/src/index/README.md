@@ -8,10 +8,10 @@ Composable index lifecycle, snapshot persistence, and search-time dispatch.
 |-------|-------|------|
 | Lifecycle | `IndexStore`, `IndexConfig`, `StoreMeta` | Build, update, publish snapshots |
 | Snapshot | `Snapshot`, `SnapshotId` | Immutable opened snapshot + indexes |
-| Search | `Indexes`, `IndexSession`, `IndexedCorpus` | Query, intersect, hydrate candidates |
+| Search | `Indexes`, `IndexedCorpus` | Query, intersect, hydrate candidates |
 | Dispatch | `IndexConfig` | Per-kind lifecycle and query routing |
 
-`IndexStore` owns write transactions. `Snapshot::open_current` and `Indexes::from_snapshot` own read/search. Candidate resolution lives in `Grep` / `CandidatePlanner`, not on `Indexes`.
+`IndexStore` owns write transactions. `Indexes::open` owns read/search. Candidate resolution lives in `Grep` / `CandidatePlanner`, not on `Indexes`.
 
 ## Design
 
@@ -31,7 +31,7 @@ index/
 |--------|-------------|
 | [`kinds.rs`](kinds.rs) | `IndexConfig`, `Index`, `FileId`, `IndexId` |
 | [`search.rs`](search.rs) | `Indexes`: snapshot search facade |
-| [`snapshot/mod.rs`](snapshot/mod.rs) | `Snapshot::open_current` |
+| [`snapshot/mod.rs`](snapshot/mod.rs) | Snapshot persistence and `Indexes::open` |
 | [`store.rs`](store.rs) | `IndexStore`: lifecycle orchestration |
 | [`paths.rs`](paths.rs) | `IndexedCorpus`: covered path set |
 | [`config.rs`](config.rs) | `IndexBuildConfig`, `CorpusSpec`, `CorpusKind` |

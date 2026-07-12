@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::path::Path;
 
 use sift_core::Inputs;
-use sift_core::candidates::{CandidateSource, ScanScope, SnapshotFreshness};
+use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
 use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, PathDisplay,
     VisibilityConfig,
@@ -64,11 +64,7 @@ fn store_meta(root: &Path, coverage: IndexCoverage) -> StoreMeta {
 
 fn planner_fixture() -> PlannerFixture {
     let (temp, indexes) = common::open_large_indexes();
-    let root = indexes
-        .session()
-        .expect("indexed corpus")
-        .root
-        .to_path_buf();
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &root).unwrap();
     PlannerFixture {
         _temp: temp,
@@ -96,12 +92,13 @@ fn resolve(
     mode: SearchMode,
     meta: Option<&StoreMeta>,
 ) -> usize {
-    let source = CandidateSource {
-        indexes: &fixture.indexes,
-        filter: &fixture.filter,
-        store_meta: meta,
+    let source = CandidateSource::new(
+        &fixture.indexes,
+        &fixture.filter,
+        meta,
         scope,
-    };
+        IndexNarrowing::Allowed,
+    );
     let query = SearchQueryBuilder::new(patterns.to_vec())
         .options(options)
         .build()
@@ -109,7 +106,7 @@ fn resolve(
     let request = GrepRequest {
         query,
         streams: Inputs::empty(),
-        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
         mode,
         stats: StatsMode::Off,
     };
@@ -185,7 +182,7 @@ fn bench_candidate_planner_walk(c: &mut Criterion) {
     let request = GrepRequest {
         query,
         streams: Inputs::empty(),
-        conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
         mode: SearchMode::Lines,
         stats: StatsMode::Off,
     };
@@ -197,12 +194,8 @@ fn bench_candidate_planner_walk(c: &mut Criterion) {
     let mut g = c.benchmark_group("candidate_planner");
     g.bench_function("walk_fallback_empty_index", |b| {
         b.iter(|| {
-            let source = CandidateSource {
-                indexes: &indexes,
-                filter: &filter,
-                store_meta: None,
-                scope,
-            };
+            let source =
+                CandidateSource::new(&indexes, &filter, None, scope, IndexNarrowing::Allowed);
             black_box(
                 Grep::new(source)
                     .resolve_candidates(&request)

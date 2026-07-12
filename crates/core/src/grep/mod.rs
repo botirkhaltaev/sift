@@ -6,10 +6,9 @@ pub mod input;
 use crate::candidates::CandidateSource;
 use crate::candidates::planner::CandidatePlanner;
 use crate::candidates::query::CandidateQuery;
-use crate::candidates::selection::CandidateCoverage;
+use crate::candidates::scope::CandidateCoverage;
 use crate::search::{
     EventEmission, Report, SearchInputs, SearchMode, SearchQuery, SearchSink, Searcher, StatsMode,
-    ZeroCounts,
 };
 pub use crate::search::{InputConversion, Inputs};
 
@@ -30,15 +29,6 @@ pub struct Grep<'a> {
     source: CandidateSource<'a>,
 }
 
-pub struct GrepBuilder<'grep, 'source, 'input> {
-    grep: &'grep Grep<'source>,
-    query: Option<SearchQuery>,
-    streams: Inputs<'input>,
-    conversion: InputConversion<'input>,
-    mode: SearchMode,
-    stats: StatsMode,
-}
-
 pub struct GrepRequest<'a> {
     pub query: SearchQuery,
     pub streams: Inputs<'a>,
@@ -51,18 +41,6 @@ impl<'a> Grep<'a> {
     #[must_use]
     pub const fn new(source: CandidateSource<'a>) -> Self {
         Self { source }
-    }
-
-    #[must_use]
-    pub fn builder<'input>(&self) -> GrepBuilder<'_, 'a, 'input> {
-        GrepBuilder {
-            grep: self,
-            query: None,
-            streams: Inputs::empty(),
-            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
-            mode: SearchMode::Lines,
-            stats: StatsMode::Off,
-        }
     }
 
     /// Run a grep search and collect the requested report fields.
@@ -96,11 +74,27 @@ impl<'a> Grep<'a> {
         &'a self,
         request: &GrepRequest<'_>,
     ) -> crate::Result<crate::Candidates<'a>> {
-        let coverage = request.candidate_coverage();
+        let (searcher, candidate_query, coverage) = Self::compile(request)?;
+        let _ = searcher;
+        self.resolve_compiled(&candidate_query, coverage)
+    }
+
+    fn compile<'q>(
+        request: &'q GrepRequest<'_>,
+    ) -> crate::Result<(Searcher, CandidateQuery<'q>, CandidateCoverage)> {
         let searcher = Searcher::new(request.query.clone())?;
         let candidate_query =
             CandidateQuery::new(&request.query, searcher.prefilter_compatibility());
-        let plan = CandidatePlanner::plan(&self.source, &candidate_query, coverage);
+        let coverage = CandidateCoverage::from_mode(request.mode);
+        Ok((searcher, candidate_query, coverage))
+    }
+
+    fn resolve_compiled(
+        &'a self,
+        candidate_query: &CandidateQuery<'_>,
+        coverage: CandidateCoverage,
+    ) -> crate::Result<crate::Candidates<'a>> {
+        let plan = CandidatePlanner::plan(&self.source, candidate_query, coverage);
         plan.resolve(&self.source)
     }
 
@@ -109,122 +103,35 @@ impl<'a> Grep<'a> {
         request: GrepRequest<'a>,
         events: EventEmission<'_>,
     ) -> crate::Result<Report> {
-        let candidates = self.resolve_candidates(&request)?;
-        let searcher = Searcher::new(request.query)?;
+        let GrepRequest {
+            query,
+            streams,
+            conversion,
+            mode,
+            stats,
+        } = request;
+        let coverage = CandidateCoverage::from_mode(mode);
+        let searcher = Searcher::new(query.clone())?;
+        let candidate_query = CandidateQuery::new(&query, searcher.prefilter_compatibility());
+        let candidates = self.resolve_compiled(&candidate_query, coverage)?;
         let inputs = SearchInputs {
             candidates,
-            streams: request.streams,
-            conversion: request.conversion,
+            streams,
+            conversion,
         };
-        searcher.execute(inputs, request.stats, request.mode, events)
-    }
-}
-
-impl GrepRequest<'_> {
-    const fn candidate_coverage(&self) -> CandidateCoverage {
-        match self.mode {
-            SearchMode::FilesWithoutMatch => CandidateCoverage::Complete,
-            SearchMode::CountLines { zeros } | SearchMode::CountMatches { zeros } => match zeros {
-                ZeroCounts::Include => CandidateCoverage::Complete,
-                ZeroCounts::Omit => CandidateCoverage::PotentialMatches,
-            },
-            SearchMode::Lines | SearchMode::Matches | SearchMode::FilesWithMatches => {
-                CandidateCoverage::PotentialMatches
-            }
-        }
-    }
-}
-
-impl<'input> GrepBuilder<'_, '_, 'input> {
-    #[must_use]
-    pub fn query(mut self, query: SearchQuery) -> Self {
-        self.query = Some(query);
-        self
-    }
-
-    #[must_use]
-    pub fn streams(mut self, streams: Inputs<'input>) -> Self {
-        self.streams = streams;
-        self
-    }
-
-    #[must_use]
-    pub const fn conversion(mut self, conversion: InputConversion<'input>) -> Self {
-        self.conversion = conversion;
-        self
-    }
-
-    #[must_use]
-    pub const fn mode(mut self, mode: SearchMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    #[must_use]
-    pub const fn stats(mut self, stats: StatsMode) -> Self {
-        self.stats = stats;
-        self
-    }
-
-    /// Build the canonical grep request.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when required request fields are missing.
-    pub fn build(self) -> crate::Result<GrepRequest<'input>> {
-        let query = self
-            .query
-            .ok_or(crate::Error::Search(Error::MissingSearchQuery))?;
-        Ok(GrepRequest {
-            query,
-            streams: self.streams,
-            conversion: self.conversion,
-            mode: self.mode,
-            stats: self.stats,
-        })
-    }
-
-    /// Execute this request and return a report.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if request building, candidate resolution, or search fails.
-    pub fn search(self) -> crate::Result<Report> {
-        self.grep.search(self.build()?)
-    }
-
-    /// Execute this request and emit semantic events.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if request building, candidate resolution, search, or sink handling fails.
-    pub fn stream(self, sink: &mut impl SearchSink) -> crate::Result<Report> {
-        self.grep.stream(self.build()?, sink)
+        searcher.execute(inputs, stats, mode, events)
     }
 }
 
 #[cfg(test)]
 mod candidate_coverage_tests {
     use super::*;
-    use crate::search::SearchQueryBuilder;
-
-    fn coverage(mode: SearchMode) -> CandidateCoverage {
-        GrepRequest {
-            query: SearchQueryBuilder::new(vec!["x".into()])
-                .build()
-                .expect("query"),
-            streams: Inputs::empty(),
-            conversion: InputConversion::for_candidates(&[], PathDisplay::Relative, None),
-            mode,
-            stats: StatsMode::Off,
-        }
-        .candidate_coverage()
-    }
+    use crate::search::{SearchMode, ZeroCounts};
 
     #[test]
     fn count_lines_omit_uses_potential_matches() {
         assert_eq!(
-            coverage(SearchMode::CountLines {
+            CandidateCoverage::from_mode(SearchMode::CountLines {
                 zeros: ZeroCounts::Omit
             }),
             CandidateCoverage::PotentialMatches
@@ -234,7 +141,7 @@ mod candidate_coverage_tests {
     #[test]
     fn count_lines_include_uses_complete() {
         assert_eq!(
-            coverage(SearchMode::CountLines {
+            CandidateCoverage::from_mode(SearchMode::CountLines {
                 zeros: ZeroCounts::Include
             }),
             CandidateCoverage::Complete
@@ -244,7 +151,7 @@ mod candidate_coverage_tests {
     #[test]
     fn count_matches_omit_uses_potential_matches() {
         assert_eq!(
-            coverage(SearchMode::CountMatches {
+            CandidateCoverage::from_mode(SearchMode::CountMatches {
                 zeros: ZeroCounts::Omit
             }),
             CandidateCoverage::PotentialMatches
@@ -254,7 +161,7 @@ mod candidate_coverage_tests {
     #[test]
     fn files_without_match_uses_complete() {
         assert_eq!(
-            coverage(SearchMode::FilesWithoutMatch),
+            CandidateCoverage::from_mode(SearchMode::FilesWithoutMatch),
             CandidateCoverage::Complete
         );
     }
