@@ -149,6 +149,12 @@ impl Indexes {
         let Some(lead) = self.lead_index() else {
             return Vec::new();
         };
+        // Single opened index: coverage is that index's file set, so every lead
+        // file id is in-corpus. Skip per-id PathBuf + HashSet lookup (heaptrack
+        // hot path on AllIndexed / case-insensitive full-cover narrowings).
+        if self.snapshot.indexes().len() == 1 {
+            return lead.all_file_ids();
+        }
         lead.all_file_ids()
             .into_iter()
             .filter(|id| {
