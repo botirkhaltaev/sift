@@ -334,11 +334,23 @@ run_hyperfine() {
 extract_heaptrack_hotspots() {
   local gz="$1"
   local dest="$2"
-  heaptrack --analyze "$gz" 2>/dev/null \
+  # Prefer heaptrack_print: `heaptrack --analyze` may auto-launch heaptrack_gui
+  # and hang in headless VMs / cloud agent environments.
+  if have_tool heaptrack_print; then
+    heaptrack_print -f "$gz" -n 40 -a 1 -p 1 -T 1 -l 0 2>/dev/null \
+      | rg -i "MOST CALLS|PEAK MEMORY|MOST TEMPORARY|peak consumption|sift_|crates/core|grep_|index_|candidate|hydrate|intersection|posting|Searcher|Matcher|InputConversion|PathBuf" \
+      | head -160 >"$dest" || true
+    if [[ ! -s "$dest" ]]; then
+      heaptrack_print -f "$gz" -n 25 -a 1 -p 1 -T 1 -l 0 2>/dev/null | head -120 >"$dest" || true
+    fi
+    return 0
+  fi
+  # Fallback: force non-GUI analyze if possible.
+  DISPLAY= HEAPTRACK_GUI=0 timeout 120 heaptrack --analyze "$gz" 2>/dev/null \
     | rg -i "MOST CALLS|peak consumption|sift_|crates/core|grep_|index_|candidate|hydrate|intersection|posting|Searcher|Matcher" \
     | head -120 >"$dest" || true
   if [[ ! -s "$dest" ]]; then
-    heaptrack --analyze "$gz" 2>/dev/null | head -100 >"$dest" || true
+    DISPLAY= HEAPTRACK_GUI=0 timeout 120 heaptrack --analyze "$gz" 2>/dev/null | head -100 >"$dest" || true
   fi
 }
 
@@ -352,24 +364,25 @@ run_heaptrack() {
     return 0
   }
   echo "Running heaptrack..."
+  # `--record-only` skips auto-launch of heaptrack_gui (hangs headless VMs).
   # shellcheck disable=SC2086
-  heaptrack -o "$out_dir/heaptrack" "$bin" --bench "$full_name" $CRITERION_ARGS \
-    2>&1 | tee "$out_dir/heaptrack.log"
+  heaptrack --record-only -o "$out_dir/heaptrack" "$bin" --bench "$full_name" $CRITERION_ARGS \
+    2>&1 | tee "$out_dir/heaptrack.log" || true
   if [[ -f "$out_dir/heaptrack.gz" ]]; then
     extract_heaptrack_hotspots "$out_dir/heaptrack.gz" "$out_dir/heaptrack-hotspots.txt"
     {
       echo ""
       echo "## heaptrack"
       echo ""
-      rg "allocations:|temporary|leaked" "$out_dir/heaptrack.log" || true
+      rg "allocations:|temporary|leaked|time:" "$out_dir/heaptrack.log" || true
       echo ""
       echo "### sift hotspots"
       echo ""
       echo '```'
-      head -80 "$out_dir/heaptrack-hotspots.txt"
+      head -100 "$out_dir/heaptrack-hotspots.txt"
       echo '```'
       echo ""
-      echo "Full analysis: \`heaptrack --analyze $out_dir/heaptrack.gz\`"
+      echo "Full analysis: \`heaptrack_print -f $out_dir/heaptrack.gz\`"
     } >>"$out_dir/summary.md"
   fi
 }
@@ -695,7 +708,11 @@ cmd_analyze() {
     echo "file not found: $gz" >&2
     exit 1
   fi
-  extract_heaptrack_hotspots "$gz" /dev/stdout
+  local tmp
+  tmp=$(mktemp)
+  extract_heaptrack_hotspots "$gz" "$tmp"
+  cat "$tmp"
+  rm -f "$tmp"
 }
 
 main() {
