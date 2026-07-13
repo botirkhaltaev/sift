@@ -126,11 +126,11 @@ impl<'searcher, 'input> SearchTask<'searcher, 'input> {
         origin: InputOrigin,
     ) -> SearchOutcome {
         let match_emission = MatchEmission::from(self.mode, self.options);
-        let sink_path = match (match_emission, self.events) {
-            (MatchEmission::Presence | MatchEmission::LineCount, EventCollection::Discard) => {
-                PathBuf::new()
-            }
-            _ => self.input.display_path().to_path_buf(),
+        // Discard sinks never emit path-bearing events; Match.file is similarly unused on
+        // Discard (callers that need paths use Collect / FileReport / hit_paths).
+        let sink_path = match self.events {
+            EventCollection::Discard => PathBuf::new(),
+            EventCollection::Collect => self.input.display_path().to_path_buf(),
         };
         let mut sink = MatchSink {
             path: sink_path,
@@ -317,7 +317,7 @@ impl<M: GrepMatcherTrait> MatchSink<'_, M> {
                     && matches!(self.event_collection, EventCollection::Discard) =>
             {
                 self.matches.push(Match {
-                    file: self.path.clone(),
+                    file: PathBuf::new(),
                     line,
                     text: String::from_utf8_lossy(line_bytes).into_owned(),
                 });
