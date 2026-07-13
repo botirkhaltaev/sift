@@ -4,10 +4,26 @@ use std::path::{Path, PathBuf};
 use crate::corpus::Candidate;
 use crate::corpus::candidate::PathDisplay;
 
+/// How the corpus-relative hit path relates to the display path.
+///
+/// Relative path display reuses [`InputIdentity::display_path`] as the hit path
+/// without a second allocation. Absolute display still owns a distinct relative
+/// path for hit tracking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HitPath {
+    /// No corpus path (stdin / anonymous bytes).
+    Absent,
+    /// Hit path equals [`InputIdentity::display_path`].
+    Display,
+    /// Distinct owned path (corpus-relative when display is absolute).
+    Owned(PathBuf),
+}
+
 #[derive(Debug, Clone)]
 pub struct InputIdentity {
     pub display_path: PathBuf,
-    pub hit_path: Option<PathBuf>,
+    /// Corpus hit path relative to how [`Self::display_path`] is shown.
+    pub corpus_hit: HitPath,
     pub byte_len: Option<u64>,
 }
 
@@ -30,8 +46,18 @@ impl InputIdentity {
     pub fn from_name(name: &str) -> Self {
         Self {
             display_path: PathBuf::from(name),
-            hit_path: None,
+            corpus_hit: HitPath::Absent,
             byte_len: None,
+        }
+    }
+
+    /// Corpus-relative hit path for reporting, if any.
+    #[must_use]
+    pub fn hit_path(&self) -> Option<&Path> {
+        match &self.corpus_hit {
+            HitPath::Absent => None,
+            HitPath::Display => Some(self.display_path.as_path()),
+            HitPath::Owned(path) => Some(path.as_path()),
         }
     }
 }
@@ -56,9 +82,7 @@ impl Input<'_> {
     #[must_use]
     pub fn hit_path(&self) -> Option<&Path> {
         match self {
-            Self::Path { identity, .. } | Self::Bytes { identity, .. } => {
-                identity.hit_path.as_deref()
-            }
+            Self::Path { identity, .. } | Self::Bytes { identity, .. } => identity.hit_path(),
         }
     }
 
@@ -190,20 +214,11 @@ impl<'a> InputConversion<'a> {
         if let Some(transform) = self.transform {
             let bytes = transform.read_candidate(candidate)?;
             let path = Cow::Owned(candidate.abs_path().display().to_string());
-            Ok(if explicit {
-                Input::Bytes {
-                    path,
-                    bytes: Cow::Owned(bytes),
-                    identity,
-                    explicit: true,
-                }
-            } else {
-                Input::Bytes {
-                    path,
-                    bytes: Cow::Owned(bytes),
-                    identity,
-                    explicit: false,
-                }
+            Ok(Input::Bytes {
+                path,
+                bytes: Cow::Owned(bytes),
+                identity,
+                explicit,
             })
         } else {
             Ok(Input::Path {
@@ -215,14 +230,17 @@ impl<'a> InputConversion<'a> {
     }
 
     fn identity(&self, candidate: &Candidate) -> InputIdentity {
-        let display_path = match self.path_display {
-            PathDisplay::Relative => candidate.rel_path(),
-            PathDisplay::Absolute => candidate.abs_path(),
-        };
-        InputIdentity {
-            display_path: display_path.to_path_buf(),
-            hit_path: Some(candidate.rel_path().to_path_buf()),
-            byte_len: candidate.cached_size(),
+        match self.path_display {
+            PathDisplay::Relative => InputIdentity {
+                display_path: candidate.rel_path().to_path_buf(),
+                corpus_hit: HitPath::Display,
+                byte_len: candidate.cached_size(),
+            },
+            PathDisplay::Absolute => InputIdentity {
+                display_path: candidate.abs_path().to_path_buf(),
+                corpus_hit: HitPath::Owned(candidate.rel_path().to_path_buf()),
+                byte_len: candidate.cached_size(),
+            },
         }
     }
 }
