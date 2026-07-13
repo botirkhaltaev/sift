@@ -8,7 +8,8 @@ use crate::candidates::planner::CandidatePlanner;
 use crate::candidates::query::CandidateQuery;
 use crate::candidates::scope::CandidateCoverage;
 use crate::search::{
-    EventEmission, Report, SearchInputs, SearchMode, SearchQuery, SearchSink, Searcher, StatsMode,
+    EventEmission, PrefilterCompatibility, RegexEngine, Report, SearchInputs, SearchMode,
+    SearchQuery, SearchSink, Searcher, StatsMode,
 };
 pub use crate::search::{InputConversion, Inputs};
 
@@ -69,24 +70,23 @@ impl<'a> Grep<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error if query compilation or candidate resolution fails.
+    /// Returns an error if candidate resolution fails.
     pub fn resolve_candidates(
         &'a self,
         request: &GrepRequest<'_>,
     ) -> crate::Result<crate::Candidates<'a>> {
-        let (searcher, candidate_query, coverage) = Self::compile(request)?;
-        let _ = searcher;
+        let candidate_query = Self::candidate_query(&request.query);
+        let coverage = CandidateCoverage::from_mode(request.mode);
         self.resolve_compiled(&candidate_query, coverage)
     }
 
-    fn compile<'q>(
-        request: &'q GrepRequest<'_>,
-    ) -> crate::Result<(Searcher, CandidateQuery<'q>, CandidateCoverage)> {
-        let searcher = Searcher::new(request.query.clone())?;
-        let candidate_query =
-            CandidateQuery::new(&request.query, searcher.prefilter_compatibility());
-        let coverage = CandidateCoverage::from_mode(request.mode);
-        Ok((searcher, candidate_query, coverage))
+    /// Project a [`SearchQuery`] into index candidate planning without compiling a matcher.
+    fn candidate_query(query: &SearchQuery) -> CandidateQuery<'_> {
+        let prefilter = match query.options.regex_engine {
+            RegexEngine::Pcre2 => PrefilterCompatibility::Incompatible,
+            RegexEngine::Rust | RegexEngine::Auto => PrefilterCompatibility::Compatible,
+        };
+        CandidateQuery::new(query, prefilter)
     }
 
     fn resolve_compiled(
