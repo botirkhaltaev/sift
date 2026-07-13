@@ -19,33 +19,35 @@ impl IndexedCorpus {
     }
 
     /// Corpus-relative paths covered by every provided coverage set.
+    ///
+    /// A single coverage is returned as-is (cheap `Arc` clone). Multi-index
+    /// intersection clones one set and retains against the others by reference,
+    /// avoiding `into_set`/`Arc::try_unwrap` which copies the full path table
+    /// whenever the index still holds a coverage cache.
     #[must_use]
     pub(crate) fn intersection(coverages: impl IntoIterator<Item = Self>) -> Self {
-        let mut iter = coverages.into_iter();
-        let Some(first) = iter.next() else {
+        let mut coverages = coverages.into_iter();
+        let Some(first) = coverages.next() else {
             return Self::new([]);
         };
+        let Some(second) = coverages.next() else {
+            return first;
+        };
 
-        let mut paths = first.into_set();
-        for next in iter {
-            let next_paths = next.into_set();
-            paths.retain(|path| next_paths.contains(path));
+        let mut paths = (*first.paths).clone();
+        paths.retain(|path| second.contains(path));
+        for next in coverages {
             if paths.is_empty() {
                 break;
             }
+            paths.retain(|path| next.contains(path));
         }
-
         Self::new(paths)
     }
 
     #[must_use]
     pub fn contains(&self, path: &Path) -> bool {
         self.paths.contains(path)
-    }
-
-    #[must_use]
-    pub(crate) fn into_set(self) -> HashSet<PathBuf> {
-        Arc::try_unwrap(self.paths).unwrap_or_else(|paths| (*paths).clone())
     }
 
     /// Drop paths already present in this indexed corpus.
