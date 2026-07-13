@@ -6,13 +6,13 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 
-use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
+use sift_core::candidates::{CandidateSource, Candidates, IndexNarrowing, ScanScope, SnapshotFreshness};
 use sift_core::grep::{
     CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest, PathDisplay,
 };
 use sift_core::search::{
-    InputConversion, SearchFlags, SearchInputs, SearchOptions, SearchQueryBuilder, Searcher,
-    StatsMode,
+    InputConversion, SearchFlags, SearchInputs, SearchMode, SearchOptions, SearchQueryBuilder,
+    Searcher, StatsMode, ZeroCounts,
 };
 use sift_core::{Indexes, Inputs};
 
@@ -72,6 +72,129 @@ fn run_grep(
         conversion: InputConversion::new(&[], PathDisplay::Relative, None),
     };
     searcher.search(inputs, StatsMode::Off).unwrap().matched()
+}
+
+struct PreparedSearch {
+    searcher: Searcher,
+    candidates: Vec<sift_core::Candidate>,
+}
+
+fn run_search_only(prepared: &PreparedSearch) -> bool {
+    let inputs = SearchInputs {
+        candidates: Candidates::from(prepared.candidates.clone()),
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+    };
+    prepared
+        .searcher
+        .search(inputs, StatsMode::Off)
+        .unwrap()
+        .matched()
+}
+
+fn prepare_search(
+    indexes: &Indexes,
+    filter: &CandidateFilter,
+    patterns: &[&str],
+    opts: SearchOptions,
+    mode: SearchMode,
+) -> PreparedSearch {
+    let source = CandidateSource::new(
+        indexes,
+        filter,
+        None,
+        ScanScope::Index {
+            order: CandidateOrder::default(),
+            freshness: SnapshotFreshness::Current,
+        },
+        IndexNarrowing::Allowed,
+    );
+    let query = SearchQueryBuilder::new(patterns.iter().map(ToString::to_string).collect())
+        .options(opts)
+        .build()
+        .unwrap();
+    let request = GrepRequest {
+        query: query.clone(),
+        streams: Inputs::empty(),
+        conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+        mode,
+        stats: StatsMode::Off,
+    };
+    let candidates = Grep::new(source)
+        .resolve_candidates(&request)
+        .unwrap()
+        .into_vec();
+    let searcher = Searcher::new(query).unwrap();
+    PreparedSearch {
+        searcher,
+        candidates,
+    }
+}
+
+fn bench_search_only(c: &mut Criterion) {
+    let fixture = common::open_large_indexes();
+    let indexes = fixture.1;
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
+    let filter = make_filter(&CandidateFilterConfig::default(), &root);
+
+    let mut g = c.benchmark_group("grep_search_only");
+
+    g.bench_function("literal", |b| {
+        let prepared =
+            prepare_search(&indexes, &filter, &["beta"], SearchOptions::default(), SearchMode::Lines);
+        b.iter(|| black_box(run_search_only(&prepared)));
+    });
+
+    g.bench_function("alternation", |b| {
+        let prepared = prepare_search(
+            &indexes,
+            &filter,
+            &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT"],
+            SearchOptions::default(),
+            SearchMode::Lines,
+        );
+        b.iter(|| black_box(run_search_only(&prepared)));
+    });
+
+    g.bench_function("case_insensitive_alternation", |b| {
+        let prepared = prepare_search(
+            &indexes,
+            &filter,
+            &["ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT"],
+            SearchOptions {
+                case_mode: sift_core::search::CaseMode::Insensitive,
+                ..Default::default()
+            },
+            SearchMode::Lines,
+        );
+        b.iter(|| black_box(run_search_only(&prepared)));
+    });
+
+    g.finish();
+}
+
+fn bench_count_matches(c: &mut Criterion) {
+    let fixture = common::open_large_indexes();
+    let indexes = fixture.1;
+    let root = indexes.corpus_root().expect("indexed corpus").to_path_buf();
+    let filter = make_filter(&CandidateFilterConfig::default(), &root);
+
+    let mut g = c.benchmark_group("grep_count_matches");
+
+    g.bench_function("literal", |b| {
+        let prepared = prepare_search(
+            &indexes,
+            &filter,
+            &["beta"],
+            SearchOptions::default(),
+            SearchMode::CountMatches {
+                zeros: ZeroCounts::Omit,
+            },
+        );
+        b.iter(|| black_box(run_search_only(&prepared)));
+    });
+
+    g.finish();
 }
 
 fn bench_indexed_search(c: &mut Criterion) {
@@ -169,6 +292,6 @@ fn bench_walk_search(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = sift_criterion();
-    targets = bench_indexed_search, bench_walk_search,
+    targets = bench_indexed_search, bench_search_only, bench_count_matches, bench_walk_search,
 }
 criterion_main!(benches);
