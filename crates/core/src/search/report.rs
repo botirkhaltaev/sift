@@ -71,7 +71,7 @@ impl Report {
             match_count += outcome.matches.len();
             match_spans += outcome.match_spans;
             files.push(FileReport {
-                path: outcome.path.clone(),
+                path: std::mem::take(&mut outcome.path),
                 matched: outcome.matched,
                 selected: file_selected,
                 line_matches: outcome.line_matches,
