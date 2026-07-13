@@ -53,6 +53,7 @@ impl CandidatePlanner {
             discovery,
             order: scope.order(),
             query_result,
+            indexed_corpus: source.indexes.indexed_corpus(),
         }
     }
 

@@ -100,10 +100,10 @@ impl Indexes {
     }
 
     #[must_use]
-    pub(crate) fn file_ids(&self, result: IndexQueryResult) -> Vec<u32> {
+    pub(crate) fn file_ids(&self, result: IndexQueryResult, corpus: &IndexedCorpus) -> Vec<u32> {
         match result {
             IndexQueryResult::Unavailable | IndexQueryResult::AllIndexed => {
-                self.all_indexed_file_ids()
+                self.all_indexed_file_ids(corpus)
             }
             IndexQueryResult::Matched { file_ids } => file_ids,
         }
@@ -112,10 +112,11 @@ impl Indexes {
     pub(crate) fn indexed_candidates<'a>(
         &'a self,
         result: IndexQueryResult,
+        corpus: &IndexedCorpus,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> Candidates<'a> {
-        Candidates::index(self, self.file_ids(result), filter, admission)
+        Candidates::index(self, self.file_ids(result, corpus), filter, admission)
     }
 
     pub(crate) fn hydrate_row(
@@ -144,11 +145,10 @@ impl Indexes {
         self.snapshot.indexes().first()
     }
 
-    fn all_indexed_file_ids(&self) -> Vec<u32> {
+    fn all_indexed_file_ids(&self, corpus: &IndexedCorpus) -> Vec<u32> {
         let Some(lead) = self.lead_index() else {
             return Vec::new();
         };
-        let corpus = self.indexed_corpus();
         lead.all_file_ids()
             .into_iter()
             .filter(|id| {
