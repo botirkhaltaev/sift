@@ -9,7 +9,9 @@ pub mod grep;
 pub mod index;
 pub mod search;
 
-pub use candidates::{CandidateSource, Candidates, IndexNarrowing, ScanScope, SnapshotFreshness};
+pub use candidates::{
+    CandidateSource, Candidates, IndexNarrowing, IndexedCandidates, ScanScope, SnapshotFreshness,
+};
 pub use corpus::Candidate;
 pub use grep::{
     ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateTransform,

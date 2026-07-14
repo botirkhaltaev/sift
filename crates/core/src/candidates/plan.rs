@@ -1,6 +1,6 @@
 use crate::corpus::Candidate;
 use crate::corpus::filter::FilterAdmission;
-use crate::corpus::order::CandidateOrder;
+use crate::corpus::order::{CandidateOrder, CandidateOrderKey};
 use crate::corpus::walk::FileWalk;
 use crate::index::IndexedCorpus;
 use crate::index::kinds::IndexQueryResult;
@@ -57,12 +57,9 @@ impl CandidatePlan {
                 source.filter,
                 admission,
             ),
-            PlannedDiscovery::Merge { admission } => Candidates::from(Self::merge(
-                source,
-                query_result,
-                admission,
-                &indexed_corpus,
-            )?),
+            PlannedDiscovery::Merge { admission } => {
+                Self::merge(source, query_result, admission, &indexed_corpus)?
+            }
         };
         Self::order(candidates, order)
     }
@@ -72,28 +69,50 @@ impl CandidatePlan {
         Ok(source.filter.retain(walked, FilterAdmission::Full))
     }
 
-    fn merge(
-        source: &CandidateSource<'_>,
+    fn merge<'a>(
+        source: &'a CandidateSource<'a>,
         query_result: IndexQueryResult,
         admission: FilterAdmission,
         indexed_corpus: &IndexedCorpus,
-    ) -> crate::Result<Vec<Candidate>> {
+    ) -> crate::Result<Candidates<'a>> {
         let IndexQueryResult::Matched { file_ids } = query_result else {
-            return Self::walk(source);
+            return Ok(Candidates::from(Self::walk(source)?));
         };
-        let mut candidates = source
-            .indexes
-            .hydrate_rows(&file_ids, source.filter, admission);
         let walked = FileWalk::from_filter(source.filter)
             .candidates_matching(indexed_corpus.unindexed_files())?;
-        let walked = source.filter.retain(walked, FilterAdmission::Full);
-        candidates.extend(walked);
-        Ok(candidates)
+        let unindexed = source.filter.retain(walked, FilterAdmission::Full);
+        Ok(Candidates::mixed(
+            source.indexes,
+            file_ids,
+            source.filter,
+            admission,
+            unindexed,
+        ))
     }
 
     fn order(candidates: Candidates<'_>, order: CandidateOrder) -> crate::Result<Candidates<'_>> {
         if !order.is_sorted() {
             return Ok(candidates);
+        }
+        // File ids are dense in lexicographic relative-path order, so path sorting of a
+        // pure indexed set only needs to reverse for descending — no hydrate.
+        if matches!(order.key, CandidateOrderKey::Path) {
+            match candidates {
+                Candidates::Indexed(mut indexed) => {
+                    if matches!(
+                        order.direction,
+                        crate::corpus::order::CandidateOrderDirection::Descending
+                    ) {
+                        indexed.file_ids.reverse();
+                    }
+                    return Ok(Candidates::Indexed(indexed));
+                }
+                other => {
+                    let mut items = other.into_vec();
+                    order.order(&mut items)?;
+                    return Ok(Candidates::from(items));
+                }
+            }
         }
         let mut items = candidates.into_vec();
         order.order(&mut items)?;
