@@ -1,6 +1,6 @@
 use std::fs;
 
-use sift_core::{GramWidth, IndexConfig, IndexStore};
+use sift_core::{GramWidth, Index, IndexRecord, Indexes, NGramIndex};
 use tempfile::TempDir;
 
 use super::common::{sample_store_meta, standard_build_config};
@@ -16,15 +16,15 @@ fn build_writes_current_snapshot() {
     let config = standard_build_config(&corpus, &[]);
     let corpus_path = corpus.clone();
     let root = corpus.canonicalize().unwrap_or(corpus_path);
-    let meta = sample_store_meta(root, vec![IndexConfig::ngram(GramWidth::TRIGRAM)]);
-    let mut store = IndexStore::open_or_create(&sift_dir, &meta).expect("open");
-    store
-        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
-        .expect("build");
+    let meta = sample_store_meta(root, vec![IndexRecord::ngram(GramWidth::TRIGRAM)]);
+    let mut indexes = Indexes::open(&sift_dir, &meta).expect("open");
+    indexes.refresh_meta(&meta).expect("refresh meta");
+    let catalog: Vec<Box<dyn Index>> = vec![Box::new(NGramIndex::new().width(GramWidth::TRIGRAM))];
+    indexes.build(&catalog, &config, &[]).expect("build");
 
-    let id = store.current_id().expect("snapshot id");
+    let id = indexes.current_id().expect("snapshot id");
     assert!(!id.is_empty());
-    let snap = store.snapshot_dir(id);
+    let snap = indexes.snapshot_dir(id);
     assert!(snap.join("ngram-3").join("postings.bin").is_file());
     assert!(snap.join("ngram-3").join("grams.bin").is_file());
 }

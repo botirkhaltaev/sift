@@ -13,7 +13,8 @@
 use libfuzzer_sys::fuzz_target;
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, NGramConfig,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexConfig, IndexCoverage,
+    IndexRecord, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
 };
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -24,6 +25,7 @@ struct Harness {
     sift_dir: PathBuf,
     postings: PathBuf,
     header: Vec<u8>,
+    meta: StoreMeta,
 }
 
 static HARNESS: OnceLock<Harness> = OnceLock::new();
@@ -37,7 +39,7 @@ fn harness() -> &'static Harness {
         fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: &corpus,
                 kind: CorpusKind::Directory,
@@ -48,18 +50,37 @@ fn harness() -> &'static Harness {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        NGramConfig::new(GramWidth::TRIGRAM)
+        NGramIndex::new()
+            .width(GramWidth::TRIGRAM)
             .build(&config, &trigram_dir, &[])
             .expect("build_index");
         let postings = trigram_dir.join("postings.bin");
-        // Reuse the real 8-byte magic so reopened blobs pass the header check
-        // and reach the decoder.
         let magic = fs::read(&postings).expect("read postings")[..8].to_vec();
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: corpus.clone(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            IndexCoverage::Complete,
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: VisibilityConfig::default(),
+            },
+            vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
+        );
         Harness {
             _temp: tmp,
             sift_dir,
             postings,
             header: magic,
+            meta,
         }
     })
 }
@@ -82,5 +103,5 @@ fuzz_target!(|data: &[u8]| {
     }
     drop(file);
 
-    let _ = Indexes::open(&h.sift_dir);
+    let _ = Indexes::open(&h.sift_dir, &h.meta);
 });

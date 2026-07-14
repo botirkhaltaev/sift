@@ -17,6 +17,16 @@ pub trait SnapshotRead {
     ///
     /// Returns an error if the namespace or artifact is missing, or I/O/mmap fails.
     fn artifact(&self, namespace: &str, name: &str) -> crate::Result<ArtifactData>;
+
+    /// List every artifact name stored under `namespace`.
+    ///
+    /// Used by lifecycle code to copy artifacts for an unchanged index kind
+    /// without hard-coding its layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the namespace cannot be inspected.
+    fn artifacts(&self, namespace: &str) -> crate::Result<Vec<String>>;
 }
 
 /// A writable snapshot transaction that accepts named byte artifacts.

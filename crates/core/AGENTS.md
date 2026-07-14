@@ -7,15 +7,15 @@ Composable indexed code search: index lifecycle, candidate planning, and grep-st
 ## Architecture
 
 ```
-IndexStore (lifecycle)  →  Indexes::open  →  Indexes (search)
+Indexes::open (lifecycle) / Indexes::load (search)  →  Indexes
 CandidatePlanner::plan  →  CandidatePlan::resolve  →  Grep::search
 ```
 
-- `IndexStore` — build/update/publish only
-- `Snapshot` / `Indexes` — read/search (`open`, `query`, `hydrate_*`, `usable`, `corpus_root`)
+- `Indexes` — build/update/publish and query/hydrate over one store
+- `Snapshot` — opened `Box<dyn Index>` vec for a committed snapshot
 - `Grep` — single public entry for resolve + search
 
-Today the default index is `IndexConfig::ngram(GramWidth::TRIGRAM)`.
+Today the default index is `ngram::Index::new()` (trigram width).
 
 ## Public API
 
@@ -23,7 +23,7 @@ Search (re-exported from `lib.rs`):
 
 - `Grep`, `GrepRequest`, `Grep::resolve_candidates`, `Searcher`, `Report`
 - `Indexes`, `IndexedCorpus`, `SnapshotId`
-- `IndexConfig`, `IndexStore`, `NGramIndex`, `GramWidth`
+- `Index`, `IndexRecord`, `IndexConfig`, `IndexWrite`, `ngram::Index`, `GramWidth`
 - `Candidates`, `CandidateSource`, `ScanScope`, `SnapshotFreshness`, `IndexNarrowing`
 
 Internal: `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
@@ -32,9 +32,9 @@ Internal: `CandidatePlanner`, `CandidatePlan`, `CandidateQuery`.
 
 | Module | Responsibility |
 |--------|----------------|
-| `index/search.rs` | `Indexes` search facade |
+| `index/search.rs` | `Indexes` lifecycle + search |
+| `index/contract.rs` | `Index` trait, `IndexWrite`, `IndexRecord` |
 | `index/snapshot/` | `Snapshot`, persistence |
-| `index/store.rs` | `IndexStore` lifecycle |
 | `index/ngram/` | N-gram implementation |
 | `grep/` | Public search API |
 | `candidates/planner.rs` | `CandidatePlanner` (pure planning) |
@@ -75,3 +75,4 @@ cargo test -p sift-core
 - Put stdout formatting in core.
 - Expose `Indexes::candidates` or test-only constructors.
 - Mix planning with I/O.
+- Reintroduce `IndexStore` or `open_or_create`.

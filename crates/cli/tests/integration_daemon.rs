@@ -22,7 +22,7 @@ use common::normalize_stderr;
 use common::normalize_stdout;
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, SnapshotId,
+    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexCoverage, IndexRecord, Indexes, SnapshotId,
     StoreMeta, WalkMeta,
 };
 use sift_grep::index::daemon::{Daemon, DaemonOrchestrator, ServeConfig};
@@ -76,7 +76,7 @@ fn sample_meta(root: PathBuf) -> StoreMeta {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+        vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
     )
 }
 
@@ -121,9 +121,11 @@ where
 }
 
 fn path_indexed(sift_dir: &Path, rel: &str) -> bool {
-    Indexes::open(sift_dir)
-        .ok()
-        .is_some_and(|indexes| indexes.indexed_corpus().contains(Path::new(rel)))
+    StoreMeta::read(sift_dir).ok().is_some_and(|meta| {
+        Indexes::open(sift_dir, &meta)
+            .ok()
+            .is_some_and(|indexes| indexes.indexed_corpus().contains(Path::new(rel)))
+    })
 }
 
 fn poll_until_indexed(sift_dir: &Path, rel: &str, timeout: Duration) {
@@ -698,7 +700,8 @@ fn daemon_validates_only_current_committed_snapshot() {
     wait_for_ready(&ready_path);
 
     let daemon = Daemon::new(p.sift_dir().to_path_buf());
-    let first = Indexes::open(p.sift_dir()).expect("open indexes");
+    let meta = StoreMeta::read(p.sift_dir()).expect("read meta");
+    let first = Indexes::open(p.sift_dir(), &meta).expect("open indexes");
     let first_id = first.snapshot_id().expect("committed snapshot id");
     assert!(
         daemon
@@ -711,7 +714,7 @@ fn daemon_validates_only_current_committed_snapshot() {
     daemon.index(vec![]).expect("queue full reconcile");
     poll_until_indexed(p.sift_dir(), "b.txt", Duration::from_secs(15));
 
-    let second = Indexes::open(p.sift_dir()).expect("open indexes");
+    let second = Indexes::open(p.sift_dir(), &meta).expect("open indexes");
     let second_id = second.snapshot_id().expect("committed snapshot id");
     assert_ne!(
         first_id, second_id,

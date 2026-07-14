@@ -1,13 +1,11 @@
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use rayon::prelude::*;
-
 use crate::candidates::query::CandidateQuery;
-use crate::index::kinds::IndexQueryResult;
+use crate::corpus::Candidate;
 use crate::index::{CorpusKind, FileId, IndexedCorpus};
 
-use super::config::Config;
 use super::files::{FileFingerprint, FileTable};
 use super::gram::{GramMatch, GramWidth};
 use super::storage::grams::GramSets;
@@ -24,11 +22,25 @@ pub enum NGramIndexError {
     Io(#[from] std::io::Error),
 }
 
-/// Opened runtime-width N-gram index.
+/// Catalog handle or opened runtime-width N-gram index.
 #[derive(Debug)]
 pub struct Index {
     pub(crate) width: GramWidth,
-    pub(crate) storage: Storage,
+    pub(crate) storage: Option<Storage>,
+}
+
+impl PartialEq for Index {
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width
+    }
+}
+
+impl Eq for Index {}
+
+impl Hash for Index {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.width.hash(state);
+    }
 }
 
 #[derive(Debug)]
@@ -139,40 +151,160 @@ impl Storage {
     }
 }
 
+impl Default for Index {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Index {
+    pub const DEFAULT: Self = Self {
+        width: GramWidth::TRIGRAM,
+        storage: None,
+    };
+
     #[must_use]
-    pub const fn width(&self) -> GramWidth {
+    pub const fn new() -> Self {
+        Self::DEFAULT
+    }
+
+    #[must_use]
+    pub const fn width(mut self, width: GramWidth) -> Self {
+        self.width = width;
+        self
+    }
+
+    #[must_use]
+    pub const fn gram_width(&self) -> GramWidth {
         self.width
     }
 
     #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        "ngram"
+    }
+
+    #[must_use]
+    pub fn params(&self) -> serde_json::Value {
+        serde_json::json!({ "width": self.width.get() })
+    }
+
+    #[must_use]
+    pub fn name(&self) -> String {
+        format!("{}-{}", self.kind(), self.width.get())
+    }
+
+    #[must_use]
+    pub const fn artifact_names(&self) -> &'static [&'static str] {
+        &[
+            crate::FILES_BIN,
+            crate::LEXICON_BIN,
+            crate::POSTINGS_BIN,
+            crate::GRAMS_BIN,
+        ]
+    }
+
+    /// Parse an N-gram catalog name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is not `ngram-N` or `ngram:N`, or if `N`
+    /// is not a valid width.
+    pub fn parse_name(value: &str) -> Result<Self, String> {
+        let width = value
+            .strip_prefix("ngram-")
+            .or_else(|| value.strip_prefix("ngram:"))
+            .ok_or_else(|| format!("unknown index: {value}"))?;
+        let width = width
+            .parse::<u8>()
+            .map_err(|_| format!("invalid ngram width: {width}"))?;
+        Ok(Self::new().width(GramWidth::new(width)))
+    }
+
+    /// Parse persisted params for registry/config reconstruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if params are not a width object or bare number.
+    pub fn from_params(params: &serde_json::Value) -> crate::Result<Self> {
+        let width = if let Some(width) = params.as_u64() {
+            width
+        } else if let Some(width) = params.get("width").and_then(serde_json::Value::as_u64) {
+            width
+        } else {
+            return Err(crate::Error::Index(
+                crate::index::IndexError::UnknownIndexConfig(format!(
+                    "invalid ngram params: {params}"
+                )),
+            ));
+        };
+        let width = u8::try_from(width).map_err(|_| {
+            crate::Error::Index(crate::index::IndexError::UnknownIndexConfig(format!(
+                "invalid ngram width: {width}"
+            )))
+        })?;
+        Ok(Self::new().width(GramWidth::new(width)))
+    }
+
+    pub(crate) const fn with_storage(width: GramWidth, storage: Storage) -> Self {
+        Self {
+            width,
+            storage: Some(storage),
+        }
+    }
+
+    pub(crate) const fn storage(&self) -> Option<&Storage> {
+        self.storage.as_ref()
+    }
+
+    #[must_use]
     pub fn file_path(&self, id: FileId) -> Option<&Path> {
-        self.storage.files.get(id).map(|fp| fp.path.as_path())
+        self.storage()?.files.get(id).map(|fp| fp.path.as_path())
     }
 
     #[must_use]
     pub fn file_abs_path(&self, id: FileId) -> Option<PathBuf> {
-        self.storage
-            .files
-            .get(id)
-            .map(|fp| self.storage.root.join(&fp.path))
+        let storage = self.storage()?;
+        storage.files.get(id).map(|fp| storage.root.join(&fp.path))
     }
 
+    /// Corpus root of an opened index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this index has not been opened (has no storage).
     #[must_use]
     pub fn root(&self) -> &Path {
-        &self.storage.root
+        &self.storage.as_ref().expect("opened ngram index").root
     }
 
+    /// Corpus kind of an opened index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this index has not been opened (has no storage).
     #[must_use]
     pub const fn corpus_kind(&self) -> CorpusKind {
-        self.storage.corpus_kind
+        self.storage
+            .as_ref()
+            .expect("opened ngram index")
+            .corpus_kind
     }
 
-    /// Resolve candidate coverage for the query.
+    /// Resolve candidate file ids for the query. Falls back to every indexed
+    /// file when the query cannot be narrowed.
     #[must_use]
-    pub(crate) fn query(&self, query: &CandidateQuery<'_>) -> IndexQueryResult {
-        let Some(arms) = Config::new(self.width).extract_literal_arms(query) else {
-            return IndexQueryResult::Unavailable;
+    pub(crate) fn query_file_ids(&self, query: &CandidateQuery<'_>) -> Vec<FileId> {
+        let Some(storage) = self.storage() else {
+            return Vec::new();
+        };
+        let all_ids = || {
+            (0..storage.files.len())
+                .map(FileId::new)
+                .collect::<Vec<_>>()
+        };
+        let Some(arms) = self.extract_literal_arms(query) else {
+            return all_ids();
         };
         let gram_match = if query.case_insensitive() {
             GramMatch::AsciiCase
@@ -180,10 +312,9 @@ impl Index {
             GramMatch::Exact
         };
         let ids = self.candidate_file_ids(&arms, gram_match);
-        if ids.len() == self.storage.files.len() && self.storage.files.len() > 1 {
-            return IndexQueryResult::AllIndexed;
-        }
-        IndexQueryResult::Matched { file_ids: ids }
+        ids.into_iter()
+            .filter_map(|id| usize::try_from(id).ok().map(FileId::new))
+            .collect()
     }
 
     /// Returns an explanation of how a query would be handled.
@@ -191,7 +322,7 @@ impl Index {
     pub fn explain(&self, query: &crate::search::SearchQuery) -> crate::index::QueryPlanOutput {
         use crate::search::PrefilterCompatibility;
         let candidate_query = CandidateQuery::new(query, PrefilterCompatibility::Compatible);
-        let mode = match Config::new(self.width).extract_literal_arms(&candidate_query) {
+        let mode = match self.extract_literal_arms(&candidate_query) {
             Some(_) => crate::index::PlanMode::IndexedCandidates,
             None => crate::index::PlanMode::FullScan,
         };
@@ -202,49 +333,28 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn all_file_ids(&self) -> Vec<u32> {
-        (0..self.storage.files.len())
-            .filter_map(|id| u32::try_from(id).ok())
-            .collect()
+    pub(crate) fn all_file_ids(&self) -> Vec<FileId> {
+        let Some(storage) = self.storage() else {
+            return Vec::new();
+        };
+        (0..storage.files.len()).map(FileId::new).collect()
     }
 
     #[must_use]
-    pub(crate) fn rel_path(&self, id: u32) -> Option<&Path> {
-        let fid = FileId::new(usize::try_from(id).ok()?);
-        let row = self.storage.files.row(fid)?;
-        Some(Path::new(row.path))
-    }
-
-    #[must_use]
-    pub(crate) fn hydrate_rows(
-        &self,
-        ids: &[u32],
-        filter: &crate::corpus::filter::CandidateFilter,
-        admission: crate::corpus::filter::FilterAdmission,
-    ) -> Vec<crate::Candidate> {
-        ids.par_iter()
-            .filter_map(|&id| self.hydrate_row(id, filter, admission))
-            .collect()
-    }
-
-    #[must_use]
-    pub(crate) fn hydrate_row(
-        &self,
-        id: u32,
-        filter: &crate::corpus::filter::CandidateFilter,
-        admission: crate::corpus::filter::FilterAdmission,
-    ) -> Option<crate::Candidate> {
-        let fid = FileId::new(usize::try_from(id).ok()?);
-        let row = self.storage.files.row(fid)?;
+    pub fn candidate(&self, id: FileId) -> Option<Candidate> {
+        let storage = self.storage()?;
+        let row = storage.files.row(id)?;
         let rel = PathBuf::from(row.path);
-        let abs = self.storage.root.join(&rel);
-        let candidate = crate::Candidate::with_metadata(rel, abs, Some(row.size), None);
-        candidate.matches(filter, admission).then_some(candidate)
+        let abs = storage.root.join(&rel);
+        Some(Candidate::with_metadata(rel, abs, Some(row.size), None))
     }
 
     #[must_use]
     pub(crate) fn coverage(&self) -> IndexedCorpus {
-        self.storage.files.coverage()
+        self.storage().map_or_else(
+            || IndexedCorpus::new([]),
+            |storage| storage.files.coverage(),
+        )
     }
 
     pub(crate) fn merge_partial_fingerprints(

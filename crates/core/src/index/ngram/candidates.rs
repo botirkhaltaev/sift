@@ -67,12 +67,13 @@ impl Index {
     }
 
     fn posting_ids(&self, lit: &[u8], gram_match: GramMatch) -> Option<Vec<u32>> {
+        let storage = self.storage()?;
         let width = self.width.get();
         match self.width.literal_narrowing(lit.len()) {
             LiteralNarrowing::TooShort => None,
             LiteralNarrowing::Covering => {
                 // Union postings for every width-gram that contains `lit`.
-                let file_count = self.storage.files.len();
+                let file_count = storage.files.len();
                 let mut window = vec![0u8; width];
                 let mut slices: Vec<&[u8]> = Vec::new();
                 for wild_pos in 0..width {
@@ -118,7 +119,7 @@ impl Index {
                     if ids.is_empty() { None } else { Some(ids) }
                 }
                 GramMatch::AsciiCase => {
-                    let file_count = self.storage.files.len();
+                    let file_count = storage.files.len();
                     let mut window = vec![0u8; width];
                     let mut cur: Option<Vec<u32>> = None;
                     for offset in 0..=lit.len() - width {
@@ -154,18 +155,16 @@ impl Index {
     }
 
     fn posting_bytes_slice(&self, gram: Gram) -> &[u8] {
-        let Some(entry) = self.storage.lexicon.get(gram) else {
+        let Some(storage) = self.storage() else {
+            return &[];
+        };
+        let Some(entry) = storage.lexicon.get(gram) else {
             return &[];
         };
         let start = usize::try_from(entry.offset).unwrap_or(usize::MAX);
-        let payload_len = self.storage.postings.payload_len();
-        let end = self
-            .storage
-            .lexicon
-            .posting_byte_end(entry.offset, payload_len);
-        self.storage
-            .postings
-            .slice(start, end.saturating_sub(start))
+        let payload_len = storage.postings.payload_len();
+        let end = storage.lexicon.posting_byte_end(entry.offset, payload_len);
+        storage.postings.slice(start, end.saturating_sub(start))
     }
 
     pub(crate) fn intersect_sorted_slices(slices: &[&[u8]]) -> Vec<u32> {

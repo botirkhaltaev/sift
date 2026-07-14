@@ -28,15 +28,13 @@ pub use search::{
 
 pub use ignore::{Walk, WalkBuilder};
 
-pub use index::config::{IndexBuildConfig, IndexWalkConfig};
+pub use index::config::IndexWalkConfig;
 pub use index::meta::StoreMeta;
-pub use index::ngram::{
-    Config as NGramConfig, Gram, GramWidth, GramWindows, Index as NGramIndex, NGramIndexError,
-};
-pub use index::store::IndexStore;
+pub use index::ngram::{Gram, GramWidth, GramWindows, Index as NGramIndex, NGramIndexError};
 pub use index::{
-    CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, IndexConfig, IndexCoverage, IndexError,
-    IndexId, IndexedCorpus, Indexes, PlanMode, QueryPlanOutput, SnapshotId, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig, IndexCoverage,
+    IndexError, IndexId, IndexRecord, IndexWrite, IndexedCorpus, Indexes, PlanMode,
+    QueryPlanOutput, SnapshotId, WalkMeta,
 };
 
 use thiserror::Error;

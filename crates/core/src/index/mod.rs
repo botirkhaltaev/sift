@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod config;
+pub mod contract;
 pub mod error;
 pub mod kinds;
 pub mod meta;
@@ -8,13 +9,13 @@ pub mod ngram;
 mod paths;
 mod search;
 pub mod snapshot;
-pub mod store;
 
 pub use artifacts::{IndexDestination, IndexSource};
-pub use config::{CorpusKind, CorpusSpec, IndexBuildConfig};
+pub use config::{CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig};
+pub use contract::{Index, IndexRecord, IndexWrite};
 pub use error::IndexError;
-pub use kinds::{FileId, IndexConfig, IndexId, PlanMode, QueryPlanOutput};
-pub use meta::{CorpusMeta, FilterMeta, IndexCoverage, WalkMeta};
+pub use kinds::{FileId, IndexId, PlanMode, QueryPlanOutput};
+pub use meta::{CorpusMeta, FilterMeta, IndexCoverage, StoreMeta, WalkMeta};
 pub use paths::IndexedCorpus;
 pub use search::Indexes;
 pub use snapshot::SnapshotId;
@@ -24,6 +25,28 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    fn empty_meta(root: std::path::PathBuf) -> StoreMeta {
+        StoreMeta::new(
+            CorpusMeta {
+                root,
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            IndexCoverage::Complete,
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: crate::corpus::filter::VisibilityConfig::default(),
+            },
+            IndexRecord::default_catalog(),
+        )
+    }
 
     #[test]
     fn file_id_new_and_get() {
@@ -42,7 +65,18 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         let sift_dir = tmp.path().join(".sift");
         fs::create_dir_all(&sift_dir).expect("create sift dir");
-        let indexes = Indexes::open(&sift_dir).expect("open indexes");
+        let meta = empty_meta(tmp.path().to_path_buf());
+        let indexes = Indexes::open(&sift_dir, &meta).expect("open indexes");
         assert!(!indexes.usable());
+    }
+
+    #[test]
+    fn indexes_load_does_not_create_store() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let sift_dir = tmp.path().join(".sift");
+        let indexes = Indexes::load(&sift_dir).expect("load indexes");
+        assert!(!indexes.usable());
+        assert!(!StoreMeta::path(&sift_dir).exists());
+        assert!(!sift_dir.exists());
     }
 }

@@ -133,6 +133,14 @@ impl SnapshotRead for MemorySnapshotReader {
         })?;
         Ok(ArtifactData::Memory(bytes.clone()))
     }
+
+    fn artifacts(&self, namespace: &str) -> crate::Result<Vec<String>> {
+        Ok(self
+            .artifacts
+            .get(namespace)
+            .map(|ns| ns.keys().cloned().collect())
+            .unwrap_or_default())
+    }
 }
 
 impl SnapshotStore for MemorySnapshotStore {

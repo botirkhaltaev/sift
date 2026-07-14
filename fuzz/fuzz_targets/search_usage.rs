@@ -10,8 +10,8 @@ use sift_core::search::{
     StatsMode,
 };
 use sift_core::{
-    CorpusKind, CorpusSpec, GramWidth, IndexBuildConfig, IndexWalkConfig, Indexes, Inputs,
-    NGramConfig,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexConfig, IndexCoverage,
+    IndexRecord, IndexWalkConfig, Indexes, Inputs, NGramIndex, StoreMeta, WalkMeta,
 };
 use std::fs;
 use std::sync::OnceLock;
@@ -35,7 +35,7 @@ fn indexed() -> &'static IndexHolder {
         fs::write(corpus.join("b.txt"), b"baz\nquux line\n").expect("b.txt");
         let sift_dir = tmp.path().join(".sift");
         let trigram_dir = sift_dir.join("trigram");
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: &corpus,
                 kind: CorpusKind::Directory,
@@ -46,10 +46,30 @@ fn indexed() -> &'static IndexHolder {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        NGramConfig::new(GramWidth::TRIGRAM)
+        NGramIndex::new()
+            .width(GramWidth::TRIGRAM)
             .build(&config, &trigram_dir, &[])
             .expect("build_index");
-        let indexes = Indexes::open(&sift_dir).expect("open_index");
+        let meta = StoreMeta::new(
+            CorpusMeta {
+                root: corpus.clone(),
+                kind: CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            IndexCoverage::Complete,
+            WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            FilterMeta {
+                visibility: VisibilityConfig::default(),
+            },
+            vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
+        );
+        let indexes = Indexes::open(&sift_dir, &meta).expect("open_index");
         let root = indexes
             .corpus_root()
             .expect("indexed corpus")

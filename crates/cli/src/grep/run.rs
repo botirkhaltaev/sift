@@ -113,8 +113,8 @@ impl Run {
     ) -> anyhow::Result<SearchSession> {
         self.configure_threads();
         let cwd = std::env::current_dir()?;
-        let indexes = sift_core::Indexes::open(&self.config.sift_dir)?;
         let store_meta = sift_core::StoreMeta::read(&self.config.sift_dir).ok();
+        let indexes = sift_core::Indexes::load(&self.config.sift_dir)?;
         let scope = CorpusScope::resolve(
             &indexes,
             store_meta.as_ref(),

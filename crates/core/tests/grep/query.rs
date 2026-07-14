@@ -2,15 +2,41 @@ use std::fs;
 use std::path::Path;
 
 use sift_core::search::{SearchOptions, SearchQueryBuilder};
-use sift_core::{CorpusKind, FileId, Indexes, PlanMode};
+use sift_core::{
+    CorpusKind, CorpusMeta, FileId, FilterMeta, IndexCoverage, IndexRecord, Indexes, PlanMode,
+    StoreMeta, VisibilityConfig, WalkMeta,
+};
 use tempfile::TempDir;
 
 use crate::common::build_trigram_in_dir;
 
+fn default_meta() -> StoreMeta {
+    StoreMeta::new(
+        CorpusMeta {
+            root: std::path::PathBuf::new(),
+            kind: CorpusKind::Directory,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
+        },
+        IndexCoverage::Complete,
+        WalkMeta {
+            follow_links: false,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        },
+        FilterMeta {
+            visibility: VisibilityConfig::default(),
+        },
+        IndexRecord::default_catalog(),
+    )
+}
+
 #[test]
 fn open_missing_current_returns_empty_registry() {
     let tmp = TempDir::new().expect("tempdir");
-    let indexes = Indexes::open(tmp.path()).expect("open");
+    let meta = default_meta();
+    let indexes = Indexes::open(tmp.path(), &meta).expect("open");
     assert!(!indexes.usable());
 }
 
@@ -19,7 +45,8 @@ fn open_empty_sift_dir_returns_empty_registry() {
     let tmp = TempDir::new().expect("tempdir");
     let sift_dir = tmp.path().join(".sift");
     fs::create_dir_all(&sift_dir).expect("mkdir");
-    let indexes = Indexes::open(&sift_dir).expect("open");
+    let meta = default_meta();
+    let indexes = Indexes::open(&sift_dir, &meta).expect("open");
     assert!(!indexes.usable());
 }
 
@@ -29,7 +56,8 @@ fn open_broken_current_errors() {
     let sift_dir = tmp.path().join(".sift");
     fs::create_dir_all(&sift_dir).expect("mkdir");
     fs::write(sift_dir.join("CURRENT"), "nonexistent-snapshot-id\n").expect("write");
-    assert!(Indexes::open(&sift_dir).is_err());
+    let meta = default_meta();
+    assert!(Indexes::open(&sift_dir, &meta).is_err());
 }
 
 #[test]

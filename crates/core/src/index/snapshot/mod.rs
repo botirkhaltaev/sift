@@ -13,10 +13,10 @@ pub use store::{SnapshotRead, SnapshotStore, SnapshotWrite, SnapshotWriterSessio
 
 use std::path::{Path, PathBuf};
 
+use super::IndexSource;
+use super::config::CorpusKind;
+use super::contract::Index;
 use super::error::IndexError;
-use super::kinds::Index;
-use super::meta::StoreMeta;
-use super::{IndexConfig, IndexSource};
 
 /// An immutable opened snapshot and the indexes it contains.
 pub struct Snapshot {
@@ -31,7 +31,7 @@ enum SnapshotState {
 }
 
 struct CurrentSnapshot {
-    indexes: Vec<Index>,
+    indexes: Vec<Box<dyn Index>>,
     _lease: SnapshotLease,
 }
 
@@ -46,10 +46,10 @@ impl Snapshot {
     }
 
     #[must_use]
-    pub(crate) const fn committed(
+    pub(crate) fn committed(
         id: SnapshotId,
         root: PathBuf,
-        indexes: Vec<Index>,
+        indexes: Vec<Box<dyn Index>>,
         lease: SnapshotLease,
     ) -> Self {
         Self {
@@ -73,7 +73,7 @@ impl Snapshot {
     }
 
     #[must_use]
-    pub(crate) fn indexes(&self) -> &[Index] {
+    pub(crate) fn indexes(&self) -> &[Box<dyn Index>] {
         match &self.state {
             SnapshotState::Empty => &[],
             SnapshotState::Current(c) => &c.indexes,
@@ -87,27 +87,22 @@ impl Snapshot {
 
     /// Open the current committed snapshot for search.
     ///
+    /// Uses `root` and `corpus_kind` from the caller's metadata so that
+    /// snapshot loading does not read `.sift/meta.json`.
+    ///
     /// # Errors
     ///
     /// Returns an error if the manifest is malformed, an index kind is unknown,
     /// or the snapshot could not be opened after retry.
-    pub fn open_current(sift_dir: &Path) -> crate::Result<Self> {
+    pub fn open_current(
+        sift_dir: &Path,
+        root: PathBuf,
+        corpus_kind: CorpusKind,
+    ) -> crate::Result<Self> {
         for attempt in 0..2 {
             let Some(current_id) = DiskSnapshotStore::read_current_id(sift_dir)? else {
-                return Ok(Self::empty(PathBuf::new()));
+                return Ok(Self::empty(root));
             };
-
-            let meta = StoreMeta::read(sift_dir).map_err(|_| {
-                crate::Error::Index(IndexError::Io {
-                    path: StoreMeta::path(sift_dir),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "store metadata not found",
-                    ),
-                })
-            })?;
-            let root = meta.corpus.root.clone();
-            let corpus_kind = meta.corpus.kind;
 
             let snap_dir = sift_dir.join("snapshots").join(&current_id);
 
@@ -135,17 +130,19 @@ impl Snapshot {
                 })
             })?;
 
-            let mut indexes = Vec::new();
-            for name in &manifest.indexes {
-                let config: IndexConfig = name.parse().map_err(|_| {
-                    crate::Error::Index(IndexError::UnknownIndexConfig(name.clone()))
-                })?;
-                let index_dir = snap_dir.join(name);
-                indexes.push(config.open(
-                    IndexSource::Directory(&index_dir),
-                    &root,
-                    corpus_kind,
-                )?);
+            let mut indexes: Vec<Box<dyn Index>> = Vec::new();
+            for record in &manifest.indexes {
+                let namespace = record.name();
+                let handle = record.to_index()?;
+                let index_dir = snap_dir.join(&namespace);
+                if !index_dir.exists() {
+                    return Err(crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("index namespace {namespace} missing under snapshot"),
+                    )));
+                }
+                let opened = handle.open(IndexSource::Directory(&index_dir), &root, corpus_kind)?;
+                indexes.push(opened);
             }
 
             return Ok(Self::committed(manifest.id, root, indexes, lease));

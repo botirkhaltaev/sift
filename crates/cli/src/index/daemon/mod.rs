@@ -15,8 +15,8 @@ use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, S
 use notify::RecursiveMode;
 use notify::Watcher;
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexStore, Indexes,
-    SnapshotId, StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, FilterMeta, IndexCoverage, IndexRecord, Indexes, SnapshotId, StoreMeta,
+    WalkMeta,
 };
 use thiserror::Error;
 
@@ -405,10 +405,9 @@ impl DaemonOrchestrator {
 
         let idle_timeout = config.idle_timeout;
         let mut phase = Phase::idle(idle_timeout);
-        let mut ingest =
-            IngestTracker::from_reconcile(IndexStore::open_or_create(&sift_dir, &meta).and_then(
-                |mut store| SnapshotRefresh::new(&sift_dir, &meta, &[]).run(&mut store),
-            )?);
+        let mut ingest = IngestTracker::from_reconcile(Indexes::open(&sift_dir, &meta).and_then(
+            |mut indexes| SnapshotRefresh::new(&sift_dir, &meta, &[]).run(&mut indexes),
+        )?);
 
         let ipc_tx = tx.clone();
         let ipc_daemon = Daemon::new(sift_dir.clone());
@@ -478,7 +477,7 @@ impl DaemonOrchestrator {
                     FilterMeta {
                         visibility: sift_core::grep::VisibilityConfig::default(),
                     },
-                    IndexConfig::ALL.to_vec(),
+                    IndexRecord::default_catalog(),
                 ))
             }
             (Err(e), None) => Err(e),
@@ -840,8 +839,8 @@ impl PendingIndex {
 
     fn reconcile(&mut self, sift_dir: &Path, meta: &StoreMeta) -> Option<ReconcileOutcome> {
         let paths = self.take()?;
-        let result = IndexStore::open_or_create(sift_dir, meta)
-            .and_then(|mut store| SnapshotRefresh::new(sift_dir, meta, &paths).run(&mut store));
+        let result = Indexes::open(sift_dir, meta)
+            .and_then(|mut indexes| SnapshotRefresh::new(sift_dir, meta, &paths).run(&mut indexes));
         match result {
             Ok(outcome) => Some(outcome),
             Err(e) => {
@@ -868,7 +867,7 @@ impl StorePaths<'_> {
         let mut meta = StoreMeta::read(sift_dir)
             .map_err(|e| DaemonError::message(format!("no store metadata: {e}")))?;
         if meta.indexes.is_empty() {
-            meta.indexes = IndexConfig::ALL.to_vec();
+            meta.indexes = IndexRecord::default_catalog();
         }
         Ok(meta)
     }
@@ -943,9 +942,12 @@ impl DaemonRuntime<'_> {
             }
             DaemonRequest::Index(paths) => {
                 self.ingest.observe();
-                let paths = match Indexes::open(self.store.raw) {
-                    Ok(indexes) => indexes.indexed_corpus().retain_unindexed(paths),
-                    Err(_) => paths,
+                let paths = match StorePaths::read_meta(self.store.raw)
+                    .ok()
+                    .and_then(|meta| Indexes::open(self.store.raw, &meta).ok())
+                {
+                    Some(indexes) => indexes.indexed_corpus().retain_unindexed(paths),
+                    None => paths,
                 };
                 self.refresh.apply_index(
                     paths,
@@ -1132,8 +1134,8 @@ impl IndexRefresh<'_> {
             };
             let mut outcome = None;
             if matches!(scope, RefreshScope::CorpusAndPending) {
-                let result = IndexStore::open_or_create(&sift_dir, &meta).and_then(|mut store| {
-                    SnapshotRefresh::new(&sift_dir, &meta, &[]).run(&mut store)
+                let result = Indexes::open(&sift_dir, &meta).and_then(|mut indexes| {
+                    SnapshotRefresh::new(&sift_dir, &meta, &[]).run(&mut indexes)
                 });
                 match result {
                     Ok(committed) => outcome = Some(committed),
@@ -1302,7 +1304,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+            vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
         );
         StoreMeta::write(&meta, &sift_dir).unwrap();
 
@@ -1332,7 +1334,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+            vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
         );
         StoreMeta::write(&meta, &sift_dir).unwrap();
 
@@ -1371,7 +1373,7 @@ mod tests {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+                vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
             ),
             &sift_dir,
         )
@@ -1398,7 +1400,7 @@ mod tests {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+                vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
             ),
             &sift_dir,
         )
@@ -1430,7 +1432,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+            vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
         );
         std::fs::create_dir_all(&sift_dir).unwrap();
         StoreMeta::write(&meta, &sift_dir).unwrap();
@@ -1502,7 +1504,7 @@ mod tests {
             FilterMeta {
                 visibility: VisibilityConfig::default(),
             },
-            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+            vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
         );
         std::fs::create_dir_all(&sift_dir).unwrap();
         StoreMeta::write(&meta, &sift_dir).unwrap();

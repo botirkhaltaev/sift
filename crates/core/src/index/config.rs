@@ -36,7 +36,7 @@ impl IndexWalkConfig {
 }
 
 /// Corpus and filesystem inputs for building or updating index artifacts.
-pub struct IndexBuildConfig<'a> {
+pub struct IndexConfig<'a> {
     pub corpus: CorpusSpec<'a>,
     pub walk: IndexWalkConfig,
     pub visibility: VisibilityConfig,

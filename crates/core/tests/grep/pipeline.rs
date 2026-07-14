@@ -28,7 +28,7 @@ fn grep_finds_match_in_indexed_corpus() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -70,7 +70,7 @@ fn candidate_planner_all_indexed_uses_index_when_metadata_missing() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -106,7 +106,7 @@ fn high_level_grep_search_resolves_candidates_and_reports_matches() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -148,7 +148,7 @@ fn high_level_grep_stream_emits_events_without_collecting_matches() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -192,7 +192,7 @@ fn high_level_grep_files_without_match_selects_nonmatching_files() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -235,7 +235,7 @@ fn high_level_grep_files_without_match_uses_full_corpus_with_index() {
     fs::write(corpus.join("b.txt"), "goodbye\n").expect("write b");
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -275,7 +275,7 @@ fn high_level_grep_files_without_match_is_not_selected_when_all_files_match() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -384,7 +384,7 @@ fn count_include_zero_lists_zeros_but_found_requires_hits() {
     fs::write(corpus.join("b.txt"), "beta\n").expect("write b");
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -428,7 +428,7 @@ fn stream_begin_path_shares_arc_with_listed_file() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
@@ -493,7 +493,7 @@ fn first_match_settles_on_pattern_hit_not_include_zero() {
     fs::write(corpus.join("c.txt"), "needle\n").expect("write c");
 
     let sift_dir = tmp.path().join(".sift");
-    super::common::build_store(&corpus, &sift_dir);
+    super::common::build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");

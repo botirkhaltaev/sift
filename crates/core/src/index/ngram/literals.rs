@@ -4,10 +4,10 @@ use regex_syntax::hir::{self, Hir};
 
 use crate::candidates::query::CandidateQuery;
 
-use super::config::Config;
 use super::gram::{GramWidth, LiteralNarrowing};
+use super::index::Index;
 
-impl Config {
+impl Index {
     /// Extract literal byte arms from a query spec.
     /// Returns `None` if no usable literals for this N-gram width can be extracted.
     ///
@@ -16,11 +16,11 @@ impl Config {
     /// decline narrowing so candidates stay conservative.
     ///
     /// [`GramMatch`]: super::gram::GramMatch
-    pub(crate) fn extract_literal_arms(self, query: &CandidateQuery<'_>) -> Option<Vec<Vec<u8>>> {
+    pub(crate) fn extract_literal_arms(&self, query: &CandidateQuery<'_>) -> Option<Vec<Vec<u8>>> {
         if query.invert_match() {
             return None;
         }
-        let width = self.width();
+        let width = self.gram_width();
         let case_insensitive = query.case_insensitive();
         let mut literal_arms: Vec<Vec<u8>> = Vec::new();
         for p in query.patterns {

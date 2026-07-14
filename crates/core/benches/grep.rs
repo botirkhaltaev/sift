@@ -149,7 +149,29 @@ fn bench_walk_search(c: &mut Criterion) {
     let corpus = tmp.path().join("corpus");
     common::make_filter_corpus(&corpus);
     let filter = make_filter(&CandidateFilterConfig::default(), &corpus);
-    let indexes = Indexes::open(&tmp.path().join(".sift")).unwrap();
+    let sift_dir = tmp.path().join(".sift");
+    let meta = sift_core::StoreMeta::read(&sift_dir).unwrap_or_else(|_| {
+        sift_core::StoreMeta::new(
+            sift_core::CorpusMeta {
+                root: sift_dir.clone(),
+                kind: sift_core::CorpusKind::Directory,
+                include_paths: Vec::new(),
+                exclude_paths: Vec::new(),
+            },
+            sift_core::IndexCoverage::Complete,
+            sift_core::WalkMeta {
+                follow_links: false,
+                one_file_system: false,
+                max_depth: None,
+                max_filesize: None,
+            },
+            sift_core::FilterMeta {
+                visibility: sift_core::VisibilityConfig::default(),
+            },
+            sift_core::IndexRecord::default_catalog(),
+        )
+    });
+    let indexes = Indexes::open(&sift_dir, &meta).unwrap();
 
     let mut g = c.benchmark_group("grep_walk");
 

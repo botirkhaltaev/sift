@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::corpus::filter::{CandidateFilter, VisibilityConfig};
 
-use super::config::{CorpusKind, CorpusSpec, IndexBuildConfig, IndexWalkConfig};
-use super::{IndexConfig, IndexError};
+use super::IndexError;
+use super::config::{CorpusKind, CorpusSpec, IndexConfig, IndexWalkConfig};
+use super::contract::IndexRecord;
 
 const META_FILE: &str = "meta.json";
 const STORE_VERSION: u32 = 1;
@@ -19,7 +20,7 @@ pub struct StoreMeta {
     pub coverage: IndexCoverage,
     pub walk: WalkMeta,
     pub filters: FilterMeta,
-    pub indexes: Vec<IndexConfig>,
+    pub indexes: Vec<IndexRecord>,
 }
 
 /// Whether the store is expected to cover the whole configured corpus.
@@ -69,7 +70,7 @@ impl StoreMeta {
         coverage: IndexCoverage,
         walk: WalkMeta,
         filters: FilterMeta,
-        indexes: Vec<IndexConfig>,
+        indexes: Vec<IndexRecord>,
     ) -> Self {
         Self {
             version: STORE_VERSION,
@@ -120,10 +121,10 @@ impl StoreMeta {
         Ok(())
     }
 
-    /// Map persisted metadata to a runtime index build configuration.
+    /// Map persisted metadata to a runtime write configuration.
     #[must_use]
-    pub fn index_config(&self) -> IndexBuildConfig<'_> {
-        IndexBuildConfig {
+    pub fn write_config(&self) -> IndexConfig<'_> {
+        IndexConfig {
             corpus: CorpusSpec {
                 root: &self.corpus.root,
                 kind: self.corpus.kind,
@@ -139,6 +140,16 @@ impl StoreMeta {
             },
             visibility: self.filters.visibility.clone(),
         }
+    }
+
+    /// Instantiate the catalog of opened-index handles described by
+    /// [`Self::indexes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any record's kind or params are invalid.
+    pub fn catalog(&self) -> crate::Result<Vec<Box<dyn super::contract::Index>>> {
+        self.indexes.iter().map(IndexRecord::to_index).collect()
     }
 
     /// Whether this index metadata covers the search-time candidate universe.
@@ -199,7 +210,7 @@ mod tests {
                     ..VisibilityConfig::default()
                 },
             },
-            vec![IndexConfig::ngram(crate::index::ngram::GramWidth::TRIGRAM)],
+            IndexRecord::default_catalog(),
         );
         meta.write(tmp.path()).expect("write meta");
 

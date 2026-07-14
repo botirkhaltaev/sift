@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::identity::SnapshotId;
+use crate::index::contract::IndexRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotManifest {
     pub id: SnapshotId,
-    pub indexes: Vec<String>,
+    pub indexes: Vec<IndexRecord>,
 }

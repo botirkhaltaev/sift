@@ -1,77 +1,144 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use rayon::prelude::*;
-
-use super::config::CorpusKind;
+use super::config::{CorpusKind, IndexConfig};
+use super::contract::{Index, IndexWrite};
 use super::error::IndexError;
-use super::kinds::{Index, IndexQueryResult};
+use super::kinds::FileId;
+use super::meta::StoreMeta;
 use super::paths::IndexedCorpus;
-use super::snapshot::{Snapshot, SnapshotId};
+use super::snapshot::store::SnapshotWrite;
+use super::snapshot::{
+    DiskSnapshotStore, Snapshot, SnapshotId, SnapshotManifest, SnapshotRead, SnapshotStore,
+    SnapshotWriterSession,
+};
+use super::{IndexDestination, IndexSource};
 
 use crate::candidates::Candidates;
+use crate::candidates::query::CandidateQuery;
 use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
 
-/// Opened snapshot indexes for query-time candidate resolution.
+/// Composable snapshot store and query registry.
+///
+/// Combines index lifecycle (build, update, publish) with query-time candidate
+/// narrowing. [`Self::open`] ensures store metadata is on disk and loads the
+/// current snapshot; [`Self::load`] opens an existing store without creating
+/// one. `build` / `update` acquire the write lock and publish a new committed
+/// snapshot.
 pub struct Indexes {
+    sift_dir: PathBuf,
+    snapshots: DiskSnapshotStore,
+    meta: StoreMeta,
     snapshot: Snapshot,
 }
 
 impl Indexes {
-    /// Open the current committed snapshot under `sift_dir`.
+    /// Open the store at `sift_dir`, writing `meta` when the store is new, and
+    /// load the current committed snapshot.
+    ///
+    /// Use this for index lifecycle (build/update). For search-only loads that
+    /// must not create a store, use [`Self::load`].
     ///
     /// # Errors
     ///
-    /// Returns [`IndexError::InvalidManifest`] if a snapshot manifest is
-    /// malformed, or [`IndexError::Trigram`] if a trigram index is malformed.
-    ///
-    /// Returns an empty `Indexes` when no current snapshot exists (walk fallback).
-    pub fn open(sift_dir: &Path) -> Result<Self, IndexError> {
-        let snapshot = Snapshot::open_current(sift_dir).map_err(|e| match e {
-            crate::Error::Index(ie) => ie,
-            crate::Error::Io(io) => IndexError::Io {
-                path: sift_dir.to_path_buf(),
-                source: io,
-            },
-            _ => IndexError::Io {
-                path: sift_dir.to_path_buf(),
-                source: std::io::Error::other(e.to_string()),
-            },
-        })?;
-        Ok(Self::new(snapshot))
+    /// Returns an error if the directory cannot be created, metadata cannot be
+    /// written, the snapshot store cannot be opened, or the current snapshot
+    /// cannot be loaded.
+    pub fn open(sift_dir: &Path, meta: &StoreMeta) -> crate::Result<Self> {
+        std::fs::create_dir_all(sift_dir)?;
+        if !StoreMeta::path(sift_dir).exists() {
+            let guard = acquire_write_lock(sift_dir)?;
+            if !StoreMeta::path(sift_dir).exists() {
+                meta.write(sift_dir)?;
+            }
+            drop(guard);
+        }
+        let stored_meta = StoreMeta::read(sift_dir).unwrap_or_else(|_| meta.clone());
+        Self::from_stored(sift_dir, stored_meta)
     }
 
-    /// Wrap an already-opened snapshot for search.
+    /// Load an existing store for search. Does not create meta or directories.
+    ///
+    /// When no store exists, returns an empty (unusable) indexes handle so
+    /// callers can fall back to walking the corpus.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if metadata exists but cannot be read, or the current
+    /// snapshot cannot be opened.
+    pub fn load(sift_dir: &Path) -> crate::Result<Self> {
+        if !StoreMeta::path(sift_dir).exists() {
+            return Ok(Self {
+                sift_dir: sift_dir.to_path_buf(),
+                snapshots: DiskSnapshotStore::open(sift_dir)?,
+                meta: empty_search_meta(),
+                snapshot: Snapshot::empty(PathBuf::new()),
+            });
+        }
+        let stored_meta = StoreMeta::read(sift_dir)?;
+        Self::from_stored(sift_dir, stored_meta)
+    }
+
+    fn from_stored(sift_dir: &Path, stored_meta: StoreMeta) -> crate::Result<Self> {
+        let snapshots = DiskSnapshotStore::open(sift_dir)?;
+        let snapshot = Snapshot::open_current(
+            sift_dir,
+            stored_meta.corpus.root.clone(),
+            stored_meta.corpus.kind,
+        )?;
+        Ok(Self {
+            sift_dir: sift_dir.to_path_buf(),
+            snapshots,
+            meta: stored_meta,
+            snapshot,
+        })
+    }
+
+    /// Metadata currently governing the store.
     #[must_use]
-    pub(crate) const fn new(snapshot: Snapshot) -> Self {
-        Self { snapshot }
+    pub const fn meta(&self) -> &StoreMeta {
+        &self.meta
+    }
+
+    /// Overwrite the store metadata on disk and in-memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing `meta.json` fails.
+    pub fn refresh_meta(&mut self, meta: &StoreMeta) -> crate::Result<()> {
+        meta.write(&self.sift_dir)?;
+        self.meta = meta.clone();
+        Ok(())
+    }
+
+    /// Committed snapshot id when present.
+    #[must_use]
+    pub fn current_id(&self) -> Option<&str> {
+        self.snapshots.current_id().map(SnapshotId::as_str)
+    }
+
+    /// Filesystem directory of a snapshot (used by CLI diagnostics).
+    #[must_use]
+    pub fn snapshot_dir(&self, id: &str) -> PathBuf {
+        self.sift_dir.join("snapshots").join(id)
     }
 
     /// Whether opened indexes are usable for candidate discovery.
     #[must_use]
     pub fn usable(&self) -> bool {
-        if self.snapshot.is_empty() {
-            return false;
-        }
-        let indexes = self.snapshot.indexes();
-        let Some(first) = indexes.first() else {
-            return false;
-        };
-        let corpus = first.corpus_kind();
-        indexes.iter().all(|idx| idx.corpus_kind() == corpus)
+        !self.snapshot.is_empty() && !self.snapshot.indexes().is_empty()
     }
 
-    /// Corpus root when indexes are usable.
+    /// Corpus root recorded in metadata.
     #[must_use]
     pub fn corpus_root(&self) -> Option<&Path> {
-        self.usable().then_some(self.snapshot.root())
+        self.usable().then_some(self.meta.corpus.root.as_path())
     }
 
-    /// Corpus kind when indexes are usable.
+    /// Corpus kind recorded in metadata.
     #[must_use]
     pub fn corpus_kind(&self) -> Option<CorpusKind> {
-        let first = self.snapshot.indexes().first()?;
-        self.usable().then_some(first.corpus_kind())
+        self.usable().then_some(self.meta.corpus.kind)
     }
 
     /// Committed snapshot id when present.
@@ -83,126 +150,278 @@ impl Indexes {
     /// Corpus-relative paths covered by every opened index in this snapshot.
     #[must_use]
     pub fn indexed_corpus(&self) -> IndexedCorpus {
-        IndexedCorpus::intersection(self.snapshot.indexes().iter().map(Index::coverage))
+        IndexedCorpus::intersection(self.snapshot.indexes().iter().map(|idx| idx.coverage()))
     }
 
-    #[must_use]
-    pub(crate) fn query(
-        &self,
-        query: &crate::candidates::query::CandidateQuery<'_>,
-    ) -> IndexQueryResult {
-        let indexes = self.snapshot.indexes();
-        match indexes.len() {
-            0 => IndexQueryResult::Unavailable,
-            1 => indexes[0].query(query),
-            _ => Self::query_multi(indexes, query),
+    /// Build a new snapshot using the given configured indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the writer session cannot be acquired, the build
+    /// fails, or publishing fails.
+    pub fn build(
+        &mut self,
+        indexes: &[Box<dyn Index>],
+        config: &IndexConfig<'_>,
+        paths: &[PathBuf],
+    ) -> crate::Result<String> {
+        let mut writer = self.snapshots.writer()?;
+        let mut txn = writer.begin()?;
+
+        for index in indexes {
+            let namespace = index.name();
+            index.build(IndexWrite {
+                dest: IndexDestination::Snapshot {
+                    writer: &mut txn,
+                    namespace: &namespace,
+                },
+                config,
+                paths,
+            })?;
         }
+
+        let manifest = SnapshotManifest {
+            id: txn.id().clone(),
+            indexes: indexes.iter().map(|idx| idx.to_record()).collect(),
+        };
+        let id = writer.publish(txn, manifest)?;
+        drop(writer);
+        self.reload_snapshot()?;
+        Ok(id.to_string())
     }
 
-    #[must_use]
-    pub(crate) fn file_ids(&self, result: IndexQueryResult, corpus: &IndexedCorpus) -> Vec<u32> {
-        match result {
-            IndexQueryResult::Unavailable | IndexQueryResult::AllIndexed => {
-                self.all_indexed_file_ids(corpus)
+    /// Refresh the current snapshot, rebuilding only indexes whose corpus
+    /// changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is no current snapshot, the writer session
+    /// cannot be acquired, the update fails, or publishing fails.
+    pub fn update(
+        &mut self,
+        indexes: &[Box<dyn Index>],
+        paths: &[PathBuf],
+    ) -> crate::Result<Option<String>> {
+        let config = self.meta.write_config();
+        let mut writer = self.snapshots.writer()?;
+
+        let Some(current) = writer.current()? else {
+            return Err(crate::Error::Index(IndexError::Io {
+                path: self.sift_dir.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no current snapshot; run build first",
+                ),
+            }));
+        };
+
+        let mut txn = writer.begin()?;
+
+        let changed: Vec<bool> = indexes
+            .iter()
+            .map(|index| {
+                let namespace = index.name();
+                let is_present = current
+                    .manifest()
+                    .indexes
+                    .iter()
+                    .any(|record| record.name() == namespace);
+                if !is_present {
+                    index.build(IndexWrite {
+                        dest: IndexDestination::Snapshot {
+                            writer: &mut txn,
+                            namespace: &namespace,
+                        },
+                        config: &config,
+                        paths,
+                    })?;
+                    return Ok(true);
+                }
+                let opened_source = IndexSource::Snapshot {
+                    reader: &current as &dyn SnapshotRead,
+                    namespace: &namespace,
+                };
+                let opened = index.open(opened_source, config.corpus.root, config.corpus.kind)?;
+                opened.update(IndexWrite {
+                    dest: IndexDestination::Snapshot {
+                        writer: &mut txn,
+                        namespace: &namespace,
+                    },
+                    config: &config,
+                    paths,
+                })
+            })
+            .collect::<crate::Result<_>>()?;
+
+        if !changed.iter().any(|&c| c) {
+            return Ok(None);
+        }
+
+        for (index, did_change) in indexes.iter().zip(&changed) {
+            if !did_change {
+                let namespace = index.name();
+                for artifact_name in current.artifacts(&namespace)? {
+                    let data = current.artifact(&namespace, &artifact_name)?;
+                    let bytes = data.as_ref().to_vec();
+                    txn.put_artifact(&namespace, &artifact_name, bytes)?;
+                }
             }
-            IndexQueryResult::Matched { file_ids } => file_ids,
         }
+
+        let manifest = SnapshotManifest {
+            id: txn.id().clone(),
+            indexes: indexes.iter().map(|idx| idx.to_record()).collect(),
+        };
+        let id = writer.publish(txn, manifest)?;
+        drop(writer);
+        drop(current);
+        self.reload_snapshot()?;
+        Ok(Some(id.to_string()))
     }
 
-    pub(crate) fn indexed_candidates<'a>(
+    fn reload_snapshot(&mut self) -> crate::Result<()> {
+        self.snapshots = DiskSnapshotStore::open(&self.sift_dir)?;
+        self.snapshot = Snapshot::open_current(
+            &self.sift_dir,
+            self.meta.corpus.root.clone(),
+            self.meta.corpus.kind,
+        )?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub(crate) fn query(&self, query: &CandidateQuery<'_>) -> Vec<FileId> {
+        let indexes = self.snapshot.indexes();
+        if indexes.is_empty() {
+            return Vec::new();
+        }
+        if indexes.len() == 1 {
+            return indexes[0].query(query);
+        }
+        let mut plans: Vec<Vec<FileId>> = indexes.iter().map(|idx| idx.query(query)).collect();
+        plans.sort_by_key(Vec::len);
+        let mut cur = plans.remove(0);
+        for next in plans {
+            cur = intersect_sorted(&cur, &next);
+            if cur.is_empty() {
+                break;
+            }
+        }
+        cur
+    }
+
+    pub(crate) const fn indexed_candidates<'a>(
         &'a self,
-        result: IndexQueryResult,
-        corpus: &IndexedCorpus,
+        file_ids: Vec<FileId>,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> Candidates<'a> {
-        Candidates::indexed(self, self.file_ids(result, corpus), filter, admission)
+        Candidates::indexed(self, file_ids, filter, admission)
     }
 
     pub(crate) fn hydrate_row(
         &self,
-        id: u32,
+        id: FileId,
         filter: &CandidateFilter,
         admission: FilterAdmission,
     ) -> Option<Candidate> {
-        self.lead_index()?.hydrate_row(id, filter, admission)
+        let lead = self.lead_index()?;
+        let candidate = lead.candidate(id)?;
+        candidate.matches(filter, admission).then_some(candidate)
     }
 
     pub(crate) fn hydrate_rows(
         &self,
-        file_ids: &[u32],
+        file_ids: &[FileId],
         filter: &CandidateFilter,
         admission: FilterAdmission,
     ) -> Vec<Candidate> {
-        let Some(index) = self.lead_index() else {
-            return Vec::new();
-        };
-        index.hydrate_rows(file_ids, filter, admission)
-    }
-
-    /// Manifest-first index: owns the file table used to hydrate candidates.
-    fn lead_index(&self) -> Option<&Index> {
-        self.snapshot.indexes().first()
-    }
-
-    fn all_indexed_file_ids(&self, corpus: &IndexedCorpus) -> Vec<u32> {
+        use rayon::prelude::*;
         let Some(lead) = self.lead_index() else {
             return Vec::new();
         };
-        // Single opened index: coverage is that index's file set, so every lead
-        // file id is in-corpus. Skip per-id PathBuf + HashSet lookup (heaptrack
-        // hot path on AllIndexed / case-insensitive full-cover narrowings).
+        file_ids
+            .par_iter()
+            .filter_map(|id| {
+                let candidate = lead.candidate(*id)?;
+                candidate.matches(filter, admission).then_some(candidate)
+            })
+            .collect()
+    }
+
+    pub(crate) fn all_indexed_file_ids(&self, corpus: &IndexedCorpus) -> Vec<FileId> {
+        let Some(lead) = self.lead_index() else {
+            return Vec::new();
+        };
         if self.snapshot.indexes().len() == 1 {
             return lead.all_file_ids();
         }
         lead.all_file_ids()
             .into_iter()
-            .filter(|&id| lead.rel_path(id).is_some_and(|path| corpus.contains(path)))
+            .filter(|id| {
+                lead.candidate(*id)
+                    .is_some_and(|c| corpus.contains(c.rel_path()))
+            })
             .collect()
     }
 
-    fn query_multi(
-        indexes: &[Index],
-        query: &crate::candidates::query::CandidateQuery<'_>,
-    ) -> IndexQueryResult {
-        let plans: Vec<IndexQueryResult> = indexes
-            .par_iter()
-            .map(|idx| idx.query(query))
-            .filter(|plan| !plan.is_unavailable())
-            .collect();
-
-        if plans.is_empty() {
-            return IndexQueryResult::Unavailable;
-        }
-
-        let mut matched = plans.into_iter().filter_map(|plan| match plan {
-            IndexQueryResult::Matched { file_ids } => Some(file_ids),
-            IndexQueryResult::AllIndexed | IndexQueryResult::Unavailable => None,
-        });
-        let Some(mut current) = matched.next() else {
-            return IndexQueryResult::AllIndexed;
-        };
-
-        for next in matched {
-            let mut out = Vec::with_capacity(current.len().min(next.len()));
-            let (mut i, mut j) = (0usize, 0usize);
-            while i < current.len() && j < next.len() {
-                match current[i].cmp(&next[j]) {
-                    std::cmp::Ordering::Less => i += 1,
-                    std::cmp::Ordering::Greater => j += 1,
-                    std::cmp::Ordering::Equal => {
-                        out.push(current[i]);
-                        i += 1;
-                        j += 1;
-                    }
-                }
-            }
-            current = out;
-            if current.is_empty() {
-                break;
-            }
-        }
-
-        IndexQueryResult::Matched { file_ids: current }
+    fn lead_index(&self) -> Option<&dyn Index> {
+        self.snapshot.indexes().first().map(AsRef::as_ref)
     }
+}
+
+fn acquire_write_lock(sift_dir: &Path) -> crate::Result<WriteLockGuard> {
+    let lock_path = sift_dir.join("write.lock");
+    let mut lock_file = fslock::LockFile::open(&lock_path)?;
+    lock_file.lock()?;
+    Ok(WriteLockGuard { file: lock_file })
+}
+
+fn empty_search_meta() -> StoreMeta {
+    StoreMeta::new(
+        super::meta::CorpusMeta {
+            root: PathBuf::new(),
+            kind: CorpusKind::Directory,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
+        },
+        super::meta::IndexCoverage::Complete,
+        super::meta::WalkMeta {
+            follow_links: false,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        },
+        super::meta::FilterMeta {
+            visibility: crate::corpus::filter::VisibilityConfig::default(),
+        },
+        super::contract::IndexRecord::default_catalog(),
+    )
+}
+
+struct WriteLockGuard {
+    file: fslock::LockFile,
+}
+
+impl Drop for WriteLockGuard {
+    fn drop(&mut self) {
+        let _ = &mut self.file;
+    }
+}
+
+fn intersect_sorted(a: &[FileId], b: &[FileId]) -> Vec<FileId> {
+    let mut out = Vec::with_capacity(a.len().min(b.len()));
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out
 }

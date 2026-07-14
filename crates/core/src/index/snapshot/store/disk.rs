@@ -314,6 +314,25 @@ impl SnapshotRead for DiskSnapshotReader {
         let mmap = crate::index::mmap::mmap_open(&path)?;
         Ok(ArtifactData::Mmap(mmap))
     }
+
+    fn artifacts(&self, namespace: &str) -> crate::Result<Vec<String>> {
+        let ns_dir = self.dir.join(namespace);
+        let entries = match std::fs::read_dir(&ns_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(crate::Error::Io(e)),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type().is_ok_and(|t| t.is_file())
+                && let Some(name) = entry.file_name().to_str().map(str::to_string)
+            {
+                names.push(name);
+            }
+        }
+        Ok(names)
+    }
 }
 
 // ---------------------------------------------------------------------------
