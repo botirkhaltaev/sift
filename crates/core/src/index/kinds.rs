@@ -200,7 +200,7 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn rel_path(&self, id: u32) -> Option<PathBuf> {
+    pub(crate) fn rel_path(&self, id: u32) -> Option<&Path> {
         match self {
             Self::NGram(index) => index.rel_path(id),
         }

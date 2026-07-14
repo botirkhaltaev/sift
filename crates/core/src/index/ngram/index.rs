@@ -209,10 +209,10 @@ impl Index {
     }
 
     #[must_use]
-    pub(crate) fn rel_path(&self, id: u32) -> Option<PathBuf> {
+    pub(crate) fn rel_path(&self, id: u32) -> Option<&Path> {
         let fid = FileId::new(usize::try_from(id).ok()?);
         let row = self.storage.files.row(fid)?;
-        Some(PathBuf::from(row.path))
+        Some(Path::new(row.path))
     }
 
     #[must_use]

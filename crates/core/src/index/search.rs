@@ -151,10 +151,7 @@ impl Indexes {
         };
         lead.all_file_ids()
             .into_iter()
-            .filter(|id| {
-                lead.rel_path(*id)
-                    .is_some_and(|path| corpus.contains(path.as_path()))
-            })
+            .filter(|&id| lead.rel_path(id).is_some_and(|path| corpus.contains(path)))
             .collect()
     }
 
