@@ -208,26 +208,28 @@ impl Searcher {
         event_collection: EventCollection,
     ) -> crate::Result<(Vec<SearchOutcome>, usize, u64)> {
         let options = self.options();
-        let outcomes: crate::Result<Vec<SearchOutcome>> = indexed
+        let outcomes: crate::Result<Vec<Option<SearchOutcome>>> = indexed
             .file_ids()
             .par_iter()
-            .filter_map(|&id| {
-                let candidate =
-                    indexed
-                        .indexes
-                        .hydrate_row(id, indexed.filter, indexed.admission)?;
-                Some(
-                    conversion
-                        .open(SearchFile::Hydrated(candidate))
-                        .map(|input| {
-                            let mut grep = SearchTask::discovered_searcher(options, mode);
-                            SearchTask::new(&self.matcher, options, mode, event_collection, &input)
-                                .execute(&mut grep)
-                        }),
-                )
-            })
+            .map_init(
+                || SearchTask::discovered_searcher(options, mode),
+                |grep, &id| {
+                    let Some(candidate) =
+                        indexed
+                            .indexes
+                            .hydrate_row(id, indexed.filter, indexed.admission)
+                    else {
+                        return Ok(None);
+                    };
+                    let input = conversion.open(SearchFile::Hydrated(candidate))?;
+                    Ok(Some(
+                        SearchTask::new(&self.matcher, options, mode, event_collection, &input)
+                            .execute(grep),
+                    ))
+                },
+            )
             .collect();
-        let outcomes = outcomes?;
+        let outcomes: Vec<SearchOutcome> = outcomes?.into_iter().flatten().collect();
         let searched = outcomes.len();
         let bytes = outcomes.iter().fold(0u64, |acc, outcome| {
             acc.saturating_add(outcome.bytes_searched)
