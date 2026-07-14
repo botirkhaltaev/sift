@@ -133,8 +133,9 @@ fn high_level_grep_search_resolves_candidates_and_reports_matches() {
 
     assert!(report.matched);
     assert!(report.selected);
-    assert!(!report.matches.is_empty());
+    assert!(report.matches().next().is_some());
     assert!(!report.hit_paths.is_empty());
+
     assert!(report.stats.is_some());
 }
 
@@ -175,7 +176,7 @@ fn high_level_grep_stream_emits_events_without_collecting_matches() {
         .expect("grep stream");
 
     assert!(report.matched);
-    assert!(!report.matches.is_empty());
+    assert!(report.matches().next().is_some());
     assert!(sink.matches > 0);
 }
 
@@ -370,6 +371,7 @@ fn grep_finds_match_in_stdin_stream() {
 
     let report = searcher.search(inputs, StatsMode::Off).expect("grep run");
     assert!(report.matched());
-    assert_eq!(report.matches.len(), 1);
-    assert!(report.matches[0].text.contains("needle"));
+    let line_hits: Vec<_> = report.matches().collect();
+    assert_eq!(line_hits.len(), 1);
+    assert!(line_hits[0].1.text.contains("needle"));
 }

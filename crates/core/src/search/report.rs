@@ -9,9 +9,9 @@ pub struct Report {
     pub matched: bool,
     /// Whether this search mode selected any file/result.
     pub selected: bool,
-    pub matches: Vec<Match>,
     /// Unique rel-paths with at least one pattern hit.
     pub hit_paths: Vec<PathBuf>,
+    /// Per-file outcomes; line hits live on [`FileReport::matches`].
     pub files: Vec<FileReport>,
     pub stats: Option<Stats>,
 }
@@ -25,6 +25,8 @@ pub struct FileReport {
     pub match_spans: usize,
     pub bytes_searched: u64,
     pub binary_byte_offset: Option<u64>,
+    /// Line/spans collected for this file (path owned once on `path`).
+    pub matches: Vec<Match>,
 }
 
 #[derive(Clone, Copy)]
@@ -41,7 +43,6 @@ impl Report {
         Self {
             matched: false,
             selected: false,
-            matches: Vec::new(),
             hit_paths: Vec::new(),
             files: Vec::new(),
             stats: stats.collect().then(Stats::default),
@@ -49,7 +50,6 @@ impl Report {
     }
 
     pub(crate) fn from_outcomes(mut outcomes: Vec<SearchOutcome>, summary: SearchSummary) -> Self {
-        let mut line_matches = Vec::new();
         let mut hit_paths = Vec::new();
         let mut matched = false;
         let mut selected = false;
@@ -71,15 +71,15 @@ impl Report {
             match_count += outcome.matches.len();
             match_spans += outcome.match_spans;
             files.push(FileReport {
-                path: outcome.path.clone(),
+                path: std::mem::take(&mut outcome.path),
                 matched: outcome.matched,
                 selected: file_selected,
                 line_matches: outcome.line_matches,
                 match_spans: outcome.match_spans,
                 bytes_searched: outcome.bytes_searched,
                 binary_byte_offset: outcome.binary_byte_offset,
+                matches: std::mem::take(&mut outcome.matches),
             });
-            line_matches.append(&mut outcome.matches);
         }
 
         let stats = summary.stats.collect().then_some(Stats {
@@ -100,7 +100,6 @@ impl Report {
         Self {
             matched,
             selected,
-            matches: line_matches,
             hit_paths,
             files,
             stats,
@@ -120,5 +119,12 @@ impl Report {
     #[must_use]
     pub const fn stats(&self) -> Option<&Stats> {
         self.stats.as_ref()
+    }
+
+    /// Flatten nested file hits (for callers that want a linear view).
+    pub fn matches(&self) -> impl Iterator<Item = (&std::path::Path, &Match)> {
+        self.files
+            .iter()
+            .flat_map(|file| file.matches.iter().map(move |m| (file.path.as_path(), m)))
     }
 }
