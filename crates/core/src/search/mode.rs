@@ -14,7 +14,32 @@ pub enum SearchMode {
 }
 
 impl SearchMode {
-    pub(crate) const fn selects(self, matched: bool) -> bool {
+    /// Whether this file receives a row in the mode-shaped [`crate::search::Listing`].
+    pub(crate) const fn admits(self, matched: bool) -> bool {
+        match self {
+            Self::FilesWithoutMatch => !matched,
+            Self::CountLines {
+                zeros: ZeroCounts::Include,
+            }
+            | Self::CountMatches {
+                zeros: ZeroCounts::Include,
+            } => true,
+            Self::Lines
+            | Self::Matches
+            | Self::CountLines {
+                zeros: ZeroCounts::Omit,
+            }
+            | Self::CountMatches {
+                zeros: ZeroCounts::Omit,
+            }
+            | Self::FilesWithMatches => matched,
+        }
+    }
+
+    /// Whether `FirstMatch` / quiet should stop after this file.
+    ///
+    /// Independent of Include-zero listing admission.
+    pub(crate) const fn settles(self, matched: bool) -> bool {
         match self {
             Self::FilesWithoutMatch => !matched,
             Self::Lines

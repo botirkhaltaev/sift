@@ -1,5 +1,6 @@
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchEvent {
@@ -13,12 +14,12 @@ pub enum SearchEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEvent {
-    pub path: PathBuf,
+    pub path: Arc<Path>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchEvent {
-    pub path: PathBuf,
+    pub path: Arc<Path>,
     pub line_number: Option<u64>,
     pub absolute_byte_offset: Option<u64>,
     pub bytes: Vec<u8>,
@@ -29,7 +30,7 @@ pub struct MatchEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextEvent {
-    pub path: PathBuf,
+    pub path: Arc<Path>,
     pub kind: ContextKind,
     pub line_number: Option<u64>,
     pub absolute_byte_offset: u64,
@@ -45,7 +46,7 @@ pub enum ContextKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryEvent {
-    pub path: PathBuf,
+    pub path: Arc<Path>,
     pub absolute_byte_offset: u64,
     pub explicit: bool,
 }

@@ -1,9 +1,18 @@
 use std::time::Duration;
 
+/// Aggregate match totals — typed so path-only modes are not a zero sentinel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MatchTotals {
+    #[default]
+    None,
+    Lines(usize),
+    Spans(usize),
+}
+
 /// Search execution statistics.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Stats {
-    pub matches: usize,
+    pub matches: MatchTotals,
     pub files_with_matches: usize,
     pub files_searched: usize,
     pub bytes_printed: u64,

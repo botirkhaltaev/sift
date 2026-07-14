@@ -1,26 +1,20 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use sift_core::search::{
-    BinaryEvent, BinaryMode, ContextEvent, ContextKind, FileEvent, MatchEvent, Report, SearchEvent,
-    SearchSink,
+    BinaryEvent, BinaryMode, ContextEvent, ContextKind, FileEvent, Listing, MatchEvent, Report,
+    SearchEvent, SearchSink,
 };
 
-use crate::format::collection::PrintExtras;
 use crate::format::output::format::ColumnOverflow;
-use crate::format::output::mode::{OutputEmission, PrintMode, ZeroCountMode};
+use crate::format::output::mode::{OutputEmission, PrintMode};
 use crate::format::output::style::{
     ColorOutput, FilenameMode, LineStyleFlags, PrintSeparators, RecordTerminator,
 };
 use crate::format::output::{PrintFormat, PrintSpec};
-
-#[derive(Clone)]
-struct DisplayPath {
-    text: String,
-    hit: Option<PathBuf>,
-}
 
 #[derive(Default)]
 struct FileJsonStats {
@@ -32,23 +26,20 @@ struct FileJsonStats {
 pub(super) struct EventRenderer<'a> {
     output: PrintSpec,
     separators: &'a PrintSeparators,
-    display: HashMap<PathBuf, DisplayPath>,
-    extras: PrintExtras,
     started: Instant,
     binary_mode: BinaryMode,
     context_requested: bool,
     bytes: Vec<u8>,
-    json_stats: HashMap<PathBuf, FileJsonStats>,
-    headings: HashSet<PathBuf>,
-    hit_paths: Vec<PathBuf>,
-    binary_paths: HashSet<PathBuf>,
+    json_stats: HashMap<Arc<Path>, FileJsonStats>,
+    headings: HashSet<Arc<Path>>,
+    binary_paths: HashSet<Arc<Path>>,
 }
 
 impl<'a> EventRenderer<'a> {
     pub(super) fn new(
         output: PrintSpec,
         separators: &'a PrintSeparators,
-        extras: PrintExtras,
+        _extras: crate::format::collection::PrintExtras,
         started: Instant,
         binary_mode: BinaryMode,
         context_requested: bool,
@@ -56,22 +47,18 @@ impl<'a> EventRenderer<'a> {
         Self {
             output,
             separators,
-            display: HashMap::new(),
-            extras,
             started,
             binary_mode,
             context_requested,
             bytes: Vec::new(),
             json_stats: HashMap::new(),
             headings: HashSet::new(),
-            hit_paths: Vec::new(),
             binary_paths: HashSet::new(),
         }
     }
 
     pub(super) fn finish(&mut self, report: &mut Report) -> sift_core::Result<()> {
         if matches!(self.output.emission, OutputEmission::Quiet) {
-            report.hit_paths.clone_from(&self.hit_paths);
             return Ok(());
         }
         if matches!(self.output.format, PrintFormat::Json) {
@@ -84,47 +71,28 @@ impl<'a> EventRenderer<'a> {
         if let Some(stats) = report.stats.as_mut() {
             stats.bytes_printed = bytes_printed;
         }
-        if !self.hit_paths.is_empty() {
-            report.hit_paths.clone_from(&self.hit_paths);
-        }
         Ok(())
     }
 
     fn render_summary_modes(&mut self, report: &Report) {
-        match self.output.mode {
-            PrintMode::Standard | PrintMode::OnlyMatching => {}
-            PrintMode::Count => {
-                for file in &report.files {
-                    if file.line_matches > 0
-                        || matches!(self.output.include_zero, ZeroCountMode::Include)
-                    {
-                        self.write_path_record(&file.path, &file.line_matches.to_string());
-                    }
+        match (&self.output.mode, &report.listed) {
+            (PrintMode::Count, Listing::LineCounts(counts)) => {
+                for count in counts {
+                    self.write_path_record(count.file.path.as_ref(), &count.lines.to_string());
                 }
             }
-            PrintMode::CountMatches => {
-                for file in &report.files {
-                    if file.match_spans > 0
-                        || matches!(self.output.include_zero, ZeroCountMode::Include)
-                    {
-                        self.write_path_record(&file.path, &file.match_spans.to_string());
-                    }
+            (PrintMode::CountMatches, Listing::SpanCounts(counts)) => {
+                for count in counts {
+                    self.write_path_record(count.file.path.as_ref(), &count.spans.to_string());
                 }
             }
-            PrintMode::FilesWithMatches => {
-                for file in &report.files {
-                    if file.matched {
-                        self.write_path_only(&file.path);
-                    }
+            (PrintMode::FilesWithMatches, Listing::MatchingPaths(files))
+            | (PrintMode::FilesWithoutMatch, Listing::NonMatchingPaths(files)) => {
+                for file in files {
+                    self.write_path_only(file.path.as_ref());
                 }
             }
-            PrintMode::FilesWithoutMatch => {
-                for file in &report.files {
-                    if !file.matched {
-                        self.write_path_only(&file.path);
-                    }
-                }
-            }
+            _ => {}
         }
     }
 
@@ -143,8 +111,8 @@ impl<'a> EventRenderer<'a> {
         {
             return;
         }
-        if self.output.lines.heading() && self.headings.insert(event.path.clone()) {
-            self.write_display_path(&event.path);
+        if self.output.lines.heading() && self.headings.insert(Arc::clone(&event.path)) {
+            self.write_display_path(event.path.as_ref());
             self.terminator();
         }
         if matches!(self.output.mode, PrintMode::OnlyMatching) {
@@ -182,7 +150,10 @@ impl<'a> EventRenderer<'a> {
         ) {
             return;
         }
-        self.write_display_prefix(&event.path, &self.separators.field_context_separator);
+        self.write_display_prefix(
+            event.path.as_ref(),
+            &self.separators.field_context_separator,
+        );
         if self.line_numbers()
             && let Some(line) = event.line_number
         {
@@ -200,7 +171,7 @@ impl<'a> EventRenderer<'a> {
     }
 
     fn write_prefix(&mut self, event: &MatchEvent, column_offset: usize) {
-        self.write_display_prefix(&event.path, &self.separators.field_match_separator);
+        self.write_display_prefix(event.path.as_ref(), &self.separators.field_match_separator);
         if self.line_numbers()
             && let Some(line) = event.line_number
         {
@@ -220,7 +191,7 @@ impl<'a> EventRenderer<'a> {
         }
     }
 
-    fn write_display_prefix(&mut self, path: &PathBuf, separator: &[u8]) {
+    fn write_display_prefix(&mut self, path: &Path, separator: &[u8]) {
         if self.output.lines.heading()
             || matches!(self.output.lines.filename_mode, FilenameMode::Never)
         {
@@ -230,15 +201,10 @@ impl<'a> EventRenderer<'a> {
         self.bytes.extend(separator);
     }
 
-    fn write_display_path(&mut self, path: &PathBuf) {
-        let display = self.display.get(path).map_or_else(
-            || {
-                apply_path_separator(
-                    path.to_string_lossy().to_string(),
-                    self.output.records.path_separator,
-                )
-            },
-            |display| display.text.clone(),
+    fn write_display_path(&mut self, path: &Path) {
+        let display = apply_path_separator(
+            path.to_string_lossy().to_string(),
+            self.output.records.path_separator,
         );
         self.write_hyperlink_start(display.as_str());
         if let Some(color) = self.ansi_for(self.output.records.colors.as_grep().path()) {
@@ -337,12 +303,12 @@ impl<'a> EventRenderer<'a> {
         self.output.lines.line_number() || self.context_requested
     }
 
-    fn write_path_only(&mut self, path: &PathBuf) {
+    fn write_path_only(&mut self, path: &Path) {
         self.write_display_path(path);
         self.terminator();
     }
 
-    fn write_path_record(&mut self, path: &PathBuf, value: &str) {
+    fn write_path_record(&mut self, path: &Path, value: &str) {
         if matches!(self.output.lines.filename_mode, FilenameMode::Never) {
         } else {
             self.write_display_path(path);
@@ -357,7 +323,7 @@ impl<'a> EventRenderer<'a> {
     }
 
     fn write_binary(&mut self, event: &BinaryEvent) {
-        self.binary_paths.insert(event.path.clone());
+        self.binary_paths.insert(Arc::clone(&event.path));
         if !matches!(
             self.output.mode,
             PrintMode::Standard | PrintMode::OnlyMatching
@@ -370,7 +336,7 @@ impl<'a> EventRenderer<'a> {
         if matches!(self.binary_mode, BinaryMode::Quit) && !event.explicit {
             return;
         }
-        self.write_display_path(&event.path);
+        self.write_display_path(event.path.as_ref());
         self.bytes.extend(b": binary file matches");
         self.terminator();
         self.bytes.extend(
@@ -402,7 +368,10 @@ impl<'a> EventRenderer<'a> {
                     "human": format!("{:.6}s", elapsed.as_secs_f64()),
                 },
                 "stats": {
-                    "matches": stats.map_or(0, |stats| stats.matches),
+                    "matches": stats.map_or(0, |stats| match stats.matches {
+                        sift_core::MatchTotals::None => 0,
+                        sift_core::MatchTotals::Lines(n) | sift_core::MatchTotals::Spans(n) => n,
+                    }),
                     "bytes_searched": stats.map_or(0, |stats| stats.bytes_searched),
                 }
             }
@@ -443,7 +412,7 @@ impl EventRenderer<'_> {
         if matches!(self.output.format, PrintFormat::Json) {
             let value = serde_json::json!({
                 "type": "begin",
-                "data": { "path": { "text": self.display_text(&event.path) } }
+                "data": { "path": { "text": Self::display_text(&event.path) } }
             });
             self.write_json(&value)?;
         }
@@ -451,15 +420,8 @@ impl EventRenderer<'_> {
     }
 
     fn matched(&mut self, event: &MatchEvent) -> sift_core::Result<()> {
-        if self.extras.collect_hits()
-            && let Some(display) = self.display.get(&event.path)
-            && let Some(hit) = display.hit.as_ref()
-            && !self.hit_paths.contains(hit)
-        {
-            self.hit_paths.push(hit.clone());
-        }
         if matches!(self.output.format, PrintFormat::Json) {
-            let stats = self.json_stats.entry(event.path.clone()).or_default();
+            let stats = self.json_stats.entry(Arc::clone(&event.path)).or_default();
             stats.matches += event.ranges.len() as u64;
             stats.matched_lines += 1;
             let submatches: Vec<_> = event
@@ -476,7 +438,7 @@ impl EventRenderer<'_> {
             let value = serde_json::json!({
                 "type": "match",
                 "data": {
-                    "path": { "text": self.display_text(&event.path) },
+                    "path": { "text": Self::display_text(&event.path) },
                     "lines": { "text": String::from_utf8_lossy(&event.bytes).to_string() },
                     "line_number": event.line_number,
                     "absolute_offset": event.absolute_byte_offset,
@@ -500,7 +462,7 @@ impl EventRenderer<'_> {
             let value = serde_json::json!({
                 "type": "context",
                 "data": {
-                    "path": { "text": self.display_text(&event.path) },
+                    "path": { "text": Self::display_text(&event.path) },
                     "lines": { "text": String::from_utf8_lossy(&event.bytes).to_string() },
                     "line_number": event.line_number,
                     "absolute_offset": event.absolute_byte_offset,
@@ -521,7 +483,7 @@ impl EventRenderer<'_> {
             let value = serde_json::json!({
                 "type": "end",
                 "data": {
-                    "path": { "text": self.display_text(&event.path) },
+                    "path": { "text": Self::display_text(&event.path) },
                     "stats": {
                         "matches": stats.matches,
                         "matched_lines": stats.matched_lines,
@@ -544,11 +506,8 @@ impl EventRenderer<'_> {
         Ok(())
     }
 
-    fn display_text(&self, path: &PathBuf) -> String {
-        self.display.get(path).map_or_else(
-            || path.to_string_lossy().to_string(),
-            |display| display.text.clone(),
-        )
+    fn display_text(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
     }
 }
 

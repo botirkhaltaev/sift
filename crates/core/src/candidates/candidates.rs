@@ -2,47 +2,94 @@ use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
 use crate::index::Indexes;
 
-/// Corpus files ready for search. The index arm is lazy; call [`into_vec`](Self::into_vec) to
-/// materialize all.
+/// Index-narrowed file ids with the filter used when each row is opened.
+pub struct IndexedCandidates<'a> {
+    pub(crate) indexes: &'a Indexes,
+    pub(crate) file_ids: Vec<u32>,
+    pub(crate) filter: &'a CandidateFilter,
+    pub(crate) admission: FilterAdmission,
+}
+
+/// Corpus files ready for search.
+///
+/// [`Resolved`](Self::Resolved) paths are already materialized. [`Indexed`](Self::Indexed)
+/// keeps file ids until the searcher opens each row. [`Mixed`](Self::Mixed) pairs deferred
+/// index hits with already-resolved unindexed walk paths (lazy snapshots).
 pub enum Candidates<'a> {
-    /// Walk, merge, or sorted resolve: paths already materialized.
-    Materialized(Vec<Candidate>),
-    /// Index-narrowed file ids; iteration materializes one file at a time.
-    Index {
-        indexes: &'a Indexes,
-        file_ids: Vec<u32>,
-        filter: &'a CandidateFilter,
-        admission: FilterAdmission,
+    /// Walk, merge residual, or sorted resolve: paths already materialized.
+    Resolved(Vec<Candidate>),
+    /// Index-narrowed file ids; search hydrates one file at a time.
+    Indexed(IndexedCandidates<'a>),
+    /// Lazy snapshot: index hits stay as ids; unindexed walk paths are resolved.
+    Mixed {
+        indexed: IndexedCandidates<'a>,
+        unindexed: Vec<Candidate>,
     },
 }
 
-/// Iterator over resolved candidates.
+/// Iterator over resolved candidates (hydrates index rows as it goes).
 pub enum IntoIter<'a> {
-    Materialized(std::vec::IntoIter<Candidate>),
-    Index {
+    Resolved(std::vec::IntoIter<Candidate>),
+    Indexed {
         ids: std::vec::IntoIter<u32>,
         indexes: &'a Indexes,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     },
+    Mixed {
+        ids: std::vec::IntoIter<u32>,
+        indexes: &'a Indexes,
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+        unindexed: std::vec::IntoIter<Candidate>,
+    },
 }
 
-impl<'a> Candidates<'a> {
-    pub(crate) const fn empty() -> Self {
-        Self::Materialized(Vec::new())
-    }
-
-    pub(crate) const fn index(
+impl<'a> IndexedCandidates<'a> {
+    pub(crate) const fn new(
         indexes: &'a Indexes,
         file_ids: Vec<u32>,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> Self {
-        Self::Index {
+        Self {
             indexes,
             file_ids,
             filter,
             admission,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn file_ids(&self) -> &[u32] {
+        &self.file_ids
+    }
+}
+
+impl<'a> Candidates<'a> {
+    pub(crate) const fn empty() -> Self {
+        Self::Resolved(Vec::new())
+    }
+
+    pub(crate) const fn indexed(
+        indexes: &'a Indexes,
+        file_ids: Vec<u32>,
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+    ) -> Self {
+        Self::Indexed(IndexedCandidates::new(indexes, file_ids, filter, admission))
+    }
+
+    pub(crate) const fn mixed(
+        indexes: &'a Indexes,
+        file_ids: Vec<u32>,
+        filter: &'a CandidateFilter,
+        admission: FilterAdmission,
+        unindexed: Vec<Candidate>,
+    ) -> Self {
+        Self::Mixed {
+            indexed: IndexedCandidates::new(indexes, file_ids, filter, admission),
+            unindexed,
         }
     }
 
@@ -53,8 +100,11 @@ impl<'a> Candidates<'a> {
     #[must_use = "candidate emptiness affects whether search runs"]
     pub const fn is_empty(&self) -> bool {
         match self {
-            Self::Materialized(items) => items.is_empty(),
-            Self::Index { file_ids, .. } => file_ids.is_empty(),
+            Self::Resolved(items) => items.is_empty(),
+            Self::Indexed(indexed) => indexed.file_ids.is_empty(),
+            Self::Mixed { indexed, unindexed } => {
+                indexed.file_ids.is_empty() && unindexed.is_empty()
+            }
         }
     }
 
@@ -62,20 +112,31 @@ impl<'a> Candidates<'a> {
     #[must_use = "materialized candidates are consumed by search"]
     pub fn into_vec(self) -> Vec<Candidate> {
         match self {
-            Self::Materialized(items) => items,
-            Self::Index {
-                indexes,
-                file_ids,
-                filter,
-                admission,
-            } => indexes.hydrate_rows(&file_ids, filter, admission),
+            Self::Resolved(items) => items,
+            Self::Indexed(indexed) => {
+                indexed
+                    .indexes
+                    .hydrate_rows(&indexed.file_ids, indexed.filter, indexed.admission)
+            }
+            Self::Mixed {
+                indexed,
+                mut unindexed,
+            } => {
+                let mut items = indexed.indexes.hydrate_rows(
+                    &indexed.file_ids,
+                    indexed.filter,
+                    indexed.admission,
+                );
+                items.append(&mut unindexed);
+                items
+            }
         }
     }
 }
 
 impl From<Vec<Candidate>> for Candidates<'_> {
     fn from(items: Vec<Candidate>) -> Self {
-        Self::Materialized(items)
+        Self::Resolved(items)
     }
 }
 
@@ -90,25 +151,52 @@ impl Iterator for IntoIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Materialized(iter) => iter.next(),
-            Self::Index {
+            Self::Resolved(iter) => iter.next(),
+            Self::Indexed {
                 ids,
                 indexes,
                 filter,
                 admission,
-            } => loop {
-                let id = ids.next()?;
-                if let Some(candidate) = indexes.hydrate_row(id, filter, *admission) {
-                    return Some(candidate);
-                }
-            },
+            } => next_hydrated(ids, indexes, filter, *admission),
+            Self::Mixed {
+                ids,
+                indexes,
+                filter,
+                admission,
+                unindexed,
+            } => next_hydrated(ids, indexes, filter, *admission).or_else(|| unindexed.next()),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
-            Self::Materialized(iter) => iter.size_hint(),
-            Self::Index { ids, .. } => (0, ids.size_hint().1),
+            Self::Resolved(iter) => iter.size_hint(),
+            Self::Indexed { ids, .. } => (0, ids.size_hint().1),
+            Self::Mixed { ids, unindexed, .. } => {
+                let (unindexed_lo, unindexed_hi) = unindexed.size_hint();
+                let (_, ids_hi) = ids.size_hint();
+                (
+                    unindexed_lo,
+                    match (ids_hi, unindexed_hi) {
+                        (Some(a), Some(b)) => Some(a.saturating_add(b)),
+                        _ => None,
+                    },
+                )
+            }
+        }
+    }
+}
+
+fn next_hydrated(
+    ids: &mut std::vec::IntoIter<u32>,
+    indexes: &Indexes,
+    filter: &CandidateFilter,
+    admission: FilterAdmission,
+) -> Option<Candidate> {
+    loop {
+        let id = ids.next()?;
+        if let Some(candidate) = indexes.hydrate_row(id, filter, admission) {
+            return Some(candidate);
         }
     }
 }
@@ -119,17 +207,19 @@ impl<'a> IntoIterator for Candidates<'a> {
 
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            Self::Materialized(items) => IntoIter::Materialized(items.into_iter()),
-            Self::Index {
-                indexes,
-                file_ids,
-                filter,
-                admission,
-            } => IntoIter::Index {
-                ids: file_ids.into_iter(),
-                indexes,
-                filter,
-                admission,
+            Self::Resolved(items) => IntoIter::Resolved(items.into_iter()),
+            Self::Indexed(indexed) => IntoIter::Indexed {
+                ids: indexed.file_ids.into_iter(),
+                indexes: indexed.indexes,
+                filter: indexed.filter,
+                admission: indexed.admission,
+            },
+            Self::Mixed { indexed, unindexed } => IntoIter::Mixed {
+                ids: indexed.file_ids.into_iter(),
+                indexes: indexed.indexes,
+                filter: indexed.filter,
+                admission: indexed.admission,
+                unindexed: unindexed.into_iter(),
             },
         }
     }

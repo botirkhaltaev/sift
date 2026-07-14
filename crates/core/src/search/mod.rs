@@ -13,9 +13,10 @@ mod task;
 pub use event::{
     BinaryEvent, ContextEvent, ContextKind, FileEvent, MatchEvent, SearchEvent, SearchSink,
 };
-pub use hit::Match;
+pub use hit::{LineCount, ListedFile, Listing, Match, MatchedFile, SpanCount};
 pub use input::{
-    CandidateTransform, HitPath, Input, InputConversion, InputIdentity, Inputs, SearchInputs,
+    CandidateTransform, HitPath, Input, InputConversion, InputIdentity, Inputs, SearchFile,
+    SearchInputs,
 };
 pub(crate) use matcher::PrefilterCompatibility;
 pub use mode::{SearchMode, ZeroCounts};
@@ -23,8 +24,7 @@ pub use options::{
     BinaryMode, CaseMode, InputEncoding, RegexEngine, SearchBound, SearchFlags, SearchOptions,
 };
 pub use query::{SearchQuery, SearchQueryBuilder};
-pub use report::{FileReport, Report};
+pub use report::Report;
 pub(crate) use searcher::EventEmission;
 pub use searcher::Searcher;
-pub use stats::{Stats, StatsMode};
-pub(crate) use task::SearchOutcome;
+pub use stats::{MatchTotals, Stats, StatsMode};

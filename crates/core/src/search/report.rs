@@ -1,30 +1,14 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::search::{Match, SearchMode, SearchOutcome, Stats, StatsMode};
+use crate::search::hit::Listing;
+use crate::search::mode::SearchMode;
+use crate::search::stats::{MatchTotals, Stats, StatsMode};
+use crate::search::task::FileSearch;
 
 /// Result of a search run.
 pub struct Report {
-    /// Whether any regex match was found.
-    pub matched: bool,
-    /// Whether this search mode selected any file/result.
-    pub selected: bool,
-    pub matches: Vec<Match>,
-    /// Unique rel-paths with at least one pattern hit.
-    pub hit_paths: Vec<PathBuf>,
-    pub files: Vec<FileReport>,
+    pub listed: Listing,
     pub stats: Option<Stats>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileReport {
-    pub path: PathBuf,
-    pub matched: bool,
-    pub selected: bool,
-    pub line_matches: usize,
-    pub match_spans: usize,
-    pub bytes_searched: u64,
-    pub binary_byte_offset: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -37,58 +21,39 @@ pub(crate) struct SearchSummary {
 }
 
 impl Report {
-    pub(crate) fn empty(stats: StatsMode) -> Self {
+    pub(crate) fn empty(stats: StatsMode, mode: SearchMode) -> Self {
         Self {
-            matched: false,
-            selected: false,
-            matches: Vec::new(),
-            hit_paths: Vec::new(),
-            files: Vec::new(),
+            listed: Listing::empty(mode),
             stats: stats.collect().then(Stats::default),
         }
     }
 
-    pub(crate) fn from_outcomes(mut outcomes: Vec<SearchOutcome>, summary: SearchSummary) -> Self {
-        let mut line_matches = Vec::new();
-        let mut hit_paths = Vec::new();
-        let mut matched = false;
-        let mut selected = false;
-        let mut match_count = 0usize;
-        let mut match_spans = 0usize;
+    pub(crate) fn from_searches(searches: Vec<FileSearch>, summary: SearchSummary) -> Self {
+        let mut listed = Listing::empty(summary.mode);
         let mut files_with_matches = 0usize;
-        let mut files = Vec::with_capacity(outcomes.len());
+        let mut match_lines = 0usize;
+        let mut match_spans = 0usize;
 
-        for outcome in &mut outcomes {
-            matched |= outcome.matched;
-            let file_selected = summary.mode.selects(outcome.matched);
-            selected |= file_selected;
-            if outcome.matched {
+        for search in searches {
+            if search.matched {
                 files_with_matches += 1;
-                if let Some(path) = outcome.hit_path.take() {
-                    hit_paths.push(path);
-                }
             }
-            match_count += outcome.matches.len();
-            match_spans += outcome.match_spans;
-            files.push(FileReport {
-                path: outcome.path.clone(),
-                matched: outcome.matched,
-                selected: file_selected,
-                line_matches: outcome.line_matches,
-                match_spans: outcome.match_spans,
-                bytes_searched: outcome.bytes_searched,
-                binary_byte_offset: outcome.binary_byte_offset,
-            });
-            line_matches.append(&mut outcome.matches);
+            match_lines = match_lines.saturating_add(search.line_matches);
+            match_spans = match_spans.saturating_add(search.match_spans);
+            if let Some(row) = search.row {
+                listed.push_row(row);
+            }
         }
 
         let stats = summary.stats.collect().then_some(Stats {
             matches: match summary.mode {
-                SearchMode::CountMatches { .. } | SearchMode::Matches => match_spans,
-                SearchMode::Lines
-                | SearchMode::CountLines { .. }
-                | SearchMode::FilesWithMatches
-                | SearchMode::FilesWithoutMatch => match_count,
+                SearchMode::FilesWithMatches | SearchMode::FilesWithoutMatch => MatchTotals::None,
+                SearchMode::CountMatches { .. } | SearchMode::Matches => {
+                    MatchTotals::Spans(match_spans)
+                }
+                SearchMode::Lines | SearchMode::CountLines { .. } => {
+                    MatchTotals::Lines(match_lines)
+                }
             },
             files_with_matches,
             files_searched: summary.inputs_len,
@@ -97,24 +62,21 @@ impl Report {
             elapsed: summary.elapsed,
         });
 
-        Self {
-            matched,
-            selected,
-            matches: line_matches,
-            hit_paths,
-            files,
-            stats,
+        Self { listed, stats }
+    }
+
+    /// Whether the search should exit successfully (ripgrep-compatible).
+    ///
+    /// Not the same as [`Listing::is_empty`]: count `--include-zero` may list
+    /// zeros while this returns false when no pattern hits occurred.
+    #[must_use]
+    pub fn found(&self) -> bool {
+        match &self.listed {
+            Listing::MatchingPaths(v) | Listing::NonMatchingPaths(v) => !v.is_empty(),
+            Listing::Lines(v) | Listing::Spans(v) => !v.is_empty(),
+            Listing::LineCounts(v) => v.iter().any(|c| c.lines > 0),
+            Listing::SpanCounts(v) => v.iter().any(|c| c.spans > 0),
         }
-    }
-
-    #[must_use]
-    pub const fn matched(&self) -> bool {
-        self.matched
-    }
-
-    #[must_use]
-    pub const fn selected(&self) -> bool {
-        self.selected
     }
 
     #[must_use]

@@ -7,6 +7,6 @@ pub mod source;
 #[path = "candidates.rs"]
 mod collection;
 
-pub use collection::Candidates;
+pub use collection::{Candidates, IndexedCandidates};
 pub use scope::{IndexNarrowing, ScanScope, SnapshotFreshness};
 pub use source::CandidateSource;
