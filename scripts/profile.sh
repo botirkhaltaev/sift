@@ -28,7 +28,7 @@
 #
 # Environment:
 #   CRITERION_ARGS   Criterion flags (default: short profile run)
-#   PROFILE_TOOLS    comma list subset of tools (default: all)
+#   PROFILE_TOOLS    comma list (default: heaptrack,hyperfine,perf)
 #   PERF             override path to perf binary
 #   PERF_EVENT       override event (default: auto task-clock|cpu-clock)
 #
@@ -41,7 +41,8 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 CRITERION_ARGS="${CRITERION_ARGS:---warm-up-time 2 --measurement-time 5 --sample-size 20 --noplot}"
-PROFILE_TOOLS="${PROFILE_TOOLS:-heaptrack,hyperfine,perf,samply,flamegraph,callgrind,massif,cachegrind}"
+# Default stays focused on signal; opt into samply/flamegraph/valgrind via PROFILE_TOOLS.
+PROFILE_TOOLS="${PROFILE_TOOLS:-heaptrack,hyperfine,perf}"
 
 usage() {
   cat <<'EOF'
@@ -68,7 +69,7 @@ Default SUITE:
   candidates all_indexed_complete
   grep   full_scan_fallback
 
-PROFILE_TOOLS (comma-separated):
+PROFILE_TOOLS (comma-separated; default heaptrack,hyperfine,perf):
   heaptrack,hyperfine,perf,samply,flamegraph,callgrind,massif,cachegrind
 EOF
 }
@@ -493,15 +494,9 @@ run_flamegraph() {
   if [[ -f "$out_dir/perf.data" ]] && have_tool flamegraph; then
     "$PERF_BIN" script -i "$out_dir/perf.data" 2>/dev/null \
       | flamegraph >"$svg" 2>"$out_dir/flamegraph.log" || true
-  elif have_tool cargo-flamegraph; then
-    # Fallback: invoke cargo-flamegraph with PERF env and period mode.
-    local crate_args
-    crate_args=$(bench_crate_args "$(basename "$(dirname "$bin")" 2>/dev/null || echo grep)")
-    # Prefer direct binary to avoid re-resolving package name mistakes.
-    # shellcheck disable=SC2086
-    CARGO_PROFILE_RELEASE_DEBUG=true PERF="$PERF_BIN" \
-      cargo flamegraph --output "$svg" -- "$bin" --bench "$full_name" $CRITERION_ARGS \
-      2>&1 | tee "$out_dir/flamegraph.log" || true
+  else
+    echo "flamegraph: need perf.data from a prior perf run and flamegraph on PATH" \
+      >"$out_dir/flamegraph.log"
   fi
   {
     echo ""
@@ -510,7 +505,7 @@ run_flamegraph() {
     if [[ -f "$svg" ]]; then
       echo "SVG: \`$svg\`"
     else
-      echo "not produced (see flamegraph.log)"
+      echo "not produced (see flamegraph.log); enable \`perf\` in PROFILE_TOOLS first"
     fi
   } >>"$out_dir/summary.md"
 }
@@ -656,6 +651,21 @@ run_ab() {
   local target="$3"
   local filter="$4"
   local out_base="${5:-.sift-profile/ab}"
+
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "error: working tree dirty; commit or stash before --ab" >&2
+    exit 1
+  fi
+
+  local restore_ref
+  restore_ref=$(git rev-parse --abbrev-ref HEAD)
+  if [[ "$restore_ref" == "HEAD" ]]; then
+    restore_ref=$(git rev-parse HEAD)
+  fi
+  cleanup_ab() {
+    git checkout -q "$restore_ref" || true
+  }
+  trap cleanup_ab EXIT
 
   mkdir -p "$out_base"
   local report="$out_base/ab-report.md"
