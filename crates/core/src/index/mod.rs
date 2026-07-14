@@ -79,4 +79,13 @@ mod tests {
         assert!(!StoreMeta::path(&sift_dir).exists());
         assert!(!sift_dir.exists());
     }
+
+    #[test]
+    fn indexes_load_errors_on_dangling_current() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let sift_dir = tmp.path().join(".sift");
+        fs::create_dir_all(&sift_dir).expect("create sift dir");
+        fs::write(sift_dir.join("CURRENT"), "missing-snapshot\n").expect("write CURRENT");
+        assert!(Indexes::load(&sift_dir).is_err());
+    }
 }

@@ -60,14 +60,19 @@ impl Indexes {
     /// Load an existing store for search. Does not create meta or directories.
     ///
     /// When no store exists, returns an empty (unusable) indexes handle so
-    /// callers can fall back to walking the corpus.
+    /// callers can fall back to walking the corpus. A dangling `CURRENT`
+    /// without meta is treated as a broken store and returns an error.
     ///
     /// # Errors
     ///
-    /// Returns an error if metadata exists but cannot be read, or the current
-    /// snapshot cannot be opened.
+    /// Returns an error if metadata exists but cannot be read, the current
+    /// snapshot cannot be opened, or the store is inconsistent.
     pub fn load(sift_dir: &Path) -> crate::Result<Self> {
         if !StoreMeta::path(sift_dir).exists() {
+            if DiskSnapshotStore::read_current_id(sift_dir)?.is_some() {
+                // CURRENT without meta is inconsistent — surface the open error.
+                let _ = Snapshot::open_current(sift_dir, PathBuf::new(), CorpusKind::Directory)?;
+            }
             return Ok(Self {
                 sift_dir: sift_dir.to_path_buf(),
                 snapshots: DiskSnapshotStore::open(sift_dir)?,
