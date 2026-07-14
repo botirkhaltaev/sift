@@ -20,6 +20,22 @@ cargo test --workspace --all-features
 
 Run all three before pushing. CI enforces the same checks on Linux, macOS, and Windows.
 
+## Profiling
+
+Use system profilers via Criterion workloads, not ad-hoc `/tmp` harnesses:
+
+```bash
+./scripts/profile.sh doctor
+./scripts/profile.sh grep case_insensitive_alternation
+./scripts/profile.sh --ab master HEAD index case_insensitive_alternation
+PROFILE_TOOLS=heaptrack,perf ./scripts/profile.sh --suite
+```
+
+`scripts/profile.sh` auto-resolves a working `perf` binary (cloud kernels often have a stub
+`/usr/bin/perf`), probes software `task-clock` period sampling when HW cycles are unavailable,
+and runs heaptrack / hyperfine / perf / samply / flamegraph / callgrind / massif / cachegrind
+when installed. Prefer paired before/after heaptrack+hyperfine evidence for performance PRs.
+
 ## Layout
 
 | Path | Role |
@@ -32,7 +48,7 @@ Run all three before pushing. CI enforces the same checks on Linux, macOS, and W
 | `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
 | `benchsuite/` | Comparative `rg` vs `sift` benchmarks |
-| `scripts/` | `bench.sh`, `fuzz.sh`, `install.sh` |
+| `scripts/` | `bench.sh`, `fuzz.sh`, `install.sh`, `profile.sh` |
 | `skills/` | Agent usage skill for searching with `sift` (`npx skills`); CLI development → `crates/cli/AGENTS.md` |
 | `docs/` | Performance snapshots, compatibility matrix |
 
