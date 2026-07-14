@@ -71,7 +71,7 @@ fn run_grep(
         streams: Inputs::empty(),
         conversion: InputConversion::new(&[], PathDisplay::Relative, None),
     };
-    searcher.search(inputs, StatsMode::Off).unwrap().matched()
+    searcher.search(inputs, StatsMode::Off).unwrap().found()
 }
 
 fn bench_indexed_search(c: &mut Criterion) {

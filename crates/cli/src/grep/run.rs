@@ -265,8 +265,8 @@ impl Run {
         if let Some(s) = report.stats.as_ref() {
             OutputDecl::write_stats(s);
         }
-        let selected = report.selected;
-        Self::queue_lazy_hits(daemon, &session, report.hit_paths);
+        let selected = report.found();
+        Self::queue_lazy_hits(daemon, &session, report.listed.corpus_hit_paths());
         Ok(selected)
     }
 

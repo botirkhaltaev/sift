@@ -561,7 +561,11 @@ impl OutputDecl {
     }
 
     pub fn write_stats(stats: &Stats) {
-        eprintln!("{} matches", stats.matches);
+        let matches = match stats.matches {
+            sift_core::MatchTotals::None => 0,
+            sift_core::MatchTotals::Lines(n) | sift_core::MatchTotals::Spans(n) => n,
+        };
+        eprintln!("{matches} matches");
         eprintln!("{} files contained matches", stats.files_with_matches);
         eprintln!("{} files searched", stats.files_searched);
         eprintln!("{} bytes printed", stats.bytes_printed);

@@ -80,10 +80,15 @@ impl Input<'_> {
     }
 
     #[must_use]
-    pub fn hit_path(&self) -> Option<&Path> {
+    pub const fn identity(&self) -> &InputIdentity {
         match self {
-            Self::Path { identity, .. } | Self::Bytes { identity, .. } => identity.hit_path(),
+            Self::Path { identity, .. } | Self::Bytes { identity, .. } => identity,
         }
+    }
+
+    #[must_use]
+    pub fn hit_path(&self) -> Option<&Path> {
+        self.identity().hit_path()
     }
 
     #[must_use]

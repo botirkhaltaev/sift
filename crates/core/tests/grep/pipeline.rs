@@ -3,11 +3,11 @@ use std::fs;
 
 use sift_core::candidates::{CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness};
 use sift_core::grep::{
-    ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, Grep, GrepRequest,
-    PathDisplay,
+    ByteInput, CandidateFilter, CandidateFilterConfig, CandidateOrder, CandidateOrderDirection,
+    CandidateOrderKey, Grep, GrepRequest, PathDisplay,
 };
 use sift_core::search::{
-    InputConversion, Inputs, SearchEvent, SearchMode, SearchOptions, SearchQueryBuilder,
+    InputConversion, Inputs, Listing, SearchEvent, SearchMode, SearchOptions, SearchQueryBuilder,
     SearchSink, Searcher, StatsMode,
 };
 use tempfile::TempDir;
@@ -60,7 +60,7 @@ fn grep_finds_match_in_indexed_corpus() {
     };
 
     let report = searcher.search(inputs, StatsMode::Off).expect("grep run");
-    assert!(report.matched());
+    assert!(report.found());
 }
 
 #[test]
@@ -131,11 +131,13 @@ fn high_level_grep_search_resolves_candidates_and_reports_matches() {
         })
         .expect("grep search");
 
-    assert!(report.matched);
-    assert!(report.selected);
-    assert!(report.matches().next().is_some());
-    assert!(!report.hit_paths.is_empty());
-
+    assert!(report.found());
+    let Listing::Lines(files) = &report.listed else {
+        panic!("expected Lines listing");
+    };
+    assert!(!files.is_empty());
+    assert!(files.iter().any(|f| !f.matches.is_empty()));
+    assert!(!report.listed.corpus_hit_paths().is_empty());
     assert!(report.stats.is_some());
 }
 
@@ -175,8 +177,11 @@ fn high_level_grep_stream_emits_events_without_collecting_matches() {
         )
         .expect("grep stream");
 
-    assert!(report.matched);
-    assert!(report.matches().next().is_some());
+    assert!(report.found());
+    let Listing::Lines(files) = &report.listed else {
+        panic!("expected Lines listing");
+    };
+    assert!(files.iter().all(|f| f.matches.is_empty()));
     assert!(sink.matches > 0);
 }
 
@@ -214,14 +219,11 @@ fn high_level_grep_files_without_match_selects_nonmatching_files() {
         })
         .expect("grep search");
 
-    assert!(report.matched);
-    assert!(report.selected);
-    assert!(
-        report
-            .files
-            .iter()
-            .any(|file| file.selected && !file.matched)
-    );
+    assert!(report.found());
+    let Listing::NonMatchingPaths(files) = &report.listed else {
+        panic!("expected NonMatchingPaths");
+    };
+    assert!(!files.is_empty());
 }
 
 #[test]
@@ -258,15 +260,12 @@ fn high_level_grep_files_without_match_uses_full_corpus_with_index() {
         })
         .expect("grep search");
 
-    assert!(report.matched);
-    assert!(report.selected);
-    assert_eq!(report.files.iter().filter(|file| file.selected).count(), 1);
-    assert!(
-        report
-            .files
-            .iter()
-            .any(|file| file.selected && file.path.ends_with("b.txt"))
-    );
+    assert!(report.found());
+    let Listing::NonMatchingPaths(files) = &report.listed else {
+        panic!("expected NonMatchingPaths");
+    };
+    assert_eq!(files.len(), 1);
+    assert!(files[0].path.ends_with("b.txt"));
 }
 
 #[test]
@@ -301,14 +300,11 @@ fn high_level_grep_files_without_match_is_not_selected_when_all_files_match() {
         })
         .expect("grep search");
 
-    assert!(report.matched);
-    assert!(!report.selected);
-    assert!(
-        report
-            .files
-            .iter()
-            .all(|file| file.matched && !file.selected)
-    );
+    assert!(!report.found());
+    let Listing::NonMatchingPaths(files) = &report.listed else {
+        panic!("expected NonMatchingPaths");
+    };
+    assert!(files.is_empty());
 }
 
 #[derive(Default)]
@@ -370,8 +366,175 @@ fn grep_finds_match_in_stdin_stream() {
     };
 
     let report = searcher.search(inputs, StatsMode::Off).expect("grep run");
-    assert!(report.matched());
-    let line_hits: Vec<_> = report.matches().collect();
-    assert_eq!(line_hits.len(), 1);
-    assert!(line_hits[0].1.text.contains("needle"));
+    assert!(report.found());
+    let Listing::Lines(files) = &report.listed else {
+        panic!("expected Lines listing");
+    };
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].matches.len(), 1);
+    assert!(files[0].matches[0].text.contains("needle"));
+}
+
+#[test]
+fn count_include_zero_lists_zeros_but_found_requires_hits() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("create corpus");
+    fs::write(corpus.join("a.txt"), "alpha\n").expect("write a");
+    fs::write(corpus.join("b.txt"), "beta\n").expect("write b");
+
+    let sift_dir = tmp.path().join(".sift");
+    super::common::build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
+    let source = CandidateSource::new(
+        &indexes,
+        &filter,
+        None,
+        ScanScope::Walk {
+            order: CandidateOrder::default(),
+        },
+        IndexNarrowing::Allowed,
+    );
+
+    let report = Grep::new(source)
+        .search(GrepRequest {
+            query: SearchQueryBuilder::new(vec!["nomatch".to_string()])
+                .options(SearchOptions::default())
+                .build()
+                .expect("query"),
+            streams: Inputs::empty(),
+            conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+            mode: SearchMode::CountLines {
+                zeros: sift_core::ZeroCounts::Include,
+            },
+            stats: StatsMode::Off,
+        })
+        .expect("grep search");
+
+    assert!(!report.found());
+    let Listing::LineCounts(counts) = &report.listed else {
+        panic!("expected LineCounts");
+    };
+    assert!(!counts.is_empty());
+    assert!(counts.iter().all(|c| c.lines == 0));
+}
+
+#[test]
+fn stream_begin_path_shares_arc_with_listed_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    make_parity_corpus(&corpus);
+
+    let sift_dir = tmp.path().join(".sift");
+    super::common::build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
+    let source = CandidateSource::new(
+        &indexes,
+        &filter,
+        None,
+        index_scope(CandidateOrder::default()),
+        IndexNarrowing::Allowed,
+    );
+    let mut sink = PathRecorder::default();
+
+    let report = Grep::new(source)
+        .stream(
+            GrepRequest {
+                query: SearchQueryBuilder::new(vec!["beta".to_string()])
+                    .options(SearchOptions::default())
+                    .build()
+                    .expect("query"),
+                streams: Inputs::empty(),
+                conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+                mode: SearchMode::Lines,
+                stats: StatsMode::Off,
+            },
+            &mut sink,
+        )
+        .expect("grep stream");
+
+    let Listing::Lines(files) = &report.listed else {
+        panic!("expected Lines");
+    };
+    assert!(!files.is_empty());
+    assert!(!sink.begin_paths.is_empty());
+    assert!(sink.begin_paths.iter().any(|begin| {
+        files
+            .iter()
+            .any(|f| std::sync::Arc::ptr_eq(begin, &f.file.path))
+    }));
+}
+
+#[derive(Default)]
+struct PathRecorder {
+    begin_paths: Vec<std::sync::Arc<std::path::Path>>,
+}
+
+impl SearchSink for PathRecorder {
+    fn event(&mut self, event: SearchEvent) -> sift_core::Result<()> {
+        if let SearchEvent::Begin(event) = event {
+            self.begin_paths.push(event.path);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn first_match_settles_on_pattern_hit_not_include_zero() {
+    let tmp = TempDir::new().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("create corpus");
+    fs::write(corpus.join("a.txt"), "aaa\n").expect("write a");
+    fs::write(corpus.join("b.txt"), "bbb\n").expect("write b");
+    fs::write(corpus.join("c.txt"), "needle\n").expect("write c");
+
+    let sift_dir = tmp.path().join(".sift");
+    super::common::build_store(&corpus, &sift_dir);
+
+    let indexes = open_indexes(&sift_dir);
+    let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).expect("filter");
+    let source = CandidateSource::new(
+        &indexes,
+        &filter,
+        None,
+        ScanScope::Walk {
+            order: CandidateOrder::new(CandidateOrderKey::Path, CandidateOrderDirection::Ascending),
+        },
+        IndexNarrowing::Bypassed,
+    );
+
+    let options = SearchOptions {
+        search_bound: sift_core::SearchBound::FirstMatch,
+        ..SearchOptions::default()
+    };
+
+    let report = Grep::new(source)
+        .search(GrepRequest {
+            query: SearchQueryBuilder::new(vec!["needle".to_string()])
+                .options(options)
+                .build()
+                .expect("query"),
+            streams: Inputs::empty(),
+            conversion: InputConversion::new(&[], PathDisplay::Relative, None),
+            mode: SearchMode::CountLines {
+                zeros: sift_core::ZeroCounts::Include,
+            },
+            stats: StatsMode::On,
+        })
+        .expect("grep search");
+
+    assert!(report.found());
+    let Listing::LineCounts(counts) = &report.listed else {
+        panic!("expected LineCounts");
+    };
+    assert_eq!(counts.len(), 1);
+    assert!(counts[0].lines > 0);
+    assert!(counts[0].file.path.ends_with("c.txt"));
+    let stats = report.stats.as_ref().expect("stats");
+    assert!(stats.files_searched >= 1);
+    assert!(stats.files_searched <= 3);
 }
