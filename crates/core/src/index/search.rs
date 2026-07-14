@@ -116,7 +116,7 @@ impl Indexes {
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> Candidates<'a> {
-        Candidates::index(self, self.file_ids(result, corpus), filter, admission)
+        Candidates::indexed(self, self.file_ids(result, corpus), filter, admission)
     }
 
     pub(crate) fn hydrate_row(
