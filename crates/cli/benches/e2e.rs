@@ -1,8 +1,6 @@
 use criterion::{Criterion, Throughput};
 
-use crate::support::{
-    build_index, large_indexed_fixture, make_filter_corpus, make_small_corpus, run_sift, search_scale,
-};
+use crate::support::{build_index, make_filter_corpus, make_small_corpus, run_sift};
 
 fn bench_tiny(c: &mut Criterion) {
     let tmp_tiny = tempfile::tempdir().unwrap();
@@ -91,8 +89,8 @@ fn bench_walk(c: &mut Criterion, small: &std::path::Path, small_no_index: &std::
     g.finish();
 }
 
-fn bench_indexed_small(c: &mut Criterion, small: &std::path::Path, small_sift: &std::path::Path) {
-    let mut g = c.benchmark_group("e2e/subprocess/indexed_tiny");
+fn bench_indexed(c: &mut Criterion, small: &std::path::Path, small_sift: &std::path::Path) {
+    let mut g = c.benchmark_group("e2e/subprocess/indexed");
     g.throughput(Throughput::Elements(20));
 
     g.bench_function("literal", |b| {
@@ -111,52 +109,24 @@ fn bench_indexed_small(c: &mut Criterion, small: &std::path::Path, small_sift: &
             );
         });
     });
-    g.finish();
-}
-
-/// Monorepo-scale indexed CLI search (same `SIFT_BENCH_SCALE` as sift-core).
-fn bench_indexed_large(c: &mut Criterion) {
-    let (corpus, sift_dir) = large_indexed_fixture();
-    let scale = search_scale();
-    let mut g = c.benchmark_group("e2e/subprocess/indexed_large");
-    g.throughput(Throughput::Elements(scale.files as u64));
-    g.sample_size(20);
-    g.measurement_time(std::time::Duration::from_secs(15));
-
-    let sift = sift_dir.to_string_lossy().into_owned();
-    g.bench_function("literal", |b| {
-        b.iter(|| {
-            run_sift(&["--sift-dir", &sift, "-n", "beta"], &corpus);
-        });
-    });
-    g.bench_function("required_literal", |b| {
-        b.iter(|| {
-            run_sift(&["--sift-dir", &sift, "-n", "[A-Z]+_RESUME"], &corpus);
-        });
-    });
-    g.bench_function("full_scan", |b| {
+    g.bench_function("json", |b| {
         b.iter(|| {
             run_sift(
                 &[
                     "--sift-dir",
-                    &sift,
-                    "-n",
-                    r"\w{5}\s+\w{5}\s+\w{5}\s+\w{5}\s+\w{5}",
+                    &small_sift.to_string_lossy(),
+                    "--json",
+                    "beta",
                 ],
-                &corpus,
+                small,
             );
         });
     });
-    g.bench_function("alternation", |b| {
+    g.bench_function("count", |b| {
         b.iter(|| {
             run_sift(
-                &[
-                    "--sift-dir",
-                    &sift,
-                    "-n",
-                    "ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT",
-                ],
-                &corpus,
+                &["--sift-dir", &small_sift.to_string_lossy(), "-c", "beta"],
+                small,
             );
         });
     });
@@ -214,8 +184,7 @@ pub fn bench(c: &mut Criterion) {
     build_index(&small, &small_sift);
     let small_no_index = tmp_small.path().join(".sift-absent");
     bench_walk(c, &small, &small_no_index);
-    bench_indexed_small(c, &small, &small_sift);
-    bench_indexed_large(c);
+    bench_indexed(c, &small, &small_sift);
 
     let tmp_filt = tempfile::tempdir().unwrap();
     let filt = tmp_filt.path().join("corpus");

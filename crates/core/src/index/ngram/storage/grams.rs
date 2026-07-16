@@ -7,7 +7,7 @@ use integer_encoding::VarInt;
 use super::format::GRAMS_MAGIC;
 use super::{read_u32_le, read_u64_le};
 use crate::index::mmap::mmap_open;
-use crate::index::ngram::gram::{Gram, GramWidth, GramWindows};
+use crate::index::ngram::gram::{Gram, GramNorm, GramWidth};
 use crate::index::snapshot::ArtifactData;
 
 /// A single sorted unique gram set for one file.
@@ -39,7 +39,7 @@ impl GramSet {
     }
 
     #[must_use]
-    pub fn collect(width: GramWidth, bytes: &[u8]) -> Self {
+    pub fn collect(width: GramWidth, bytes: &[u8], norm: GramNorm) -> Self {
         if bytes.len() < width.get() {
             return Self { grams: Vec::new() };
         }
@@ -50,7 +50,14 @@ impl GramSet {
             bytes.len() / 8,
             rustc_hash::FxBuildHasher,
         );
-        seen.extend(GramWindows::new(bytes, width));
+        let width_usize = width.get();
+        // Width is 1..=8 — pack from a stack buffer to avoid per-window heap allocs.
+        let mut window = [0u8; 8];
+        for offset in 0..=bytes.len() - width_usize {
+            window[..width_usize].copy_from_slice(&bytes[offset..offset + width_usize]);
+            norm.normalize_window(&mut window[..width_usize]);
+            seen.insert(Gram::from_window(&window[..width_usize]));
+        }
         let mut grams: Vec<Gram> = seen.into_iter().collect();
         grams.sort_unstable();
         Self { grams }

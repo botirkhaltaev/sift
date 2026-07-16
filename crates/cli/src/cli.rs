@@ -21,7 +21,9 @@ use crate::grep::pattern::{
     BinaryDecl, GrepFlags, GrepScope, PatternArgs, RegexFlagsA, RegexFlagsB,
 };
 use crate::grep::run::{Run, RunConfig, RunMode, RunResult};
-use crate::index::{IndexExecution, IndexJob, IndexOperation, IndexRequest};
+use crate::index::{
+    IndexDecl, IndexExecution, IndexJob, IndexOperation, IndexRequest, IndexSelection,
+};
 use crate::update;
 
 use clap::{Parser, Subcommand};
@@ -276,8 +278,14 @@ impl Cli {
             },
             Some(Commands::Index { command }) => {
                 let daemon = self.paths.daemon();
-                let (path, indexes, operation, execution, build_coverage) =
-                    command.into_request_parts();
+                let indexes = match IndexSelection::resolve(argv) {
+                    Ok(selection) => selection.map(|s| s.indexes),
+                    Err(e) => {
+                        eprintln!("sift: {e}");
+                        return ExitCode::from(2);
+                    }
+                };
+                let (path, operation, execution, build_coverage) = command.into_request_parts();
                 let req = IndexRequest {
                     operation,
                     execution,
@@ -355,10 +363,8 @@ pub enum IndexCommands {
         #[arg(default_value = ".")]
         path: PathBuf,
 
-        /// Comma-separated index configurations to build (default: all).
-        /// Available: trigram, ngram-3, ngram:3
-        #[arg(short, long, value_delimiter = ',')]
-        indexes: Option<Vec<sift_core::IndexRecord>>,
+        #[command(flatten)]
+        indexes: IndexDecl,
 
         /// Block until the index build completes (default: async via daemon).
         #[arg(long)]
@@ -373,10 +379,8 @@ pub enum IndexCommands {
         #[arg(default_value = ".")]
         path: PathBuf,
 
-        /// Comma-separated index configurations to update (default: all).
-        /// Available: trigram, ngram-3, ngram:3
-        #[arg(short, long, value_delimiter = ',')]
-        indexes: Option<Vec<sift_core::IndexRecord>>,
+        #[command(flatten)]
+        indexes: IndexDecl,
 
         /// Block until the index update completes.
         #[arg(long)]
@@ -389,7 +393,6 @@ impl IndexCommands {
         self,
     ) -> (
         PathBuf,
-        Option<Vec<sift_core::IndexRecord>>,
         IndexOperation,
         IndexExecution,
         sift_core::IndexCoverage,
@@ -397,7 +400,7 @@ impl IndexCommands {
         match self {
             Self::Build {
                 path,
-                indexes,
+                indexes: _,
                 wait,
                 lazy,
             } => {
@@ -411,11 +414,11 @@ impl IndexCommands {
                 } else {
                     sift_core::IndexCoverage::Complete
                 };
-                (path, indexes, IndexOperation::Build, execution, coverage)
+                (path, IndexOperation::Build, execution, coverage)
             }
             Self::Update {
                 path,
-                indexes,
+                indexes: _,
                 wait,
             } => {
                 let execution = if wait {
@@ -425,7 +428,6 @@ impl IndexCommands {
                 };
                 (
                     path,
-                    indexes,
                     IndexOperation::Update,
                     execution,
                     sift_core::IndexCoverage::Complete,
@@ -483,6 +485,32 @@ mod tests {
             Some(Commands::Index {
                 command: IndexCommands::Build { path, .. },
             }) => assert_eq!(path, PathBuf::from("/tmp")),
+            _ => panic!("expected index build subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_index_kind_and_options() {
+        let cli = Cli::try_parse_from([
+            "sift",
+            "index",
+            "build",
+            "--index",
+            "ngram",
+            "--width",
+            "5",
+            "--norm",
+            "ascii-lower",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Index {
+                command: IndexCommands::Build { indexes, .. },
+            }) => {
+                assert_eq!(indexes.kinds.len(), 1);
+                assert_eq!(indexes.width, vec![5]);
+                assert_eq!(indexes.norms, vec![crate::index::GramNormArg::AsciiLower]);
+            }
             _ => panic!("expected index build subcommand"),
         }
     }

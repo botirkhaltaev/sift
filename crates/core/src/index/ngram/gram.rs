@@ -1,7 +1,80 @@
+/// How N-gram keys are normalized before lexicon packing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum GramNorm {
+    /// Preserve exact file bytes in gram keys.
+    #[default]
+    Identity,
+    /// Fold ASCII letters to lowercase before packing gram keys.
+    AsciiLower,
+}
+
+impl GramNorm {
+    /// Apply this normalization to a mutable byte window.
+    pub(crate) fn normalize_window(self, window: &mut [u8]) {
+        if matches!(self, Self::AsciiLower) {
+            for byte in window {
+                *byte = byte.to_ascii_lowercase();
+            }
+        }
+    }
+
+    /// Fold an owned literal for posting lookup against an ascii-lower lexicon.
+    pub(crate) fn normalize_literal(self, lit: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Identity => lit.to_vec(),
+            Self::AsciiLower => lit.to_ascii_lowercase(),
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Identity => "identity",
+            Self::AsciiLower => "ascii-lower",
+        }
+    }
+}
+
+impl std::fmt::Display for GramNorm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for GramNorm {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "identity" => Ok(Self::Identity),
+            "ascii-lower" => Ok(Self::AsciiLower),
+            other => Err(format!(
+                "unknown gram norm '{other}' (expected identity or ascii-lower)"
+            )),
+        }
+    }
+}
+
+impl serde::Serialize for GramNorm {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for GramNorm {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// Validated N-gram width.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GramWidth(u8);
 
 impl GramWidth {
@@ -16,6 +89,19 @@ impl GramWidth {
     pub const fn new(width: u8) -> Self {
         assert!(width >= 1 && width <= 8, "gram width must be 1..=8");
         Self(width)
+    }
+
+    /// Fallible constructor for parsed configuration input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `width` is outside `1..=8`.
+    pub const fn try_new(width: u8) -> Result<Self, &'static str> {
+        if width >= 1 && width <= 8 {
+            Ok(Self(width))
+        } else {
+            Err("gram width must be 1..=8")
+        }
     }
 
     #[must_use]
@@ -39,6 +125,25 @@ impl GramWidth {
         } else {
             LiteralNarrowing::Windows
         }
+    }
+}
+
+impl serde::Serialize for GramWidth {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u8(self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for GramWidth {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let width = <u8 as serde::Deserialize>::deserialize(deserializer)?;
+        Self::try_new(width).map_err(serde::de::Error::custom)
     }
 }
 

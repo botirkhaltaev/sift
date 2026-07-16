@@ -39,19 +39,23 @@ impl IndexRecord {
     #[must_use]
     pub fn name(&self) -> String {
         match self.kind.as_str() {
-            "ngram" => {
-                let width = self
-                    .params
-                    .get("width")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or_else(|| self.params.as_u64().unwrap_or(0));
-                format!("ngram-{width}")
-            }
+            "ngram" => super::ngram::Index::from_params(&self.params).map_or_else(
+                |_| {
+                    let width = self
+                        .params
+                        .get("width")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or_else(|| self.params.as_u64().unwrap_or(0));
+                    format!("ngram-{width}")
+                },
+                |index| index.name(),
+            ),
             other => other.to_string(),
         }
     }
 
-    /// Parse a short catalog name (`trigram`, `ngram-3`, `ngram:3`).
+    /// Parse a short catalog name (`trigram`, `ngram-3`, `ngram:3`,
+    /// `ngram-5-ascii-lower`).
     ///
     /// # Errors
     ///
@@ -61,18 +65,15 @@ impl IndexRecord {
             "trigram" => Ok(Self::ngram(super::ngram::GramWidth::TRIGRAM)),
             other => {
                 let index = super::ngram::Index::parse_name(other)?;
-                Ok(Self::ngram(index.gram_width()))
+                Ok(index.to_record())
             }
         }
     }
 
-    /// N-gram catalog record for the given width.
+    /// N-gram catalog record for the given width (identity norm).
     #[must_use]
     pub fn ngram(width: super::ngram::GramWidth) -> Self {
-        Self {
-            kind: "ngram".to_string(),
-            params: serde_json::json!({ "width": width.get() }),
-        }
+        super::ngram::Index::new().width(width).to_record()
     }
 
     /// Default catalog of records shipped with the engine.

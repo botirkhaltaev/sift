@@ -7,7 +7,7 @@ use crate::corpus::Candidate;
 use crate::index::{CorpusKind, FileId, IndexedCorpus};
 
 use super::files::{FileFingerprint, FileTable};
-use super::gram::{GramMatch, GramWidth};
+use super::gram::{GramMatch, GramNorm, GramWidth};
 use super::storage::grams::GramSets;
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
@@ -26,12 +26,13 @@ pub enum NGramIndexError {
 #[derive(Debug)]
 pub struct Index {
     pub(crate) width: GramWidth,
+    pub(crate) norm: GramNorm,
     pub(crate) storage: Option<Storage>,
 }
 
 impl PartialEq for Index {
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width
+        self.width == other.width && self.norm == other.norm
     }
 }
 
@@ -40,6 +41,7 @@ impl Eq for Index {}
 impl Hash for Index {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.width.hash(state);
+        self.norm.hash(state);
     }
 }
 
@@ -160,6 +162,14 @@ impl Default for Index {
 impl Index {
     pub const DEFAULT: Self = Self {
         width: GramWidth::TRIGRAM,
+        norm: GramNorm::Identity,
+        storage: None,
+    };
+
+    /// Case-folded width-5 index for selective case-insensitive narrowing.
+    pub const ASCII_LOWER_5: Self = Self {
+        width: GramWidth::new(5),
+        norm: GramNorm::AsciiLower,
         storage: None,
     };
 
@@ -175,8 +185,19 @@ impl Index {
     }
 
     #[must_use]
+    pub const fn norm(mut self, norm: GramNorm) -> Self {
+        self.norm = norm;
+        self
+    }
+
+    #[must_use]
     pub const fn gram_width(&self) -> GramWidth {
         self.width
+    }
+
+    #[must_use]
+    pub const fn gram_norm(&self) -> GramNorm {
+        self.norm
     }
 
     #[must_use]
@@ -186,12 +207,22 @@ impl Index {
 
     #[must_use]
     pub fn params(&self) -> serde_json::Value {
-        serde_json::json!({ "width": self.width.get() })
+        match self.norm {
+            GramNorm::Identity => serde_json::json!({ "width": self.width.get() }),
+            GramNorm::AsciiLower => {
+                serde_json::json!({ "width": self.width.get(), "norm": "ascii-lower" })
+            }
+        }
     }
 
     #[must_use]
     pub fn name(&self) -> String {
-        format!("{}-{}", self.kind(), self.width.get())
+        match self.norm {
+            GramNorm::Identity => format!("{}-{}", self.kind(), self.width.get()),
+            GramNorm::AsciiLower => {
+                format!("{}-{}-ascii-lower", self.kind(), self.width.get())
+            }
+        }
     }
 
     #[must_use]
@@ -206,19 +237,24 @@ impl Index {
 
     /// Parse an N-gram catalog name.
     ///
+    /// Accepts `ngram-N`, `ngram:N`, and `ngram-N-ascii-lower`.
+    ///
     /// # Errors
     ///
-    /// Returns an error if `value` is not `ngram-N` or `ngram:N`, or if `N`
+    /// Returns an error if `value` is not a known catalog name, or if `N`
     /// is not a valid width.
     pub fn parse_name(value: &str) -> Result<Self, String> {
-        let width = value
+        let rest = value
             .strip_prefix("ngram-")
             .or_else(|| value.strip_prefix("ngram:"))
             .ok_or_else(|| format!("unknown index: {value}"))?;
-        let width = width
+        let (width_str, norm) = rest
+            .strip_suffix("-ascii-lower")
+            .map_or((rest, GramNorm::Identity), |w| (w, GramNorm::AsciiLower));
+        let width = width_str
             .parse::<u8>()
-            .map_err(|_| format!("invalid ngram width: {width}"))?;
-        Ok(Self::new().width(GramWidth::new(width)))
+            .map_err(|_| format!("invalid ngram width: {width_str}"))?;
+        Ok(Self::new().width(GramWidth::new(width)).norm(norm))
     }
 
     /// Parse persisted params for registry/config reconstruction.
@@ -243,12 +279,27 @@ impl Index {
                 "invalid ngram width: {width}"
             )))
         })?;
-        Ok(Self::new().width(GramWidth::new(width)))
+        let norm = match params.get("norm") {
+            None if params.as_u64().is_some() => GramNorm::Identity,
+            None => GramNorm::Identity,
+            Some(value) => {
+                let raw = value.as_str().ok_or_else(|| {
+                    crate::Error::Index(crate::index::IndexError::UnknownIndexConfig(format!(
+                        "invalid ngram norm: {value}"
+                    )))
+                })?;
+                raw.parse::<GramNorm>().map_err(|e| {
+                    crate::Error::Index(crate::index::IndexError::UnknownIndexConfig(e))
+                })?
+            }
+        };
+        Ok(Self::new().width(GramWidth::new(width)).norm(norm))
     }
 
-    pub(crate) const fn with_storage(width: GramWidth, storage: Storage) -> Self {
+    pub(crate) const fn with_storage(&self, storage: Storage) -> Self {
         Self {
-            width,
+            width: self.width,
+            norm: self.norm,
             storage: Some(storage),
         }
     }
@@ -293,6 +344,10 @@ impl Index {
 
     /// Resolve candidate file ids for the query. Falls back to every indexed
     /// file when the query cannot be narrowed.
+    ///
+    /// `AsciiLower` indexes only narrow case-insensitive queries (Exact on
+    /// folded grams). Case-sensitive queries cannot be proven from a folded
+    /// lexicon, so they return every covered id.
     #[must_use]
     pub(crate) fn query_file_ids(&self, query: &CandidateQuery<'_>) -> Vec<FileId> {
         let Some(storage) = self.storage() else {
@@ -306,10 +361,17 @@ impl Index {
         let Some(arms) = self.extract_literal_arms(query) else {
             return all_ids();
         };
-        let gram_match = if query.case_insensitive() {
-            GramMatch::AsciiCase
-        } else {
-            GramMatch::Exact
+        let (arms, gram_match) = match (self.norm, query.case_insensitive()) {
+            (GramNorm::Identity, true) => (arms, GramMatch::AsciiCase),
+            (GramNorm::Identity, false) => (arms, GramMatch::Exact),
+            (GramNorm::AsciiLower, false) => return all_ids(),
+            (GramNorm::AsciiLower, true) => {
+                let folded = arms
+                    .into_iter()
+                    .map(|arm| GramNorm::AsciiLower.normalize_literal(&arm))
+                    .collect();
+                (folded, GramMatch::Exact)
+            }
         };
         let ids = self.candidate_file_ids(&arms, gram_match);
         ids.into_iter()
