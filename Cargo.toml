@@ -32,8 +32,3 @@ no_effect_underscore_binding = "deny"
 [profile.bench]
 inherits = "release"
 debug = 1
-
-# Release + line tables for perf / cargo-flamegraph (used by `scripts/profile.sh`, not benches).
-[profile.profiling]
-inherits = "release"
-debug = 1
