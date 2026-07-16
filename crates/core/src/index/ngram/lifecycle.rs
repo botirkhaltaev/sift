@@ -2,12 +2,11 @@ use std::path::{Path, PathBuf};
 
 use crate::corpus::walk::LinkTraversal;
 use crate::corpus::walk::{FileWalk, WalkFile};
+use crate::index::contract::IndexWrite;
 use crate::index::snapshot::ArtifactData;
-use crate::index::{CorpusKind, IndexBuildConfig, IndexDestination, IndexSource};
+use crate::index::{CorpusKind, FileId, IndexConfig, IndexDestination, IndexSource};
 
 use super::build::{FingerprintCollector, IndexTables, PostingTables};
-use super::config::Config;
-use super::files::FileFingerprint;
 use super::files::FileTable;
 use super::gram::GramWidth;
 use super::index::{Index, IndexedFiles, IndexedFilesLocation, NGramIndexError, Storage};
@@ -15,57 +14,55 @@ use super::storage::grams::{GramSet, GramSets};
 use super::storage::lexicon::Lexicon;
 use super::storage::postings::Postings;
 
-impl Config {
+impl Index {
     /// Build an N-gram index from an explicit path list, or from a full walk when `paths` is empty.
     ///
     /// # Errors
     ///
     /// Returns an error if corpus walking, extraction, or encoding fails.
     pub fn build(
-        self,
-        config: &IndexBuildConfig<'_>,
+        &self,
+        config: &IndexConfig<'_>,
         output_dir: &Path,
         paths: &[PathBuf],
-    ) -> crate::Result<Index> {
+    ) -> crate::Result<Self> {
         self.build_into(config, IndexDestination::Directory(output_dir), paths)
     }
 
     /// Build an N-gram index into a directory or snapshot destination.
     pub(crate) fn build_into(
-        self,
-        config: &IndexBuildConfig<'_>,
-        dest: IndexDestination,
+        &self,
+        config: &IndexConfig<'_>,
+        dest: IndexDestination<'_>,
         paths: &[PathBuf],
-    ) -> crate::Result<Index> {
+    ) -> crate::Result<Self> {
         let tables = IndexTables::build(self.width, config, paths)?;
         let root = config.corpus.root.canonicalize()?;
-        Self::persist_tables(self.width, &tables, &root, config.corpus.kind, dest)
+        self.persist_tables(&tables, &root, config.corpus.kind, dest)
     }
 
     /// Encode and store tables at the given destination, returning a live index.
     pub(crate) fn persist_tables(
-        width: GramWidth,
+        &self,
         tables: &IndexTables,
         root: &Path,
         corpus_kind: CorpusKind,
-        dest: IndexDestination,
-    ) -> crate::Result<Index> {
+        dest: IndexDestination<'_>,
+    ) -> crate::Result<Self> {
         match dest {
-            IndexDestination::Directory(dir) => {
-                Self::create_in_dir(width, tables, root, corpus_kind, dir)
-            }
+            IndexDestination::Directory(dir) => self.create_in_dir(tables, root, corpus_kind, dir),
             IndexDestination::Snapshot { writer, namespace } => {
                 let ((fr, lr), (pr, gr)) = rayon::join(
                     || {
                         rayon::join(
                             || FileTable::encode(&tables.fingerprints),
-                            || Lexicon::encode(width, &tables.lexicon),
+                            || Lexicon::encode(self.width, &tables.lexicon),
                         )
                     },
                     || {
                         rayon::join(
                             || Postings::encode(&tables.postings),
-                            || GramSets::encode(width, &tables.file_grams),
+                            || GramSets::encode(self.width, &tables.file_grams),
                         )
                     },
                 );
@@ -79,13 +76,13 @@ impl Config {
                     FileTable::from_artifact(ArtifactData::Memory(files_bytes.clone().into()))?;
                 let lexicon = Lexicon::from_artifact(
                     ArtifactData::Memory(lexicon_bytes.clone().into()),
-                    width,
+                    self.width,
                 )?;
                 let postings =
                     Postings::from_artifact(ArtifactData::Memory(postings_bytes.clone().into()))?;
                 let gram_sets = GramSets::from_artifact(
                     ArtifactData::Memory(gram_sets_bytes.clone().into()),
-                    width,
+                    self.width,
                 )?;
 
                 writer.put_artifact(namespace, crate::FILES_BIN, files_bytes)?;
@@ -96,9 +93,9 @@ impl Config {
                 Self::validate_file_paths(&tables.fingerprints)?;
                 Self::validate_lexicon_postings(&lexicon, &postings)?;
 
-                Ok(Index {
-                    width,
-                    storage: Storage::new(
+                Ok(Self::with_storage(
+                    self.width,
+                    Storage::new(
                         root.to_path_buf(),
                         IndexedFiles::new(IndexedFilesLocation::Memory {
                             table: files,
@@ -110,7 +107,7 @@ impl Config {
                         postings,
                         corpus_kind,
                     ),
-                })
+                ))
             }
         }
     }
@@ -125,26 +122,28 @@ impl Config {
         index_dir: &Path,
         root: &Path,
         corpus_kind: CorpusKind,
-    ) -> crate::Result<Index> {
-        Self::open_tables(width, IndexSource::Directory(index_dir), root, corpus_kind)
+    ) -> crate::Result<Self> {
+        Self::new()
+            .width(width)
+            .open_from(IndexSource::Directory(index_dir), root, corpus_kind)
     }
 
     pub(crate) fn open_from(
-        self,
-        source: IndexSource,
+        &self,
+        source: IndexSource<'_>,
         root: &Path,
         corpus_kind: CorpusKind,
-    ) -> crate::Result<Index> {
-        Self::open_tables(self.width, source, root, corpus_kind)
+    ) -> crate::Result<Self> {
+        self.open_tables(source, root, corpus_kind)
     }
 
     /// Open index tables from a storage source (directory or snapshot).
     pub(crate) fn open_tables(
-        width: GramWidth,
-        source: IndexSource,
+        &self,
+        source: IndexSource<'_>,
         root: &Path,
         corpus_kind: CorpusKind,
-    ) -> crate::Result<Index> {
+    ) -> crate::Result<Self> {
         match source {
             IndexSource::Directory(dir) => {
                 let files_path = dir.join(crate::FILES_BIN);
@@ -162,13 +161,15 @@ impl Config {
                 let indexed_files = IndexedFiles::new(IndexedFilesLocation::Disk(files))
                     .map_err(NGramIndexError::Io)?;
 
-                let lexicon = Lexicon::open(&lexicon_path, width).map_err(NGramIndexError::Io)?;
+                let lexicon =
+                    Lexicon::open(&lexicon_path, self.width).map_err(NGramIndexError::Io)?;
                 let postings = Postings::open(&postings_path).map_err(NGramIndexError::Io)?;
-                let gram_sets = GramSets::open(&grams_path, width).map_err(NGramIndexError::Io)?;
+                let gram_sets =
+                    GramSets::open(&grams_path, self.width).map_err(NGramIndexError::Io)?;
 
-                Ok(Index {
-                    width,
-                    storage: Storage::new(
+                Ok(Self::with_storage(
+                    self.width,
+                    Storage::new(
                         root.to_path_buf(),
                         indexed_files,
                         gram_sets,
@@ -176,7 +177,7 @@ impl Config {
                         postings,
                         corpus_kind,
                     ),
-                })
+                ))
             }
             IndexSource::Snapshot { reader, namespace } => {
                 let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
@@ -185,20 +186,20 @@ impl Config {
                     .map_err(NGramIndexError::Io)?;
 
                 let lexicon_data = reader.artifact(namespace, crate::LEXICON_BIN)?;
-                let lexicon =
-                    Lexicon::from_artifact(lexicon_data, width).map_err(NGramIndexError::Io)?;
+                let lexicon = Lexicon::from_artifact(lexicon_data, self.width)
+                    .map_err(NGramIndexError::Io)?;
 
                 let postings_data = reader.artifact(namespace, crate::POSTINGS_BIN)?;
                 let postings =
                     Postings::from_artifact(postings_data).map_err(NGramIndexError::Io)?;
 
                 let gram_sets_data = reader.artifact(namespace, crate::GRAMS_BIN)?;
-                let gram_sets =
-                    GramSets::from_artifact(gram_sets_data, width).map_err(NGramIndexError::Io)?;
+                let gram_sets = GramSets::from_artifact(gram_sets_data, self.width)
+                    .map_err(NGramIndexError::Io)?;
 
-                Ok(Index {
-                    width,
-                    storage: Storage::new(
+                Ok(Self::with_storage(
+                    self.width,
+                    Storage::new(
                         root.to_path_buf(),
                         indexed_files,
                         gram_sets,
@@ -206,19 +207,19 @@ impl Config {
                         postings,
                         corpus_kind,
                     ),
-                })
+                ))
             }
         }
     }
 
     /// Write tables to `dir` as persistence files and return an mmap-backed index.
     fn create_in_dir(
-        width: GramWidth,
+        &self,
         tables: &IndexTables,
         root: &Path,
         corpus_kind: CorpusKind,
         dir: &Path,
-    ) -> crate::Result<Index> {
+    ) -> crate::Result<Self> {
         std::fs::create_dir_all(dir)?;
 
         let files_path = dir.join(crate::FILES_BIN);
@@ -230,13 +231,13 @@ impl Config {
             || {
                 rayon::join(
                     || FileTable::create(&files_path, &tables.fingerprints),
-                    || Lexicon::create(&lexicon_path, width, &tables.lexicon),
+                    || Lexicon::create(&lexicon_path, self.width, &tables.lexicon),
                 )
             },
             || {
                 rayon::join(
                     || Postings::create(&postings_path, &tables.postings),
-                    || GramSets::create(&grams_path, width, &tables.file_grams),
+                    || GramSets::create(&grams_path, self.width, &tables.file_grams),
                 )
             },
         );
@@ -249,9 +250,9 @@ impl Config {
         Self::validate_file_paths(&tables.fingerprints)?;
         Self::validate_lexicon_postings(&lexicon, &postings)?;
 
-        Ok(Index {
-            width,
-            storage: Storage::new(
+        Ok(Self::with_storage(
+            self.width,
+            Storage::new(
                 root.to_path_buf(),
                 IndexedFiles::new(IndexedFilesLocation::Memory {
                     table: files,
@@ -263,22 +264,9 @@ impl Config {
                 postings,
                 corpus_kind,
             ),
-        })
+        ))
     }
 
-    fn validate_lexicon_postings(
-        lexicon: &Lexicon,
-        postings: &Postings,
-    ) -> Result<(), NGramIndexError> {
-        Index::validate_lexicon_postings(lexicon, postings)
-    }
-
-    fn validate_file_paths(fingerprints: &[FileFingerprint]) -> Result<(), NGramIndexError> {
-        Index::validate_file_paths(fingerprints)
-    }
-}
-
-impl Index {
     /// Update the index from the current corpus, writing artifact files into `output_dir`.
     ///
     /// Returns `Ok(Some(index))` if a new index was written, or `Ok(None)` if no files changed.
@@ -288,7 +276,7 @@ impl Index {
     /// Returns an error if corpus walking, extraction, or encoding fails.
     pub fn update(
         &self,
-        config: &IndexBuildConfig<'_>,
+        config: &IndexConfig<'_>,
         output_dir: &Path,
         paths: &[PathBuf],
     ) -> crate::Result<Option<Self>> {
@@ -298,12 +286,16 @@ impl Index {
     /// Rebuild index tables for changed files and persist to `dest`.
     pub(crate) fn rebuild(
         &self,
-        config: &IndexBuildConfig<'_>,
-        dest: IndexDestination,
+        config: &IndexConfig<'_>,
+        dest: IndexDestination<'_>,
         paths: &[PathBuf],
     ) -> crate::Result<Option<Self>> {
         use rayon::prelude::*;
         use std::collections::HashMap;
+
+        let Some(storage) = self.storage() else {
+            return self.build_into(config, dest, paths).map(Some);
+        };
 
         let fingerprints = if paths.is_empty() {
             let corpus_paths: Vec<PathBuf> = FileWalk::new(config.corpus.root)
@@ -324,19 +316,14 @@ impl Index {
                 .collect();
             FingerprintCollector::new(config.corpus.root, &corpus_paths).collect()?
         } else {
-            Self::merge_partial_fingerprints(
-                self.storage.files.as_slice(),
-                config.corpus.root,
-                paths,
-            )?
+            Self::merge_partial_fingerprints(storage.files.as_slice(), config.corpus.root, paths)?
         };
 
-        if fingerprints == self.storage.files.as_slice() {
+        if fingerprints == storage.files.as_slice() {
             return Ok(None);
         }
 
-        let prev_id_by_fp: HashMap<(&Path, i64, u64), usize> = self
-            .storage
+        let prev_id_by_fp: HashMap<(&Path, i64, u64), usize> = storage
             .files
             .as_slice()
             .iter()
@@ -350,11 +337,7 @@ impl Index {
                 if let Some(&prev_id) =
                     prev_id_by_fp.get(&(fp.path.as_path(), fp.mtime_secs, fp.size))
                 {
-                    return self
-                        .storage
-                        .gram_sets
-                        .get(prev_id)
-                        .map_err(crate::Error::Io);
+                    return storage.gram_sets.get(prev_id).map_err(crate::Error::Io);
                 }
                 let abs = config.corpus.root.join(&fp.path);
                 std::fs::read(&abs)
@@ -373,7 +356,56 @@ impl Index {
         };
 
         let root = config.corpus.root.canonicalize()?;
-        let index = Config::persist_tables(self.width, &tables, &root, config.corpus.kind, dest)?;
-        Ok(Some(index))
+        self.persist_tables(&tables, &root, config.corpus.kind, dest)
+            .map(Some)
+    }
+}
+
+impl crate::index::contract::Index for Index {
+    fn kind(&self) -> &'static str {
+        Self::kind(self)
+    }
+
+    fn params(&self) -> serde_json::Value {
+        Self::params(self)
+    }
+
+    fn name(&self) -> String {
+        Self::name(self)
+    }
+
+    fn build(&self, write: IndexWrite<'_>) -> crate::Result<()> {
+        self.build_into(write.config, write.dest, write.paths)
+            .map(|_| ())
+    }
+
+    fn open(
+        &self,
+        source: IndexSource<'_>,
+        root: &Path,
+        corpus_kind: CorpusKind,
+    ) -> crate::Result<Box<dyn crate::index::contract::Index>> {
+        Ok(Box::new(self.open_from(source, root, corpus_kind)?))
+    }
+
+    fn query(&self, query: &crate::candidates::query::CandidateQuery<'_>) -> Vec<FileId> {
+        Self::query_file_ids(self, query)
+    }
+
+    fn coverage(&self) -> crate::index::IndexedCorpus {
+        Self::coverage(self)
+    }
+
+    fn candidate(&self, id: FileId) -> Option<crate::corpus::Candidate> {
+        Self::candidate(self, id)
+    }
+
+    fn all_file_ids(&self) -> Vec<FileId> {
+        Self::all_file_ids(self)
+    }
+
+    fn update(&self, write: IndexWrite<'_>) -> crate::Result<bool> {
+        self.rebuild(write.config, write.dest, write.paths)
+            .map(|updated| updated.is_some())
     }
 }

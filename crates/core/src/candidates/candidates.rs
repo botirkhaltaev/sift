@@ -1,11 +1,11 @@
 use crate::corpus::Candidate;
 use crate::corpus::filter::{CandidateFilter, FilterAdmission};
-use crate::index::Indexes;
+use crate::index::{FileId, Indexes};
 
 /// Index-narrowed file ids with the filter used when each row is opened.
 pub struct IndexedCandidates<'a> {
     pub(crate) indexes: &'a Indexes,
-    pub(crate) file_ids: Vec<u32>,
+    pub(crate) file_ids: Vec<FileId>,
     pub(crate) filter: &'a CandidateFilter,
     pub(crate) admission: FilterAdmission,
 }
@@ -31,13 +31,13 @@ pub enum Candidates<'a> {
 pub enum IntoIter<'a> {
     Resolved(std::vec::IntoIter<Candidate>),
     Indexed {
-        ids: std::vec::IntoIter<u32>,
+        ids: std::vec::IntoIter<FileId>,
         indexes: &'a Indexes,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     },
     Mixed {
-        ids: std::vec::IntoIter<u32>,
+        ids: std::vec::IntoIter<FileId>,
         indexes: &'a Indexes,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
@@ -48,7 +48,7 @@ pub enum IntoIter<'a> {
 impl<'a> IndexedCandidates<'a> {
     pub(crate) const fn new(
         indexes: &'a Indexes,
-        file_ids: Vec<u32>,
+        file_ids: Vec<FileId>,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> Self {
@@ -61,7 +61,7 @@ impl<'a> IndexedCandidates<'a> {
     }
 
     #[must_use]
-    pub(crate) fn file_ids(&self) -> &[u32] {
+    pub(crate) fn file_ids(&self) -> &[FileId] {
         &self.file_ids
     }
 }
@@ -73,7 +73,7 @@ impl<'a> Candidates<'a> {
 
     pub(crate) const fn indexed(
         indexes: &'a Indexes,
-        file_ids: Vec<u32>,
+        file_ids: Vec<FileId>,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
     ) -> Self {
@@ -82,7 +82,7 @@ impl<'a> Candidates<'a> {
 
     pub(crate) const fn mixed(
         indexes: &'a Indexes,
-        file_ids: Vec<u32>,
+        file_ids: Vec<FileId>,
         filter: &'a CandidateFilter,
         admission: FilterAdmission,
         unindexed: Vec<Candidate>,
@@ -188,7 +188,7 @@ impl Iterator for IntoIter<'_> {
 }
 
 fn next_hydrated(
-    ids: &mut std::vec::IntoIter<u32>,
+    ids: &mut std::vec::IntoIter<FileId>,
     indexes: &Indexes,
     filter: &CandidateFilter,
     admission: FilterAdmission,

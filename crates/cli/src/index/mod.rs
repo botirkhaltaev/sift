@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusMeta, FilterMeta, IndexConfig, IndexCoverage, IndexError, IndexStore, SnapshotId,
-    StoreMeta, WalkMeta,
+    CorpusMeta, FilterMeta, IndexCoverage, IndexError, IndexRecord, Indexes, SnapshotId, StoreMeta,
+    WalkMeta,
 };
 
 use crate::grep::Argv;
@@ -47,7 +47,7 @@ pub struct IndexRequest {
     pub execution: IndexExecution,
     pub build_coverage: IndexCoverage,
     pub path: PathBuf,
-    pub indexes: Option<Vec<IndexConfig>>,
+    pub indexes: Option<Vec<IndexRecord>>,
     pub sift_dir: PathBuf,
     pub follow_links: bool,
     pub one_file_system: bool,
@@ -63,7 +63,7 @@ pub struct IndexJob {
     pub root: PathBuf,
     pub include_paths: Vec<PathBuf>,
     pub corpus_kind: sift_core::CorpusKind,
-    pub indexes: Vec<IndexConfig>,
+    pub indexes: Vec<IndexRecord>,
     pub follow_links: bool,
     pub one_file_system: bool,
     pub max_depth: Option<usize>,
@@ -87,7 +87,10 @@ impl IndexJob {
         } else {
             (canonical, Vec::new(), sift_core::CorpusKind::Directory)
         };
-        let indexes: Vec<IndexConfig> = req.indexes.as_deref().unwrap_or(IndexConfig::ALL).to_vec();
+        let indexes: Vec<IndexRecord> = req
+            .indexes
+            .clone()
+            .unwrap_or_else(IndexRecord::default_catalog);
         let exclude_paths = CorpusScope::excluded_paths(&root, &req.sift_dir);
         let max_filesize = req
             .max_filesize
@@ -122,7 +125,7 @@ impl IndexJob {
         let existing_meta = StoreMeta::read(&self.sift_dir).ok();
         let meta = self.store_meta(ignore_res, existing_meta.as_ref());
 
-        let mut store = match IndexStore::open_or_create(&self.sift_dir, &meta) {
+        let mut indexes = match Indexes::open(&self.sift_dir, &meta) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("sift: {e}");
@@ -130,7 +133,7 @@ impl IndexJob {
             }
         };
 
-        let has_snapshot = store.current_id().is_some();
+        let has_snapshot = indexes.current_id().is_some();
         match self.operation {
             IndexOperation::Build if has_snapshot => {
                 eprintln!(
@@ -149,12 +152,12 @@ impl IndexJob {
             IndexOperation::Build | IndexOperation::Update => {}
         }
 
-        if let Err(e) = store.refresh_meta(&meta) {
+        if let Err(e) = indexes.refresh_meta(&meta) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
 
-        if let Err(e) = SnapshotRefresh::new(&self.sift_dir, &meta, &[]).run(&mut store) {
+        if let Err(e) = SnapshotRefresh::new(&self.sift_dir, &meta, &[]).run(&mut indexes) {
             eprintln!("sift: {e}");
             return ExitCode::from(2);
         }
@@ -182,14 +185,14 @@ impl IndexJob {
         let existing_meta = StoreMeta::read(&self.sift_dir).ok();
         let meta = self.store_meta(ignore_res, existing_meta.as_ref());
 
-        let store = match IndexStore::open_or_create(&self.sift_dir, &meta) {
+        let indexes = match Indexes::open(&self.sift_dir, &meta) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("sift: {e}");
                 return ExitCode::from(2);
             }
         };
-        let has_snapshot = store.current_id().is_some();
+        let has_snapshot = indexes.current_id().is_some();
         match self.operation {
             IndexOperation::Build if has_snapshot => {
                 eprintln!(
@@ -305,27 +308,27 @@ impl<'a> SnapshotRefresh<'a> {
     /// # Errors
     ///
     /// Propagates build/update failures from the underlying index kinds.
-    pub fn run(self, store: &mut IndexStore) -> sift_core::Result<ReconcileOutcome> {
-        let build = self.meta.index_config();
-        let configs = &self.meta.indexes;
+    pub fn run(self, indexes: &mut Indexes) -> sift_core::Result<ReconcileOutcome> {
+        let build = self.meta.write_config();
+        let catalog = self.meta.catalog()?;
         let (snapshot_id, changed) = if self.paths.is_empty() {
-            if store.current_id().is_none() {
-                (SnapshotId::new(store.build(configs, &build, &[])?), true)
+            if indexes.current_id().is_none() {
+                (SnapshotId::new(indexes.build(&catalog, &build, &[])?), true)
             } else {
-                match store.update(configs, &build, &[])? {
+                match indexes.update(&catalog, &[])? {
                     Some(id) => (SnapshotId::new(id), true),
-                    None => (Self::current_snapshot_id(store, self.sift_dir)?, false),
+                    None => (Self::current_snapshot_id(indexes, self.sift_dir)?, false),
                 }
             }
-        } else if store.current_id().is_none() {
+        } else if indexes.current_id().is_none() {
             (
-                SnapshotId::new(store.build(configs, &build, self.paths)?),
+                SnapshotId::new(indexes.build(&catalog, &build, self.paths)?),
                 true,
             )
         } else {
-            match store.update(configs, &build, self.paths)? {
+            match indexes.update(&catalog, self.paths)? {
                 Some(id) => (SnapshotId::new(id), true),
-                None => (Self::current_snapshot_id(store, self.sift_dir)?, false),
+                None => (Self::current_snapshot_id(indexes, self.sift_dir)?, false),
             }
         };
         Ok(ReconcileOutcome {
@@ -334,8 +337,8 @@ impl<'a> SnapshotRefresh<'a> {
         })
     }
 
-    fn current_snapshot_id(store: &IndexStore, sift_dir: &Path) -> sift_core::Result<SnapshotId> {
-        store
+    fn current_snapshot_id(indexes: &Indexes, sift_dir: &Path) -> sift_core::Result<SnapshotId> {
+        indexes
             .current_id()
             .map(|id| SnapshotId::new(id.to_string()))
             .ok_or_else(|| {

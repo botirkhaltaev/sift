@@ -1,35 +1,38 @@
 # sift-core
 
-Core engine for indexed code search. Build on-disk indexes over a codebase, then run regex or fixed-string queries with automatic candidate narrowing.
+Core engine for indexed code search. Build on-disk indexes over a codebase, then
+run regex or fixed-string queries with automatic candidate narrowing.
 
 ## Index architecture
 
-Composable indexes narrow candidates independently; `Indexes` intersects their results at query time.
+Every kind implements the `Index` trait; `Indexes` builds/updates snapshots and
+intersects `query` results at search time.
 
 ```
-IndexConfig ──IndexStore──> snapshot on disk
-                                │
-                    Indexes::open
-                                │
-                           Indexes (search)
-                                │
-              CandidatePlanner → CandidatePlan::resolve
-                                │
-                           Grep::search
+IndexRecord / Box<dyn Index> ──Indexes::build──> snapshot on disk
+                                      │
+                              Indexes::open
+                                      │
+                                 Indexes
+                                      │
+                CandidatePlanner → CandidatePlan::resolve
+                                      │
+                                 Grep::search
 ```
 
 | Type | Role |
 |------|------|
-| `IndexStore` | Build, update, publish |
-| `Snapshot` | Opened snapshot (internal); use `Indexes::open` |
-| `Indexes` | Query, file ids, hydrate candidates |
+| `Index` | Kind contract (`build` / `open` / `query` / `candidate` / `update`) |
+| `IndexRecord` | Persisted `{ kind, params }` |
+| `IndexConfig` | Corpus/walk/visibility for a write |
+| `Indexes` | Lifecycle + search |
 | `Grep` | Resolve candidates + run search |
 
 ## Modules
 
 | Module | Description |
 |--------|-------------|
-| [`index/`](src/index/) | Lifecycle, snapshot, search facade |
+| [`index/`](src/index/) | Contract, snapshot, orchestrator |
 | [`index/ngram/`](src/index/ngram/) | N-gram index implementation |
 | [`grep/`](src/grep/) | Public search API |
 | [`candidates/`](src/candidates/) | Planning and resolution |
@@ -40,13 +43,14 @@ IndexConfig ──IndexStore──> snapshot on disk
 use sift_core::{
     CandidateSource, Grep, GrepRequest, Indexes, IndexNarrowing, Inputs, InputConversion,
     PathDisplay, ScanScope, SnapshotFreshness, SearchMode, SearchOptions, SearchQuery, StatsMode,
+    StoreMeta,
 };
 
-let indexes = Indexes::open(&sift_dir)?;
+let indexes = Indexes::open(&sift_dir, &meta)?;
 let source = CandidateSource::new(
     &indexes,
     &filter,
-    store_meta.as_ref(),
+    Some(indexes.meta()),
     ScanScope::Index {
         order: Default::default(),
         freshness: SnapshotFreshness::Current,

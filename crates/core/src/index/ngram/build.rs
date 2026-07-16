@@ -12,7 +12,7 @@ use super::storage::postings::Postings;
 
 use crate::corpus::walk::LinkTraversal;
 use crate::corpus::walk::{FileWalk, WalkFile};
-use crate::index::{CorpusKind, IndexBuildConfig};
+use crate::index::{CorpusKind, IndexConfig};
 
 /// Collected index data ready for persistence.
 pub struct IndexTables {
@@ -185,7 +185,7 @@ impl PostingTables {
 impl IndexTables {
     pub fn build(
         width: GramWidth,
-        config: &IndexBuildConfig<'_>,
+        config: &IndexConfig<'_>,
         paths: &[PathBuf],
     ) -> crate::Result<Self> {
         use rayon::prelude::*;
@@ -262,7 +262,7 @@ mod tests {
     use crate::index::config::IndexWalkConfig;
     use crate::index::ngram::gram::GramWidth;
     use crate::index::ngram::storage::postings::Postings;
-    use crate::index::{CorpusKind, CorpusSpec, IndexBuildConfig};
+    use crate::index::{CorpusKind, CorpusSpec, IndexConfig};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -270,8 +270,8 @@ mod tests {
     struct TablesFixture;
 
     impl TablesFixture {
-        fn no_ignore_config(root: &Path) -> IndexBuildConfig<'_> {
-            IndexBuildConfig {
+        fn no_ignore_config(root: &Path) -> IndexConfig<'_> {
+            IndexConfig {
                 corpus: CorpusSpec {
                     root,
                     kind: CorpusKind::Directory,
@@ -335,7 +335,7 @@ mod tests {
     struct FilterParity;
 
     impl FilterParity {
-        fn filter_config(build: &IndexBuildConfig<'_>) -> CandidateFilterConfig {
+        fn filter_config(build: &IndexConfig<'_>) -> CandidateFilterConfig {
             CandidateFilterConfig {
                 exclude_paths: build.corpus.exclude_paths.to_vec(),
                 visibility: build.visibility.clone(),
@@ -394,7 +394,7 @@ mod tests {
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::write(excluded_dir.join("skip.txt"), "world\n").expect("write skip");
 
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -438,7 +438,7 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         FilterCorpus::write(tmp.path());
 
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -467,7 +467,7 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         FilterCorpus::write(tmp.path());
 
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -498,7 +498,7 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         FilterCorpus::write(tmp.path());
 
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -536,7 +536,7 @@ mod tests {
         fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
         fs::write(tmp.path().join("skip.txt"), "world\n").expect("write skip");
 
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -563,7 +563,7 @@ mod tests {
         fs::write(tmp.path().join("other.txt"), "haystack\n").expect("write other");
 
         let only_txt = PathBuf::from("only.txt");
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::SingleFile,
@@ -603,7 +603,7 @@ mod tests {
         fs::write(tmp.path().join("keep.txt"), "hello\n").expect("write keep");
         fs::write(tmp.path().join("skip.ignored"), "secret\n").expect("write ignored");
 
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,
@@ -635,7 +635,7 @@ mod tests {
         fs::write(tmp.path().join("src/keep.txt"), "needle\n").expect("write keep");
         fs::write(tmp.path().join("target/ignored.txt"), "secret\n").expect("write ignored");
 
-        let config = IndexBuildConfig {
+        let config = IndexConfig {
             corpus: CorpusSpec {
                 root: tmp.path(),
                 kind: CorpusKind::Directory,

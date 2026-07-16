@@ -2,11 +2,11 @@ use std::fs;
 
 use sift_core::grep::FilterAdmission;
 use sift_core::search::SearchOptions;
-use sift_core::{GramWidth, IndexConfig, IndexStore};
+use sift_core::{GramWidth, Index, IndexRecord, Indexes, NGramIndex};
 use tempfile::TempDir;
 
 use super::common::{
-    build_store, index_candidates, open_indexes, sample_store_meta, standard_build_config,
+    build_indexes, index_candidates, open_indexes, sample_store_meta, standard_build_config,
 };
 
 #[test]
@@ -17,7 +17,7 @@ fn build_and_reopen_indexes() {
     fs::write(corpus.join("a.txt"), "hello world\n").expect("write");
 
     let sift_dir = tmp.path().join(".sift");
-    build_store(&corpus, &sift_dir);
+    build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     assert!(indexes.usable());
@@ -43,16 +43,14 @@ fn update_skips_rebuild_when_unchanged() {
     let config = standard_build_config(&corpus, &[]);
     let corpus_path = corpus.clone();
     let root = corpus.canonicalize().unwrap_or(corpus_path);
-    let meta = sample_store_meta(root, vec![IndexConfig::ngram(GramWidth::TRIGRAM)]);
-    let mut store = IndexStore::open_or_create(&sift_dir, &meta).expect("open");
-    store
-        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
-        .expect("build");
-    let id = store.current_id().expect("id").to_string();
+    let meta = sample_store_meta(root, vec![IndexRecord::ngram(GramWidth::TRIGRAM)]);
+    let mut indexes = Indexes::open(&sift_dir, &meta).expect("open");
+    indexes.refresh_meta(&meta).expect("refresh meta");
+    let catalog: Vec<Box<dyn Index>> = vec![Box::new(NGramIndex::new().width(GramWidth::TRIGRAM))];
+    indexes.build(&catalog, &config, &[]).expect("build");
+    let id = indexes.current_id().expect("id").to_string();
 
-    let changed = store
-        .update(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
-        .expect("update");
+    let changed = indexes.update(&catalog, &[]).expect("update");
     assert_eq!(changed, None, "expected no rebuild when corpus unchanged");
-    assert_eq!(store.current_id().unwrap(), id);
+    assert_eq!(indexes.current_id().unwrap(), id);
 }

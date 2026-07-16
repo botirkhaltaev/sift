@@ -1,27 +1,21 @@
 # index/
 
-Composable index lifecycle, snapshot persistence, and search-time dispatch.
+Uniform index kinds, snapshot persistence, and search orchestration.
 
 ## Layers
 
 | Layer | Types | Role |
 |-------|-------|------|
-| Lifecycle | `IndexStore`, `IndexConfig`, `StoreMeta` | Build, update, publish snapshots |
-| Snapshot | `Snapshot`, `SnapshotId` | Immutable opened snapshot + indexes |
-| Search | `Indexes`, `IndexedCorpus` | Query, intersect, hydrate candidates |
-| Dispatch | `IndexConfig` | Per-kind lifecycle and query routing |
-
-`IndexStore` owns write transactions. `Indexes::open` owns read/search. Candidate resolution lives in `Grep` / `CandidatePlanner`, not on `Indexes`.
-
-## Design
-
-Multiple configured indexes can coexist. Each narrows candidates independently; `Indexes` intersects their query results. Today the default is `IndexConfig::ngram(GramWidth::TRIGRAM)` / `Index::NGram`.
+| Contract | `Index`, `IndexWrite`, `IndexRecord` | Kind interface + persistable identity |
+| Orchestrator | `Indexes`, `StoreMeta` | `open` / `build` / `update` + query/hydrate |
+| Snapshot | `Snapshot`, `SnapshotId` | Opened `Box<dyn Index>` vec |
+| Kind | `ngram::Index` | First shipped impl |
 
 ```
 index/
-  search.rs    -- Indexes: open snapshot, query, hydrate
+  contract.rs  -- Index trait, IndexRecord, IndexWrite
+  search.rs    -- Indexes: lifecycle + search
   snapshot/    -- atomic persistence, leases, manifests
-  store.rs     -- IndexStore: build/update/publish
   ngram/       -- runtime-width N-gram index (default width 3)
 ```
 
@@ -29,36 +23,34 @@ index/
 
 | Module | Description |
 |--------|-------------|
-| [`kinds.rs`](kinds.rs) | `IndexConfig`, `Index`, `FileId`, `IndexId` |
-| [`search.rs`](search.rs) | `Indexes`: snapshot search facade |
-| [`snapshot/mod.rs`](snapshot/mod.rs) | Snapshot persistence and `Indexes::open` |
-| [`store.rs`](store.rs) | `IndexStore`: lifecycle orchestration |
-| [`paths.rs`](paths.rs) | `IndexedCorpus`: covered path set |
-| [`config.rs`](config.rs) | `IndexBuildConfig`, `CorpusSpec`, `CorpusKind` |
-| [`meta.rs`](meta.rs) | `StoreMeta` (`.sift/meta.json`) |
+| [`contract.rs`](contract.rs) | `Index` trait, `IndexRecord`, `IndexWrite` |
+| [`search.rs`](search.rs) | `Indexes` orchestrator |
+| [`snapshot/`](snapshot/) | Snapshot persistence |
+| [`kinds.rs`](kinds.rs) | `FileId`, `IndexId`, plan output types |
+| [`paths.rs`](paths.rs) | `IndexedCorpus` |
+| [`config.rs`](config.rs) | `IndexConfig` (corpus write inputs), `CorpusSpec` |
+| [`meta.rs`](meta.rs) | `StoreMeta` |
 | [`artifacts.rs`](artifacts.rs) | `IndexSource`, `IndexDestination` |
 | [`ngram/`](ngram/) | N-gram implementation |
 
 ## API
 
 ```rust
-use sift_core::{GramWidth, IndexConfig, IndexStore, Indexes, NGramIndex, Snapshot};
+use sift_core::{GramWidth, IndexRecord, Indexes, NGramIndex, StoreMeta};
 
-// Lifecycle
-let mut store = IndexStore::open_or_create(&sift_dir, &meta)?;
-store.build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])?;
+let mut indexes = Indexes::open(&sift_dir, &meta)?;
+let catalog = [Box::new(NGramIndex::new()) as Box<dyn sift_core::Index>];
+indexes.build(&catalog, &config, &[])?;
 
-// Search (committed snapshot)
-let indexes = Indexes::open(&sift_dir)?;
+// Or refresh from meta.indexes via IndexRecord::to_index()
 ```
 
-Resolve candidates through `Grep::resolve_candidates`, not `Indexes` directly.
+Resolve candidates through `Grep::resolve_candidates`.
 
 ## Adding a New Index Kind
 
-1. Add variants to `IndexConfig` and `Index` in `kinds.rs`.
-2. Route lifecycle through `IndexConfig` and queries through `Index`.
-3. Implement `query`, `hydrate_row`, `all_file_ids`, `coverage` on the `Index` arm.
-4. Add a sibling module to `ngram/`.
+1. Implement `Index` on the kind type.
+2. Register in `IndexRecord::to_index`.
+3. Add a sibling module under `index/`.
 
-`Indexes`, `IndexStore`, snapshot layer, candidate planner, and CLI require no changes.
+No central enum dispatch.

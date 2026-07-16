@@ -358,7 +358,7 @@ pub enum IndexCommands {
         /// Comma-separated index configurations to build (default: all).
         /// Available: trigram, ngram-3, ngram:3
         #[arg(short, long, value_delimiter = ',')]
-        indexes: Option<Vec<sift_core::IndexConfig>>,
+        indexes: Option<Vec<sift_core::IndexRecord>>,
 
         /// Block until the index build completes (default: async via daemon).
         #[arg(long)]
@@ -376,7 +376,7 @@ pub enum IndexCommands {
         /// Comma-separated index configurations to update (default: all).
         /// Available: trigram, ngram-3, ngram:3
         #[arg(short, long, value_delimiter = ',')]
-        indexes: Option<Vec<sift_core::IndexConfig>>,
+        indexes: Option<Vec<sift_core::IndexRecord>>,
 
         /// Block until the index update completes.
         #[arg(long)]
@@ -389,7 +389,7 @@ impl IndexCommands {
         self,
     ) -> (
         PathBuf,
-        Option<Vec<sift_core::IndexConfig>>,
+        Option<Vec<sift_core::IndexRecord>>,
         IndexOperation,
         IndexExecution,
         sift_core::IndexCoverage,

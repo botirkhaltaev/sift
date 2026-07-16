@@ -16,12 +16,11 @@ use sift_core::{
     Candidate, CandidateOrder, CandidateSource, IndexNarrowing, ScanScope, SnapshotFreshness,
 };
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
-    IndexCoverage, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramConfig, NGramIndex,
-    StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, Index, IndexConfig, IndexCoverage,
+    IndexRecord, IndexWalkConfig, Indexes, Inputs, NGramIndex, StoreMeta, WalkMeta,
 };
 
-pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexConfig>) -> StoreMeta {
+pub fn sample_store_meta(root: PathBuf, indexes: Vec<IndexRecord>) -> StoreMeta {
     StoreMeta::new(
         CorpusMeta {
             root,
@@ -72,11 +71,8 @@ pub fn make_filter_corpus(root: &Path) {
     fs::write(root.join(".ignore"), "also_skip/**\n").expect("write ignore");
 }
 
-pub fn standard_build_config<'a>(
-    root: &'a Path,
-    exclude_paths: &'a [PathBuf],
-) -> IndexBuildConfig<'a> {
-    IndexBuildConfig {
+pub fn standard_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -> IndexConfig<'a> {
+    IndexConfig {
         corpus: CorpusSpec {
             root,
             kind: CorpusKind::Directory,
@@ -89,11 +85,8 @@ pub fn standard_build_config<'a>(
     }
 }
 
-pub fn no_ignore_build_config<'a>(
-    root: &'a Path,
-    exclude_paths: &'a [PathBuf],
-) -> IndexBuildConfig<'a> {
-    IndexBuildConfig {
+pub fn no_ignore_build_config<'a>(root: &'a Path, exclude_paths: &'a [PathBuf]) -> IndexConfig<'a> {
+    IndexConfig {
         corpus: CorpusSpec {
             root,
             kind: CorpusKind::Directory,
@@ -109,21 +102,24 @@ pub fn no_ignore_build_config<'a>(
     }
 }
 
-pub fn build_store(corpus: &Path, sift_dir: &Path) -> IndexStore {
+pub fn build_indexes(corpus: &Path, sift_dir: &Path) -> Indexes {
     let root = corpus
         .canonicalize()
         .unwrap_or_else(|_| corpus.to_path_buf());
-    let meta = sample_store_meta(root, vec![IndexConfig::ngram(GramWidth::TRIGRAM)]);
-    let mut store = IndexStore::open_or_create(sift_dir, &meta).expect("open store");
+    let meta = sample_store_meta(root, vec![IndexRecord::ngram(GramWidth::TRIGRAM)]);
+    let mut indexes = Indexes::open(sift_dir, &meta).expect("open indexes");
+    indexes.refresh_meta(&meta).expect("refresh meta");
     let config = standard_build_config(corpus, &[]);
-    store
-        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
-        .expect("build index");
-    store
+    let catalog: Vec<Box<dyn Index>> = vec![Box::new(NGramIndex::new().width(GramWidth::TRIGRAM))];
+    indexes.build(&catalog, &config, &[]).expect("build index");
+    indexes
 }
 
 pub fn open_indexes(sift_dir: &Path) -> Indexes {
-    Indexes::open(sift_dir).expect("open indexes")
+    let meta = StoreMeta::read(sift_dir).unwrap_or_else(|_| {
+        sample_store_meta(PathBuf::new(), vec![IndexRecord::ngram(GramWidth::TRIGRAM)])
+    });
+    Indexes::open(sift_dir, &meta).expect("open indexes")
 }
 
 pub fn index_candidates(
@@ -140,7 +136,7 @@ pub fn index_candidates(
     let meta_storage = if admission == FilterAdmission::Indexed {
         Some(sample_store_meta(
             root,
-            vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+            vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
         ))
     } else {
         None
@@ -181,7 +177,7 @@ pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> NGramIndex {
     } else {
         (corpus, CorpusKind::Directory, vec![])
     };
-    let config = IndexBuildConfig {
+    let config = IndexConfig {
         corpus: CorpusSpec {
             root,
             kind,
@@ -192,7 +188,8 @@ pub fn build_trigram_in_dir(corpus: &Path, trigram_dir: &Path) -> NGramIndex {
         walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
-    NGramConfig::new(GramWidth::TRIGRAM)
+    NGramIndex::new()
+        .width(GramWidth::TRIGRAM)
         .build(&config, trigram_dir, &[])
         .expect("build trigram index")
 }

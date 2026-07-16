@@ -14,9 +14,8 @@ use sift_core::search::{
     InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode,
 };
 use sift_core::{
-    CaseMode, CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig,
-    IndexConfig, IndexStore, IndexWalkConfig, Indexes, Inputs, NGramConfig, NGramIndex, StoreMeta,
-    WalkMeta,
+    CaseMode, CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, Index, IndexConfig,
+    IndexRecord, IndexWalkConfig, Indexes, Inputs, NGramIndex, StoreMeta, WalkMeta,
 };
 
 mod common;
@@ -29,7 +28,7 @@ fn build_index(corpus: &Path, idx_dir: &Path) -> NGramIndex {
     } else {
         (corpus, CorpusKind::Directory, vec![])
     };
-    let config = IndexBuildConfig {
+    let config = IndexConfig {
         corpus: CorpusSpec {
             root,
             kind,
@@ -40,13 +39,13 @@ fn build_index(corpus: &Path, idx_dir: &Path) -> NGramIndex {
         walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
-    let config_index = NGramConfig::new(GramWidth::TRIGRAM);
+    let config_index = NGramIndex::new().width(GramWidth::TRIGRAM);
     config_index.build(&config, idx_dir, &[]).unwrap();
-    NGramConfig::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
+    NGramIndex::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
 }
 
 fn open_index(idx_dir: &Path, root: &Path, kind: CorpusKind) -> NGramIndex {
-    NGramConfig::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
+    NGramIndex::open(GramWidth::TRIGRAM, idx_dir, root, kind).unwrap()
 }
 
 fn open_large_index() -> (tempfile::TempDir, NGramIndex) {
@@ -104,6 +103,29 @@ struct IndexOpenFixture {
 struct SiftDirFixture {
     temp: tempfile::TempDir,
     sift_dir: std::path::PathBuf,
+    meta: StoreMeta,
+}
+
+fn default_meta(root: std::path::PathBuf) -> StoreMeta {
+    StoreMeta::new(
+        CorpusMeta {
+            root,
+            kind: CorpusKind::Directory,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
+        },
+        sift_core::IndexCoverage::Complete,
+        WalkMeta {
+            follow_links: false,
+            one_file_system: false,
+            max_depth: None,
+            max_filesize: None,
+        },
+        FilterMeta {
+            visibility: VisibilityConfig::default(),
+        },
+        vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
+    )
 }
 
 impl Drop for IndexOpenFixture {
@@ -172,8 +194,8 @@ fn materialize_monorepo_corpus(
 fn standard_build_config<'a>(
     root: &'a Path,
     exclude_paths: &'a [std::path::PathBuf],
-) -> IndexBuildConfig<'a> {
-    IndexBuildConfig {
+) -> IndexConfig<'a> {
+    IndexConfig {
         corpus: CorpusSpec {
             root,
             kind: CorpusKind::Directory,
@@ -186,7 +208,7 @@ fn standard_build_config<'a>(
     }
 }
 
-/// Full `sift build` path via [`IndexStore`] (production defaults).
+/// Full `sift build` path via [`Indexes`] (production defaults).
 fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
     let corpus_path = corpus.to_path_buf();
     let root = corpus.canonicalize().unwrap_or(corpus_path);
@@ -207,13 +229,13 @@ fn build_index_via_store(corpus: &Path, sift_dir: &Path) {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+        vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
     );
-    let mut store = IndexStore::open_or_create(sift_dir, &meta).unwrap();
+    let mut indexes = Indexes::open(sift_dir, &meta).unwrap();
+    indexes.refresh_meta(&meta).unwrap();
     let config = standard_build_config(corpus, &[]);
-    store
-        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
-        .unwrap();
+    let catalog: Vec<Box<dyn Index>> = vec![Box::new(NGramIndex::new().width(GramWidth::TRIGRAM))];
+    indexes.build(&catalog, &config, &[]).unwrap();
 }
 
 // ─── Build benchmarks ────────────────────────────────────────────────────────
@@ -457,7 +479,8 @@ fn bench_indexes_open(c: &mut Criterion) {
             let tmp = tempfile::tempdir().unwrap();
             let sift_dir = tmp.path().join(".sift");
             std::fs::create_dir_all(&sift_dir).unwrap();
-            black_box(Indexes::open(&sift_dir).unwrap());
+            let meta = default_meta(std::path::PathBuf::new());
+            black_box(Indexes::open(&sift_dir, &meta).unwrap());
         });
     });
 
@@ -486,13 +509,16 @@ fn bench_indexes_open(c: &mut Criterion) {
                 FilterMeta {
                     visibility: VisibilityConfig::default(),
                 },
-                vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+                vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
             );
-            let mut store = IndexStore::open_or_create(&sift, &meta).expect("open store");
-            store
+            let mut indexes = Indexes::open(&sift, &meta).expect("open indexes");
+            indexes.refresh_meta(&meta).expect("refresh meta");
+            let catalog: Vec<Box<dyn Index>> =
+                vec![Box::new(NGramIndex::new().width(GramWidth::TRIGRAM))];
+            indexes
                 .build(
-                    &[IndexConfig::ngram(GramWidth::TRIGRAM)],
-                    &IndexBuildConfig {
+                    &catalog,
+                    &IndexConfig {
                         corpus: CorpusSpec {
                             root: &corpus,
                             kind: CorpusKind::Directory,
@@ -506,14 +532,15 @@ fn bench_indexes_open(c: &mut Criterion) {
                     &[],
                 )
                 .expect("build");
-            drop(store);
+            drop(indexes);
             SiftDirFixture {
                 temp: tmp,
                 sift_dir: sift,
+                meta,
             }
         };
         b.iter(|| {
-            black_box(Indexes::open(&fixture.sift_dir).unwrap());
+            black_box(Indexes::open(&fixture.sift_dir, &fixture.meta).unwrap());
         });
     });
 

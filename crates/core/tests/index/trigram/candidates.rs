@@ -6,7 +6,7 @@ use sift_core::search::SearchOptions;
 use tempfile::TempDir;
 
 use super::super::common::{
-    build_store, index_candidates, make_filter_corpus, make_parity_corpus, open_indexes,
+    build_indexes, index_candidates, make_filter_corpus, make_parity_corpus, open_indexes,
 };
 
 #[test]
@@ -16,7 +16,7 @@ fn literal_query_returns_indexed_candidates() {
     make_parity_corpus(&corpus);
 
     let sift_dir = tmp.path().join(".sift");
-    build_store(&corpus, &sift_dir);
+    build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let candidates = index_candidates(
@@ -43,7 +43,7 @@ fn literal_query_matching_every_file_reports_no_narrowing() {
     fs::write(corpus.join("b.txt"), "another beta\n").expect("write b");
 
     let sift_dir = tmp.path().join(".sift");
-    build_store(&corpus, &sift_dir);
+    build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let candidates = index_candidates(
@@ -61,7 +61,7 @@ fn literal_candidates_narrow_to_expected_file() {
     let tmp = TempDir::new().expect("tempdir");
     make_filter_corpus(tmp.path());
     let sift_dir = tmp.path().join(".sift");
-    build_store(tmp.path(), &sift_dir);
+    build_indexes(tmp.path(), &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let candidates = index_candidates(
@@ -96,7 +96,7 @@ fn case_insensitive_uppercase_corpus_narrows() {
     }
 
     let sift_dir = tmp.path().join(".sift");
-    build_store(&corpus, &sift_dir);
+    build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let pattern = "err_sys|pme_turn_off".to_string();
@@ -135,7 +135,7 @@ fn case_insensitive_alternation_narrows_uppercase_symbols() {
     }
 
     let sift_dir = tmp.path().join(".sift");
-    build_store(&corpus, &sift_dir);
+    build_indexes(&corpus, &sift_dir);
 
     let indexes = open_indexes(&sift_dir);
     let pattern = "ERR_SYS|PME_TURN_OFF|LINK_REQ_RST|CFG_BME_EVT".to_string();

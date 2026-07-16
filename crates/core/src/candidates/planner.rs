@@ -1,6 +1,6 @@
 use crate::corpus::filter::FilterAdmission;
+use crate::index::FileId;
 use crate::index::IndexCoverage;
-use crate::index::kinds::IndexQueryResult;
 
 use crate::candidates::query::{CandidateQuery, PrefilterNarrowing};
 use crate::candidates::scope::{CandidateCoverage, IndexNarrowing, ScanScope, SnapshotFreshness};
@@ -13,9 +13,7 @@ pub(crate) struct CandidatePlanner;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IndexStatus {
     Empty,
-    NoCandidateIndex,
-    AllCandidates,
-    CanQuery,
+    Queryable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,10 +33,9 @@ impl CandidatePlanner {
         coverage: CandidateCoverage,
     ) -> CandidatePlan {
         let scope = source.scope;
-        let narrowed = source.indexes.query(query);
         let narrowing = Self::narrowing_allowed(source, query);
         let snapshot_status = Self::snapshot_status(source, scope);
-        let index_status = Self::index_status(source, &narrowed);
+        let index_status = Self::index_status(source);
         let freshness = scope.freshness().unwrap_or(SnapshotFreshness::Current);
         let discovery = Self::discovery(
             scope,
@@ -48,11 +45,11 @@ impl CandidatePlanner {
             snapshot_status,
             freshness,
         );
-        let query_result = Self::plan_query_result(discovery, coverage, narrowed);
+        let file_ids = Self::file_ids_for(source, query, discovery, coverage);
         CandidatePlan {
             discovery,
             order: scope.order(),
-            query_result,
+            file_ids,
             indexed_corpus: source.indexes.indexed_corpus(),
         }
     }
@@ -62,17 +59,23 @@ impl CandidatePlanner {
             && matches!(query.prefilter_narrowing(), PrefilterNarrowing::Allowed)
     }
 
-    fn plan_query_result(
+    fn file_ids_for(
+        source: &CandidateSource<'_>,
+        query: &CandidateQuery<'_>,
         discovery: PlannedDiscovery,
         coverage: CandidateCoverage,
-        narrowed: IndexQueryResult,
-    ) -> IndexQueryResult {
-        match (coverage, discovery) {
-            (
-                CandidateCoverage::Complete,
-                PlannedDiscovery::Index { .. } | PlannedDiscovery::Merge { .. },
-            ) => IndexQueryResult::AllIndexed,
-            _ => narrowed,
+    ) -> Vec<FileId> {
+        match discovery {
+            PlannedDiscovery::Empty | PlannedDiscovery::Walk => Vec::new(),
+            PlannedDiscovery::Index { .. } | PlannedDiscovery::Merge { .. } => {
+                if matches!(coverage, CandidateCoverage::Complete) {
+                    source
+                        .indexes
+                        .all_indexed_file_ids(&source.indexes.indexed_corpus())
+                } else {
+                    source.indexes.query(query)
+                }
+            }
         }
     }
 
@@ -96,13 +99,9 @@ impl CandidatePlanner {
         }
     }
 
-    fn index_status(source: &CandidateSource<'_>, query_result: &IndexQueryResult) -> IndexStatus {
+    fn index_status(source: &CandidateSource<'_>) -> IndexStatus {
         if source.indexes.usable() {
-            match query_result {
-                IndexQueryResult::Unavailable => IndexStatus::NoCandidateIndex,
-                IndexQueryResult::AllIndexed => IndexStatus::AllCandidates,
-                IndexQueryResult::Matched { .. } => IndexStatus::CanQuery,
-            }
+            IndexStatus::Queryable
         } else {
             IndexStatus::Empty
         }
@@ -155,35 +154,20 @@ impl CandidatePlanner {
         freshness: SnapshotFreshness,
     ) -> PlannedDiscovery {
         match (index_status, narrowing, freshness) {
-            (IndexStatus::Empty, _, _)
-            | (_, false, _)
-            | (IndexStatus::NoCandidateIndex, _, SnapshotFreshness::Stale) => {
-                PlannedDiscovery::Walk
-            }
-            (
-                IndexStatus::NoCandidateIndex | IndexStatus::AllCandidates,
-                true,
-                SnapshotFreshness::Current,
-            ) => PlannedDiscovery::Index {
-                admission: Self::admission(snapshot_status),
-            },
-            (IndexStatus::AllCandidates, true, SnapshotFreshness::Stale) => match snapshot_status {
+            (IndexStatus::Empty, _, _) | (_, false, _) => PlannedDiscovery::Walk,
+            (IndexStatus::Queryable, true, _) => match snapshot_status {
+                SnapshotStatus::TrustedLazy => PlannedDiscovery::Merge {
+                    admission: Self::admission(snapshot_status),
+                },
+                SnapshotStatus::FilterMismatch => PlannedDiscovery::Walk,
+                SnapshotStatus::StaleComplete => PlannedDiscovery::Index {
+                    admission: Self::admission(snapshot_status),
+                },
                 SnapshotStatus::Missing | SnapshotStatus::TrustedComplete => {
                     PlannedDiscovery::Index {
                         admission: Self::admission(snapshot_status),
                     }
                 }
-                SnapshotStatus::FilterMismatch
-                | SnapshotStatus::TrustedLazy
-                | SnapshotStatus::StaleComplete => PlannedDiscovery::Walk,
-            },
-            (IndexStatus::CanQuery, true, _) => match snapshot_status {
-                SnapshotStatus::TrustedLazy => PlannedDiscovery::Merge {
-                    admission: Self::admission(snapshot_status),
-                },
-                _ => PlannedDiscovery::Index {
-                    admission: Self::admission(snapshot_status),
-                },
             },
         }
     }

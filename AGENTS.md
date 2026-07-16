@@ -6,9 +6,9 @@ Guidelines for AI agents working on the sift codebase.
 
 Sift is an indexed code search engine written in Rust, built around **composable on-disk indexes**. It builds indexes tuned to the search workload, then uses them to narrow candidate files before running the full regex engine.
 
-The core architecture treats code search like database query execution: multiple index configurations can coexist, each narrowing candidates independently, with `Indexes` intersecting their results. `IndexStore` owns lifecycle (build/update); `Snapshot` and `Indexes` own search (`open`, `query`, `hydrate_*`). Candidate resolution goes through `Grep::resolve_candidates` / `CandidatePlanner`, not shortcut methods on `Indexes`. Today the default index is runtime-width N-gram (trigram default).
+The core architecture treats code search like database query execution: every kind implements one `Index` trait; `Indexes` orchestrates build/update/search and intersects `query` results. Candidate resolution goes through `Grep::resolve_candidates` / `CandidatePlanner`. Today the default index is runtime-width N-gram (trigram default).
 
-The candidate pipeline is **plan (pure) → resolve (I/O) → search**: `CandidatePlanner::plan` caches `IndexQueryResult` in a lifetime-free `CandidatePlan`; `CandidatePlan::resolve` is the single I/O boundary; `Searcher` consumes a lazy `Candidates` collection (`into_vec()` materializes all).
+The candidate pipeline is **plan (pure) → resolve (I/O) → search**: `CandidatePlanner::plan` caches a lifetime-free `CandidatePlan` with file ids; `CandidatePlan::resolve` is the single I/O boundary; `Searcher` consumes a lazy `Candidates` collection (`into_vec()` materializes all).
 
 ## Build & Test
 
@@ -42,8 +42,8 @@ when installed. Prefer paired before/after heaptrack+hyperfine evidence for perf
 |------|------|
 | `crates/core/` | `sift-core`: composable index registry, query planning, candidate narrowing, search engine |
 | `crates/core/src/candidates/` | Index-agnostic candidate description, planning, and resolution |
-| `crates/core/src/index/` | `IndexConfig` / `Index` dispatch, `IndexStore` lifecycle, `Snapshot`, `Indexes` search |
-| `crates/core/src/index/ngram/` | N-gram index: generic implementation plus trigram specialization (first shipped index type) |
+| `crates/core/src/index/` | `Index` trait, `IndexRecord`, `Indexes` orchestrator, `Snapshot` |
+| `crates/core/src/index/ngram/` | N-gram `Index` impl (first shipped kind) |
 | `crates/core/src/grep/` | Grep search API and matcher execution |
 | `crates/cli/` | `sift-cli`: `sift` binary (clap CLI over core) |
 | `fuzz/` | `cargo-fuzz` targets (standalone package, nightly) |
@@ -78,20 +78,20 @@ Use short, descriptive kebab-case with a type prefix:
 
 ## Core API Entry Points
 
-`IndexStore::open_or_create` → `build` / `update` → `Snapshot::open_current` → `Indexes::open` → `Grep::resolve_candidates` → `Searcher::execute`. CLI: `IndexJob::run` / `SnapshotRefresh::run` for lifecycle; `Run::execute` for search. See `crates/core/README.md`.
+`Indexes::open(dir, meta)` (lifecycle) / `Indexes::load(dir)` (search) → `build` / `update` → `Grep::resolve_candidates` → `Searcher::execute`. CLI: `IndexJob::run` / `SnapshotRefresh::run` for lifecycle; `Run::execute` for search. See `crates/core/README.md`.
 
-## Index layer split
+## Index layer
 
-Keep lifecycle, snapshot, and search on separate types. Do not add orchestration shortcuts to core.
+| Type | Role |
+|------|------|
+| `Index` trait | Uniform kind: `build` / `open` / `query` / `candidate` / `update` |
+| `IndexRecord` | Persisted `{ kind, params }` in meta/manifest |
+| `IndexConfig` | Corpus/walk/visibility for a write |
+| `IndexWrite` | `{ dest, config, paths }` for create and refresh |
+| `Indexes` | Lifecycle + search orchestrator |
+| `StoreMeta` | Store metadata |
 
-| Layer | Types | Role |
-|-------|-------|------|
-| Core lifecycle | `IndexStore`, `IndexConfig`, `StoreMeta` | Build, update, meta |
-| Core search | `Snapshot`, `Indexes`, `IndexedCorpus` | Open, query, hydrate |
-| Core candidates | `CandidatePlanner`, `Grep` | Plan, resolve, search |
-| CLI | `IndexJob`, `SnapshotRefresh`, daemon | Reconcile, debounce, IPC |
-
-**Do not add to core:** `from_single`, `Indexes::candidates`, `reconcile`, `unindexed_hit_paths`, or other caller-specific helpers. Callers compose `Snapshot::open_current`, `Indexes::open`, `indexed_corpus().retain_unindexed`, and `Grep::resolve_candidates`.
+**Do not add to core:** `from_single`, `Indexes::candidates(SearchQuery)`, `reconcile`, `unindexed_hit_paths`, or other caller-specific helpers. Callers compose `Indexes::open`, `indexed_corpus().retain_unindexed`, and `Grep::resolve_candidates`.
 
 ## Architecture & Design
 
@@ -238,6 +238,7 @@ Examples of **bad** names that flag the pattern:
 - `current_with_lease` (the variant adds a lease)
 - `run_search_with_index` (the variant adds an index)
 - `open_with_lease`
+- `open_or_create` / `get_or_create` / `create_if_missing` (same op + missing branch)
 - `posting_ids_for_ascii_casei_literal` (parallel path for one mode)
 - `intersect_sorted_ids` (free helper instead of a type method / inline)
 - `push(events, || SearchEvent::...)` (callback/`FnOnce` instead of match)
@@ -253,28 +254,25 @@ snapshot store, use a domain enum instead of `*_to_dir` / `*_into` variants:
 
 ```rust
 // Do this:
-pub fn build(config: &IndexConfig<'_>, dest: IndexDestination) -> Result<Self>;
+fn build(&self, write: IndexWrite<'_>) -> Result<()>;
 
 // NOT this (parallel variants):
 fn build(config, output_dir) -> Result;     // directory
 fn build_into(config, writer, ns) -> Result; // snapshot
 ```
 
-## IndexSource / IndexDestination
+## IndexSource / IndexDestination / IndexWrite
 
-N-gram lifecycle functions (`build`, `open`, `update`) and `IndexConfig`
-lifecycle functions (`build`, `open`, `update`) use `IndexSource` and
-`IndexDestination` domain types instead of parallel variants:
+Index lifecycle uses destination/source domain types and a single write request:
 
-- `IndexSource` — describes where index data is read from:
+- `IndexSource` — where index data is read from:
   `Directory(&Path)` or `Snapshot { reader, namespace }`.
-- `IndexDestination` — describes where index data is written to:
+- `IndexDestination` — where index data is written to:
   `Directory(&Path)` or `Snapshot { writer, namespace }`.
+- `IndexWrite` — `{ dest, config, paths }` for both `build` and `update`
+  (update differs only because `&self` already holds prior index data).
 
-Each function dispatches internally on the enum variant. See
-`crates/core/src/index/mod.rs` for the type definitions,
-`crates/core/src/index/ngram/mod.rs` for the NGramIndex lifecycle,
-and `crates/core/src/index/kinds.rs` for configured/runtime index dispatch.
+See `crates/core/src/index/artifacts.rs`, `contract.rs`, and `ngram/`.
 
 ## Module Organization
 

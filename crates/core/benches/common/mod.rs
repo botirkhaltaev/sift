@@ -14,8 +14,8 @@ use std::path::Path;
 
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, IndexBuildConfig, IndexConfig,
-    IndexCoverage, IndexStore, IndexWalkConfig, Indexes, StoreMeta, WalkMeta,
+    CorpusKind, CorpusMeta, CorpusSpec, FilterMeta, GramWidth, Index, IndexConfig, IndexCoverage,
+    IndexRecord, IndexWalkConfig, Indexes, NGramIndex, StoreMeta, WalkMeta,
 };
 
 // ─── Corpus materializers ────────────────────────────────────────────────────
@@ -99,10 +99,11 @@ fn build_index_store(corpus: &Path, sift_dir: &Path) {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+        vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
     );
-    let mut store = IndexStore::open_or_create(sift_dir, &meta).unwrap();
-    let config = IndexBuildConfig {
+    let mut indexes = Indexes::open(sift_dir, &meta).unwrap();
+    indexes.refresh_meta(&meta).unwrap();
+    let config = IndexConfig {
         corpus: CorpusSpec {
             root: corpus,
             kind: CorpusKind::Directory,
@@ -113,9 +114,8 @@ fn build_index_store(corpus: &Path, sift_dir: &Path) {
         walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
-    store
-        .build(&[IndexConfig::ngram(GramWidth::TRIGRAM)], &config, &[])
-        .unwrap();
+    let catalog: Vec<Box<dyn Index>> = vec![Box::new(NGramIndex::new().width(GramWidth::TRIGRAM))];
+    indexes.build(&catalog, &config, &[]).unwrap();
 }
 
 pub fn open_large_indexes() -> (tempfile::TempDir, Indexes) {
@@ -124,6 +124,7 @@ pub fn open_large_indexes() -> (tempfile::TempDir, Indexes) {
     materialize_large_corpus(&corpus, 8_000, 100, 256);
     let sift_dir = tmp.path().join(".sift");
     build_index_store(&corpus, &sift_dir);
-    let indexes = Indexes::open(&sift_dir).unwrap();
+    let meta = StoreMeta::read(&sift_dir).unwrap();
+    let indexes = Indexes::open(&sift_dir, &meta).unwrap();
     (tmp, indexes)
 }

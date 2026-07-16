@@ -81,15 +81,17 @@ fn in_memory_current_returns_snapshot() {
     txn.put_artifact("test", "data.txt", b"content".to_vec())
         .expect("put");
 
+    let record =
+        crate::index::contract::IndexRecord::ngram(crate::index::ngram::GramWidth::TRIGRAM);
     let manifest = SnapshotManifest {
         id: txn.id().clone(),
-        indexes: vec!["trigram".to_string()],
+        indexes: vec![record.clone()],
     };
     let id = session.publish(txn, manifest).expect("publish");
 
     let current = store.current().unwrap().expect("has current");
     assert_eq!(current.manifest().id, id);
-    assert_eq!(current.manifest().indexes, &["trigram"]);
+    assert_eq!(current.manifest().indexes, vec![record]);
     let artifact = current.artifact("test", "data.txt").unwrap();
     assert_eq!(artifact.as_ref(), b"content");
 }

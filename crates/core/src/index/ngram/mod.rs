@@ -4,12 +4,10 @@ pub mod gram;
 pub mod storage;
 
 mod candidates;
-mod config;
 mod index;
 mod lifecycle;
 mod literals;
 
-pub use config::Config;
 pub use gram::{Gram, GramWidth, GramWindows};
 pub use index::{Index, NGramIndexError};
 
@@ -26,8 +24,8 @@ mod candidate_tests {
 
     use super::*;
 
-    fn default_config() -> Config {
-        Config::new(GramWidth::TRIGRAM)
+    fn default_config() -> Index {
+        Index::new().width(GramWidth::TRIGRAM)
     }
 
     fn regex_search_options(
@@ -290,7 +288,8 @@ mod candidate_tests {
             },
         );
         assert!(
-            Config::new(GramWidth::new(2))
+            Index::new()
+                .width(GramWidth::new(2))
                 .extract_literal_arms(&built.candidate())
                 .is_some()
         );
@@ -350,9 +349,8 @@ mod candidate_tests {
 
         // Posting count mismatches are caught at build time.
         // The open path skips content-level validation for speed.
-        let result = Config::open(
-            GramWidth::TRIGRAM,
-            &dir,
+        let result = Index::new().width(GramWidth::TRIGRAM).open_from(
+            crate::index::IndexSource::Directory(&dir),
             Path::new("/root"),
             crate::index::CorpusKind::Directory,
         );

@@ -1,7 +1,7 @@
 use sift_core::StoreMeta;
 use tempfile::TempDir;
 
-use super::common::build_store;
+use super::common::build_indexes;
 
 #[test]
 fn store_meta_written_on_create() {
@@ -11,7 +11,7 @@ fn store_meta_written_on_create() {
     std::fs::write(corpus.join("f.txt"), "x\n").expect("write");
 
     let sift_dir = tmp.path().join(".sift");
-    build_store(&corpus, &sift_dir);
+    build_indexes(&corpus, &sift_dir);
 
     let meta = StoreMeta::read(&sift_dir).expect("read meta");
     assert_eq!(meta.corpus.root, corpus.canonicalize().unwrap_or(corpus));

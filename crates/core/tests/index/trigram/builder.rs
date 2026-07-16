@@ -2,7 +2,7 @@ use std::fs;
 
 use sift_core::grep::VisibilityConfig;
 use sift_core::{
-    CorpusKind, CorpusSpec, FileId, GramWidth, IndexBuildConfig, IndexWalkConfig, NGramConfig,
+    CorpusKind, CorpusSpec, FileId, GramWidth, IndexConfig, IndexWalkConfig, NGramIndex,
 };
 use tempfile::TempDir;
 
@@ -16,7 +16,7 @@ fn persisted_index_reopens_with_same_files() {
 
     let trigram_dir = tmp.path().join("trigram");
     let root = corpus.canonicalize().expect("canonicalize");
-    let config = IndexBuildConfig {
+    let config = IndexConfig {
         corpus: CorpusSpec {
             root: &corpus,
             kind: CorpusKind::Directory,
@@ -27,12 +27,12 @@ fn persisted_index_reopens_with_same_files() {
         walk: IndexWalkConfig::new(false),
         visibility: VisibilityConfig::default(),
     };
-    let index_config = NGramConfig::new(GramWidth::TRIGRAM);
+    let index_config = NGramIndex::new().width(GramWidth::TRIGRAM);
     index_config
         .build(&config, &trigram_dir, &[])
         .expect("build");
 
-    let reopened = NGramConfig::open(
+    let reopened = NGramIndex::open(
         GramWidth::TRIGRAM,
         &trigram_dir,
         &root,

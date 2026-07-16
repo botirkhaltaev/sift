@@ -16,7 +16,7 @@ use sift_core::search::{
     InputConversion, SearchMode, SearchOptions, SearchQueryBuilder, StatsMode, ZeroCounts,
 };
 use sift_core::{
-    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexConfig, IndexCoverage, Indexes, StoreMeta,
+    CorpusKind, CorpusMeta, FilterMeta, GramWidth, IndexCoverage, IndexRecord, Indexes, StoreMeta,
     WalkMeta,
 };
 
@@ -58,7 +58,7 @@ fn store_meta(root: &Path, coverage: IndexCoverage) -> StoreMeta {
         FilterMeta {
             visibility: VisibilityConfig::default(),
         },
-        vec![IndexConfig::ngram(GramWidth::TRIGRAM)],
+        vec![IndexRecord::ngram(GramWidth::TRIGRAM)],
     )
 }
 
@@ -79,7 +79,9 @@ fn empty_index_fixture() -> (tempfile::TempDir, Indexes, CandidateFilter) {
     let temp = tempfile::tempdir().unwrap();
     let corpus = temp.path().join("corpus");
     common::make_filter_corpus(&corpus);
-    let indexes = Indexes::open(&temp.path().join(".sift")).unwrap();
+    let sift_dir = temp.path().join(".sift");
+    let meta = store_meta(&corpus, IndexCoverage::Complete);
+    let indexes = Indexes::open(&sift_dir, &meta).unwrap();
     let filter = CandidateFilter::new(&CandidateFilterConfig::default(), &corpus).unwrap();
     (temp, indexes, filter)
 }

@@ -1,7 +1,7 @@
 bitflags::bitflags! {
     /// Flags modifying how a query is interpreted by the search engine and index layer.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub(crate) struct CandidateFlags: u8 {
+    pub struct CandidateFlags: u8 {
         const FIXED_STRINGS    = 1 << 0;
         const CASE_INSENSITIVE = 1 << 1;
         const WORD_REGEXP      = 1 << 2;
@@ -16,7 +16,7 @@ bitflags::bitflags! {
 use crate::search::{InputEncoding, PrefilterCompatibility, RegexEngine, SearchFlags, SearchQuery};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrefilterNarrowing {
+pub enum PrefilterNarrowing {
     Allowed,
     Bypassed,
 }
@@ -24,14 +24,14 @@ pub(crate) enum PrefilterNarrowing {
 /// Index-agnostic query projection used to resolve candidate files.
 #[must_use]
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CandidateQuery<'q> {
+pub struct CandidateQuery<'q> {
     pub patterns: &'q [String],
     pub flags: CandidateFlags,
     prefilter_narrowing: PrefilterNarrowing,
 }
 
 impl<'q> CandidateQuery<'q> {
-    pub(crate) fn new(query: &'q SearchQuery, prefilter: PrefilterCompatibility) -> Self {
+    pub fn new(query: &'q SearchQuery, prefilter: PrefilterCompatibility) -> Self {
         let mut flags = CandidateFlags::empty();
         if query.options.flags.contains(SearchFlags::FIXED_STRINGS) {
             flags |= CandidateFlags::FIXED_STRINGS;
@@ -68,37 +68,37 @@ impl<'q> CandidateQuery<'q> {
     }
 
     #[must_use]
-    pub(crate) const fn fixed_strings(&self) -> bool {
+    pub const fn fixed_strings(&self) -> bool {
         self.flags.contains(CandidateFlags::FIXED_STRINGS)
     }
 
     #[must_use]
-    pub(crate) const fn case_insensitive(&self) -> bool {
+    pub const fn case_insensitive(&self) -> bool {
         self.flags.contains(CandidateFlags::CASE_INSENSITIVE)
     }
 
     #[must_use]
-    pub(crate) const fn word_regexp(&self) -> bool {
+    pub const fn word_regexp(&self) -> bool {
         self.flags.contains(CandidateFlags::WORD_REGEXP)
     }
 
     #[must_use]
-    pub(crate) const fn line_regexp(&self) -> bool {
+    pub const fn line_regexp(&self) -> bool {
         self.flags.contains(CandidateFlags::LINE_REGEXP)
     }
 
     #[must_use]
-    pub(crate) const fn invert_match(&self) -> bool {
+    pub const fn invert_match(&self) -> bool {
         self.flags.contains(CandidateFlags::INVERT_MATCH)
     }
 
     #[must_use]
-    pub(crate) const fn bom_sniffing(&self) -> bool {
+    pub const fn bom_sniffing(&self) -> bool {
         self.flags.contains(CandidateFlags::BOM_SNIFFING)
     }
 
     #[must_use]
-    pub(crate) const fn prefilter_narrowing(&self) -> PrefilterNarrowing {
+    pub const fn prefilter_narrowing(&self) -> PrefilterNarrowing {
         self.prefilter_narrowing
     }
 }
