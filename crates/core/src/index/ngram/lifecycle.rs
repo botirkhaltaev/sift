@@ -36,7 +36,7 @@ impl Index {
         dest: IndexDestination<'_>,
         paths: &[PathBuf],
     ) -> crate::Result<Self> {
-        let tables = IndexTables::build(self.width, config, paths)?;
+        let tables = IndexTables::build(self.width, self.norm, config, paths)?;
         let root = config.corpus.root.canonicalize()?;
         self.persist_tables(&tables, &root, config.corpus.kind, dest)
     }
@@ -93,21 +93,18 @@ impl Index {
                 Self::validate_file_paths(&tables.fingerprints)?;
                 Self::validate_lexicon_postings(&lexicon, &postings)?;
 
-                Ok(Self::with_storage(
-                    self.width,
-                    Storage::new(
-                        root.to_path_buf(),
-                        IndexedFiles::new(IndexedFilesLocation::Memory {
-                            table: files,
-                            fingerprints: tables.fingerprints.clone(),
-                        })
-                        .map_err(crate::Error::Io)?,
-                        gram_sets,
-                        lexicon,
-                        postings,
-                        corpus_kind,
-                    ),
-                ))
+                Ok(self.with_storage(Storage::new(
+                    root.to_path_buf(),
+                    IndexedFiles::new(IndexedFilesLocation::Memory {
+                        table: files,
+                        fingerprints: tables.fingerprints.clone(),
+                    })
+                    .map_err(crate::Error::Io)?,
+                    gram_sets,
+                    lexicon,
+                    postings,
+                    corpus_kind,
+                )))
             }
         }
     }
@@ -167,17 +164,14 @@ impl Index {
                 let gram_sets =
                     GramSets::open(&grams_path, self.width).map_err(NGramIndexError::Io)?;
 
-                Ok(Self::with_storage(
-                    self.width,
-                    Storage::new(
-                        root.to_path_buf(),
-                        indexed_files,
-                        gram_sets,
-                        lexicon,
-                        postings,
-                        corpus_kind,
-                    ),
-                ))
+                Ok(self.with_storage(Storage::new(
+                    root.to_path_buf(),
+                    indexed_files,
+                    gram_sets,
+                    lexicon,
+                    postings,
+                    corpus_kind,
+                )))
             }
             IndexSource::Snapshot { reader, namespace } => {
                 let files_data = reader.artifact(namespace, crate::FILES_BIN)?;
@@ -197,17 +191,14 @@ impl Index {
                 let gram_sets = GramSets::from_artifact(gram_sets_data, self.width)
                     .map_err(NGramIndexError::Io)?;
 
-                Ok(Self::with_storage(
-                    self.width,
-                    Storage::new(
-                        root.to_path_buf(),
-                        indexed_files,
-                        gram_sets,
-                        lexicon,
-                        postings,
-                        corpus_kind,
-                    ),
-                ))
+                Ok(self.with_storage(Storage::new(
+                    root.to_path_buf(),
+                    indexed_files,
+                    gram_sets,
+                    lexicon,
+                    postings,
+                    corpus_kind,
+                )))
             }
         }
     }
@@ -250,21 +241,18 @@ impl Index {
         Self::validate_file_paths(&tables.fingerprints)?;
         Self::validate_lexicon_postings(&lexicon, &postings)?;
 
-        Ok(Self::with_storage(
-            self.width,
-            Storage::new(
-                root.to_path_buf(),
-                IndexedFiles::new(IndexedFilesLocation::Memory {
-                    table: files,
-                    fingerprints: tables.fingerprints.clone(),
-                })
-                .map_err(crate::Error::Io)?,
-                gram_sets,
-                lexicon,
-                postings,
-                corpus_kind,
-            ),
-        ))
+        Ok(self.with_storage(Storage::new(
+            root.to_path_buf(),
+            IndexedFiles::new(IndexedFilesLocation::Memory {
+                table: files,
+                fingerprints: tables.fingerprints.clone(),
+            })
+            .map_err(crate::Error::Io)?,
+            gram_sets,
+            lexicon,
+            postings,
+            corpus_kind,
+        )))
     }
 
     /// Update the index from the current corpus, writing artifact files into `output_dir`.
@@ -341,7 +329,7 @@ impl Index {
                 }
                 let abs = config.corpus.root.join(&fp.path);
                 std::fs::read(&abs)
-                    .map(|bytes| GramSet::collect(self.width, &bytes))
+                    .map(|bytes| GramSet::collect(self.width, &bytes, self.norm))
                     .map_err(crate::Error::Io)
             })
             .collect::<crate::Result<_>>()?;

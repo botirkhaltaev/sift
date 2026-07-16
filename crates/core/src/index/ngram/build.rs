@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use super::files::FileFingerprint;
-use super::gram::{Gram, GramWidth};
+use super::gram::{Gram, GramNorm, GramWidth};
 use super::storage::grams::GramSet;
 use super::storage::lexicon::LexiconEntry;
 use super::storage::postings::Postings;
@@ -185,6 +185,7 @@ impl PostingTables {
 impl IndexTables {
     pub fn build(
         width: GramWidth,
+        norm: GramNorm,
         config: &IndexConfig<'_>,
         paths: &[PathBuf],
     ) -> crate::Result<Self> {
@@ -232,7 +233,7 @@ impl IndexTables {
             .par_iter()
             .map(|fp| {
                 let abs = root.join(&fp.path);
-                std::fs::read(&abs).map(|bytes| GramSet::collect(width, &bytes))
+                std::fs::read(&abs).map(|bytes| GramSet::collect(width, &bytes, norm))
             })
             .collect::<std::io::Result<_>>()
             .map_err(crate::Error::Io)?;
@@ -289,7 +290,8 @@ mod tests {
 
         fn build(root: &Path) -> IndexTables {
             let config = Self::no_ignore_config(root);
-            IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables")
+            IndexTables::build(GramWidth::TRIGRAM, GramNorm::Identity, &config, &[])
+                .expect("build tables")
         }
     }
 
@@ -408,7 +410,8 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, GramNorm::Identity, &config, &[])
+            .expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -550,7 +553,8 @@ mod tests {
                 ..Default::default()
             },
         };
-        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, GramNorm::Identity, &config, &[])
+            .expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(tables.fingerprints[0].path, PathBuf::from("keep.txt"));
     }
@@ -574,7 +578,8 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, GramNorm::Identity, &config, &[])
+            .expect("build tables");
         assert_eq!(tables.fingerprints.len(), 1);
         assert_eq!(
             tables.fingerprints[0].path,
@@ -614,7 +619,8 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, GramNorm::Identity, &config, &[])
+            .expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             !paths.iter().any(|p| p == "skip.ignored"),
@@ -646,7 +652,8 @@ mod tests {
             walk: IndexWalkConfig::new(false),
             visibility: VisibilityConfig::default(),
         };
-        let tables = IndexTables::build(GramWidth::TRIGRAM, &config, &[]).expect("build tables");
+        let tables = IndexTables::build(GramWidth::TRIGRAM, GramNorm::Identity, &config, &[])
+            .expect("build tables");
         let paths: Vec<_> = tables.fingerprints.iter().map(|f| f.path.clone()).collect();
         assert!(
             paths.iter().any(|p| p == Path::new("src/keep.txt")),

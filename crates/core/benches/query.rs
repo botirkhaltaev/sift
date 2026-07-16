@@ -10,17 +10,22 @@ use sift_core::search::{
     CaseMode, RegexEngine, SearchFlags, SearchOptions, SearchQueryBuilder, Searcher,
 };
 
-#[path = "common/criterion_config.rs"]
-mod criterion_config;
-
-use criterion_config::sift_criterion;
-
 fn searcher(patterns: Vec<String>, options: SearchOptions) -> Searcher {
     let query = SearchQueryBuilder::new(patterns)
         .options(options)
         .build()
         .unwrap();
     Searcher::new(query).unwrap()
+}
+
+fn sift_criterion() -> Criterion {
+    Criterion::default()
+        .warm_up_time(std::time::Duration::from_secs(3))
+        .measurement_time(std::time::Duration::from_secs(6))
+        .sample_size(100)
+        .significance_level(0.05)
+        .noise_threshold(0.05)
+        .configure_from_args()
 }
 
 fn bench_query_compile(c: &mut Criterion) {

@@ -8,7 +8,7 @@ mod index;
 mod lifecycle;
 mod literals;
 
-pub use gram::{Gram, GramWidth, GramWindows};
+pub use gram::{Gram, GramNorm, GramWidth, GramWindows};
 pub use index::{Index, NGramIndexError};
 
 #[cfg(test)]

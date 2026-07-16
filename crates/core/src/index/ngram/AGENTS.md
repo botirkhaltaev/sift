@@ -7,8 +7,9 @@ knobs (default width-3) and optional opened storage; it implements
 
 ## Key Types
 
-- `Index`: knobs (`width`) + optional storage; `Index::new()` / `.width(...)`
-- `GramWidth`, `Gram`, `GramWindows`: runtime-width gram domain primitives
+- `Index`: knobs (`width`, `norm`) + optional storage; `Index::new()` / `.width(...)` / `.norm(...)`
+- `GramWidth`, `GramNorm`, `Gram`, `GramWindows`: runtime-width gram domain primitives
+- `GramNorm::AsciiLower`: fold ASCII letters at index time; query-time Exact on folded literals for `-i` only
 - `IndexTables`: table builder output; reuses cached grams for unchanged files
 - `FileFingerprint`: per-file change detection data (path, mtime, size)
 

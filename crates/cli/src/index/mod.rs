@@ -17,8 +17,10 @@ use crate::grep::ignore::IgnoreResolution;
 use crate::grep::paths::CorpusScope;
 
 pub mod daemon;
+mod selection;
 
 pub use daemon::{Daemon, DaemonError, DaemonOrchestrator, ServeConfig};
+pub use selection::{GramNormArg, IndexDecl, IndexKindArg, IndexSelection};
 
 /// Result of reconciling store metadata and corpus state into a committed snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]

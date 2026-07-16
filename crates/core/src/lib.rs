@@ -30,7 +30,9 @@ pub use ignore::{Walk, WalkBuilder};
 
 pub use index::config::IndexWalkConfig;
 pub use index::meta::StoreMeta;
-pub use index::ngram::{Gram, GramWidth, GramWindows, Index as NGramIndex, NGramIndexError};
+pub use index::ngram::{
+    Gram, GramNorm, GramWidth, GramWindows, Index as NGramIndex, NGramIndexError,
+};
 pub use index::{
     CorpusKind, CorpusMeta, CorpusSpec, FileId, FilterMeta, Index, IndexConfig, IndexCoverage,
     IndexError, IndexId, IndexRecord, IndexWrite, IndexedCorpus, Indexes, PlanMode,
